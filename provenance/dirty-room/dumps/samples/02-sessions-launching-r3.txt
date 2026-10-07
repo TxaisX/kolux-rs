@@ -1,0 +1,101 @@
+# 02-sessions-launching random sample round 3 (100 of 1249): file	title
+src/shared/structured-agent-session-reducer.test.ts	bounds retained submission identities across repeated tail refreshes
+src/shared/agent-session-journal-schemas.test.ts	admits every body shape this build writes
+src/renderer/src/components/new-workspace/smart-workspace-command-value.test.ts	keeps typed text armed while the query is ahead of debounced search
+src/shared/structured-agent-session-reducer.test.ts	keeps paged-in older items when a focus refresh carries nothing new
+src/shared/agent-resume-launch-command.test.ts	fails open on a token-leading powershell backtick before whitespace
+src/renderer/src/lib/agent-picker-search.test.ts	matches command aliases that do not appear in the display label
+src/shared/model-id-label.test.ts	special-cases the gpt segment
+src/renderer/src/components/launch-agents/launch-agent-roles.test.ts	puts the role brief ahead of the shared task
+src/renderer/src/components/new-workspace/ProjectCombobox.test.tsx	arms "Add project" when a query matches nothing, so Enter is never a wrong guess
+src/renderer/src/components/launch-agents/launch-agent-last-lineup.test.ts	returns nothing for an absent lineup
+src/shared/structured-agent-session-options.test.ts	projects live options as directly settable descriptors
+src/renderer/src/lib/new-workspace.test.ts	does not track when follow-up prompt delivery is rejected by the terminal runtime
+src/main/external-editor-launch.test.ts	treats an existing POSIX executable path with spaces as an executable launcher
+src/renderer/src/lib/launch-agent-background-session-remote.test.ts	forwards Hermes startup queries through SSH command transport
+src/shared/agent-session-option-catalog-grok.test.ts	drops the unmatched seed row the additive merge would have kept
+src/renderer/src/runtime/structured-agent-session-status-feed.test.ts	reconnects when the capability probe fails, which is not an answer
+src/renderer/src/components/launch-agents/LaunchAgentGrid.test.tsx	collapses to a single tab stop once a sibling option outside this grid is picked
+src/renderer/src/components/launch-agents/LaunchIsolationToggle.test.tsx	shows no warning once New worktree is already selected
+src/shared/new-workspace/worktree-create-retry-policy.test.ts	retries only known branch and review conflicts
+src/renderer/src/components/new-workspace/project-combobox-matching.test.ts	flags only ids whose display name repeats
+src/renderer/src/components/launch-agents/launch-agents-requests.test.ts	starts every seat empty from zero
+src/main/external-editor-launch.test.ts	runs GUI compound Windows commands verbatim instead of re-parsing them under start
+src/renderer/src/components/agent/AgentCombobox.test.tsx	finds a collapsed agent by search without expanding first
+src/renderer/src/components/new-workspace/ComposerParentWorktreePicker.test.tsx	excludes a folder root whose lineage row is instance-stale
+src/renderer/src/lib/agent-resume-launch-target.test.ts	keeps POSIX quoting for a project pinned to a WSL runtime
+src/shared/agent-session-lease-adjudication.test.ts	frees a lease that names neither an owner nor a reservation, without moving the fence
+src/renderer/src/components/launch-agents/new-session-seat-state.test.ts	is false for a Terminal-free agent choice missing its model
+src/renderer/src/lib/new-workspace-enter-guard.test.ts	returns false for Shift+Enter inside a non-textarea element
+src/renderer/src/components/NewWorkspaceComposerCard.test.tsx	keeps the branch name field when creating from a base branch
+src/renderer/src/store/slices/tabs-model-reconciliation.test.ts	keeps a reconnecting terminal whose live session survives only in a reconnect map
+src/shared/structured-agent-session-reducer.test.ts	projects additive background task state without changing transcript identity
+src/renderer/src/components/custom-agents/custom-agent-validation.test.ts	starts with nothing chosen -- no AI, no model, results-folder scope
+src/shared/structured-agent-session-composer.test.ts	adds only implemented host-supported conversation commands
+src/main/ipc/preflight-agent-detection.test.ts	hydrates shell PATH before user-facing agent detection
+src/renderer/src/components/launch-agents/launch-agents-shared-checkout.test.ts	uses the SSH host platform and connection for startup and trust
+tests/e2e/cross-version-wire/published-field-shape.unit.test.ts	reads an empty payload as no fields, which is what the anti-vacuous check tests
+src/renderer/src/lib/new-workspace-create-gates.test.ts	keeps quick create clickable when no repo is selected so submit can validate inline
+src/renderer/src/lib/new-workspace.test.ts	uses the fallback name when no other seed source is available
+src/renderer/src/lib/launch-agent-background-session-remote.test.ts	creates background sessions on the active runtime environment
+tests/e2e/helpers/electron-launch-args.unit.test.ts	launches the package root that owns the compiled main entry
+src/renderer/src/components/agent/AgentCombobox.test.tsx	renders bundled favicons for favicon-domain agents instead of the remote Google service
+src/renderer/src/components/agent-picker/AgentPickerPane.test.tsx	picking Terminal needs no model step
+src/renderer/src/components/new-workspace/use-jira-url-source.test.tsx	requires an explicit account choice and binds the exact account context
+src/renderer/src/components/new-workspace/SmartWorkspaceNameField-provider-boundaries.test.ts	does not hide SSH or runtime GitLab sources based on local glab preflight
+src/renderer/src/components/new-workspace/SmartWorkspaceNameField.jira-accessibility.test.tsx	keeps selected-source actions out of Tab order with keyboard fallbacks
+src/renderer/src/components/new-workspace/SetProjectLocationDialog.test.tsx	clones onto the selected host
+src/renderer/src/lib/launch-work-item-direct-agent-routing.test.ts	reports an unknown outcome without starting a fallback terminal
+src/shared/agent-session-mutation-envelope.test.ts	surfaces a ledger refusal verbatim
+src/shared/agent-session-resume.test.ts	compares the actual provider resume locator for each agent
+src/renderer/src/components/new-workspace/ProjectCombobox.test.tsx	restores the committed project on Escape instead of stranding a stale query
+src/renderer/src/components/custom-agents/custom-agent-validation.test.ts	round-trips through customAgentToDraft
+src/shared/agent-session-option-catalog.test.ts	keeps Claude option sets model-scoped
+src/shared/agent-session-lease-adjudication.test.ts	keeps a conflicted claim conflicted regardless of proof
+src/renderer/src/components/launch-agents/launch-agents-pristine-tab.test.ts	is not pristine when a fresh working agent-status hook covers it
+src/renderer/src/lib/launch-work-item-direct-agent.test.ts	omits native-chat preferences when the new workspace opens in terminal mode
+src/renderer/src/lib/structured-agent-session-launch-resume-identity.test.ts	does not hand a resume the blank launch already pending for the same worktree
+src/renderer/src/lib/new-workspace-project-options.test.ts	excludes projects configured only on removed hosts
+src/renderer/src/components/new-workspace/smart-workspace-source-results.test.ts	rejects oversized Linear input before parsing it
+src/renderer/src/components/agent/agent-combobox-command-state.test.ts	resets command highlight when the active query candidate changes while open
+src/main/ipc/preflight-agent-detection.test.ts	does not run host shell hydration for WSL agent detection
+src/renderer/src/lib/structured-agent-session-launch-resume-identity.test.ts	keeps the same row apart across worktrees and agents
+src/renderer/src/components/new-workspace/SmartWorkspaceNameField.ime-enter.test.tsx	ignores the Enter that commits a CJK IME composition (isComposing)
+src/shared/agent-session-option-catalog.test.ts	returns no catalog for unknown agents
+src/renderer/src/components/new-workspace/SmartWorkspaceNameField.ime-enter.test.tsx	replaces a completed shortcode as it is typed
+src/shared/agent-session-option-catalog.test.ts	parses Cursor model discovery without treating headings as models
+src/renderer/src/components/launch-agents/launch-agents-requests.test.ts	resets the targeted seat to the new agent’s default model
+src/shared/agent-session-resume.test.ts	round-trips transcriptPath through normalizeAgentProviderSession
+src/main/external-editor-launch.test.ts	upgrades a direct JetBrains .cmd path to the colocated *64.exe
+src/renderer/src/components/new-workspace/smart-workspace-source-results.test.ts	describes empty Branch results after the empty-query search runs
+src/renderer/src/lib/resume-sleeping-agent-session.test.ts	leaves a hidden restorable stable-pane record for in-place cold restore during activation
+src/renderer/src/lib/structured-agent-session-launch-refusal-fallback.test.ts	opens exactly one legacy terminal when an older runtime has no create method
+src/renderer/src/components/new-workspace/ProjectCombobox.test.tsx	keeps a focusable combobox that composer focus helpers can target
+src/renderer/src/components/NewWorkspaceComposerCard.test.tsx	shows the run target picker for one ready setup so hosts can be added
+src/renderer/src/runtime/structured-agent-session-client.test.ts	does not dispatch rewind when host capability cannot be verified
+src/renderer/src/lib/launch-work-item-direct.test.ts	seeds the chat-composer launch draft for a GitHub issue draft launch
+src/renderer/src/components/new-workspace/use-jira-url-source.test.tsx	forces Retry past an invalid fulfilled summary result
+src/renderer/src/lib/agent-resume-launch-target.test.ts	quotes for cmd.exe when the global Windows shell is cmd.exe
+src/shared/custom-agents.test.ts	defaults a missing/invalid changeScope to results-folder
+src/renderer/src/lib/launch-agent-background-session.test.ts	uses a sidecar exit watcher so completion survives terminal attachment
+src/shared/new-workspace-dialog-repo.test.ts	lets explicit draft/initial/active choices win over the focused host
+src/shared/custom-agents-prompt.test.ts	includes the instructions verbatim
+src/shared/agent-session-mutation-envelope.test.ts	refuses a writer while the lease is unreconciled
+src/renderer/src/lib/launch-agent-background-session-remote.test.ts	keeps the short fallback for an SSH shell that talks but cannot emit the marker
+src/shared/agent-resume-launch-command.test.ts	fails open on a powershell subexpression locator
+src/shared/agent-session-option-catalog-grok.test.ts	gives unknown model ids the widest effort menu launch reads from the seed
+src/renderer/src/lib/workspace-composer-initial-focus.test.ts	prefers the source pill over the project combobox when both exist
+tests/e2e/cross-version-wire/published-field-shape.unit.test.ts	rejects unequal occurrence counts instead of truncating the comparison
+src/renderer/src/lib/new-workspace-enter-guard.test.ts	returns false for a plain Enter with no composition
+src/renderer/src/lib/simulator-launch-coordination.test.ts	expires unconsumed sessions at the TTL boundary
+src/main/app-relaunch.test.ts	durably records the reason before scheduling the replacement process
+src/renderer/src/lib/agent-picker-search.test.ts	highlights the current value until a search should choose the first visible result
+src/renderer/src/lib/new-workspace-composer-repo.test.ts	ignores host scope "all" and falls back to the first eligible repo
+src/renderer/src/components/launch-agents/launch-agents-shared-checkout.test.ts	does not launch through an unresolved paired-runtime owner
+src/renderer/src/components/new-workspace/SmartWorkspaceNameField-source-boundaries.test.ts	confines source-mode overflow to the source strip
+src/shared/custom-agent-launch-args.test.ts	fails closed to manual mode for an asking scope on an AI outside the custom-agent set
+src/renderer/src/lib/fix-checks-agent-launch.test.ts	falls back to the repo connection when an attached workspace lookup is unresolved
+src/renderer/src/components/NewWorkspaceComposerCard.test.tsx	emits the setup startup policy toggle value when setup will run
+src/renderer/src/components/launch-agents/new-session-seat-state.test.ts	drops a saved-agent pick once the underlying record is deleted
+src/renderer/src/components/new-workspace/use-jira-source-connection.test.tsx	re-reads only the matching source after a connection mutation
+src/renderer/src/store/slices/tabs-model-reconciliation.test.ts	restores a marker-only terminal when the host loss omitted its unified row

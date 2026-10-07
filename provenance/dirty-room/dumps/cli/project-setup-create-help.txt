@@ -1,0 +1,30 @@
+﻿kolux project setup-create
+
+Usage: kolux project setup-create --project <id> --host <host-id> [--setup-id <id>] [--path <path>] [--kind git|folder] [--display-name <name>] [--worktree-base-path <path>] [--git-username <name>] [--state ready|not-set-up|setting-up|error|unsupported] [--method imported-existing-folder|cloned|provisioned] [--json]
+
+Create independent project host setup metadata
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --project
+  --host
+  --setup-id
+  --path <path>          Path argument for the command
+  --kind
+  --display-name <name>  Override the Kolux display name
+  --worktree-base-path
+  --git-username
+  --state
+  --method
+
+Notes:
+  Creates setup metadata without registering a repo compatibility record.
+  --host runtime:<environment-id> targets that paired Kolux server; use the id from `kolux environment list`, not the environment name.
+  Use setup-existing-folder when Kolux should import and manage an actual checkout path now.
+
+Examples:
+  $ kolux project setup-create --project github:TxaisX/kolux --host runtime:03ef704c-b180-4b10-998d-e28fbd5de9a3 --state setting-up --method provisioned --json
+

@@ -1,0 +1,16 @@
+﻿kolux terminal switch
+
+Usage: kolux terminal switch [--terminal <handle>] [--json]
+
+Switch to a terminal tab in the UI
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --terminal <handle>  Runtime-issued terminal handle
+
+Examples:
+  $ kolux terminal switch --terminal term_abc123
+

@@ -1,0 +1,17 @@
+﻿kolux tab switch
+
+Usage: kolux tab switch (--index <n> | --page <id>) [--worktree <selector>] [--focus] [--json]
+
+Switch the active browser tab
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --index <n>            Tab index to switch to
+  --page <id>            Stable browser page id from `kolux tab list --json`
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --focus                Reveal the created terminal session in Kolux
+  --page <id>            Stable browser page id from `kolux tab list --json`
+

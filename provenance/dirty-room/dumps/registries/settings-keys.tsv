@@ -1,0 +1,195 @@
+key	default_value_expression	flag	preceding_comment	evidence
+workspaceDir	args.workspaceDir			src/shared/default-global-settings.ts:34
+worktreeVisibilityDefaults	{ external: 'hide' }			src/shared/default-global-settings.ts:35
+nestWorkspaces	true			src/shared/default-global-settings.ts:36
+workspaceDirHistory	[]			src/shared/default-global-settings.ts:37
+refreshLocalBaseRefOnWorktreeCreate	false			src/shared/default-global-settings.ts:38
+localBaseRefSuggestionDismissed	false			src/shared/default-global-settings.ts:39
+autoRenameBranchFromWork	true			src/shared/default-global-settings.ts:40
+autoRenameBranchFromWorkDefaultedOn	true			src/shared/default-global-settings.ts:41
+branchPrefix	'git-username'			src/shared/default-global-settings.ts:42
+branchPrefixCustom	''			src/shared/default-global-settings.ts:43
+theme	'system'			src/shared/default-global-settings.ts:44
+themeId	DEFAULT_KOLUX_THEME_SETTING			src/shared/default-global-settings.ts:45
+themeHueShift	0			src/shared/default-global-settings.ts:46
+themeSaturation	100			src/shared/default-global-settings.ts:47
+themeDepth	0			src/shared/default-global-settings.ts:48
+leftSidebarAppearanceMode	'default'			src/shared/default-global-settings.ts:49
+leftSidebarTintColor	DEFAULT_LEFT_SIDEBAR_TINT_COLOR			src/shared/default-global-settings.ts:50
+leftSidebarTintOpacity	DEFAULT_LEFT_SIDEBAR_TINT_OPACITY			src/shared/default-global-settings.ts:51
+uiLanguage	UI_LANGUAGE_SYSTEM			src/shared/default-global-settings.ts:52
+appIcon	DEFAULT_APP_ICON_ID			src/shared/default-global-settings.ts:53
+appFontFamily	args.appFontFamily			src/shared/default-global-settings.ts:54
+editorAutoSave	false			src/shared/default-global-settings.ts:55
+editorAutoSaveDelayMs	args.editorAutoSaveDelayMs			src/shared/default-global-settings.ts:56
+editorMinimapEnabled	false			src/shared/default-global-settings.ts:57
+editorFontFamily	''		Why empty: the editor keeps following the terminal font unless the user opts in.	src/shared/default-global-settings.ts:59
+editorWordWrap	true			src/shared/default-global-settings.ts:60
+richMarkdownSpellcheckEnabled	true			src/shared/default-global-settings.ts:61
+markdownReviewToolsEnabled	true			src/shared/default-global-settings.ts:62
+primarySelectionMiddleClickPaste	args.primarySelectionMiddleClickPaste			src/shared/default-global-settings.ts:63
+primarySelectionMiddleClickPasteDefaultedForLinux	args.primarySelectionDefaultedForLinux			src/shared/default-global-settings.ts:64
+primarySelectionMiddleClickPasteDefaultedForTerminalDefaults	args.primarySelectionMiddleClickPaste,			src/shared/default-global-settings.ts:65
+terminalFontSize	14			src/shared/default-global-settings.ts:67
+terminalFontFamily	args.terminalFontFamily			src/shared/default-global-settings.ts:68
+terminalFontWeight	DEFAULT_TERMINAL_FONT_WEIGHT			src/shared/default-global-settings.ts:69
+terminalFontWeightBold	DEFAULT_TERMINAL_FONT_WEIGHT_BOLD			src/shared/default-global-settings.ts:70
+terminalLineHeight	1			src/shared/default-global-settings.ts:71
+terminalScrollSensitivity	1.15			src/shared/default-global-settings.ts:72
+terminalFastScrollSensitivity	5			src/shared/default-global-settings.ts:73
+terminalTuiScrollSensitivity	1			src/shared/default-global-settings.ts:74
+terminalTuiScrollSensitivityDefaultedToOne	true			src/shared/default-global-settings.ts:75
+terminalGpuAcceleration	'auto'		Why: "auto" uses WebGL when supported, falling back to DOM on renderer failure or software/unknown GPU.	src/shared/default-global-settings.ts:77
+terminalLigatures	'auto'		Why 'auto': enable ligatures only for known ligature fonts, never forced. Resolver in shared/terminal-ligatures.ts.	src/shared/default-global-settings.ts:79
+terminalCursorStyle	'block'			src/shared/default-global-settings.ts:80
+terminalCursorStyleDefaultedToBlock	true			src/shared/default-global-settings.ts:81
+terminalCursorBlink	true			src/shared/default-global-settings.ts:82
+terminalThemeDark	'Kolux Dark'			src/shared/default-global-settings.ts:83
+terminalDividerColorDark	'#3f3f46'			src/shared/default-global-settings.ts:84
+terminalUseSeparateLightTheme	true			src/shared/default-global-settings.ts:85
+terminalThemeLight	'Builtin Tango Light'			src/shared/default-global-settings.ts:86
+terminalCustomThemes	[]			src/shared/default-global-settings.ts:87
+terminalDividerColorLight	'#d4d4d8'			src/shared/default-global-settings.ts:88
+terminalInactivePaneOpacity	args.terminalInactivePaneOpacity			src/shared/default-global-settings.ts:89
+terminalActivePaneOpacity	1			src/shared/default-global-settings.ts:90
+terminalPaneOpacityTransitionMs	140			src/shared/default-global-settings.ts:91
+terminalDividerThicknessPx	3			src/shared/default-global-settings.ts:92
+terminalRightClickToPaste	args.terminalRightClickToPaste		Why: Windows paste-on-right-click matches native convention; macOS/Linux keep right-click for the context menu.	src/shared/default-global-settings.ts:94
+terminalRightClickToPasteDefaultedForPlatform	true			src/shared/default-global-settings.ts:95
+terminalWindowsShell	'powershell.exe'			src/shared/default-global-settings.ts:96
+terminalWindowsWslDistro	null			src/shared/default-global-settings.ts:97
+localAccountRuntime	'auto'			src/shared/default-global-settings.ts:98
+localAccountRuntimeDefaultedToAutoForAllUsers	true			src/shared/default-global-settings.ts:99
+localAccountWslDistro	null			src/shared/default-global-settings.ts:100
+localWindowsRuntimeDefault	{ kind: 'windows-host' }			src/shared/default-global-settings.ts:101
+terminalWindowsPowerShellImplementation	'auto'		Why: prefer modern PowerShell when installed, falling back to inbox Windows PowerShell.	src/shared/default-global-settings.ts:103
+terminalMouseHideWhileTyping	false			src/shared/default-global-settings.ts:104
+terminalQuickCommands	getDefaultTerminalQuickCommands()			src/shared/default-global-settings.ts:105
+terminalFocusFollowsMouse	false		Why: opt-in only, matching Ghostty's default (upgrades never enable it unexpectedly).	src/shared/default-global-settings.ts:107
+windowBackgroundBlur	false			src/shared/default-global-settings.ts:108
+minimizeToTrayOnClose	false			src/shared/default-global-settings.ts:109
+showMenuBarIcon	true		Why: default-on everywhere so it round-trips across platforms; only darwin acts on it.	src/shared/default-global-settings.ts:111
+terminalClipboardOnSelect	false			src/shared/default-global-settings.ts:112
+terminalAllowOsc52Clipboard	true		Why: default on so Zellij/tmux/nvim copy works out of the box. Query replies stay disabled and payload size is capped in the OSC 52 handler. This default only covers new profiles; existing ones persisted `false` and are flipped once by the stamp below (shared/osc52-clipboard-settings.ts, applied by both the Electron store and the web client's localStorage store).	src/shared/default-global-settings.ts:118
+terminalAllowOsc52ClipboardDefaultedOnForAllUsers	true			src/shared/default-global-settings.ts:119
+claudeAgentTeamsMode	'off'			src/shared/default-global-settings.ts:120
+setupScriptLaunchMode	'new-tab'			src/shared/default-global-settings.ts:121
+terminalScrollbackRows	DESKTOP_TERMINAL_SCROLLBACK_ROWS_DEFAULT			src/shared/default-global-settings.ts:122
+httpProxyUrl	''			src/shared/default-global-settings.ts:123
+httpProxyBypassRules	''			src/shared/default-global-settings.ts:124
+electronHttp1CompatibilityMode	false			src/shared/default-global-settings.ts:125
+openLinksInApp	false			src/shared/default-global-settings.ts:126
+localhostWorktreeLabelsEnabled	false			src/shared/default-global-settings.ts:127
+openLinksInAppPreferencePrompted	false			src/shared/default-global-settings.ts:128
+openLinksInAppModifierInverts	false			src/shared/default-global-settings.ts:129
+terminalLinkActionPopoverEnabled	true			src/shared/default-global-settings.ts:130
+openAgentTabsInChatByDefault	false			src/shared/default-global-settings.ts:131
+experimentalNativeChat	false	experimental		src/shared/default-global-settings.ts:132
+experimentalStructuredNativeChat	false	experimental		src/shared/default-global-settings.ts:133
+nativeChatSessionOptions	{}			src/shared/default-global-settings.ts:134
+openInApplications	[...DEFAULT_OPEN_IN_APPLICATIONS]			src/shared/default-global-settings.ts:135
+rightSidebarOpenByDefault	true			src/shared/default-global-settings.ts:136
+showGitIgnoredFiles	true			src/shared/default-global-settings.ts:137
+sourceControlViewMode	'list'			src/shared/default-global-settings.ts:138
+sourceControlGroupOrder	DEFAULT_SOURCE_CONTROL_GROUP_ORDER			src/shared/default-global-settings.ts:139
+sourceControlCompareAgainstUpstream	false			src/shared/default-global-settings.ts:140
+showTitlebarAppName	true			src/shared/default-global-settings.ts:141
+showTasksButton	true			src/shared/default-global-settings.ts:142
+showAutomationsButton	false			src/shared/default-global-settings.ts:143
+nestedWorkerMaxDepth	1			src/shared/default-global-settings.ts:144
+showSkillsButton	false			src/shared/default-global-settings.ts:145
+showMobileButton	false			src/shared/default-global-settings.ts:146
+showPinnedWorktreesInGroups	false			src/shared/default-global-settings.ts:147
+ctrlTabOrderMode	'mru'			src/shared/default-global-settings.ts:148
+terminalShortcutPolicy	'kolux-first'		Why: Kolux-first keeps core shortcuts working from a focused terminal; TUI-ownership users opt in.	src/shared/default-global-settings.ts:150
+floatingTerminalEnabled	true			src/shared/default-global-settings.ts:151
+browserClientHostedRemoteEnabled	true			src/shared/default-global-settings.ts:152
+floatingTerminalDefaultedForAllUsers	true			src/shared/default-global-settings.ts:153
+floatingTerminalCwd	'~'			src/shared/default-global-settings.ts:154
+floatingTerminalTrustedCwds	[]			src/shared/default-global-settings.ts:155
+floatingTerminalCwdMigratedToAppWorkspace	true			src/shared/default-global-settings.ts:156
+floatingTerminalTriggerLocation	'floating-button'			src/shared/default-global-settings.ts:157
+notifications	args.notifications			src/shared/default-global-settings.ts:158
+diffDefaultView	'inline'			src/shared/default-global-settings.ts:159
+diffWordWrap	false			src/shared/default-global-settings.ts:160
+diffShowWhitespace	false			src/shared/default-global-settings.ts:161
+combinedDiffFileTreeVisibleByDefault	false			src/shared/default-global-settings.ts:162
+prBotAuthorOverrides	[]			src/shared/default-global-settings.ts:163
+promptCacheTimerEnabled	false			src/shared/default-global-settings.ts:164
+promptCacheTtlMs	300_000			src/shared/default-global-settings.ts:165
+codexManagedAccounts	[]			src/shared/default-global-settings.ts:166
+activeCodexManagedAccountId	null			src/shared/default-global-settings.ts:167
+activeCodexManagedAccountIdsByRuntime	{ host: null, wsl: {} }			src/shared/default-global-settings.ts:168
+claudeManagedAccounts	[]			src/shared/default-global-settings.ts:169
+activeClaudeManagedAccountId	null			src/shared/default-global-settings.ts:170
+terminalScopeHistoryByWorktree	true			src/shared/default-global-settings.ts:171
+terminalHiddenViewParking	true			src/shared/default-global-settings.ts:172
+terminalSshViewParking	true		C1 kill switches — runtime reads stay `!== false` so older persisted settings objects (which omit them) keep the default-on behavior.	src/shared/default-global-settings.ts:175
+terminalHiddenWorktreeRetentionBudget	true			src/shared/default-global-settings.ts:176
+browserGuestWorktreeRetentionBudget	true			src/shared/default-global-settings.ts:177
+terminalMainSideEffectAuthority	true			src/shared/default-global-settings.ts:178
+terminalHiddenDeliveryGate	true			src/shared/default-global-settings.ts:179
+terminalModelQueryAuthority	true			src/shared/default-global-settings.ts:180
+defaultTuiAgent	null			src/shared/default-global-settings.ts:181
+disabledTuiAgents	[...DEFAULT_DISABLED_TUI_AGENTS]			src/shared/default-global-settings.ts:182
+pluginSystemEnabled	false			src/shared/default-global-settings.ts:183
+disabledPlugins	[]			src/shared/default-global-settings.ts:184
+pluginConsents	{}			src/shared/default-global-settings.ts:185
+devPluginPaths	[]			src/shared/default-global-settings.ts:186
+claudeAgentTeamsDefaultDisabledMigrated	true			src/shared/default-global-settings.ts:187
+keyVaultCredentialMigrationAcknowledged	true			src/shared/default-global-settings.ts:188
+skipDeleteWorktreeConfirm	false			src/shared/default-global-settings.ts:189
+skipCloseTerminalWithRunningProcessConfirm	false			src/shared/default-global-settings.ts:190
+skipDeleteAutomationConfirm	false			src/shared/default-global-settings.ts:191
+skipCodexRateLimitResetConfirm	false			src/shared/default-global-settings.ts:192
+defaultTaskViewPreset	'all'			src/shared/default-global-settings.ts:193
+defaultTaskSource	'github'			src/shared/default-global-settings.ts:194
+visibleTaskProviders	[...TASK_PROVIDERS]			src/shared/default-global-settings.ts:195
+visibleTaskProvidersDefaultedForJira	true			src/shared/default-global-settings.ts:196
+defaultRepoSelection	null			src/shared/default-global-settings.ts:197
+defaultLinearTeamSelection	null			src/shared/default-global-settings.ts:198
+minimaxGroupId	''			src/shared/default-global-settings.ts:199
+minimaxUsageModels	'general'			src/shared/default-global-settings.ts:200
+minimaxEndpoint	'overseas'			src/shared/default-global-settings.ts:201
+geminiCliOAuthEnabled	false			src/shared/default-global-settings.ts:202
+agentCmdOverrides	{}			src/shared/default-global-settings.ts:203
+agentDefaultArgs	{ ...DEFAULT_TUI_AGENT_ARGS }			src/shared/default-global-settings.ts:204
+launchAgentSavedShapes	[]			src/shared/default-global-settings.ts:205
+customAgents	[]			src/shared/default-global-settings.ts:206
+agentDefaultEnv	{ ...DEFAULT_TUI_AGENT_ENV }			src/shared/default-global-settings.ts:207
+agentContextCapEnabled	true			src/shared/default-global-settings.ts:208
+agentYoloDefaultsMigrated	true			src/shared/default-global-settings.ts:209
+agentStatusHooksEnabled	true			src/shared/default-global-settings.ts:210
+tabAutoGenerateTitle	false			src/shared/default-global-settings.ts:211
+confirmClosePinnedTab	true			src/shared/default-global-settings.ts:212
+keepComputerAwakeWhileAgentsRun	false			src/shared/default-global-settings.ts:213
+terminalMacOptionAsAlt	'auto'		Why: 'auto' probes keyboard layout so non-US users can type Option chars like @/€/[ out of the box (issue #903). See src/renderer/src/lib/keyboard-layout/*.	src/shared/default-global-settings.ts:215
+terminalMacOptionAsAltMigrated	false			src/shared/default-global-settings.ts:216
+terminalJISYenToBackslash	false			src/shared/default-global-settings.ts:217
+experimentalMobile	false	experimental		src/shared/default-global-settings.ts:218
+mobileEmulatorEnabled	true			src/shared/default-global-settings.ts:219
+mobileEmulatorDefaultDeviceUdid	null			src/shared/default-global-settings.ts:220
+androidSdkPath	null			src/shared/default-global-settings.ts:221
+mobileAutoRestoreFitMs	null		Why: indefinite hold — the "Restore" banner is the explicit return action, no wall-clock guess. See docs/mobile-fit-hold.md.	src/shared/default-global-settings.ts:223
+mobilePairingCustomAddress	null			src/shared/default-global-settings.ts:224
+mobilePairingCustomAddresses	[]			src/shared/default-global-settings.ts:225
+experimentalPet	false	experimental	Why: off keeps the cosmetic overlay unmounted for users who never opt in.	src/shared/default-global-settings.ts:227
+experimentalActivity	false	experimental		src/shared/default-global-settings.ts:228
+experimentalActivityDefaultedOffForAllUsers	true	experimental		src/shared/default-global-settings.ts:229
+experimentalTerminalAttention	false	experimental		src/shared/default-global-settings.ts:230
+experimentalAgentHibernation	false	experimental		src/shared/default-global-settings.ts:231
+agentHibernationIdleMs	30 * 60 * 1000			src/shared/default-global-settings.ts:232
+experimentalNewWorktreeCardStyle	false	experimental		src/shared/default-global-settings.ts:233
+experimentalEphemeralVms	false	experimental		src/shared/default-global-settings.ts:234
+compactWorktreeCards	false			src/shared/default-global-settings.ts:235
+activeRuntimeEnvironmentId	null		Why: local desktop stays the default until the user picks a saved runtime environment.	src/shared/default-global-settings.ts:237
+githubProjects	{ pinned: [], recent: [], lastViewByProject: {}, activeProject: null },		Why: hydrate a stable empty shape so renderer optional-chained reads never hit undefined.	src/shared/default-global-settings.ts:239
+commitMessageAi	{ enabled: true, agentId: null, selectedModelByAgent: {}, discoveredModelsByAgent: {}, selectedModelByAgentByHost: {}, discoveredModelsByAgentByHost: {}, selectedThinkingByModel: {}, customPrompt: '', customAgentCommand: '' },		Why: keep agent/model maps empty so first use follows the default agent's model, not a frozen stale choice.	src/shared/default-global-settings.ts:246
+sourceControlAi	getDefaultSourceControlAiSettings()			src/shared/default-global-settings.ts:257
+voice	args.voice			src/shared/default-global-settings.ts:258
+claudeSelfManagedSignIn	false			src/shared/default-global-settings.ts:259
+agentAutoResumeAfterLimit	false			src/shared/default-global-settings.ts:260
+claudeConnectionMode	'account'			src/shared/default-global-settings.ts:261
+claudeOauthToken	''			src/shared/default-global-settings.ts:262
+claudeOauthTokenCreatedAt	null			src/shared/default-global-settings.ts:263
+grokApiKey	''			src/shared/default-global-settings.ts:264

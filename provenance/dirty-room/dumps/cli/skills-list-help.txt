@@ -1,0 +1,17 @@
+﻿kolux skills list
+
+Usage: kolux skills list [--json]
+
+List version-matched skill guides bundled with this Kolux CLI
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+
+Notes:
+  Reads bundled guide metadata locally without contacting the Kolux runtime.
+  With --json, prints a topics array of canonical names and one-line descriptions.
+  Use `kolux skills get <name>` for the compact guide, `--full` for its full reference package, or `kolux skills install` to install skills.
+

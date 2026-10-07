@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(//g/Dev/Kolux/**)", "Edit(//g/Dev/Kolux/**)",
+      "Read(//g/Dev/kolux-scratch/**)", "Edit(//g/Dev/kolux-scratch/**)",
+      "Read(//g/Dev/kolux-workspaces/**)", "Edit(//g/Dev/kolux-workspaces/**)",
+      "Read(//g/Dev/nightshift-workspaces/**)", "Edit(//g/Dev/nightshift-workspaces/**)",
+      "Read(//g/Dev/backups/**)", "Edit(//g/Dev/backups/**)",
+      "Read(~/AppData/Local/Programs/kolux/**)", "Edit(~/AppData/Local/Programs/kolux/**)",
+      "Read(/provenance/dirty-room/**)", "Edit(/provenance/dirty-room/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Read|Edit|Write|MultiEdit|NotebookEdit|Glob|Grep",
+        "hooks": [
+          { "type": "command", "command": "node .claude/hooks/clean-room-guard.mjs", "timeout": 10 }
+        ]
+      }
+    ]
+  }
+}

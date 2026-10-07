@@ -1,0 +1,101 @@
+# 18-remote-hosts-DROPPED random sample round 1 (100 of 6115): file	title
+src/main/ssh/ssh-relay-versioned-install.test.ts	returns immediately without deleting a live repair lock
+src/renderer/src/runtime/runtime-environment-ssh-state.test.ts	does not recreate a removed environment bucket from an in-flight response
+src/renderer/src/web/web-preload-api-runtime-environment.test.ts	does not resolve an old server selector through a differently keyed server
+src/main/ipc/pty-ssh-undelivered-kill.test.ts	records nothing while a reversible stop owns the PTY
+src/renderer/src/web/web-preload-api-clipboard.test.ts	yields while reading accepted large browser clipboard text
+src/relay/git-handler-worktree-provisioning.test.ts	warns but resolves when --local set fails (write-failure is warn-only)
+src/main/ssh/ssh-host-key-decision.test.ts	denies an unknown host for a config that says yes, as ssh -G reports it
+src/main/ssh/system-ssh-binary.test.ts	returns the first existing fixed ssh path
+src/shared/pairing.test.ts	tolerates surrounding whitespace from clipboard
+src/renderer/src/lib/pane-manager/mobile-fit-overrides.test.ts	replaces all overrides with the given list
+src/shared/direct-ssh-reconnect-telemetry-schema.test.ts	keeps timeout, rejection, cancellation, and stale counts independent
+src/renderer/src/store/slices/editor-remote-branch-actions.test.ts	runs pull and refreshes status + upstream on success
+src/relay/wsl-agent-hook-relay.test.ts	rejects a wrong token but authenticates the host-issued fixed token
+src/relay/dispatcher.test.ts	detaches the primary client when its write throws (frame lost, trigger reconnect)
+src/main/ssh/ssh-channel-multiplexer.test.ts	sends one keepalive frame per cadence tick
+src/renderer/src/ssh/ssh-connect-ui-timeout.test.ts	honours a caller-supplied budget instead of the composer default
+src/main/ssh/ssh-connection-file-transfer.test.ts	composes a caller abort into system SSH relay uploads
+src/relay/pty-handler-output-streaming.test.ts	tracks each negotiated source entry without rescanning the queue
+src/shared/ephemeral-vm-recipes.test.ts	parses an ssh connection result
+src/renderer/src/store/slices/worktrees-remote-runtime-removal.test.ts	removes worktrees through the active remote runtime environment
+src/relay/integration.test.ts	git.unstage reverses staging
+src/main/ssh/system-ssh-forward-process.test.ts	sends no signal to a child that already exited
+src/main/ssh/koluxd-remote-launch.test.ts	sends SIGTERM and never SIGKILL
+tests/e2e/remote-agent-completion-authority.unit.test.ts	does not spin or infer exit from a remote transport failure
+src/relay/pty-source-credit-ledger.test.ts	keeps the uncovered-cursor diagnostic when a retained span has a gap
+src/main/ipc/ssh-terminate-sessions.test.ts	ssh:terminateSessions leaves a recycled relay id out of the reconnect fence
+src/shared/git-remote-url-index.test.ts	parses CRLF output
+src/renderer/src/lib/serve-desktop-promotion-session-continuity.test.ts	resumes zero agents when the promoted renderer hydrates surviving daemon panes
+src/main/ipc/filesystem-watcher-remote-batch.test.ts	drops a stale flush once a newer install owns the key
+src/relay/git-response-pty-echo-backpressure.integration.test.ts	WITH opt-in: the diff streams on the bulk lane and the echo stays bounded
+src/relay/agent-exec-handler.test.ts	reports when cancellation has no matching in-flight command
+src/renderer/src/web/web-preload-api-ui.test.ts	persists final UI and host-partitioned sessions synchronously
+src/renderer/src/store/slices/runtime-environment-ssh.test.ts	publishes an epoch-only authority change without dropping the connection generation
+src/main/ipc/mobile.test.ts	includes IPv6 addresses (ranked after IPv4) and excludes link-local IPv6
+src/relay/relay-filesystem-watch-registry.test.ts	aborts a pending crawl only after the last same-root client leaves
+src/main/ssh/ssh-remote-node-resolution.test.ts	rethrows SSH session-limit errors from package-manager hint probing in strict mode
+src/renderer/src/hooks/remote-workspace-session-merge-local-survival.test.ts	is emitted once, not preserved into both
+src/main/ssh/ssh-remote-commands.test.ts	escapes double quotes before passing JavaScript to native Windows commands
+src/main/ssh/ssh-remote-kolux-cli.test.ts	carries the Dispatch capability through the SSH envelope
+src/main/ssh/ssh-config-parser.test.ts	defaults port to 22 when missing
+src/main/ipc/repos/repo-publish-remote-handler.test.ts	rejects a "url" provider value that fails the scheme allowlist, without touching git
+src/relay/pty-handler-spawn-cwd.test.ts	does not refuse a plain shell whose workspace root is missing
+src/relay/git-handler-worktree-ops.test.ts	enables long paths when the SSH execution host is Windows
+src/main/ssh/ssh-relay-sftp-namespace-install.test.ts	retains the first-install lock when the aborted SFTP session never closes
+src/relay/pty-handler-context-cap-env.test.ts	leaves WSLENV alone for a WSL shell when the cap is not set
+src/main/updater.headless-serve-install.test.ts	preserves interactive download and install-on-quit behavior
+src/main/ipc/ssh-pty-source-obligation-ledger.test.ts	keeps sealed exit state until final ACK publication succeeds
+src/main/speech/stt-service.test.ts	rejects idle warm reuse when the model is no longer ready
+src/relay/agent-exec-handler.test.ts	merges caller-supplied provider environment into the spawned command environment
+src/renderer/src/hooks/remote-workspace-session-merge-close-tombstones.test.ts	does not re-add a tombstoned tab through the host-unknown branch
+src/shared/ssh-relay-pty-ownership-proof.test.ts	never sweeps a bare host shell
+src/main/ipc/mobile.test.ts	reports the runtime pairing url unavailable and mints no offer when the widen fails
+src/main/ipc/remote-workspace-snapshot-normalization.test.ts	treats an empty marker record as absent, like every other optional record
+src/main/ipc/filesystem-watcher-wsl.test.ts	releases the WSL child reservation after a synchronous script write failure
+src/relay/git-handler-branch-cleanup.test.ts	deletes a preserved branch at the expected head
+src/main/ssh/ssh-relay-deploy-staged-upload.test.ts	aborts an in-progress relay upload at the overall deploy timeout
+src/main/ssh/ssh-system-fallback.test.ts	does not inject Kolux ControlMaster flags when ssh config already owns muxing
+src/relay/plugin-overlay.test.ts	leaves lazy OMP agent.db in the real remote home on the relay
+src/main/ipc/repos-remote-base-ref-queries.test.ts	returns [] when the relay exec throws
+src/main/ssh/ssh-known-hosts.test.ts	skips blanks, comments and surrounding whitespace
+src/relay/plugin-overlay.test.ts	does not overwrite a user's same-named remote Pi extension file
+src/main/ssh/system-ssh-windows-upload.test.ts	never deletes the destination it is replacing
+src/renderer/src/web/web-clipboard-copy-fallback.test.ts	serves the text from the copy event without touching the DOM
+src/renderer/src/web/web-runtime-client-heartbeat.test.ts	does not probe when not in the connected state
+src/main/ssh/ssh-relay-superseded-endpoints.test.ts	leaves an upgrade-orphaned relay that still owns terminals running, untouched
+src/main/ipc/remote-workspace-cache.test.ts	keeps the observation token stable when an unchanged revision is re-read
+src/relay/subprocess.test.ts	shuts down cleanly on SIGTERM
+src/renderer/src/runtime/remote-server-update-coordinator.test.ts	repeats the install failure a still-running server is publishing
+src/main/ssh/ssh-g-config-resolution.test.ts	still reads a quoted path with no space, rather than calling every quote doubt
+src/main/ssh/ssh-remote-kolux-cli.test.ts	rejects interactive account add but still bridges account list
+src/relay/relay-filesystem-watch-registry.test.ts	fails closed instead of loading the native watcher in the relay process
+src/relay/relay-command-env.test.ts	honors relocated Windows package-manager env vars
+src/shared/remote-runtime-shared-control-subscriptions.test.ts	sends the unsubscribe when closed after an established subscribe replay completes
+src/main/ssh/ssh-orphan-sweep-pane-state-verdicts.test.ts	never sweeps when the host itself is too degraded to answer
+src/main/ssh/ssh-relay-node-headers.test.ts	leaves nodedir unset when the prefix has no headers at all
+src/main/ssh/ssh-connection-direct-startup.test.ts	passes resolved OpenSSH config to direct system SSH connections
+src/main/ssh/ssh-relay-endpoint-takeover.test.ts	names the incumbent pid and the Reset Relay escape hatch in the error
+src/shared/remote-runtime-client.test.ts	binds optional capabilities and rejects a hard outbound queue overflow
+src/relay/fs-handler-ripgrep-fallback.test.ts	falls back only for a tagged listing launch failure
+src/main/ssh/ssh-config-alias-claim.test.ts	matches single-character wildcards the way OpenSSH does
+src/relay/dispatcher-capacity-degradation.test.ts	publishProducerNotification reports its drops like notify
+src/main/ssh/ssh-connection-reconnect-ladder.test.ts	forces a fresh SSH connection for an explicit reconnect
+src/relay/git-handler-remote-sync.test.ts	fetches GitLab merge request heads through the versioned durable-ref RPC
+src/main/ssh/ssh-relay-endpoint-incumbent-shell.integration.test.ts	still retains a relay holding work alongside its service children
+src/main/wsl/wsl-w1-w3-contract.test.ts	a timeout is reported, not disguised as an empty answer
+src/renderer/src/hooks/ssh-reconnect-pane-retry.test.ts	ignores an absence record naming an id this tab does not hold
+src/relay/git-handler-utils.test.ts	detects an unknown-switch usage error from stderr when the exit code is absent
+src/main/speech/stt-service.test.ts	settles stop when the worker exits during stop and does not reuse it
+src/relay/pty-handler-spawn-admission.test.ts	increments PTY ids on each spawn
+src/main/ssh/ssh-relay-pty-master-cloexec-install.test.ts	leaves an unloadable node-pty alone rather than rebuilding it blind
+src/relay/subprocess.test.ts	exits after grace period on stdin close when no PTYs exist
+src/main/ssh/koluxd-remote-shell-commands.integration.test.ts	leaves the live daemon runtime dir untouched through capture and restore
+src/renderer/src/runtime/remote-server-update-coordinator.test.ts	fails when no offered update reaches the requested version
+src/main/ssh/koluxd-remote-deploy.test.ts	puts the previous version back after a rejected candidate, rather than leaving the host down
+src/relay/ssh-pty-consumer-session-adapter.test.ts	intersects the negotiated V1 source window without changing legacy omission
+src/renderer/src/hooks/remote-workspace-session-merge-local-survival.test.ts	keeps a local tab the host snapshot does not contain
+src/main/emulator/android/avd-manager.test.ts	appends the no-window flag
+src/main/emulator/simctl-simulator-devices.test.ts	normalizes missing simctl errors for UI and CLI callers
+src/main/ipc/worktrees-wsl-runtime-routing.test.ts	routes local worktree creation with a remote tracking base through the selected WSL project runtime
+src/main/ssh/ssh-reconnect-ladder.test.ts	caps every flap delay so handshake and relay re-establishment beat grace

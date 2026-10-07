@@ -1,0 +1,1991 @@
+{
+  "area": "07-accounts-keys",
+  "prefix": "ACCT",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-07-001",
+      "title": "AI connections page shows one Connect card per agent",
+      "tier": "P0",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Opens Settings and goes to the accounts page (titled AI connections).",
+      "user_sees": "A grid of cards for Claude, Codex and Grok, each saying in plain words what that subscription is good for and whether it is ready; below a divider sits an advanced area for managing several accounts.",
+      "rules": [
+        "Card order is Claude, Codex, Grok; each card carries a one-line plain-language tagline about what the plan is good for.",
+        "The advanced block below the grid is headed \"Manage accounts (advanced)\" and holds the per-provider account sections.",
+        "Kolux bills nothing itself: every connection uses the user's own subscription or key, and Kolux bundles no models or keys.",
+        "While statuses load the cards show a skeleton; a card never guesses not-installed before detection finishes.",
+        "Agent traffic goes straight between each agent CLI and its own provider; Kolux neither proxies nor records it."
+      ],
+      "acceptance": [
+        "Open the accounts page on a machine with only Claude installed → three cards, Claude shows its real state, Codex and Grok offer an install action.",
+        "Throttle status detection → cards render a loading skeleton, never an install prompt, until detection returns."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/AccountsPane.tsx:356",
+        "src/renderer/src/components/ai-connections/ConnectCardGrid.test.tsx:62",
+        "src/renderer/src/components/ai-connections/AiConnectionsSection.test.tsx:29",
+        "registry:settings-sections:accounts",
+        "registry:readme-features:README.md:14",
+        "registry:readme-features:What it does#3",
+        "registry:readme-features:Privacy#15"
+      ],
+      "round": 0,
+      "related": [
+        "16",
+        "17"
+      ]
+    },
+    {
+      "id": "D-07-002",
+      "title": "Connect card moves through clear states from not installed to connected",
+      "tier": "P0",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Looks at a Connect card, clicks \"Connect\", follows the sign-in, then returns.",
+      "user_sees": "The card shows exactly one of: not installed, installing, not connected, connecting, connected, or needs attention, with the single action that fits that state.",
+      "rules": [
+        "Not connected: a primary \"Connect\" button plus an \"Other ways to connect\" menu listing the alternative sign-in methods for that agent.",
+        "Connecting: depending on the method the card says a browser page opened, asks the user to paste a code with an \"Open sign-in page\" link, or shows a device code to type elsewhere; \"Cancel\" is always offered.",
+        "Connected: shows the account label (email or plan) with \"Manage\", \"Disconnect\" and, for the Claude 1-year key, \"Renew\".",
+        "Each agent has a default method: Claude uses the 1-year key, Codex uses ChatGPT sign-in, Grok uses the Grok CLI login.",
+        "A pasted sign-in code is only accepted for Claude; other agents complete in the browser or via a device code.",
+        "Cancel stops the underlying sign-in process itself, not only the card, and also clears a leftover needs-attention state when nothing is in flight.",
+        "A connect choice is disabled while its request is pending and re-enables after 30 seconds if the request never answers, so the card cannot get stuck."
+      ],
+      "acceptance": [
+        "Click Connect on Codex → card enters connecting with Cancel; finish the browser sign-in → card shows connected with the account label.",
+        "Click Cancel while connecting → the flow stops and the card returns to not connected with no partial account saved."
+      ],
+      "compat": "Connection methods: claude-token, claude-account, codex-chatgpt, codex-device-code, grok-login, grok-device-code, grok-api-key.",
+      "decision": "",
+      "evidence": [
+        "src/shared/ai-connections/ai-connection-types.ts:51",
+        "src/renderer/src/components/ai-connections/ConnectCard.test.tsx:121",
+        "src/renderer/src/components/ai-connections/connect-card-state-connecting.test.tsx:80",
+        "src/main/ai-connections/ai-connections-ipc.ts:160",
+        "src/main/ai-connections/codex-connect.test.ts:111",
+        "src/renderer/src/components/ai-connections/ConnectCard.test.tsx:214"
+      ],
+      "round": 0,
+      "related": [
+        "16"
+      ]
+    },
+    {
+      "id": "D-07-003",
+      "title": "Install a missing agent CLI from its Connect card",
+      "tier": "P0",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Install\" on a card for an agent that is not on the machine.",
+      "user_sees": "A progress bar with Cancel while the agent installs; when it finishes the card moves on to not connected without restarting Kolux.",
+      "rules": [
+        "On Windows the install runs through the system package manager and reports progress parsed from its output.",
+        "After install the program search path is re-read so the new CLI is found immediately; the cached version probe is invalidated.",
+        "An install that runs longer than 15 minutes is stopped and reported as failed.",
+        "Where no automatic installer exists the card offers \"Open install page\" instead.",
+        "Known package-manager exit codes map to plain reasons (already installed, blocked by SmartScreen, unavailable).",
+        "Starting a second install for the same agent stops the first one."
+      ],
+      "acceptance": [
+        "Click Install on a missing Codex → progress advances, then the card shows not connected and Connect works without restarting.",
+        "Simulate an install that never finishes → after 15 minutes the card shows a failure with \"Try installing again\"."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ai-connections/ai-connections-ipc.ts:56",
+        "src/main/ai-connections/ai-connections-install.test.ts:74",
+        "src/main/ai-connections/winget-install.test.ts:42",
+        "src/main/ai-connections/winget-progress-parser.test.ts:5",
+        "src/main/ai-connections/agent-version-probe.test.ts:23",
+        "src/main/ai-connections/ai-connections-ipc.test.ts:283"
+      ],
+      "round": 0,
+      "related": [
+        "16",
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-004",
+      "title": "Claude connects with a long-lived 1-year key captured once",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Connect\" on the Claude card (the default method) and approves the sign-in in the browser.",
+      "user_sees": "Claude shows connected on the 1-year key plan with the month the key needs renewing; nothing has to be pasted again until then.",
+      "rules": [
+        "Kolux runs Claude's own token-setup command in a hidden terminal, reads the long-lived key from its output, and stores the key with its creation date and the token connection mode.",
+        "The key is treated as valid for one year; from 30 days before expiry the card warns and offers \"Renew\".",
+        "Every Claude pane started in token mode receives the key through Claude's OAuth-token environment variable.",
+        "The setup command times out after 10 minutes; a subscription-required message in mid-stream output is not treated as final.",
+        "On Windows the setup runs without a visible console window and never through cmd.exe.",
+        "While the 1-year key is the Claude connection it overrides any managed-account selection for new Claude panes.",
+        "Only one 1-year key setup runs at a time; asking for another while one is in progress is refused.",
+        "On Windows, if the installed Claude launcher is a wrapper Kolux cannot run directly, the card shows needs attention instead of running it through the command prompt."
+      ],
+      "acceptance": [
+        "Connect Claude on a fresh profile → after browser approval the card shows connected and a renew month about one year out.",
+        "Set the stored key's creation date to 340 days ago → the card shows the expiring warning with Renew.",
+        "Open a new Claude pane in token mode → the session starts signed in without a browser prompt."
+      ],
+      "compat": "Environment variable CLAUDE_CODE_OAUTH_TOKEN; data: claudeOauthToken, claudeOauthTokenCreatedAt, claudeConnectionMode.",
+      "decision": "",
+      "evidence": [
+        "src/main/ai-connections/claude-token-connect.test.ts:101",
+        "src/main/ai-connections/claude-setup-token-parser.test.ts:28",
+        "src/main/ai-connections/claude-oauth-token-expiry.ts:2",
+        "src/main/providers/local-pty-spawn-environment.test.ts:30",
+        "registry:settings-keys:claudeOauthToken",
+        "registry:settings-keys:claudeConnectionMode",
+        "src/main/claude-accounts/claude-structured-auth-policy.test.ts",
+        "src/main/ai-connections/claude-token-connect.test.ts:199",
+        "src/main/ai-connections/claude-token-connect.test.ts:156"
+      ],
+      "round": 0,
+      "related": [
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-005",
+      "title": "Sign in a Claude account in the browser and keep it as a managed account",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Picks \"Use my Claude account instead\" on the Claude card, or \"Add Account\" in the Claude accounts section, and signs in in the browser.",
+      "user_sees": "A notice to finish signing in in the browser with Cancel; once done the account appears with its email and organisation and can be made active.",
+      "rules": [
+        "Kolux runs Claude's own login in a private configuration folder per account, then captures that account's credentials.",
+        "The login runs hidden on Windows; the sign-in URL and codes never appear in any error text.",
+        "Adding fails cleanly if the login process exits early or no credentials are found; nothing half-added is kept.",
+        "Re-authenticating an account that fails restores the previous credentials rather than leaving it signed out.",
+        "macOS: credentials live in the login keychain under an entry scoped to the account, with the older shared entry still readable.",
+        "On macOS the user's own Claude keychain login is put back after the browser sign-in; if it cannot be put back, adding the account fails rather than leaving that login replaced.",
+        "Credentials unchanged from before the sign-in are never taken as the new account's; when the account-specific entry is missing, only a changed shared entry is accepted (older Claude builds).",
+        "When the keychain copy and the file copy of a sign-in disagree, the fresher one is used."
+      ],
+      "acceptance": [
+        "Add a Claude account → browser opens, after sign-in the row shows email and organisation within a few seconds.",
+        "Cancel during sign-in → no new row appears and the previously active account is unchanged.",
+        "Force a re-authentication failure → the row keeps its old credentials and does not show signed out."
+      ],
+      "compat": "Data: claudeManagedAccounts list (email, organisation, runtime, last authenticated) and activeClaudeManagedAccountId.",
+      "decision": "",
+      "evidence": [
+        "src/main/claude-accounts/claude-account-service-add-account.test.ts:53",
+        "src/main/claude-accounts/claude-account-service-login-process.test.ts:52",
+        "src/main/claude-accounts/claude-account-service-reauth-rollback.test.ts:58",
+        "src/main/claude-accounts/claude-windows-interactive-login.test.ts:29",
+        "src/main/claude-accounts/keychain.test.ts:70",
+        "registry:settings-keys:claudeManagedAccounts",
+        "src/main/claude-accounts/claude-account-service-credential-capture.test.ts:132",
+        "src/main/claude-accounts/claude-account-service-credential-capture.test.ts:92",
+        "src/main/claude-accounts/runtime-auth-service-keychain-snapshots.test.ts:141"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-006",
+      "title": "Kolux keeps Claude sign-ins fresh by default, with an opt-out",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Leaves the default on, or turns on the toggle that lets Claude Code handle its own sign-in.",
+      "user_sees": "By default managed Claude sign-ins never lapse mid-day; with the opt-out on, Kolux stops renewing sign-ins and stops asking Anthropic for usage, and usage figures come only from running sessions.",
+      "rules": [
+        "Refresh happens ahead of time, inside a 5-minute window before expiry, and again when an account is switched in.",
+        "No refresh runs while a Claude terminal is live for that account, so the running session's sign-in is never pulled from under it.",
+        "A refresh the provider refuses outright marks the account as needing re-auth; network-type failures retry later.",
+        "With the opt-out on, no requests go to the token endpoint and stale-sign-in warnings are suppressed.",
+        "Opt-out is off by default.",
+        "Refreshing before a launch never touches the system-default Claude login; only managed accounts are renewed."
+      ],
+      "acceptance": [
+        "With the default, let a managed account's token near expiry while no Claude pane is open → it is renewed before it lapses.",
+        "Turn the opt-out on → no token-endpoint traffic and no Needs re-auth badge on that account afterwards."
+      ],
+      "compat": "Data: claudeSelfManagedSignIn (default false).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/accounts-pane-claude-section.tsx:358",
+        "src/main/claude-accounts/oauth-refresh.test.ts:44",
+        "src/main/claude-accounts/claude-self-managed-sign-in.test.ts:13",
+        "src/main/claude-accounts/live-pty-gate.test.ts:25",
+        "src/main/claude-accounts/runtime-auth-service-launch-refresh.test.ts:43",
+        "registry:settings-keys:claudeSelfManagedSignIn",
+        "src/main/claude-accounts/runtime-auth-service-launch-refresh.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "06"
+      ]
+    },
+    {
+      "id": "D-07-007",
+      "title": "Codex connects with ChatGPT sign-in or a device code",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Connect\" on the Codex card, or picks \"Sign in with a code\" from the other ways menu.",
+      "user_sees": "Either the browser opens for ChatGPT sign-in, or the card shows a short code to enter on another device; afterwards Codex shows connected.",
+      "rules": [
+        "Device-code sign-in lets the browser step happen on a different machine.",
+        "Each added Codex account gets its own private Codex home; the user's normal Codex folder is never changed.",
+        "A login that is torn down or rolled back never deletes a home that already holds a working sign-in.",
+        "The system-default Codex login (whatever the Codex CLI itself uses) is recognised whether it is a ChatGPT sign-in, an API key with a custom provider, or signed out.",
+        "The device-code view stays in a waiting state until both the link and the code are known."
+      ],
+      "acceptance": [
+        "Connect Codex via code → the card shows a code; entering it elsewhere turns the card connected.",
+        "Add a second Codex account → the original Codex folder's files are byte-identical before and after."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ai-connections/codex-connect.test.ts:20",
+        "src/main/codex-accounts/codex-login-session-device-auth.test.ts:17",
+        "src/main/codex-accounts/service-account-add-login.test.ts:37",
+        "src/main/codex-accounts/runtime-home-per-account-homes.test.ts:42",
+        "src/main/codex-accounts/kol-4734-login-rollback-deletes-authenticated-home.test.ts:1",
+        "src/main/codex-accounts/codex-login-session-device-auth.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-008",
+      "title": "Grok connects through its CLI login, a device code, or a pasted xAI key",
+      "tier": "P0",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Connect\" on the Grok card, or chooses \"Sign in with a code\" or \"Use an xAI API key\".",
+      "user_sees": "The Grok CLI sign-in completes and the card turns connected; for the key route a small dialog takes the key once.",
+      "rules": [
+        "The API-key route is marked advanced and billed per use, unlike the subscription sign-in.",
+        "The key dialog keeps Connect disabled until something is typed, submits the key once, and never shows it again anywhere on screen.",
+        "Cancel clears the typed key, even if the dialog is reopened without being rebuilt.",
+        "The key is stored sealed like other credentials (see the key vault card).",
+        "When a Grok CLI sign-in and a saved xAI key both exist, the card reports the sign-in; a sign-in the user already made shows connected with no action."
+      ],
+      "acceptance": [
+        "Open the key dialog → Connect is disabled; type a key → Connect enables; submit → card connected and the key text is nowhere in the page.",
+        "Type a key, Cancel, reopen → the field is empty."
+      ],
+      "compat": "Data: grokApiKey.",
+      "decision": "",
+      "evidence": [
+        "src/main/ai-connections/grok-connect.test.ts:36",
+        "src/main/grok-accounts/grok-login-session-device-auth.test.ts:5",
+        "src/renderer/src/components/ai-connections/connect-card-grok-api-key-dialog.test.tsx:35",
+        "registry:settings-keys:grokApiKey",
+        "src/main/ai-connections/grok-connection-status.test.ts:85"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-009",
+      "title": "Saved keys and sign-ins are encrypted at rest",
+      "tier": "P0",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Connects accounts and keys, then quits and reopens Kolux.",
+      "user_sees": "Everything stays connected; the saved settings and account files on disk hold sealed values, not readable keys.",
+      "rules": [
+        "The Claude long-lived key and the xAI key are sealed inside the settings file with the operating system's protection.",
+        "Managed Claude credentials and Codex account metadata are sealed too; a one-time sweep shortly after the first window opens seals anything older that was still plain.",
+        "The sweep never blocks or fails a launch; if the OS cannot seal, data stays as it was rather than being lost.",
+        "Files written by the earlier release in plain form are read and then resealed.",
+        "Sealed files that cannot be read are moved aside rather than deleted.",
+        "Files and folders that hold secrets are restricted to the current user (on Windows their permissions are rewritten to grant only that user); this is best-effort, failures are logged, and a launch is never blocked.",
+        "Where the OS offers no real keyring, or one that only obfuscates, sealing still happens and a warning is written to the log once when the condition starts, changes or clears; it is never a dialog."
+      ],
+      "acceptance": [
+        "Connect Claude with the 1-year key, quit, inspect the settings file → no key text is present; reopen → still connected.",
+        "Start from a profile with plain stored credentials → after first launch they are sealed and still work."
+      ],
+      "compat": "Data: sealed secret slots for claudeOauthToken and grokApiKey; keyVaultCredentialMigrationAcknowledged.",
+      "decision": "",
+      "evidence": [
+        "src/main/startup/credential-encryption-migration.ts:27",
+        "src/main/persistence/loading-store/state-serialization-secret-handling.ts:131",
+        "src/main/claude-accounts/claude-managed-auth-encryption-migration.test.ts:51",
+        "src/main/codex-accounts/runtime-home-service-auth-encryption-at-rest.test.ts:54",
+        "src/main/codex-accounts/codex-runtime-metadata-encryption-migration.test.ts:44",
+        "registry:settings-keys:keyVaultCredentialMigrationAcknowledged",
+        "registry:readme-features:README.md:140",
+        "src/shared/secure-file.test.ts:71",
+        "src/shared/secret-store.test.ts:44",
+        "src/main/host/secret-protection-report.ts:1",
+        "src/main/win32-utils-async-acl.test.ts",
+        "registry:readme-features:Privacy#13"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-07-010",
+      "title": "A saved key that can no longer be decrypted is cleared with a reconnect hint",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Opens Kolux after the OS key store changed (new Windows profile, restored backup).",
+      "user_sees": "The affected connection shows not connected and a message says to reconnect it on the AI connections page; the app still opens normally.",
+      "rules": [
+        "Only the key that fails to decrypt is dropped; other settings load untouched.",
+        "The message names where to reconnect (Settings, AI connections)."
+      ],
+      "acceptance": [
+        "Corrupt the sealed Claude key in the settings file → Kolux opens, Claude shows not connected, and a reconnect message appears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/persistence/loading-store/loaded-state-parsing.ts:144",
+        "src/main/claude-accounts/claude-managed-auth-storage.test.ts:49"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-07-011",
+      "title": "Keys and sign-in links never leak into logs, errors or the screen",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Connects, fails a sign-in, or shares a log.",
+      "user_sees": "Error messages explain what went wrong without showing tokens, sign-in URLs or codes.",
+      "rules": [
+        "The Claude long-lived key is redacted from all logs.",
+        "Login errors are reworded so they never echo a sign-in URL or device code.",
+        "The xAI key dialog never re-renders a submitted key.",
+        "A guard test forbids writing managed credentials in plain text."
+      ],
+      "acceptance": [
+        "Run a Claude token connect with logging on → the log holds a redaction marker, not the key.",
+        "Make a Claude login fail after a URL was printed → the shown error contains no URL."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/claude-accounts/managed-credentials-plaintext-literal-ratchet.test.ts:1",
+        "src/main/claude-accounts/claude-windows-interactive-login.test.ts:29",
+        "src/main/ai-connections/ai-connections-error-classification.test.ts:5"
+      ],
+      "round": 0,
+      "related": [
+        "10"
+      ]
+    },
+    {
+      "id": "D-07-012",
+      "title": "A dead sign-in is announced outside Settings with Sign in again",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Works normally while the active managed Claude account's sign-in goes stale, or Codex reports an auth error.",
+      "user_sees": "A calm notice naming the account with a \"Sign in again\" button that starts re-authentication.",
+      "rules": [
+        "Shows only for an active managed Claude account whose sign-in is stale, or for a Codex account that hit an auth error.",
+        "Never shown for the Codex system-default login, nor while Claude manages its own sign-in.",
+        "Hidden until settings have loaded, so it never flashes at startup."
+      ],
+      "acceptance": [
+        "Mark the active managed Claude account stale → the notice appears with its label; click Sign in again → re-auth starts.",
+        "Turn on the Claude self-managed toggle → the notice disappears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/accounts/AccountReauthNotice.test.tsx:50",
+        "src/renderer/src/components/accounts/account-reauth-notice-targets.test.ts:45",
+        "src/shared/codex-auth-errors.test.ts:9"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-07-013",
+      "title": "Needs-attention cards say why and offer the one fix that applies",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Sees a card in the needs-attention state.",
+      "user_sees": "A plain reason and one button that fixes it, or no button when waiting is the only fix.",
+      "rules": [
+        "Reasons: browser blocked, sign-in refused, plan does not include this agent, not found yet, SmartScreen blocked, usage limit, key expiring, key expired, install failed, install unavailable, unknown.",
+        "Fix buttons: \"Renew\", \"Check again\", \"Try installing again\", \"Open install page\", \"Try again\", \"Use a 1-year key instead\".",
+        "A usage limit shows when the agent can be used again (resting until a time) with no button.",
+        "An unknown reason is shown as information only, never as a misleading fix.",
+        "A Claude session that stops because its key expired flips the card to key expired.",
+        "Only a Claude connected through the 1-year key flips to key expired on a sign-in stop; account-mode connections, other stop reasons and other agents leave the card alone."
+      ],
+      "acceptance": [
+        "Expire the Claude key → card shows key expired with Renew.",
+        "Hit a Claude usage limit → card shows the reset time and no fix button."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/ai-connections/ai-connection-types.ts:51",
+        "src/main/ai-connections/claude-connection-status.test.ts:24",
+        "src/main/ai-connections/ai-connections-error-classification.test.ts:5",
+        "src/renderer/src/components/ai-connections/ConnectCard.test.tsx:121",
+        "src/main/ai-connections/ai-connections-ipc.test.ts:417"
+      ],
+      "round": 0,
+      "related": [
+        "06"
+      ]
+    },
+    {
+      "id": "D-07-014",
+      "title": "Connection status stays current without constant polling",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Signs in or installs an agent outside Kolux, then switches back.",
+      "user_sees": "The cards update on their own when Kolux regains focus; \"Check again\" re-detects without starting a sign-in.",
+      "rules": [
+        "A light safety-net check runs every 5 seconds only while the page is open and the window visible.",
+        "Regaining focus triggers an immediate re-check.",
+        "Check again re-reads the program path and clears the cached version before detecting; it never connects.",
+        "Each check computes all statuses once and broadcasts them to every open window."
+      ],
+      "acceptance": [
+        "Run the agent's login in an outside terminal, focus Kolux → the card shows connected within a second or two.",
+        "Minimise the window → no status checks run until it is visible again."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ai-connections/ai-connections-ipc.test.ts:143",
+        "src/main/ai-connections/ai-connections-broadcast.test.ts:192",
+        "src/main/ai-connections/ai-connections-status.test.ts:77",
+        "src/renderer/src/components/ai-connections/useAiConnections.test.tsx:1"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-015",
+      "title": "Disconnect removes only what Kolux created",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Disconnect\" on a connected card and confirms.",
+      "user_sees": "A confirmation first; afterwards the card returns to not connected.",
+      "rules": [
+        "1-year key: the stored key is erased.",
+        "Managed account: that account is removed from Kolux.",
+        "System-default login: nothing is deleted; Kolux only explains how to sign out in the agent's own CLI.",
+        "When Kolux quits, every in-flight connect flow is cancelled and every running install is stopped."
+      ],
+      "acceptance": [
+        "Disconnect a Claude key connection → the key is gone from settings and the card shows not connected.",
+        "Disconnect when Codex uses the system login → the user's Codex login still works in a plain terminal."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ai-connections/ai-connections-disconnect.test.ts:34",
+        "src/main/ai-connections/ai-connections-transient-state.test.ts:1",
+        "src/main/ai-connections/ai-connections-ipc.test.ts:319"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-016",
+      "title": "Claude accounts list: system default plus managed accounts",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Opens the Claude accounts section under the advanced block.",
+      "user_sees": "A \"System default\" row for the normal Claude login, then one row per managed account with email, organisation, last sign-in time, an Active badge on the selected one and a Needs re-auth warning when stale.",
+      "rules": [
+        "Each managed row offers \"Re-authenticate\" and \"Remove\"; removal asks for confirmation first.",
+        "Removing the active account falls back to the system default.",
+        "With no managed accounts the section explains Kolux is using the system default login.",
+        "Clicking a row makes it the active account for new Claude sessions."
+      ],
+      "acceptance": [
+        "Add two accounts, click the second → its row shows Active and new Claude panes run as that account.",
+        "Remove the active account and confirm → System default becomes Active."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/AccountsPane.test.tsx:29",
+        "src/main/claude-accounts/claude-account-service-account-selection.test.ts:1",
+        "src/renderer/src/runtime/runtime-provider-accounts-client.test.ts:119",
+        "registry:settings-keys:activeClaudeManagedAccountId"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-017",
+      "title": "Switching the active Claude account is safe while sessions run",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Switches the active Claude account while Claude panes are open.",
+      "user_sees": "The switch succeeds; running sessions are untouched and new sessions use the new account; on failure the previous selection comes back.",
+      "rules": [
+        "Before switching away from the system default its credentials are snapshotted and restored on switching back.",
+        "If the user logs out of Claude outside Kolux, Kolux does not resurrect that login.",
+        "Refreshed credentials are only written back when they provably belong to the same account.",
+        "Already-running sessions keep their account until restarted.",
+        "A Claude launch requested while an account switch is still in progress is refused with a try-again-shortly message.",
+        "A sign-in the user made in Claude itself while a managed account was active is kept, not overwritten, when switching back to the system default.",
+        "Switching back to the system default when Kolux holds no saved copy of it removes the managed account's credentials, so Claude is signed out rather than still signed in as the managed account."
+      ],
+      "acceptance": [
+        "With a Claude pane running, switch accounts → that pane keeps working; a new pane signs in as the new account.",
+        "Make the switch fail → the previous account is still Active."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/claude-accounts/runtime-auth-service-account-switching.test.ts:46",
+        "src/main/claude-accounts/runtime-auth-service-deselect-restore.test.ts:45",
+        "src/main/claude-accounts/runtime-auth-service-readback-identity.test.ts:44",
+        "src/main/claude-accounts/runtime-auth-service-keychain-snapshots.test.ts:1",
+        "src/main/ipc/pty/runtime/spawn-preflight.ts:140",
+        "src/main/claude-accounts/environment.ts:92",
+        "src/main/claude-accounts/runtime-auth-service-keychain-snapshots.test.ts",
+        "src/main/claude-accounts/runtime-auth-service-materialization.test.ts:399"
+      ],
+      "round": 0,
+      "related": [
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-018",
+      "title": "Adding the same Claude account twice is refused",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Signs in again with an account that is already in the list.",
+      "user_sees": "Kolux says the account already exists instead of creating a second row.",
+      "rules": [
+        "Accounts match by email ignoring case and surrounding spaces, plus organisation and where the account runs.",
+        "The same email in a different organisation is a separate account."
+      ],
+      "acceptance": [
+        "Add an account, then add it again with the email in different case → no new row, an already-added message."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/claude-accounts/claude-duplicate-account.test.ts:34"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-019",
+      "title": "Codex accounts list for quick switching",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Opens the Codex accounts section, adds, selects or removes accounts.",
+      "user_sees": "An optional list of Codex accounts, each with its own sign-in, used for switching and for live rate-limit figures; rows warn when sign-in is missing or stale.",
+      "rules": [
+        "Row warnings: needs sign-in, needs re-auth.",
+        "Removal asks to confirm; removing the active one falls back to the system default.",
+        "A personal and a business workspace under the same email are kept as two accounts with labels that tell them apart.",
+        "Adding or selecting an account does not wait on a quota refresh.",
+        "A briefly missing credential file is tolerated for a grace period, and a locked sign-in file never causes a home to be deleted.",
+        "Removing an account retries briefly when Windows still holds a lock on its folder.",
+        "Adding a ChatGPT-signed Codex account is refused, leaving the user's Codex configuration untouched, while that configuration points Codex at a custom model provider; the message says to keep the system default or switch the provider back first.",
+        "Account ownership is proven by the account's own identity, never by a matching plan label."
+      ],
+      "acceptance": [
+        "Add a personal and a business Codex sign-in with one email → two rows with distinct labels.",
+        "Remove the active Codex account → the system default becomes active and new Codex panes use it."
+      ],
+      "compat": "Data: codexManagedAccounts, activeCodexManagedAccountId, activeCodexManagedAccountIdsByRuntime.",
+      "decision": "",
+      "evidence": [
+        "src/main/codex-accounts/service-account-selection-and-removal.test.ts:32",
+        "src/main/codex-accounts/codex-auth-workspace-identity.test.ts:56",
+        "src/main/codex-accounts/codex-credential-absence-grace.test.ts:28",
+        "src/main/codex-accounts/service-quota-refresh-decoupling.test.ts:99",
+        "src/renderer/src/lib/codex-account-display-label.test.ts:12",
+        "registry:settings-keys:codexManagedAccounts",
+        "src/main/codex-accounts/service-managed-home-removal-retries.test.ts",
+        "src/main/codex-accounts/service-account-add-login.test.ts:168",
+        "src/main/codex-accounts/codex-config-mirror.ts:89",
+        "src/main/codex-accounts/codex-auth-workspace-identity.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "06"
+      ]
+    },
+    {
+      "id": "D-07-020",
+      "title": "Codex system-default login is shown as it really is",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Looks at the Codex section without adding managed accounts.",
+      "user_sees": "The system-default row says whether Codex is signed in with ChatGPT, using an API key, or signed out.",
+      "rules": [
+        "Kolux reads the system login through a mirrored snapshot and never edits the user's own Codex folder.",
+        "An API-key login with a custom provider is not mistaken for a ChatGPT account.",
+        "If the user signs out of Codex outside Kolux, Kolux drops its mirrored copy of that sign-in instead of bringing it back.",
+        "An older copy of the same Codex sign-in is never copied back from the system login unless Kolux can prove where it came from."
+      ],
+      "acceptance": [
+        "Sign Codex out in a plain terminal, focus Kolux → the system-default row shows signed out."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/codex-accounts/service-system-default-identity.test.ts:58",
+        "src/main/codex-accounts/runtime-home-system-default-snapshot.test.ts:52",
+        "src/main/codex-accounts/codex-account-identity-api-key-guard.test.ts:1",
+        "src/main/codex-accounts/runtime-home-system-default-mirror-readback.test.ts",
+        "src/main/codex-accounts/runtime-home-system-default-mirror-readback.test.ts:128"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-021",
+      "title": "Codex settings are copied into each account and sync problems are flagged",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Edits the normal Codex configuration file, then runs a managed Codex account.",
+      "user_sees": "The managed account picks up the same configuration; if copying fails the section explains why.",
+      "rules": [
+        "Warnings cover a config file locked by antivirus, a missing config file, and an empty one.",
+        "Legacy shared configuration from older releases stays readable.",
+        "The user's own Codex skills, plugins and profile are made available inside each account's home before launch without replacing that account's sign-in or sessions; later edits to the user's Codex config are picked up before the next launch.",
+        "Copying settings never overwrites a project-trust entry Codex writes at the same moment, and a failed copy never blocks a launch."
+      ],
+      "acceptance": [
+        "Add a model setting to the Codex config file → a new pane on a managed account uses it.",
+        "Lock the config file → the section shows a locked-file warning."
+      ],
+      "compat": "File format: Codex config.toml copied into each managed home.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/accounts-pane-config-sync.ts:1",
+        "src/main/codex-accounts/legacy-shared-config-compatibility.test.ts:1",
+        "src/main/codex-accounts/runtime-home-system-resource-materialization.test.ts:80",
+        "src/main/ipc/codex-config-sync.test.ts",
+        "src/main/codex-accounts/legacy-shared-config-compatibility.test.ts:108"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-07-022",
+      "title": "Choose which Codex folder past sessions are imported from",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Sets the Codex home to import history from, or clicks \"Reset\".",
+      "user_sees": "An empty field means the standard Codex folder; a custom path makes Kolux read session history from there.",
+      "rules": [
+        "Reset returns the field to empty (standard folder)."
+      ],
+      "acceptance": [
+        "Enter a custom folder holding Codex sessions → those sessions become resumable in Kolux."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/codex-session-source-home-control.tsx:10"
+      ],
+      "round": 0,
+      "related": [
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-023",
+      "title": "A resumed session stays on the account it started with",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Switches accounts, then resumes or restarts an older session.",
+      "user_sees": "The session reopens under its original account; a pane whose account is gone is marked stale rather than silently moved.",
+      "rules": [
+        "Stale panes are recognised by account id, not by label.",
+        "Auth errors printed by Codex in a pane are detected and raise the re-auth notice.",
+        "Resume waits until the right account's home is selected.",
+        "If the original account's sign-in stays unavailable for about two seconds, the resume fails with a try-again message instead of continuing under a different account."
+      ],
+      "acceptance": [
+        "Start Codex on account A, switch to B, restart the pane → it still runs as A.",
+        "Remove account A → the pane shows it needs a new account."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/pty-codex-account-attribution.test.ts:62",
+        "src/renderer/src/lib/codex-stale-pane-account-identity.test.ts:83",
+        "src/main/codex-accounts/runtime-home-resume-selection-gate.test.ts:1",
+        "src/shared/codex-auth-errors.test.ts:9",
+        "src/main/ipc/pty-codex-account-attribution.test.ts:132"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "09"
+      ]
+    },
+    {
+      "id": "D-07-024",
+      "title": "New sessions start only once the chosen sign-in is ready",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Opens a new Claude or Codex pane right after launch or right after switching accounts.",
+      "user_sees": "The pane starts signed in as the selected account instead of prompting for login.",
+      "rules": [
+        "Codex spawns wait for the managed account's credentials to be in place.",
+        "Only a Claude pane in 1-year-key mode receives the Claude token variable; managed-account and plain panes have it removed so they use their own login.",
+        "If the chosen Codex account's sign-in is still missing after about two seconds, the pane starts on the system-default login instead of hanging.",
+        "With a managed Claude account active, if the user's own per-agent environment settings explicitly set an Anthropic key or token (names matched case-insensitively on Windows, exactly elsewhere), the pane does not start and the message asks the user to remove those overrides; non-sign-in Anthropic settings such as a custom endpoint are allowed.",
+        "A Codex pane reattaching to a session that is already running is never held back waiting for sign-in.",
+        "If the user switches Codex account while a new pane is still waiting for sign-in, the pane starts on the newly selected account.",
+        "If successive account choices all lack a usable sign-in, the pane does not start and the message says to try opening it again.",
+        "An override that sets an Anthropic variable to an empty value (the way to blank it) is allowed."
+      ],
+      "acceptance": [
+        "Switch Codex accounts and open a pane immediately → it runs as the new account with no login prompt.",
+        "Open a plain shell with a key connection present → the Claude token variable is absent in that shell."
+      ],
+      "compat": "Environment variable CLAUDE_CODE_OAUTH_TOKEN is set only for token-mode Claude panes.",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/pty-daemon-spawn-codex-auth.test.ts:66",
+        "src/main/codex-accounts/managed-codex-auth-readiness.test.ts:76",
+        "src/main/providers/local-pty-spawn-environment.test.ts:30",
+        "src/main/claude-accounts/claude-token-mode-gate.test.ts:13",
+        "src/main/ipc/pty-daemon-spawn-codex-auth.test.ts:275",
+        "src/main/ipc/pty-daemon-spawn-codex-auth.test.ts:370",
+        "src/main/claude-accounts/environment.ts:156",
+        "src/main/claude-accounts/environment.ts:89",
+        "src/main/ipc/pty/runtime/spawn-preflight.ts:143",
+        "src/main/claude-accounts/claude-structured-auth-policy.test.ts:169",
+        "src/main/ipc/pty-daemon-spawn-codex-auth.test.ts:230",
+        "src/main/ipc/pty-daemon-spawn-codex-auth.test.ts:133",
+        "src/main/ipc/pty-daemon-spawn-codex-auth.test.ts:317",
+        "src/main/claude-accounts/claude-structured-auth-policy.test.ts:149"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-025",
+      "title": "Sign-ins survive quitting and restarting",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits Kolux or restarts it for an update.",
+      "user_sees": "On reopen every account is still signed in, including tokens that were refreshed during the last session.",
+      "rules": [
+        "On quit Kolux saves Codex sign-ins first, then Claude, then flushes settings, each step time-limited so quit never hangs."
+      ],
+      "acceptance": [
+        "Refresh a Claude account's token, quit at once, reopen → the account is signed in without re-auth."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-auth-restart-preservation.test.ts:11"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-07-026",
+      "title": "Accounts and keys carry over from older releases",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Upgrades Kolux, or moves from the old app to the rewrite.",
+      "user_sees": "Previously added accounts, the active selection and saved keys are all present.",
+      "rules": [
+        "Older shared-home Codex sign-ins are moved into per-account homes.",
+        "Legacy session lists are migrated so past sessions remain resumable.",
+        "Saved MCP-tool sign-ins from the old shared Codex home move into the account's own home, readable only by the user; when there are none, nothing is created.",
+        "The old shared Codex sign-in is taken over once; afterwards it is never used to refill an account whose own sign-in has gone missing."
+      ],
+      "acceptance": [
+        "Import a profile with two Claude and one Codex account → all three appear with the same one Active."
+      ],
+      "compat": "Data categories to import: claudeManagedAccounts, activeClaudeManagedAccountId, codexManagedAccounts, activeCodexManagedAccountId(s), claudeConnectionMode, claudeOauthToken (+createdAt), claudeSelfManagedSignIn, grokApiKey, minimax settings, geminiCliOAuthEnabled.",
+      "decision": "",
+      "evidence": [
+        "src/main/codex-accounts/legacy-shared-auth-migration.test.ts:53",
+        "src/main/codex-accounts/runtime-home-service-per-account-migration.test.ts:1",
+        "src/main/codex-accounts/runtime-home-session-migration-pass.test.ts:1",
+        "registry:settings-keys:claudeManagedAccounts",
+        "src/main/codex-accounts/legacy-shared-auth-migration.test.ts",
+        "src/main/codex-accounts/runtime-home-service-per-account-migration.test.ts:178"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-07-027",
+      "title": "Grok section shows the CLI sign-in and its credit usage",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Opens the Grok section, or clicks \"Refresh usage\".",
+      "user_sees": "Whether the Grok CLI is signed in, weekly credit used, and monthly usage on unified billing; when signed out it tells the user to run the Grok login command.",
+      "rules": [
+        "Kolux reads the Grok CLI's own session on disk; it does not hold a second login.",
+        "An expired session shows how to sign in again."
+      ],
+      "acceptance": [
+        "Sign the Grok CLI out → the section says to run the login command; sign back in and Refresh usage → credit figures return."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/GrokAccountsSection.tsx:14",
+        "src/main/grok-accounts/status.test.ts:16",
+        "src/main/grok-accounts/grok-login-session.test.ts:1"
+      ],
+      "round": 0,
+      "related": [
+        "06"
+      ]
+    },
+    {
+      "id": "D-07-028",
+      "title": "MiniMax credentials for usage tracking",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Pastes a MiniMax session cookie or API key, picks the endpoint, optionally overrides group id or model names.",
+      "user_sees": "Each credential can be saved, replaced or forgotten and is marked as stored locally; usage refreshes right after saving or clearing.",
+      "rules": [
+        "The section appears only when MiniMax is detected.",
+        "A help popover explains how to copy the session cookie.",
+        "Endpoint defaults to overseas; usage model defaults to general."
+      ],
+      "acceptance": [
+        "Save a MiniMax key → usage refresh fires; Forget → the key is removed and usage clears."
+      ],
+      "compat": "Data: minimaxGroupId, minimaxUsageModels, minimaxEndpoint.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/accounts-pane-minimax-credentials.tsx:21",
+        "src/main/ipc/minimax-credentials.test.ts:84",
+        "registry:settings-keys:minimaxEndpoint"
+      ],
+      "round": 0,
+      "related": [
+        "06"
+      ]
+    },
+    {
+      "id": "D-07-029",
+      "title": "Use Gemini CLI credentials (experimental)",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Turns on the experimental Gemini CLI credentials toggle.",
+      "user_sees": "Kolux reads the Gemini CLI's own sign-in for usage; the toggle shows only when Gemini is detected.",
+      "rules": [
+        "Off by default."
+      ],
+      "acceptance": [
+        "With Gemini installed and signed in, turn the toggle on → Gemini usage appears."
+      ],
+      "compat": "Data: geminiCliOAuthEnabled (default false).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/accounts-pane-provider-setting-sections.tsx:66",
+        "registry:settings-keys:geminiCliOAuthEnabled"
+      ],
+      "round": 0,
+      "related": [
+        "06"
+      ]
+    },
+    {
+      "id": "D-07-030",
+      "title": "Settings search finds account sections",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Types a provider or account word into Settings search.",
+      "user_sees": "Only the matching account sections remain visible on the accounts page.",
+      "rules": [
+        "Sections are filtered individually, not the page as a whole."
+      ],
+      "acceptance": [
+        "Search for Codex → only the Codex section shows on the accounts page."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/accounts-search.test.ts:21"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-07-031",
+      "title": "kolux account add and kolux account list",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Runs the account commands in a terminal on the machine running Kolux.",
+      "user_sees": "add runs the agent's own login in that terminal and registers the result as a managed account; list prints the managed Claude and Codex accounts.",
+      "rules": [
+        "add defaults to Claude; the agent flag picks Claude or Codex.",
+        "Codex add uses device authorisation so the browser can be on another machine.",
+        "Both accept the JSON output flag.",
+        "The running Kolux app is required; without it the command says so.",
+        "Environment and pairing-code flags are rejected rather than ignored."
+      ],
+      "acceptance": [
+        "Run kolux account add --agent codex → a device code prints; after sign-in the account appears in Settings.",
+        "Run kolux account list --json → valid JSON listing every managed account."
+      ],
+      "compat": "CLI: `kolux account add [--agent claude|codex] [--json]`, `kolux account list [--json]`.",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/account.ts:10",
+        "src/cli/specs/account.ts:23",
+        "registry:cli-manifest:account add",
+        "registry:cli-manifest:account list"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-07-032",
+      "title": "Model picker lists each agent's models; the live per-account lookup is built but off the main path",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "half-done",
+      "user_does": "Opens the model choice when starting a session.",
+      "user_sees": "Today the session picker offers a built-in model list per agent; the live list that asks the agent's CLI what this account can use reaches only the hidden native chat view and the commit-message model choice.",
+      "rules": [
+        "The session picker shows a built-in model list for Claude, Codex, Grok, Gemini and Cursor.",
+        "A live lookup asks the agent's own CLI, in a short non-interactive call, for the models this account can use; it exists for Claude, Grok and Cursor.",
+        "If a live lookup fails, the built-in list is used.",
+        "For Grok a discovered list replaces the built-in one, because Grok retires model names between releases and launching a retired one fails.",
+        "Codex and Gemini have no live lookup (planned, not shipped).",
+        "Claude, Codex and Grok are the featured agents in the picker catalog.",
+        "Agents with no built-in list, and plain terminals, skip the model step; for agents with a list, starting waits until the user actively picks a model or the normal-model choice, which keeps the CLI's own default."
+      ],
+      "acceptance": [
+        "Open the model choice for a new Claude session → models are listed even with the CLI unreachable.",
+        "With the live lookup wired to the picker: list matches what the CLI reports for the signed-in account; block the CLI → the built-in list appears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/claude-model-list-probe.ts:8",
+        "src/shared/agent-session-option-catalog-claude-codex.ts:180",
+        "registry:agent-catalog:model_picker",
+        "src/renderer/src/components/agent-picker/SessionAgentModelPicker.tsx:83",
+        "src/renderer/src/components/native-chat/native-chat-session-option-enrichment.ts",
+        "src/shared/agent-session-option-catalog-grok.ts:82",
+        "src/shared/agent-session-option-catalog-gemini-cursor.ts:106",
+        "src/renderer/src/components/agent-picker/session-ai-choice.ts:20",
+        "registry:agent-catalog:model_picker=none (30 agents)"
+      ],
+      "round": 0,
+      "related": [
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-033",
+      "title": "Commit-message model choices are discovered per agent",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Picks which agent and model writes AI commit messages.",
+      "user_sees": "The model list reflects what the installed agent actually offers, falling back to defaults when discovery fails.",
+      "rules": [
+        "Discovery covers Claude, Codex, Pi, Cursor and Antigravity; Grok is probed only, with a fixed default.",
+        "Discovered lists are remembered per agent."
+      ],
+      "acceptance": [
+        "Choose Codex for commit messages → its model list comes from the installed CLI."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-model-probe-spec.ts:7",
+        "src/main/text-generation/commit-message-model-discovery.ts:28"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-07-034",
+      "title": "Per-provider model routing tiers for workers",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Opens model routing in the Agents settings, picks a provider, and sets a model and effort for each tier.",
+      "user_sees": "Four tiers (Major, Deep, Build, Light), each with a model and effort choice, and a reset for that provider.",
+      "rules": [
+        "Providers not installed stay visible, marked as not detected on this machine.",
+        "Claude defaults: top model high, Opus high, Sonnet medium, Haiku for the light tier.",
+        "Codex has its own default ladder of models and efforts.",
+        "Reset restores that provider's defaults only."
+      ],
+      "acceptance": [
+        "Set Claude Build to Opus/high, reset Claude → Build returns to Sonnet/medium; Codex settings untouched.",
+        "On a machine without Codex → the Codex tab is still selectable with a not-detected mark."
+      ],
+      "compat": "Data: per-provider tier table (tier → model, effort) for major, deep, build, light.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/ModelRoutingSection.tsx:30",
+        "src/shared/orchestration-routing-tiers.ts:4",
+        "src/renderer/src/components/settings/AgentsPane.tsx:50"
+      ],
+      "round": 0,
+      "related": [
+        "08"
+      ]
+    },
+    {
+      "id": "D-07-035",
+      "title": "First successful connection is noted; failures name the agent",
+      "tier": "P2",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Connects an agent for the first time, or has a connect attempt fail.",
+      "user_sees": "Failure toasts say which agent failed; the first connection counts as a guided-first-run milestone.",
+      "rules": [
+        "The milestone is recorded once, on the first agent connected.",
+        "If loading the connection statuses fails, a friendly error toast appears instead of a silent empty page."
+      ],
+      "acceptance": [
+        "Fail a Grok connect → toast mentions Grok.",
+        "Connect the first agent on a fresh profile → the first-run checklist marks it done."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/ai-connections/ConnectCard.test.tsx:121",
+        "src/renderer/src/components/ai-connections/connect-card-copy.test.ts:1",
+        "src/renderer/src/components/ai-connections/useAiConnections.test.tsx:123"
+      ],
+      "round": 0,
+      "related": [
+        "16"
+      ]
+    },
+    {
+      "id": "D-07-036",
+      "title": "Account switcher that suggests another account with quota left",
+      "tier": "H",
+      "pushed": 4,
+      "state": "retired 2026-10-05",
+      "user_does": "Opened the Claude or Codex usage menu in the status bar.",
+      "user_sees": "Listed other accounts to switch to; when a Codex account ran out it named an account with quota available or offered to check the others.",
+      "rules": [
+        "Switching applied to new sessions; a hint said to restart live sessions before continuing old conversations.",
+        "A link opened the account manager in Settings.",
+        "The menu components remain in code but nothing renders them since status-bar usage was removed."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/renderer/src/components/status-bar/CodexAccountTransition.tsx:48",
+        "src/renderer/src/components/status-bar/ClaudeSwitcherMenu.tsx:249",
+        "src/renderer/src/components/status-bar/StatusBar.tsx:24"
+      ],
+      "round": 0,
+      "related": [
+        "06",
+        "21"
+      ]
+    },
+    {
+      "id": "D-07-037",
+      "title": "Codex rate-limit reset credit from the switcher",
+      "tier": "H",
+      "pushed": 4,
+      "state": "retired 2026-10-05",
+      "user_does": "Used a Codex rate-limit reset credit from the Codex usage menu.",
+      "user_sees": "A confirmation (which could be skipped next time), then the limit reset once.",
+      "rules": [
+        "Redemption was single-flight and durable across restarts so a credit was never spent twice.",
+        "The service still exists but its only button lives in the orphaned status-bar menu."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "Data: skipCodexRateLimitResetConfirm (default false).",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/main/codex-accounts/service-reset-credit-durability.test.ts:35",
+        "src/renderer/src/components/status-bar/use-codex-switcher-controller.ts:1",
+        "registry:settings-keys:skipCodexRateLimitResetConfirm"
+      ],
+      "round": 0,
+      "related": [
+        "06"
+      ]
+    },
+    {
+      "id": "D-07-038",
+      "title": "Multiple Kolux profiles (dev-only)",
+      "tier": "H",
+      "pushed": null,
+      "state": "dev-only",
+      "user_does": "With a developer flag set, creates and switches between separate Kolux profiles and moves projects between them.",
+      "user_sees": "A profile list and profile switcher; without the flag none of it appears.",
+      "rules": [
+        "Enabled only when the multi-profile environment flag equals 1.",
+        "Projects and their session state can be transferred between profiles.",
+        "Only switching and transfer are dev-only: every install runs on one default local profile, created on first launch from the earlier data, which is copied and never deleted; the rebuild needs only this single-profile path (persistence itself is area 19).",
+        "The profile list is rebuilt if its index file is missing, including on macOS and Linux under a restrictive file-creation mask."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "Environment variable KOLUX_MULTI_PROFILE_UI.",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/main/kolux-profiles/profile-ui-scope.ts:5",
+        "src/main/ipc/kolux-profiles.test.ts:96",
+        "src/main/kolux-profiles/profile-project-transfer.test.ts:113",
+        "src/renderer/src/store/slices/kolux-profiles.test.ts:113",
+        "registry:e2e-spec-names:golden-posix-profile-index-fsync",
+        "src/main/kolux-profiles/profile-index-store.test.ts:42",
+        "tests/e2e/golden-posix-profile-index-fsync.spec.ts:8"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-07-039",
+      "title": "Kolux cloud account and organisation members",
+      "tier": "H",
+      "pushed": null,
+      "state": "retired 2026-10-05",
+      "user_does": "Signed in to a Kolux account in the browser and invited, removed or revoked organisation members.",
+      "user_sees": "A cloud-linked profile with a member list; the session renewed itself in the background.",
+      "rules": [
+        "Hidden 2026-09-28 (placeholder hosts), removed 2026-10-05 with other cloud-only features."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/main/kolux-profiles/profile-cloud-pkce.test.ts:86",
+        "src/main/kolux-profiles/profile-cloud-session-refresh.test.ts:71",
+        "src/main/ipc/kolux-profile-org-members-handlers.test.ts:60"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-07-040",
+      "title": "Accounts that run inside WSL",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Chose where accounts run (automatic, this computer, or WSL with a distro).",
+      "user_sees": "Separate account selections for Windows and WSL, and legacy WSL sign-ins drained into the new layout.",
+      "rules": [
+        "WSL accounts were never sealed by the key vault."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "Data: localAccountRuntime, localAccountWslDistro (not imported).",
+      "decision": "default cut: WSL execution is part of area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/components/settings/accounts-pane-location-section.tsx:6",
+        "src/main/codex-accounts/legacy-wsl-runtime-auth-drain.test.ts:44",
+        "src/main/codex-accounts/service-wsl-accounts.test.ts:48",
+        "src/main/claude-accounts/runtime-auth-service-wsl-runtime.test.ts:42",
+        "registry:settings-keys:localAccountRuntime"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-07-041",
+      "title": "Account management for a remote Kolux host",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Drove a remote or headless Kolux runtime from the desktop.",
+      "user_sees": "Add Account disabled with a note to use the CLI on the host; Connect cards noted SSH projects.",
+      "rules": [
+        "Remote-scope notices appeared in the Claude and Codex sections."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: remote hosts are area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/ai-connections/ai-connections-ipc.test.ts:63",
+        "src/renderer/src/runtime/runtime-provider-accounts-client.ts:47"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-07-042",
+      "title": "Notice when an unpaired device asks to sign in",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Had a phone or other device try to connect without pairing.",
+      "user_sees": "A one-time notification about the unpaired device.",
+      "rules": [
+        "Delivered once even if it arrived before the window was ready."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: mobile pairing is area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/hooks/unpaired-device-auth-notification.test.ts:5"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-07-043",
+      "title": "Files on SSH hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Browsed, previewed, downloaded and watched files on an SSH host.",
+      "user_sees": "Remote files in the explorer with live change notifications and range or streamed reads.",
+      "rules": [
+        "About 120 tests in this area cover it."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: SSH hosts are area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/providers/ssh-filesystem-provider.test.ts:62",
+        "src/main/providers/ssh-filesystem-download.test.ts:45"
+      ],
+      "round": 0,
+      "related": [
+        "18",
+        "12"
+      ]
+    },
+    {
+      "id": "D-07-044",
+      "title": "Git on SSH hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Ran status, diff, staging, commit messages, merge, sync and worktrees on an SSH host.",
+      "user_sees": "The source-control panel working against a remote repository.",
+      "rules": [
+        "About 130 tests in this area cover it."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: SSH hosts are area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/providers/ssh-git-provider-worktree.test.ts:24",
+        "src/main/providers/ssh-git-provider-remote-sync.test.ts:15",
+        "src/main/providers/ssh-worktree-catalog-authority.test.ts:64"
+      ],
+      "round": 0,
+      "related": [
+        "18",
+        "11"
+      ]
+    },
+    {
+      "id": "D-07-045",
+      "title": "Terminals on SSH hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opened terminals and agent sessions on an SSH host and reattached after disconnects.",
+      "user_sees": "Remote panes that survived reconnects and routed notifications back to the desktop.",
+      "rules": [
+        "Local vs SSH dispatch decided which provider served each pane."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: SSH hosts are area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/providers/ssh-pty-provider.test.ts:20",
+        "src/main/providers/ssh-pty-provider-spawn.test.ts:40",
+        "src/main/providers/ssh-pty-notification-routing.test.ts:74",
+        "src/main/providers/execution-host-provider-dispatch.test.ts:26"
+      ],
+      "round": 0,
+      "related": [
+        "18",
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-046",
+      "title": "Windows terminals pick the best available shell",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens a terminal on Windows.",
+      "user_sees": "PowerShell 7 if installed, else Windows PowerShell, else cmd; each set up so prompts and Unicode work.",
+      "rules": [
+        "Store placeholder executables are skipped; cmd is always the last resort.",
+        "cmd starts in UTF-8; PowerShell gets prompt markers so Kolux knows when a command starts and ends.",
+        "Git Bash starts as a login shell.",
+        "If the preferred PowerShell refuses to start (access denied), the next shell in the order is tried instead of failing the pane.",
+        "cmd is located through the system's command-interpreter setting when one is set; an automatic shell choice waits for the PowerShell availability check before deciding.",
+        "A PowerShell 7 shell the user asked for directly is used even when the availability check reported it missing."
+      ],
+      "acceptance": [
+        "On a machine without PowerShell 7 → a new pane opens Windows PowerShell; remove both → cmd in UTF-8."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/windows-shell-fallback-chain.test.ts:28",
+        "src/main/providers/windows-shell-args.test.ts:60",
+        "src/main/providers/windows-powershell-executable.test.ts:26",
+        "src/main/providers/local-pty-provider-windows-shell-launch.test.ts:163",
+        "src/main/providers/local-pty-utils-windows-fallback.test.ts:45",
+        "src/main/providers/windows-powershell-executable.test.ts",
+        "src/main/providers/local-pty-provider-windows-shell-launch.test.ts",
+        "src/main/providers/windows-powershell.test.ts:31"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-047",
+      "title": "Startup commands run once the shell is ready",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens a pane that has a startup command (for example an agent launch).",
+      "user_sees": "The command runs once, after the prompt is ready, without being mangled.",
+      "rules": [
+        "zsh, bash and fish get a ready-signal wrapper that keeps the user's own config folder.",
+        "Long or heavily quoted commands are delivered another way (stdin or an encoded PowerShell command) instead of typed.",
+        "Login shells still receive their startup commands.",
+        "If the shell exits before signalling ready, output held back while waiting for the signal is still shown."
+      ],
+      "acceptance": [
+        "Launch an agent with a long quoted prompt → it starts exactly once with the prompt intact."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/local-pty-shell-ready-startup-command.test.ts:61",
+        "src/main/providers/local-pty-shell-ready-wrapper-generation.test.ts:26",
+        "src/main/providers/local-pty-provider-shell-readiness.test.ts:162",
+        "src/main/ipc/pty-login-shell-startup-commands.test.ts:103",
+        "src/main/providers/local-pty-provider-shell-readiness.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-048",
+      "title": "Terminals start with a clean environment",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens a terminal.",
+      "user_sees": "Tools behave as in a normal terminal: no stray Kolux build variables, no half-activated Python environment, no theme setup wizard popping up.",
+      "rules": [
+        "Kolux's own runtime variables and packaging variables are not passed on.",
+        "Partially inherited conda variables are dropped.",
+        "The Powerlevel10k first-run wizard is suppressed.",
+        "When Kolux passes its own git settings to a pane, inherited numbered git settings beyond Kolux's count are dropped so stale ones do not leak in."
+      ],
+      "acceptance": [
+        "Open a pane and print the environment → no NODE_ENV inherited from Kolux."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/local-pty-provider-spawn-env.test.ts:163",
+        "src/main/providers/local-pty-shell-ready-zsh-launch-environment.test.ts:1",
+        "src/main/providers/local-pty-windows-spawn-environment.test.ts:1",
+        "src/main/providers/local-pty-provider-spawn-env.test.ts:369"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-049",
+      "title": "Terminals refuse unsafe or unreachable starting folders",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens a pane for a project whose folder is missing, unmounted or the drive root.",
+      "user_sees": "A clear message about the folder instead of a silent start in the wrong place.",
+      "rules": [
+        "An agent never auto-starts in the filesystem root.",
+        "On Windows the home folder comes from the home drive and path.",
+        "An unmounted volume gets an actionable message.",
+        "Folder checks are rate-limited so many panes cannot stall the app."
+      ],
+      "acceptance": [
+        "Point a project at an unplugged drive → opening a pane shows the unmounted-volume message."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/working-directory-validation.test.ts:36",
+        "src/main/providers/local-pty-provider-spawn-cwd-safety.test.ts:162",
+        "src/main/providers/pty-default-cwd.test.ts:33",
+        "registry:e2e-spec-names:golden-fresh-profile-terminal"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "01"
+      ]
+    },
+    {
+      "id": "D-07-050",
+      "title": "Kolux knows which agent is running in each pane",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Starts an agent by hand in a plain terminal pane.",
+      "user_sees": "The pane is recognised as running that agent (status and header follow).",
+      "rules": [
+        "Detection looks at the pane's foreground process; on Windows it uses the pane's process group.",
+        "When the answer is ambiguous Kolux says unknown rather than guessing.",
+        "Cached answers are re-checked cheaply so detection does not cost CPU.",
+        "A suspended agent (Ctrl-Z) is not reported as running; the shell is treated as owning the pane again, and a background job does not count as the foreground agent."
+      ],
+      "acceptance": [
+        "Type the Claude command in a plain pane → within a few seconds the pane is treated as a Claude session."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/agent-foreground-process.test.ts:97",
+        "src/main/providers/local-pty-provider-foreground-process.test.ts:161",
+        "src/main/providers/windows-cached-agent-revalidation.test.ts:9",
+        "src/main/providers/posix-pane-foreground-fingerprint.test.ts:77",
+        "src/main/providers/agent-foreground-process.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "04"
+      ]
+    },
+    {
+      "id": "D-07-051",
+      "title": "Closing a pane or quitting ends every child process",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Closes a pane or quits Kolux.",
+      "user_sees": "No orphaned agent or shell processes left behind.",
+      "rules": [
+        "Panes get a graceful stop, then a forced one.",
+        "On an immediate Windows shutdown the whole process tree is ended.",
+        "Quit stops all panes."
+      ],
+      "acceptance": [
+        "Run a long command in a pane, quit → no matching process remains."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/local-pty-provider-shutdown.test.ts:166"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "19"
+      ]
+    },
+    {
+      "id": "D-07-052",
+      "title": "macOS terminals start as proper login sessions",
+      "tier": "P2",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens a terminal on macOS.",
+      "user_sees": "Privacy permissions and login-session behaviour match the system Terminal.",
+      "rules": [
+        "A login wrapper and a session probe are used where available.",
+        "If the session probe fails, later panes probe again and switch back to the login wrapper once it works."
+      ],
+      "acceptance": [
+        "On macOS open a pane and access a protected folder → behaves as in Terminal."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/macos-tcc-login-shell.test.ts:88",
+        "src/main/providers/macos-login-session-pty-probe.test.ts:23",
+        "src/main/providers/macos-tcc-login-shell.test.ts:264"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-053",
+      "title": "Wide characters are not duplicated on Windows terminals",
+      "tier": "P2",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Prints CJK or emoji text in a Windows pane.",
+      "user_sees": "Each character appears once, including after a repaint.",
+      "rules": [
+        "Covers the Windows console layer and the repaint buffer."
+      ],
+      "acceptance": [
+        "Echo a CJK string in PowerShell → it shows once."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/windows-conpty-wide-char-duplication.node-pty.test.ts:109",
+        "src/main/providers/pty-repaint-wide-char-buffer.node-pty.test.ts:140"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-054",
+      "title": "Fast output never freezes a pane",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs something that prints a flood of output.",
+      "user_sees": "The pane keeps up and stays responsive.",
+      "rules": [
+        "Output is acknowledged cumulatively so the producer pauses when the screen falls behind."
+      ],
+      "acceptance": [
+        "Print a 100 MB file in a pane → the app stays responsive and the pane finishes."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/pty-cumulative-ack-accounting.test.ts:64",
+        "src/main/providers/local-pty-provider-io-events.test.ts:161"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-055",
+      "title": "The app window can only read files it was given access to",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Opens files from projects, worktrees, or a folder they picked.",
+      "user_sees": "Those files open; anything outside them is refused.",
+      "rules": [
+        "Allowed: project and worktree folders and exactly granted paths.",
+        "Refused: network shares, the drive root, and whole trees granted from a single file pick.",
+        "Folders reached through a symlink are not exposed.",
+        "The grant list is size-bounded."
+      ],
+      "acceptance": [
+        "Ask the app window to read a file outside every project → refused."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/filesystem-auth.test.ts:104",
+        "src/main/ipc/filesystem-auth-symlinked-folder.test.ts:1",
+        "src/main/ipc/filesystem-auth-external-grants.test.ts:1",
+        "registry:e2e-spec-names:renderer-blocked-navigation-graph-authority"
+      ],
+      "round": 0,
+      "related": [
+        "12",
+        "10"
+      ]
+    },
+    {
+      "id": "D-07-056",
+      "title": "Worktree lists never lose entries on a failed scan",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Opens a project while git is slow or a scan fails.",
+      "user_sees": "Known worktrees stay listed; cleanup only removes worktrees Kolux can prove it created.",
+      "rules": [
+        "A failed scan prunes nothing.",
+        "Removal requires proof of where the worktree came from."
+      ],
+      "acceptance": [
+        "Make the worktree scan fail → the sidebar still lists every known worktree."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/worktrees-authoritative-local-metadata-pruning.test.ts:195",
+        "src/main/worktree-removal-authority.test.ts:10",
+        "src/main/ipc/worktrees/listing/detected-scan-failure-authority.test.ts:1"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-07-057",
+      "title": "Task sources fall back to GitHub",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the Tasks list.",
+      "user_sees": "GitHub is the source; without a signed-in GitHub CLI it shows as unavailable instead of failing.",
+      "rules": [
+        "Hidden or unknown providers fall back to GitHub."
+      ],
+      "acceptance": [
+        "Sign the GitHub CLI out → Tasks shows GitHub as unavailable."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/task-providers.test.ts:11",
+        "src/renderer/src/components/task-source-provider-availability.test.ts:23",
+        "registry:settings-keys:visibleTaskProviders"
+      ],
+      "round": 0,
+      "related": [
+        "11",
+        "05"
+      ]
+    },
+    {
+      "id": "D-07-058",
+      "title": "Review-bot authors can be overridden",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Views review comments from bots.",
+      "user_sees": "Known bot accounts are labelled as bots.",
+      "rules": [
+        "Override list is matched by author name."
+      ],
+      "acceptance": [
+        "A review comment from a configured bot shows as a bot."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/pr-bot-author-overrides.test.ts:10",
+        "src/renderer/src/lib/pr-bot-author-overrides.test.ts:1"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-07-059",
+      "title": "Memory caps scale with the machine",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs many panes on a small or large machine.",
+      "user_sees": "Kolux limits buffers and caches to fit the machine's memory.",
+      "rules": [
+        "Caps come from a memory profile chosen at startup."
+      ],
+      "acceptance": [
+        "On a low-memory machine → scrollback caps are lower than on a large one."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/renderer-memory-profile.test.ts:22"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-060",
+      "title": "Terminal modes are reset sensibly when an agent exits",
+      "tier": "P2",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Exits or restarts an agent in a pane.",
+      "user_sees": "Mouse, paste and cursor behave normally afterwards; a still-running agent keeps its hidden cursor.",
+      "rules": [
+        "Reset profiles cover mouse tracking, bracketed paste and cursor visibility."
+      ],
+      "acceptance": [
+        "Quit an agent that enabled mouse mode → clicking in the shell no longer prints escape codes."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/terminal-mode-reset-profiles.test.ts:19"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-07-061",
+      "title": "Terminal links only open when safe",
+      "tier": "P2",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Clicks a link printed in a terminal.",
+      "user_sees": "Normal links open; unsafe targets are ignored.",
+      "rules": [
+        "A guard checks each link before it is activated.",
+        "A link-detection error on unusual output is contained: the line simply has no links and the pane keeps working."
+      ],
+      "acceptance": [
+        "Click an https link in a pane → it opens; click a disallowed scheme → nothing happens."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/pane-manager/terminal-link-provider-guard.test.ts:32"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "13"
+      ]
+    },
+    {
+      "id": "D-07-062",
+      "title": "Nim files get syntax colours",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a Nim source file in the editor.",
+      "user_sees": "Keywords, strings and comments are coloured.",
+      "rules": [
+        "Uses a bundled grammar."
+      ],
+      "acceptance": [
+        "Open a .nim file → it is highlighted."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/monaco-languages/textmate-token-provider.test.ts:29"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-07-063",
+      "title": "Each agent pane has one clear owner session",
+      "tier": "P2",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Restarts, resumes or closes agent panes.",
+      "user_sees": "Status and resume always point at the right session; old panes are retired, not duplicated.",
+      "rules": [
+        "Pane ownership is tracked so a re-attached pane takes over cleanly.",
+        "Session handles chain across restarts so resume finds the right conversation.",
+        "A tab the user closed is not revived when a late re-attach arrives for it.",
+        "A forked conversation is recorded as a fork of the session it came from, never as a resume of it."
+      ],
+      "acceptance": [
+        "Restart an agent pane → one pane, one status, and resume opens the same conversation."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/agent-pane-authority.test.ts:44",
+        "src/shared/agent-session-provider-handle.test.ts:35",
+        "src/renderer/src/store/slices/agent-status-provider-session.test.ts:19",
+        "registry:e2e-spec-names:live-background-terminal-mount-authority",
+        "src/renderer/src/store/slices/agent-pane-authority.test.ts",
+        "src/shared/agent-session-provider-handle.test.ts:111"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "04",
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-064",
+      "title": "Switching the Codex account offers to restart live Codex panes",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Switches the active Codex account, or changes the Codex setup, while Codex sessions are running.",
+      "user_sees": "Each pane still running Codex shows a centred prompt saying the account was switched and naming the account that pane is still signed in as, with a choice to keep the old account or restart; a setup change shows a variant asking to restart to load the current configuration.",
+      "rules": [
+        "Only panes whose foreground program really is Codex get the prompt; a pane where the user already left Codex, or is running their own program, is left alone, and brief shell readings do not clear it.",
+        "Restart relaunches Codex in that same pane once its shell is ready, signed in as the newly selected account; split siblings are untouched.",
+        "Keeping the old account dismisses the prompt for that pane only; selecting yet another account asks again.",
+        "Switching back to the account the pane started on clears its prompt with no restart; two different accounts that share a label still count as different.",
+        "A restart that fails puts the prompt back.",
+        "After Kolux itself restarts, restored Codex panes still on an outdated account get the prompt again.",
+        "Keyboard focus moves to the prompt only for the active, visible pane; hidden or background panes never steal focus.",
+        "Panes on remote hosts or in WSL are not asked about a switch made for the local machine (those lanes are cut with area 18).",
+        "A resumed Codex pane whose sign-in folder belongs to no known account is tied to no account and never gets the prompt."
+      ],
+      "acceptance": [
+        "Run Codex in two panes and a plain shell in a third, switch the Codex account → both Codex panes show the prompt, the shell pane does not.",
+        "Click Restart in one pane → only that pane relaunches Codex on the new account; the other keeps its prompt.",
+        "Switch back to the original account → the remaining prompts disappear without a restart.",
+        "Keep the old account in a pane, then select a third account → that pane is asked again.",
+        "Quit and reopen Kolux with a Codex pane still on the old account → the prompt reappears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/CodexRestartChip.tsx:36",
+        "src/renderer/src/components/terminal-pane/TerminalPaneRuntimePortals.tsx:30",
+        "src/renderer/src/lib/codex-session-restart.ts:34",
+        "src/renderer/src/lib/codex-session-restart.ts:196",
+        "src/renderer/src/components/settings/accounts-pane-account-actions.ts:99",
+        "src/renderer/src/components/codex-restart-chip.test.tsx:94",
+        "src/renderer/src/lib/codex-session-restart.test.ts:884",
+        "src/renderer/src/store/slices/codex-restart-notice-lifecycle.test.ts:19",
+        "src/renderer/src/store/slices/store-session-cascades.test.ts",
+        "triage:00-unmapped-triage.csv:97-99,141-147,268-269,295",
+        "src/main/ipc/pty-codex-account-attribution.test.ts:250"
+      ],
+      "round": 1,
+      "related": [
+        "03",
+        "02"
+      ]
+    },
+    {
+      "id": "D-07-065",
+      "title": "macOS and Linux terminals fall back to a working shell",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens a terminal on macOS or Linux when the login shell, or a chosen shell, has been removed or is not executable.",
+      "user_sees": "The pane still opens, running the next available standard shell; if no shell can be found at all, the pane reports every shell it tried.",
+      "rules": [
+        "A shell given by name rather than full path is passed on unchanged and found through the program search path or the starting folder.",
+        "A full path that is missing or not executable falls back to zsh, then bash, then sh.",
+        "When nothing in that order works, the failure names each shell that was tried."
+      ],
+      "acceptance": [
+        "Point the shell at a full path that does not exist → a new pane opens in zsh (or bash, or sh, whichever exists first).",
+        "Set the shell to a bare name such as bash → the pane runs it from the search path with no fallback.",
+        "With no usable shell at all → the pane shows a failure listing every shell attempted."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/providers/local-pty-utils.ts:65",
+        "src/main/providers/local-pty-utils.test.ts:128",
+        "src/main/daemon/daemon-pty-session-spawn.ts:85",
+        "src/main/daemon/pty-subprocess/shell-launch-plan.ts:189"
+      ],
+      "round": 2,
+      "related": [
+        "03"
+      ]
+    }
+  ],
+  "notes": [
+    "About 830 of the 2134 test titles mapped to 07 are terminal-provider tests (local PTY and SSH), and filesystem/worktree/task-source authority files landed here only by keyword. D-07-043..063 card them with related 03/01/11/12/18; areas 03 and 18 should own them.",
+    "The scoped 'account switcher that suggests another account' exists only in the status-bar Claude/Codex menus. Nothing has rendered those since status-bar usage was removed on 2026-10-05, so D-07-036 is H. Switching itself remains in Settings (D-07-016/019). Owner may mark it build (ACCT-3 is unshipped).",
+    "Codex reset-credit service is live, but its only UI is in the orphaned switcher (D-07-037).",
+    "Live model lists: only Claude's session picker is live. Codex/Gemini launch pickers use fixed lists (ACCT-10 unshipped). Commit-message discovery covers more agents (D-07-033).",
+    "Account Location (Auto/host/WSL) and the WSL account runtime are carded D under area 18 (WSL execution cut). HANDOFF 2026-10-06 says 'WSL paths local again'; owner should confirm whether WSL accounts stay cut.",
+    "Limit auto-resume toggle sits on the accounts page but belongs to area 06; it is not carded here. Model routing tiers (D-07-034) are also claimed by 08.",
+    "HANDOFF known gap: no real browser authorization flow has been verified, so every sign-in card is live-unverified. ACCT-9 (copy sign-in link fallback, Codex cancel) has no shipped marker.",
+    "Claude routing-tier defaults name model aliases; the exact top-tier alias and Codex model names are in src/shared/orchestration-routing-tiers.ts and were not copied.",
+    "Critic r1 (2026-10-06): added D-07-064 (Codex restart prompt after account switch, from triage). Fixed D-07-032 (live model lookup reaches only hidden native chat and commit messages; session picker uses built-in lists; state half-done) and D-07-037 (state retired 2026-10-05, not flag-hidden). Rules added to D-07-001/002/007/008/009/019/021/024/035/046.",
+    "Critic r2 (2026-10-06): added D-07-065 (Unix shell fallback zsh/bash/sh, from sample). Rules added to D-07-002/004/006/017/019/020/021/024/026/032/038/046/047/050/063. No tier/state/pushed changes. e2e specs mapped to 07: golden-fresh-profile-terminal -> 16, live-background-terminal-mount-authority -> 03, renderer-blocked-navigation-graph-authority -> 19, golden-posix-profile-index-fsync -> D-07-038. D-07-038 now records that the single default profile is on the live path (H decision unchanged; owner may want that one path noted as default build).",
+    "Critic r3 (2026-10-06): no new cards. Rules added to D-07-003/004/005/013/015/017/020/023/024/026/046/048/052/061/063/064 (D-07-015 quit rule reworded to include stopping running installs). No tier/state/pushed changes. Sample items routed elsewhere: web-client paired terminals -> D-03-130, Jira/Linear search bounds -> D-11-076/077, Agent Teams helper on the Windows search path -> 08 (D-08-041), repo-removal session pruning -> 01 (D-01-008), unread mark kept across session-id updates -> 04. Tier note: many cards pushed 1-5 sit at P1/P2; the reader and every area read \"part of a top-5 theme\" as core-of-theme, so this round left them."
+  ]
+}

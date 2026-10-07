@@ -1,0 +1,18 @@
+﻿kolux linear assignee clear
+
+Usage: kolux linear assignee clear [<id>] [--current] [--workspace <id>] [--json]
+
+Clear a Linear issue assignee
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --current              Use the current Kolux worktree linked Linear issue
+  --workspace <id>      Connected Linear workspace id
+  --id <id>             Identifier for a target item or permission
+
+Examples:
+  $ kolux linear assignee clear ENG-123 --json
+

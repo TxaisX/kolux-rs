@@ -1,0 +1,19 @@
+﻿kolux linear label remove
+
+Usage: kolux linear label remove [<id>] [--current] --label <labelId-or-exact-name>... [--workspace <id>] [--json]
+
+Remove labels from a Linear issue
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --current              Use the current Kolux worktree linked Linear issue
+  --label
+  --workspace <id>      Connected Linear workspace id
+  --id <id>             Identifier for a target item or permission
+
+Examples:
+  $ kolux linear label remove --current --label Bug --json
+

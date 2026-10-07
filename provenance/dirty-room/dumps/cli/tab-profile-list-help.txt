@@ -1,0 +1,12 @@
+﻿kolux tab profile list
+
+Usage: kolux tab profile list [--json]
+
+List browser session profiles available to browser tabs
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+

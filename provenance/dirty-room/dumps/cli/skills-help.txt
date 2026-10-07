@@ -1,0 +1,12 @@
+﻿kolux skills
+
+Usage: kolux skills <command> [options]
+
+Commands:
+  list               List version-matched skill guides bundled with this Kolux CLI
+  get                Print a version-matched skill guide as Markdown
+  install            Install bundled Kolux skills via the community skills CLI
+  update             Update already-installed Kolux skills via the community skills CLI
+
+Run `kolux skills <command> --help` for command-specific usage.
+

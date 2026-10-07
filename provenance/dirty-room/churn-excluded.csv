@@ -1,0 +1,9 @@
+hash,date,subject,files,reason
+0ca8bbf45,2026-10-05,"Scrub fork origin and remove cloud-only features",0,originality-scrub
+e8ecaa97d,2026-10-05,"Scrub upstream branding and remove cloud features",3300,originality-scrub
+a4ea33c71,2026-09-23,"Retire OpenCode agent and remove the usage tracking subsystem",580,over-500-files
+7f3326473,2026-09-22,"0.10.0 — x: the app is Kolux, and its GitHub repo is TxaisX/kolux",273,rename
+7c01321e4,2026-09-21,"Fix the test failures that predate the Kolux rename",288,rename
+0a6585a51,2026-09-21,"Fix what the Kolux rename broke and keep tests off the real profile",64,rename
+9baa8d307,2026-09-21,"Rename the app from Nightshift to Kolux",7257,rename
+21231c88b,2026-09-10,"Nightshift",22476,base-import

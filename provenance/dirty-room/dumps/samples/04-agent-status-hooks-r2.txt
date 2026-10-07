@@ -1,0 +1,101 @@
+# 04-agent-status-hooks random sample round 2 (100 of 4753): file	title
+src/main/agent-hooks/wsl-hook-relay-sentinel.test.ts	delivers a pending trailing chunk before a later direct chunk, in wire order
+src/main/agent-hooks/spool.test.ts	does not let historical empty pane files starve newer records
+src/main/agent-hooks/server-copilot-normalization.test.ts	accepts camelCase Copilot event names from older hook configs
+src/main/codex/config-settings-promotion.test.ts	does not append a table beside a quoted root tui array-of-tables
+src/main/claude/claude-structured-session-recovery.test.ts	does not publish recovery while an unexpected-exit close proof is false
+src/main/claude/claude-structured-real-cli.test.ts	turns a real silent unauthenticated startup into sign-in guidance
+src/shared/codex-subagent-roster.test.ts	rejects an id that would normalize to an invisible child
+src/main/mimo/status-plugin/hook-plugin-fail-open-ownership.test.ts	retires provisional Busy after both ancestry lookups time out
+src/main/codex/codex-session-resume-wrong-account.test.ts	refuses when a NESTED dated directory locks and the root stats fine
+src/main/codex/codex-subagent-roster.test.ts	republishes the settled roster when the sweep publish was refused
+src/renderer/src/hooks/useEditorExternalWatch-targets.test.ts	does not watch Source Control-only SSH worktrees while disconnected
+src/main/agent-hooks/server-amp-normalization.test.ts	keeps Amp prompt and tool caches isolated by thread id within one pane
+src/main/claude/claude-agent-sdk-exit-proof.test.ts	has nothing to reap for a child that never spawned
+src/renderer/src/hooks/useInstalledAgentSkills.test.ts	caches host and WSL discovery results separately
+src/main/claude/compact-status-registration.test.ts	does not resurrect a pane that was retired before the completion arrived
+src/renderer/src/hooks/useSkillFreshness.test.tsx	skips focus rescans inside the cooldown but honors install-change events
+src/main/agent-hooks/server-retired-pane-new-turn.test.ts	%s
+src/main/codex/hook-service-wsl-runtime.test.ts	uses the previous ledger to remove stale Codex hashes after a canonical path change
+src/main/codex/config-toml-trust-project.test.ts	keeps case-distinct WSL Linux paths distinct
+src/main/codex/codex-session-resume-home.test.ts	starts fresh silently for cross-agent provenance on a pane relabeled codex
+src/renderer/src/hooks/useIpcEvents-agent-status-connection-attribution.test.ts	applies worktree-attributed child snapshots when runtime identity is present
+src/renderer/src/lib/agent-status-count.test.ts	excludes orphaned worktrees not in worktreesByRepo
+src/shared/agent-status-types.test.ts	keeps dispatch detection bounded for oversized whitespace prompts
+src/main/claude/claude-structured-launch-resolution.test.ts	strips ambient Anthropic auth under a managed account but keeps the rest of the env
+src/renderer/src/hooks/useIpcEvents-agent-status-pane-teardown.test.ts	does not retain a Cursor spinner terminal title when the hook reports done
+src/main/grok/windows-grok-hook-script.test.ts	exits 0 and posts an empty grokHome when GROK_HOME is unset
+src/main/amp/hook-service.test.ts	reports partial when a stale managed plugin is missing the session reset handler
+src/renderer/src/hooks/useRetiredWorktreeNames.test.ts	drops names when the repo changes rather than showing another repo pool
+src/main/codex/codex-stale-pane-accounts.test.ts	forgets a PTY so a reused id cannot inherit a dead pane account
+src/main/claude/claude-agent-sdk-exit-proof.test.ts	refreshes the live snapshot at close time so late descendants are included
+src/main/antigravity/hook-service.test.ts	removes stale managed Antigravity hook entries from retired events
+src/main/claude/hook-service.test.ts	falls back to the encoded launcher when Git Bash is not resolvable
+src/renderer/src/lib/agent-status.test.ts	maps 'cursor' to 'Cursor'
+src/main/minimax/minimax-cookie-store.test.ts	returns false when no file exists yet
+src/main/agent-hooks/manual-compact-hook-stream.test.ts	stamps the silent boundary on a manual completion from a relay that predates it
+src/main/agent-hooks/manual-compact-hook-stream.test.ts	forwards the completion over the relay and preserves its cached compact identity
+src/renderer/src/lib/agent-status.test.ts	labels GitHub Copilot CLI
+src/main/agent-hooks/server.claude-interactive-question.test.ts	clears a PermissionRequest-shaped AskUserQuestion wait (newer Claude)
+src/shared/agent-hook-listener-command-code-transcript.test.ts	keys the Command Code interaction by the absolute prompt line offset
+src/main/copilot/hook-service.test.ts	reports partial when the dedicated Copilot hook file is disabled
+src/main/codex/codex-trust-grant-ledger.test.ts	treats Windows path-case variants as the same home
+src/shared/repo-badge-color.test.ts	expands shorthand hex colors
+src/main/pi/agent-status-extension-source.test.ts	posts persisted Prime session metadata to the Prime route
+src/main/claude/claude-agent-sdk-exit-proof-identity.test.ts	keeps the descendant verdict when a POSIX root probe is unavailable
+src/main/codex/config-toml-trust-hook-read.test.ts	keeps case-distinct WSL UNC hook paths distinct
+src/shared/agent-hook-listener-interactive-prompts.test.ts	still rejects a hook payload that is malformed once the BOM is removed
+src/main/agent-hooks/server-copilot-normalization.test.ts	Notification(elicitation_dialog) accepts camelCase type and surfaces the question
+src/main/ipc/worktrees-remove-archive-hooks.test.ts	releases the watcher-install fence when worktree deletion fails
+src/main/pi/titlebar-extension-source.test.ts	survives a dialog event that carries no ui context
+src/main/hooks-issue-command.test.ts	prefers the local override over the shared kolux.yaml command
+src/main/codex/hook-service-user-hook-mirroring.test.ts	mirrors trusted system user hook approvals into the runtime CODEX_HOME
+src/main/tray/system-tray.test.ts	preserves the Windows attention swap behavior
+src/renderer/src/hooks/usePrimarySelectionPaste.test.tsx	owns Linux middle-click paste for editable DOM targets
+src/main/codex/config-toml-trust-hook-upsert.test.ts	collapses duplicate blocks for the same hook key while preserving unrelated hook state
+src/main/codex/codex-config-mirror.test.ts	allows WSL callers to retain Linux semantics for mounted-drive homes
+src/main/codex/config-settings-promotion.test.ts	inserts into a CRLF [tui] table with CRLF endings
+src/shared/claude-subagent-roster.test.ts	leaves rows this listener tracked from live events alone
+src/renderer/src/store/slices/worktrees-activity-persistence.test.ts	clears folder workspace unread on its record and dedupes repeat calls
+src/renderer/src/hooks/macos-tcc-prompt-notice-subscription.test.ts	releases the claim when acknowledgement fails or is unavailable
+src/main/codex/config-settings-promotion.test.ts	does not promote a [tui] key deletion
+src/renderer/src/hooks/usePrimarySelectionPaste.terminal-native-paste.test.tsx	keeps suppressing nothing when the terminal never armed the window
+src/renderer/src/hooks/composer-branch-selection.test.ts	clears a PR-derived push target when the manual branch changes to a different branch
+src/renderer/src/lib/agent-status-terminal-title.test.ts	uses Devin synthetic titles for hook status transitions
+src/main/codex/codex-server-request-disposition.test.ts	enumerates every server request in the negotiated stable schema
+src/renderer/src/store/slices/agent-status-quit-capture.test.ts	skips done agents — there is no turn left to resume
+src/shared/claude-subagent-row-lifecycle.test.ts	removes aborted subagents on the interrupt Stop so the pane can resolve
+src/renderer/src/hooks/useIpcEvents-agent-status-hook-titles.test.ts	buffers ready push events until a mounted tab contains the pane leaf
+src/renderer/src/components/activity/activity-thread-presentation.test.ts	does not repeat the task title as the last-message line
+src/main/codex/codex-structured-rewind.test.ts	refuses a missing target before mutation
+src/renderer/src/hooks/agent-hook-completion-store-sync.test.ts	compares effective tracking state instead of unrelated settings identity
+src/renderer/src/store/slices/folder-workspace-activation-and-activity.test.ts	does not rewind local activity when a failed early persist reconciles an older catalog value
+src/renderer/src/store/slices/store-sleep-agent-status-retention.test.ts	preserves existing retention suppressors across sleep (identity-preserved suppressor map)
+src/main/mimo/status-plugin/hook-plugin-fail-open-ownership.test.ts	ignores malformed attention that has no required sessionID
+src/main/codex/hook-service-wsl-runtime.test.ts	reconciles only current, conclusive WSL path settlements
+src/shared/codex-subagent-transcript.test.ts	tracks the newest model when the child switches mid-session
+src/shared/agent-hook-listener-claude-subagents.test.ts	marks subagent-origin tool events as child activity without adopting them as lead state
+src/main/grok/windows-grok-hook-script.test.ts	neutralizes a trailing backslash in GROK_HOME
+src/main/agent-hooks/wsl-hook-relay-manager.test.ts	round-trips write/read/stat/rename and rejects paths outside home
+src/main/agent-hooks/server-ingest-remote.test.ts	rejects invalid remote metadata-only session envelopes
+src/main/agent-hooks/server-pi-normalization.test.ts	session_shutdown leaves a running Pi status intact
+src/main/claude/compact-status-registration.test.ts	leaves an idle pane idle when PreCompact arrives alone
+src/renderer/src/store/slices/agent-status-quit-capture.test.ts	scrubs launch config registry entries when worktree agent status is dropped
+src/main/agent-hooks/server-claude-permission-visibility.test.ts	keeps Claude permission visible when another same-type subagent reports the same tool execution
+src/renderer/src/store/slices/agent-status-freshness-cache.test.ts	answers repeated commits from the cache instead of revisiting every entry
+src/renderer/src/lib/agent-status.test.ts	does not treat Factory Droid native needs-input titles as completion
+src/main/agent-hooks/first-work-folder-rename.test.ts	moves the folder and migrates identity on the happy path
+src/main/agent-hooks/managed-hook-script-refresh.test.ts	rewrites an existing script and refuses to create a missing one
+src/shared/agent-status-types.test.ts	normalizes multiline prompt to single line
+src/renderer/src/runtime/web-session-tabs-sync-agent-status.test.ts	repairs mirrored same-state attribution and retains identity from an older snapshot
+src/main/claude/claude-structured-dispatch.test.ts	rejects more than twenty URL images before sending
+src/main/agent-hooks/installer-utils-remote.test.ts	returns {} when settings.json does not exist on the remote
+src/main/codex/config-toml-trust-hook-removal.test.ts	preserves restrictive config permissions
+src/renderer/src/components/activity/activity-portal-readiness-oscillation.test.ts	tolerates a few legitimate flips while xterm attaches
+src/main/claude/hook-service.test.ts	removes the managed statusLine on remove()
+src/main/codex/config-settings-promotion.test.ts	replaces a quoted top-level key instead of adding its bare equivalent
+src/main/agent-hooks/server-endpoint-file-lifecycle.test.ts	buildPtyEnv omits KOLUX_AGENT_HOOK_ENDPOINT when no userDataPath was provided
+src/main/ipc/worktrees-remove-archive-hooks.test.ts	runs the archive hook before removing an SSH worktree
+src/main/codex/codex-structured-journal-translation-settlement.test.ts	bounds prompt cancellation and exit bodies before lifecycle batching
+src/main/agent-hooks/server-relay-listener-replay.test.ts	preserves Codex sibling and lead state across relay listener restarts
+src/renderer/src/lib/activity-thread-display.test.ts	keeps the previous assistant preview when a new ping mislabels the user prompt

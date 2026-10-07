@@ -1,0 +1,10 @@
+﻿kolux dialog
+
+Usage: kolux dialog <command> [options]
+
+Commands:
+  accept             Accept a browser dialog
+  dismiss            Dismiss a browser dialog
+
+Run `kolux dialog <command> --help` for command-specific usage.
+

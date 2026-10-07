@@ -1,0 +1,19 @@
+﻿kolux linear label set
+
+Usage: kolux linear label set [<id>] [--current] --label <labelId-or-exact-name>... [--workspace <id>] [--json]
+
+Replace labels on a Linear issue
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --current              Use the current Kolux worktree linked Linear issue
+  --label
+  --workspace <id>      Connected Linear workspace id
+  --id <id>             Identifier for a target item or permission
+
+Examples:
+  $ kolux linear label set ENG-123 --label Bug --json
+

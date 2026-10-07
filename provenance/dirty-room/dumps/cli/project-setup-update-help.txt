@@ -1,0 +1,28 @@
+﻿kolux project setup-update
+
+Usage: kolux project setup-update --setup <setup-id> [--display-name <name>] [--path <path>] [--worktree-base-path <path>] [--git-username <name>] [--kind git|folder] [--state ready|not-set-up|setting-up|error|unsupported] [--method legacy-repo|imported-existing-folder|cloned|provisioned] [--json]
+
+Update project host setup metadata
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --setup run|skip|inherit Setup policy for repo-defined setup hooks
+  --display-name <name>  Override the Kolux display name
+  --path <path>          Path argument for the command
+  --worktree-base-path
+  --git-username
+  --kind
+  --state
+  --method
+
+Notes:
+  Repo-backed setups mirror safe fields onto the repo record.
+  Path and availability state changes are only supported for independent setup records.
+
+Examples:
+  $ kolux project setup-update --setup github:TxaisX/kolux::gpu --display-name "GPU VM"
+  $ kolux project setup-update --setup github:TxaisX/kolux::gpu --path /srv/kolux --state ready --json
+

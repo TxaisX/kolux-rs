@@ -1,0 +1,40 @@
+﻿kolux automations edit
+
+Usage: kolux automations edit <id> [--name <name>] [--trigger <preset|cron|rrule>] [--json]
+
+Edit a Kolux automation
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --id <id>             Identifier for a target item or permission
+  --name <name>          Name for the new worktree or automation
+  --prompt <text>        Prompt text for agent-backed commands
+  --provider <agent>     Agent id such as codex, claude, or gemini
+  --precheck
+  --precheck-timeout
+  --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+  --workspace <selector> Existing worktree selector for automation runs
+  --project
+  --host
+  --project-host-setup
+  --source-context <json|null> Explicit TaskSourceContext for automation task/provider data
+  --workspace-mode <mode> existing or new-per-run
+  --base-branch <ref>    Base branch/ref to create the worktree from
+  --trigger <schedule>   Automation schedule preset, cron, or RRULE
+  --schedule <schedule>  Alias for --trigger
+  --time <HH:MM>        Time used with daily/weekdays/weekly presets
+  --day <0-6>           Day used with weekly preset, Sunday=0
+  --timezone <tz>       IANA timezone for the automation
+  --enabled              Enable the automation
+  --disabled             Disable the automation
+  --missed-run-grace-minutes <n> Missed-run grace window
+  --reuse-session        Reuse the previous live session for existing-workspace runs
+  --fresh-session        Disable session reuse for future runs
+
+Examples:
+  $ kolux automations edit 2f9e... --disabled
+  $ kolux automations edit --id 2f9e... --trigger "30 * * * *" --json
+

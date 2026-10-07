@@ -1,0 +1,2587 @@
+{
+  "area": "11-git-review",
+  "prefix": "GIT",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-11-001",
+      "title": "Source Control panel lists a workspace's changes in groups",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Opens Source Control in the right sidebar of a Git workspace, from its icon or with Mod+Shift+G.",
+      "user_sees": "Every changed file of that worktree, sorted into staged, changed, untracked and committed-on-branch sections, each with a count, a status letter per file and added/removed line counts.",
+      "rules": [
+        "The panel is offered only for Git workspaces; plain folders do not get it.",
+        "The header menu switches between a flat list and a folder tree; the choice is remembered (default list).",
+        "A setting chooses which section comes first: changes, staged or untracked.",
+        "Renamed files are shown under their new path; binary files show no line counts.",
+        "File names with spaces, quotes or non-ASCII characters display and act correctly.",
+        "The list refreshes on its own when git state changes outside Kolux (terminal commits, checkouts)."
+      ],
+      "acceptance": [
+        "Edit one tracked file, stage another, create a new file → three sections appear with correct counts and line totals.",
+        "Toggle tree view, close and reopen the panel → tree view is still shown.",
+        "Commit from a terminal → the panel empties without a manual refresh."
+      ],
+      "compat": "Keybinding id sidebar.sourceControl.toggle (default Mod+Shift+G).",
+      "decision": "",
+      "evidence": [
+        "registry:view-ids:source-control",
+        "registry:keybindings:sidebar.sourceControl.toggle",
+        "registry:settings-keys:sourceControlViewMode",
+        "registry:settings-keys:sourceControlGroupOrder",
+        "src/main/git/status.test.ts:59",
+        "src/shared/git-uncommitted-line-stats.test.ts:35",
+        "src/shared/source-control-group-order.test.ts:7",
+        "src/main/ipc/worktree-git-common-watch.test.ts:113"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-002",
+      "title": "Stage and unstage files, folders or whole sections",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Clicks the plus or minus on a file or folder row, uses a section's stage-all or unstage-all, or multi-selects rows and uses the bulk bar.",
+      "user_sees": "The files move between the staged and unstaged sections immediately; a bulk bar shows how many selected rows will be staged or unstaged.",
+      "rules": [
+        "A folder row stages or unstages everything beneath it.",
+        "Paths are treated literally: names containing wildcard characters never match other files.",
+        "Very large selections are split into several git calls so the command line never overflows.",
+        "Staging is per worktree; another workspace's index is never touched.",
+        "Paths that resolve outside the selected worktree are refused."
+      ],
+      "acceptance": [
+        "Stage a folder with three changed files → all three appear under staged.",
+        "Select 2,000 files and stage them → all are staged with no error."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/git/status-discard-and-bulk-staging.test.ts:63",
+        "src/main/ipc/filesystem-git-status-staging.test.ts:77",
+        "src/main/git/source-control/bulk-pathspec-command-line-budget.test.ts:55",
+        "src/main/git/status-pathspec-literals.test.ts:40",
+        "src/main/ipc/filesystem-git-status-staging.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-003",
+      "title": "Discarding changes asks first and says exactly what will be lost",
+      "tier": "P0",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Clicks discard on a file, a folder or a whole section.",
+      "user_sees": "A confirmation whose wording fits the case: a new file will be deleted for good, a deleted file will be restored from the last commit, a modified file loses all its edits. Section-level discards name how many untracked files will be deleted.",
+      "rules": [
+        "Every variant states that the action cannot be undone.",
+        "The confirm button names the action (Delete, Restore or Discard).",
+        "Discarding never follows a symbolic link out of the repository and never deletes the link's target.",
+        "A long list of untracked files in the confirmation scrolls; the buttons stay reachable."
+      ],
+      "acceptance": [
+        "Discard an untracked file → dialog says it will be deleted permanently; confirm → file is gone.",
+        "Discard a section holding 40 untracked files → dialog names 40 and its buttons are visible without resizing the window.",
+        "Discard a change to a symlink pointing outside the repo → the outside target is untouched."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/commit/discard-confirmation.ts:12",
+        "src/main/git/status-discard-symlink.test.ts:42",
+        "src/shared/git-discard-path-safety.test.ts:19",
+        "tests/e2e/source-control-discard-confirmation.spec.ts:131"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-004",
+      "title": "Write a commit message and commit from the panel",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Types a message in the commit box and presses Commit, or Ctrl+Enter (Cmd+Enter on macOS).",
+      "user_sees": "The staged changes are committed, the sections empty, and the commit appears in history.",
+      "rules": [
+        "The keyboard shortcut works only while focus is inside Source Control and only when the main button is an enabled Commit.",
+        "The shortcut is ignored with Alt or Shift held and while an input method is composing text.",
+        "An unsent message draft is kept per worktree and survives closing the panel or switching workspaces.",
+        "A failed commit shows a notice with expandable details; a commit stopped by a hook is labelled as blocked.",
+        "The failure notice offers 'Fix with AI', which launches an agent with the error output."
+      ],
+      "acceptance": [
+        "Stage a file, type a message, press Ctrl+Enter → one new commit, panel clean.",
+        "Type a draft, switch to another workspace and back → draft is still there.",
+        "Add a pre-commit hook that exits 1 → the notice says blocked and shows the hook output."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/commit/commit-shortcut.ts:5",
+        "src/renderer/src/components/right-sidebar/source-control/commit/commit-area.tsx:39",
+        "src/renderer/src/components/right-sidebar/source-control/commit/recovery-notice.tsx:177",
+        "src/main/git/commit.test.ts:14",
+        "src/main/ipc/filesystem-git-commit-dispatch.test.ts:63",
+        "tests/e2e/golden-source-control-commit.spec.ts:17",
+        "tests/e2e/source-control-commit-draft-persistence.spec.ts:50"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-005",
+      "title": "Commit combined with push, sync or force push",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the dropdown beside the commit button.",
+      "user_sees": "Choices to commit and push, commit and sync, commit and force push, or commit then pull and push, each running both steps in order.",
+      "rules": [
+        "Only combinations that make sense for the branch's state are enabled; disabled ones say why.",
+        "The force-push variant explains that it uses a lease, so it refuses to overwrite commits it has not seen.",
+        "If the commit step fails, the push step does not run."
+      ],
+      "acceptance": [
+        "On a tracked branch, choose commit and push → one commit is created and the remote shows it.",
+        "Make the commit fail → nothing is pushed."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/commit/commit-action-menu.tsx:11",
+        "src/main/ipc/filesystem-git-commit-dispatch.test.ts:63"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-006",
+      "title": "The main Source Control button always offers the next sensible step",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Looks at the large button under the commit box as the branch changes state.",
+      "user_sees": "Its label and action change: stage all, commit, push, pull, sync, publish branch, force push, or create a pull request.",
+      "rules": [
+        "Unstaged changes and nothing staged → stage all.",
+        "Staged changes with a message → commit; unresolved conflicts block commit.",
+        "Clean tracked branch → push, pull or sync depending on ahead and behind counts.",
+        "Branch never published → publish branch; blocked when HEAD is detached.",
+        "Diverged only by commits that carry identical patches (after a rebase) → force push with lease.",
+        "Clean, pushed branch → create a review; the button waits while eligibility is still loading."
+      ],
+      "acceptance": [
+        "Walk a new branch through edit → stage → commit → publish → create PR and confirm the button label at each step.",
+        "Rebase a pushed branch onto its base → button offers force push with lease, not pull."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/source-control-primary-action-decision.test.ts:25",
+        "src/shared/git-upstream-status.test.ts:12"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-007",
+      "title": "Push, pull, sync, fetch and publish from the panel",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Uses the remote menu: push, pull, sync, fetch, fast-forward, force push, publish branch or rebase from base.",
+      "user_sees": "The action runs against the branch's remote; labels carry counts (push N commits, pull N commits, a combined down/up count for sync).",
+      "rules": [
+        "Fetch updates remote refs without merging.",
+        "Publish pushes the branch to origin and sets it as the upstream.",
+        "Force push always uses a lease.",
+        "Disabled items explain why: no branch checked out, branch not published, nothing to pull, already up to date, PR already merged.",
+        "A push target that does not match the branch's configured remote is refused.",
+        "A branch with no upstream is not polled over and over for remote status.",
+        "Git and GitHub actions go only to the remotes and hosts the user already configured."
+      ],
+      "acceptance": [
+        "Make two local commits → menu reads push 2 commits; push → counts return to zero.",
+        "Open a never-published branch for ten minutes → no repeating remote probes appear in git traces."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/git/remote.test.ts:21",
+        "src/main/git/upstream.test.ts:22",
+        "src/shared/git-push-target-validation.test.ts:4",
+        "src/main/git/status-upstream-probe-churn.test.ts:61",
+        "tests/e2e/git-no-upstream-polling-churn.spec.ts:213",
+        "README.md:154"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-008",
+      "title": "Pull explains what to do when git needs a pull policy",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Pulls a branch that has diverged from its remote when git has no pull strategy configured.",
+      "user_sees": "A notice explaining the branches diverged, with merge, rebase or fast-forward-only choices and a copyable command to set the policy for good.",
+      "rules": [
+        "Choosing a policy retries the pull with it.",
+        "The copy button copies the git config command only; nothing is changed until the user runs it."
+      ],
+      "acceptance": [
+        "Diverge local and remote, unset pull.rebase, pull → notice appears; pick rebase → pull completes."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/commit/pull-policy-error-notice.tsx:34"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-009",
+      "title": "A failed push can be handed to an agent to fix",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Pushes and the push fails.",
+      "user_sees": "A push-failed or push-blocked notice that names the kind of failure; for hook or lint failures it offers to fix the problem with an agent.",
+      "rules": [
+        "Pre-push hook and lint failures are told apart from authentication, protected-branch, non-fast-forward, network and submodule failures.",
+        "The agent prompt includes the tail of the hook output and a capped list of changed files; terminal colour codes are stripped.",
+        "Fetch errors are classified the same way so the message is specific."
+      ],
+      "acceptance": [
+        "Add a failing pre-push hook, push → notice offers the AI fix; run it → an agent opens with the hook output in its prompt.",
+        "Push to a protected branch → notice says protected, no AI fix offered."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/source-control-push-failure.test.ts:16",
+        "src/shared/source-control-recovery-agent-command.test.ts:7",
+        "src/main/git/fetch-error-classification.test.ts:7"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "07"
+      ]
+    },
+    {
+      "id": "D-11-010",
+      "title": "Pushing to a fork is called out",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Works on a branch whose push target is a fork rather than origin.",
+      "user_sees": "A notice in the panel naming the fork the branch pushes to.",
+      "rules": [
+        "Branches checked out from a fork's pull request fetch from and push to that fork's remote.",
+        "Stale fork branch refs are cleaned up rather than reused."
+      ],
+      "acceptance": [
+        "Start work from a PR opened from a fork → panel notice names the fork; push lands on the fork."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/panel/fork-push-notice.tsx:7",
+        "src/main/git/fork-remote-refspec.test.ts:52",
+        "src/renderer/src/store/slices/worktrees-linked-review-push-target.test.ts:32"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-011",
+      "title": "Branch row compares the workspace against its base",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Looks at the branch row at the top of Source Control, or uses 'Change Base Ref' and 'Refresh branch compare' from the header menu.",
+      "user_sees": "The base it compares against, commits ahead and behind, how many files changed versus the base, and a total added/removed line chip; a committed-on-branch section lists files changed in the branch's commits.",
+      "rules": [
+        "The base defaults to the repository's default branch; a setting can compare against the upstream instead.",
+        "Changing the base updates counts, the committed section and the branch diff.",
+        "Line totals give up gracefully on huge branches rather than stalling the panel.",
+        "Hovering the line chip splits out test-code and generated-file lines; a file that is both counts as generated."
+      ],
+      "acceptance": [
+        "Make three commits touching five files → row reads 3 ahead, 5 files changed.",
+        "Change base to another branch → counts and committed files update."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/panel/branch-context-row.tsx:279",
+        "src/renderer/src/components/right-sidebar/source-control/panel/branch-line-total-chip.tsx:112",
+        "src/renderer/src/components/right-sidebar/source-control/sync/compare-summary.tsx:23",
+        "src/main/git/status-branch-compare.test.ts:56",
+        "src/shared/git-branch-line-total.test.ts:51",
+        "src/main/ipc/filesystem-branch-compare-diff.test.ts:67",
+        "registry:settings-keys:sourceControlCompareAgainstUpstream",
+        "src/shared/git-branch-line-total.ts:107"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-012",
+      "title": "Huge change sets are capped, with an offer to ignore heavy folders",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Opens Source Control on a worktree with tens of thousands of changed files.",
+      "user_sees": "Only the first batch of changes is listed with a banner saying so, plus an offer to add known heavy folders (dependency or build folders) to .gitignore.",
+      "rules": [
+        "The ignore offer only lists heavy folders that exist and are not already ignored; it creates .gitignore if missing.",
+        "The panel stays responsive while capped."
+      ],
+      "acceptance": [
+        "Create 30,000 untracked files in a dependency folder → banner appears; accept the offer → folder is ignored and the list shrinks."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/listing/too-many-changes-banner.tsx:9",
+        "src/shared/git-status-limit.test.ts:8",
+        "src/main/git/huge-folder-ignore.test.ts:17",
+        "tests/e2e/source-control-large-file-count.spec.ts:268"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-013",
+      "title": "Submodule changes appear as their own rows",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Works in a repository that has submodules.",
+      "user_sees": "Each changed submodule shows as one row with its state; when there are too many, a note says more submodule changes were left out.",
+      "rules": [
+        "Submodule paths are cached so repeated status reads stay fast.",
+        "Removing a worktree checks submodules for unsaved work first."
+      ],
+      "acceptance": [
+        "Move a submodule to a new commit → one submodule row appears in changes."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/git/status-submodule.test.ts:64"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-014",
+      "title": "Filter the change list and act on a file from its menu",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Types in the panel's filter box, or right-clicks a changed file.",
+      "user_sees": "The list narrows to matching paths; the menu offers copying the full or relative path, opening the file in an external app, and revealing it in the file manager.",
+      "rules": [
+        "Escape clears the filter and closes the box.",
+        "The open-in list can be customised from the same menu."
+      ],
+      "acceptance": [
+        "Type part of a file name → only matching rows remain; press Escape → full list returns."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/listing/entry-context-menu.tsx:36",
+        "src/renderer/src/components/right-sidebar/source-control/panel/header-overflow-menu.tsx:23"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "12"
+      ]
+    },
+    {
+      "id": "D-11-015",
+      "title": "Merge and rebase conflicts are listed with abort and AI resolve",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Hits conflicts during a merge or rebase in a workspace.",
+      "user_sees": "Conflict cards listing each conflicted file with its kind (both modified, both added, deleted by one side), whether it is resolved locally yet, and buttons to abort the merge or rebase or to resolve the conflicts with an agent.",
+      "rules": [
+        "Commit is blocked while any conflict is unresolved.",
+        "Conflicted files are left out of the combined diff, with a note saying so.",
+        "Abort matches the operation in progress (merge or rebase).",
+        "Very long conflict lists are capped, but the conflict rows on screen are always kept."
+      ],
+      "acceptance": [
+        "Create a conflicting merge → cards list the file; click abort → repository returns to its pre-merge state.",
+        "Click resolve with AI → an agent opens in that worktree with the conflicted files in its prompt."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/listing/conflict-status-cards.tsx:8",
+        "src/renderer/src/components/right-sidebar/source-control/sync/use-conflict-abort.ts:17",
+        "src/main/git/status-conflict-operations.test.ts:59",
+        "src/shared/git-status-conflict-entries.test.ts:27",
+        "src/main/git/status.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "07"
+      ]
+    },
+    {
+      "id": "D-11-016",
+      "title": "Review changes: an agent reviews the branch before you ship",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Chooses 'Review changes' from the Source Control header menu and picks an agent.",
+      "user_sees": "An agent session opens in that worktree with a review prompt naming the base branch and the changed files.",
+      "rules": [
+        "Each file list in the prompt is capped at 50 entries with a count of the rest.",
+        "With nothing to review the action says so plainly instead of launching.",
+        "Named in the 0.12.0 release (card WORK-2)."
+      ],
+      "acceptance": [
+        "Change 60 files, run review changes → agent prompt lists 50 files plus a count of 10 more and names the base.",
+        "On a clean branch → a message says there is nothing to review; no agent starts."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/panel/header-overflow-menu.tsx:23",
+        "src/renderer/src/components/right-sidebar/source-control/panel/header-overflow-menu.test.tsx:49",
+        "src/shared/source-control-review-changes-prompt.test.ts:4"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "07"
+      ]
+    },
+    {
+      "id": "D-11-017",
+      "title": "AI writes the commit message from the staged diff",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks the generate button beside the commit box.",
+      "user_sees": "A commit message filled in by a local agent CLI; the button turns into a stop control while it works.",
+      "rules": [
+        "The generate control is hidden when there is nothing to commit.",
+        "A generation stays attached to the worktree that started it, survives switching workspaces and remounting the panel, and fills the right box.",
+        "Only locally installed agents are offered; the default is Claude Code. Supported: Claude Code, Codex, Amp, Kimi, Copilot, Pi, Cursor, Antigravity, or a custom command.",
+        "Large diffs are cut to a budget shared fairly between files, on line boundaries.",
+        "Code fences, 'generating' preambles and list bullets are stripped from the output.",
+        "On failure the error excerpt prefers the agent's error stream and hides secrets.",
+        "An agent that exits successfully but prints nothing is reported as an empty result, with its error-stream excerpt."
+      ],
+      "acceptance": [
+        "Stage a change, click generate → a one-paragraph message appears in the box.",
+        "Start generating, switch workspace and back → the message lands in the original workspace only.",
+        "Click the button again mid-run → generation stops and the box is unchanged."
+      ],
+      "compat": "Agent names as offered: Claude Code, Codex, Amp, Kimi, Copilot, Pi, Cursor, Antigravity, Custom.",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/source-control-commit-message-ai.spec.ts:44",
+        "tests/e2e/source-control-pr-generation-switch.spec.ts:150",
+        "src/shared/commit-message-agent-spec.test.ts:28",
+        "src/shared/commit-message-prompt.test.ts:16",
+        "src/main/text-generation/commit-message-text-generation-generated-output.test.ts:24",
+        "src/main/text-generation/commit-message-text-generation-cancellation.test.ts:42",
+        "src/main/text-generation/agent-failure-output.test.ts:10",
+        "src/main/text-generation/commit-message-text-generation-failure-sanitization.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "07"
+      ]
+    },
+    {
+      "id": "D-11-018",
+      "title": "Choose the AI author for commit messages",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the AI author settings and picks an agent, model and thinking effort, or writes a custom prompt or custom command.",
+      "user_sees": "Later generations use that agent and model; the model list is read from the installed CLI.",
+      "rules": [
+        "On by default; can be turned off.",
+        "A custom command receives the prompt where it contains the prompt placeholder, otherwise on standard input.",
+        "Quoted arguments in a custom command are kept together; on Windows backslashes are taken literally.",
+        "Thinking effort choices depend on the agent.",
+        "Until the user picks a model, each agent uses a strong built-in default (Claude Code uses Sonnet).",
+        "Custom instructions go into their own size-limited part of the prompt; blank instructions add nothing."
+      ],
+      "acceptance": [
+        "Pick Codex and a model, generate → the Codex CLI is run with that model.",
+        "Set a custom command containing the placeholder → the prompt text is substituted there."
+      ],
+      "compat": "Custom command placeholder {prompt}.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/CommitMessageAiPane.tsx:46",
+        "registry:settings-keys:commitMessageAi",
+        "src/main/text-generation/commit-message-text-generation-model-discovery.test.ts:44",
+        "src/main/text-generation/commit-message-command-backslash-mode.test.ts:19",
+        "src/shared/commit-message-plan.test.ts:4",
+        "src/shared/commit-message-agent-spec.test.ts:43",
+        "src/shared/commit-message-generation.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-019",
+      "title": "Source Control AI actions can be tuned per action and per repo",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Edits the Source Control AI recipes: which agent, extra CLI arguments or a command template for commit, PR, branch-name and fix actions; sets per-repository overrides.",
+      "user_sees": "Each recipe shows insertable variable chips; repositories can use the global setting, force it on, or force it off.",
+      "rules": [
+        "A switch hides all Source Control AI actions.",
+        "The linked-issue variable is offered only for commit and PR recipes.",
+        "Older single-setting configurations are migrated into recipes on first launch.",
+        "Saving an invalid recipe is refused with a reason."
+      ],
+      "acceptance": [
+        "Turn the switch off → generate and fix-with-AI buttons disappear from the panel.",
+        "Set a repo override to off → that repo shows no AI actions while others do."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:sourceControlAi",
+        "src/shared/source-control-ai-action-recipes.test.ts:31",
+        "src/shared/source-control-ai-action-variables.test.ts:14",
+        "src/renderer/src/components/source-control/SourceControlActionVariableChips.test.tsx:20",
+        "src/shared/source-control-ai-recipe-save.test.ts:26",
+        "src/main/persistence-source-control-ai-migration.test.ts:56",
+        "src/shared/source-control-ai.test.ts:62"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-020",
+      "title": "Branches are renamed from the work done in them",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Starts work in a new workspace with a placeholder branch name.",
+      "user_sees": "The branch is renamed to a short descriptive name generated from the work.",
+      "rules": [
+        "On by default; can be turned off.",
+        "Generated names are cleaned into a short lowercase slug with the configured prefix.",
+        "Rename checks whether the branch already has an upstream and does not silently break tracking.",
+        "Profiles that existed before the feature had it switched on once; a later opt-out sticks."
+      ],
+      "acceptance": [
+        "Start an agent on a task in a fresh workspace → branch name changes to a slug describing the task."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:autoRenameBranchFromWork",
+        "src/main/text-generation/commit-message-text-generation-branch-name.test.ts:4",
+        "src/main/git/branch-rename.test.ts:15",
+        "src/main/persistence-source-control-ai-migration.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-021",
+      "title": "Create a pull request from Source Control",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the create-PR composer, sets title, description, base branch and draft, optionally generates the text, then creates it.",
+      "user_sees": "The PR is opened on GitHub and linked to the workspace; if the branch is not pushed yet the button pushes first.",
+      "rules": [
+        "Base must differ from the head branch.",
+        "If a PR already exists for the branch, that one is returned and linked instead of a duplicate.",
+        "A failed create keeps everything typed in the composer and shows the error.",
+        "Uncommitted tracked changes block creation with a clear reason.",
+        "A base branch that exists only locally gets an actionable message.",
+        "GitHub Enterprise Server is supported."
+      ],
+      "acceptance": [
+        "On a pushed branch, fill title and create → a PR exists on GitHub and the panel shows its number.",
+        "Force a create failure → composer keeps title and description and shows the error."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/CreateHostedReviewComposer.tsx:84",
+        "tests/e2e/source-control-create-pr.spec.ts:207",
+        "src/main/source-control/hosted-review-creation.test.ts:220",
+        "src/main/github/client-create-pr.test.ts:74"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-022",
+      "title": "One click takes a dirty branch all the way to a pull request",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks create PR while the branch still has uncommitted or unpushed work.",
+      "user_sees": "A progress notice walks through each step: preparing the branch, generating a commit message, committing, publishing or pushing (force pushing with lease when needed), generating review details, creating the review.",
+      "rules": [
+        "The flow keeps running if the user switches to another workspace and is visible on return.",
+        "If the branch must be synced first, or changed while details were generating, it stops with a specific message.",
+        "The notice keeps its layout with long step names."
+      ],
+      "acceptance": [
+        "Edit a file, click create PR → commit, push and PR all happen and the notice ends on success.",
+        "Start the flow, switch workspace, come back → it has completed or shows the current step."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/source-control-create-review-intent.test.ts:21",
+        "tests/e2e/source-control-create-pr-intent-switch.spec.ts:43",
+        "tests/e2e/source-control-create-pr-intent-notice-layout.spec.ts:15"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-023",
+      "title": "Create PR says why it is unavailable",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Hovers a disabled create-review action.",
+      "user_sees": "A reason such as commit changes first, push first, sync first, switch to a feature branch, base not on the remote, fork head not supported, or provider not supported.",
+      "rules": [
+        "Eligibility re-checks commits ahead of base before allowing creation.",
+        "If the head branch is no longer checked out, creation is refused.",
+        "When the lookup for an existing review fails, creation is refused rather than risking a duplicate.",
+        "Push is offered as the next action when that is what is missing."
+      ],
+      "acceptance": [
+        "On the default branch → create review is disabled with the switch-branch reason."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/source-control/hosted-review-creation-eligibility.test.ts:218"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-024",
+      "title": "AI drafts the pull request title and description",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks generate in the create-PR composer, or lets it run automatically when the composer opens.",
+      "user_sees": "A title and a plain-language description with problem and solution sections, referencing the linked issue and following the repository's PR template when one exists.",
+      "rules": [
+        "Defaults: create as draft, generate details on open, open the review after creation, use the template; each can be changed.",
+        "A linked GitHub issue's title and body are fed into the prompt.",
+        "Generation can be stopped; it stays tied to its worktree like commit generation.",
+        "If the linked issue cannot be fetched, its saved title is still used in the prompt.",
+        "A description the user deliberately left empty stays empty instead of falling back to a generated one.",
+        "A bare base-branch name that matches several remotes, none preferred, is not guessed."
+      ],
+      "acceptance": [
+        "Link an issue, open the composer → description mentions the issue and closes it by number.",
+        "Add a PR template to the repo → generated description keeps the template headings."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/pull-request-generation.test.ts:25",
+        "src/main/text-generation/pull-request-context.test.ts:22",
+        "src/main/text-generation/commit-message-text-generation-linked-issue.test.ts:8",
+        "src/main/ipc/filesystem-pull-request-field-generation.test.ts:68",
+        "src/main/ipc/source-control-ai-linked-issue.test.ts:17",
+        "tests/e2e/source-control-pr-linked-issue-ai.spec.ts:25",
+        "src/main/source-control/pull-request-linked-issue.test.ts",
+        "src/shared/pull-request-generation.test.ts",
+        "src/main/text-generation/pull-request-context.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-025",
+      "title": "Each workspace knows the pull request for its branch",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Works on a branch that has a PR, or links or unlinks a PR by hand.",
+      "user_sees": "The PR number, state and link appear in Source Control and Checks; a different PR can be linked or the link removed.",
+      "rules": [
+        "Lookup handles fork heads, renamed branches and a fallback by PR number.",
+        "Closed or merged PRs on the default branch are hidden unless the user linked them explicitly.",
+        "A manually linked PR whose branch no longer matches is flagged rather than silently swapped.",
+        "Merged PRs stay visible on their own branch."
+      ],
+      "acceptance": [
+        "Open a PR from a workspace branch → within one refresh the panel shows its number.",
+        "Link another PR by URL, then unlink → the panel returns to the branch's own PR."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/github/client-pr-linked-lookup.test.ts:39",
+        "src/main/github/default-branch-stale-pr.test.ts:207",
+        "src/main/github/client-merged-pr-visibility.test.ts:40",
+        "src/renderer/src/store/slices/hosted-review.test.ts:78",
+        "src/renderer/src/store/slices/github-pr-branch-linked-pr-divergence.test.ts:14",
+        "src/main/github/review-head-remote.test.ts:24"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-026",
+      "title": "A PR link printed by an agent attaches to its workspace",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Lets an agent create a PR from the terminal, which prints the PR URL.",
+      "user_sees": "The workspace picks up that PR as its linked review without any manual step.",
+      "rules": [
+        "URLs split across output chunks are still recognised once complete.",
+        "The same link printed twice is handled once.",
+        "Works for hidden or parked terminals too."
+      ],
+      "acceptance": [
+        "Print a GitHub PR URL in a workspace terminal → the Checks panel shows that PR."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/terminal-github-pr-link-detector.test.ts:10",
+        "src/renderer/src/components/terminal-pane/pty-connection/terminal-keydown-fit.ts:134"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-11-027",
+      "title": "PR status stays fresh without flooding GitHub",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Keeps several workspaces with PRs open over a long session.",
+      "user_sees": "PR state and checks update on their own, the visible workspace first; a refresh control updates everything at once.",
+      "rules": [
+        "The active and visible workspaces refresh before background ones; bursts are paced.",
+        "A workspace refreshes when focused if its data is stale.",
+        "Repeated validation errors back off; the refresh queue has a fixed upper size.",
+        "Requests for the same repo under different names are merged.",
+        "A failed forced refresh keeps the last known pull request data on screen.",
+        "Several workspaces linked to the same pull request all receive its update."
+      ],
+      "acceptance": [
+        "Push a fix and wait → the PR's check state changes in the panel without clicking refresh.",
+        "Open 20 workspaces → GitHub API usage stays within the shown budget."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/github/pr-refresh-coordinator-refresh-events.test.ts:21",
+        "src/renderer/src/store/slices/github-worktree-refresh-if-stale.test.ts:13",
+        "src/renderer/src/store/slices/github-refresh-sweep.test.ts:12",
+        "src/renderer/src/store/slices/github-pr-branch-fallback-results.test.ts",
+        "src/main/github/pr-refresh-queue-growth-bound.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-028",
+      "title": "GitHub rate limits and outages are shown, not hidden",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Uses GitHub features heavily or while GitHub or the gh CLI is struggling.",
+      "user_sees": "Settings shows the remaining REST, search and GraphQL budget; when limits are near, calls pause instead of failing; Tasks shows a temporarily-unavailable banner; a stalled gh call times out and recovers.",
+      "rules": [
+        "A breaker stops new calls when the limit is hit and resumes after the reset time.",
+        "Check details loading has its own timeout so the panel never spins forever.",
+        "When gh is not signed in, a help message explains how to sign in."
+      ],
+      "acceptance": [
+        "Make gh hang on issue details → the Tasks drawer recovers after the timeout.",
+        "Exhaust the search budget → banner appears; after reset, lists load again."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/GitPane.tsx:54",
+        "src/main/github/rate-limit.test.ts:40",
+        "src/main/git/gh-rate-limit-breaker.test.ts:20",
+        "src/main/github/client-rate-limit-block.test.ts:44",
+        "src/shared/github/api-availability.test.ts:4",
+        "src/renderer/src/runtime/github-check-details-timeout.test.ts:12",
+        "tests/e2e/github-cli-stall-repro.spec.ts:88",
+        "src/main/github/auth-diagnose.test.ts:10"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-11-029",
+      "title": "Checks panel shows the PR's CI results and fixes them with AI",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens Checks in the right sidebar of a workspace with a PR.",
+      "user_sees": "Checks grouped as failing, pending and passing; each expands to jobs, annotations and output, with copy-log, open-file-at-line, rerun, and fix-with-AI actions.",
+      "rules": [
+        "Long lists show the first 100 checks or jobs and the first 20 annotations, with a note.",
+        "Fix with AI lets the user choose the agent and passes the failing output.",
+        "A blocked check that needs action counts as failing, never passing; neutral checks are not counted as passed.",
+        "Folder workspaces get a separate PR Checks panel.",
+        "The failing log passed to the fixing agent is cut to its last part."
+      ],
+      "acceptance": [
+        "Break a test and push → Checks lists the failing job; expand it → log output is shown; click fix with AI → agent opens with the failure."
+      ],
+      "compat": "Keybinding id sidebar.checks.toggle (unbound by default).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/ChecksPanel.tsx:53",
+        "src/renderer/src/components/editor/CheckRunDetailsPanel.tsx:77",
+        "src/renderer/src/components/pr-checks-fix-prompt.ts:1",
+        "src/main/github/client-pr-checks.test.ts:210",
+        "src/main/github/client-pr-check-details.test.ts:55",
+        "src/renderer/src/components/task-page-pr-check-summary.test.ts:16",
+        "registry:view-ids:checks",
+        "registry:view-ids:pr-checks",
+        "registry:keybindings:sidebar.checks.toggle",
+        "src/renderer/src/components/pr-checks-fix-prompt.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-030",
+      "title": "Read and answer PR review comments inside Kolux",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Reads PR comments in the Checks panel; adds, replies to, edits, deletes, resolves or reacts to them.",
+      "user_sees": "Comments grouped by file and thread or as a timeline; changes are reflected on GitHub.",
+      "rules": [
+        "Deleting a comment asks for confirmation.",
+        "Authors can be marked as bots so their comments are grouped apart; the list is a setting.",
+        "Long threads show the first 100 comments with a note.",
+        "Blank comments cannot be submitted; text is trimmed before sending.",
+        "Comment times are shown compactly (relative when recent); an invalid time shows nothing."
+      ],
+      "acceptance": [
+        "Reply to a review thread and resolve it → GitHub shows the reply and the thread resolved."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/github-pr-comments.test.ts:15",
+        "src/renderer/src/store/slices/github-review-thread-actions.test.ts:40",
+        "src/main/github/client-pr-comment-reactions.test.ts:36",
+        "registry:settings-keys:prBotAuthorOverrides",
+        "src/renderer/src/lib/comment-body-submit-state.test.ts:9",
+        "src/shared/pr-comment-time.test.ts:7"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-031",
+      "title": "Send review comments to an agent to address",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Queues PR comments for the agent, or uses resolve-comments-with-AI.",
+      "user_sees": "The queued comments are delivered to the workspace's agent; after delivery the threads can be marked resolved with a reply.",
+      "rules": [
+        "The send button shows how many comments are queued.",
+        "Comments are marked resolved only after delivery succeeds."
+      ],
+      "acceptance": [
+        "Queue three comments and send → the agent terminal receives all three with file and line context."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/ChecksPanel.tsx:53",
+        "src/renderer/src/store/slices/github-review-thread-actions.test.ts:40"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "07"
+      ]
+    },
+    {
+      "id": "D-11-032",
+      "title": "PR merge conflicts are explained and can be resolved with AI",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens Checks for a PR that GitHub reports as conflicting.",
+      "user_sees": "A conflict section saying conflicts must be resolved before checks and merge, listing the conflicting files, with an AI resolve action.",
+      "rules": [
+        "When GitHub reports conflicts that do not reproduce locally, the panel says so and offers copyable commands to refresh mergeability."
+      ],
+      "acceptance": [
+        "Create a PR that conflicts with its base → the conflicting files are listed; resolve with AI launches an agent."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/github/conflict-summary.test.ts:63",
+        "src/main/github/client-pr-conflict-summary.test.ts:39"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-033",
+      "title": "Merge, auto-merge, merge queue and PR state actions",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses the PR actions: merge, merge when ready, enable or disable auto-merge, add to merge queue, mark ready for review, close or reopen.",
+      "user_sees": "A merge-state label (checking, checks pending or failed, blocked, behind, conflicts, in merge queue, changes requested, approval required, draft, closed, merged) and only the actions allowed now.",
+      "rules": [
+        "Only merge methods the repository allows are offered.",
+        "Auto-merge is offered only where the repository enables it.",
+        "After merge the user can delete the workspace.",
+        "Auto-merge is not offered on closed, draft, conflicting or unstable pull requests, or where the repository disallows it."
+      ],
+      "acceptance": [
+        "On a PR with pending checks, choose merge when ready → auto-merge is enabled and the label says so.",
+        "On a repo allowing only squash → only squash is offered."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/HostedReviewActions.tsx:41",
+        "src/renderer/src/components/github-pr-merge-state.test.ts:15",
+        "src/shared/github/pull-request-merge-methods.test.ts:7",
+        "src/shared/github/pull-request-auto-merge-availability.test.ts:20",
+        "src/main/github/client-merge-queue-auto-merge.test.ts:50",
+        "src/shared/github/pull-request-auto-merge-availability.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-034",
+      "title": "Stacked pull requests: see, create and merge a stack",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Works on a branch that builds on another PR's branch.",
+      "user_sees": "A stack map of the PRs with each one's state, collapsible; actions to create the next PR in the stack and to merge or queue everything up to a chosen PR after a confirmation.",
+      "rules": [
+        "Creating a stacked PR creates the current PR first, then records the stack; retries never create duplicates.",
+        "A stack whose parent links do not form a chain creates nothing.",
+        "Merging through a PR is refused if a lower PR is not mergeable."
+      ],
+      "acceptance": [
+        "Build two stacked branches, create PRs → map shows both; merge through the top → both merge in order."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/GitHubPRStackMap.tsx:50",
+        "src/main/github/stacked-pr-creation.test.ts:58",
+        "src/main/github/github-pr-stack.test.ts:40",
+        "src/main/github/client-stack-merge-guard.test.ts:34",
+        "src/main/source-control/stacked-hosted-review-creation.test.ts:34"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-035",
+      "title": "Git history panel draws the commit graph",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the history section of Source Control.",
+      "user_sees": "Recent commits with a lane graph, branch and tag labels, incoming and outgoing markers relative to the upstream, a tooltip with the full message, and the files of a selected commit.",
+      "rules": [
+        "Lane colours are stable; the current branch, its remote and the base have their own colours.",
+        "A remote-tracking label is hidden when a local branch with the same name points at the same commit.",
+        "Newly fetched upstream commits are not shown inside an older workspace's history.",
+        "Multi-line conventional commit messages wrap in the tooltip without breaking lines.",
+        "An empty repository shows a no-commits state; the section is resizable and has a refresh control."
+      ],
+      "acceptance": [
+        "Make two local commits ahead of upstream → both show as outgoing at the top of the graph.",
+        "Hover a commit with a long message → tooltip shows the whole message wrapped."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/sync/git-history-panel.tsx:43",
+        "src/shared/git-history.test.ts:95",
+        "src/shared/git-history-graph.test.ts:63",
+        "src/shared/git-history-ref-display.test.ts:13",
+        "tests/e2e/git-history-tooltip-wrap.spec.ts:51"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-11-036",
+      "title": "Commit menu in history: copy, open, or have an agent explain it",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Right-clicks a commit in the history panel.",
+      "user_sees": "Options to copy the hash, copy the message, open the commit in the browser, and 'Explain changes', which starts an agent that explains the commit.",
+      "rules": [
+        "Open in browser appears only when the built-in browser can open new tabs.",
+        "Explain sends its prompt once the agent is ready; with no agent available it shows an error."
+      ],
+      "acceptance": [
+        "Right-click a commit, choose explain changes → an agent session starts and receives an explain prompt for that commit."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/sync/git-history-commit-context-menu.tsx:15",
+        "src/renderer/src/components/right-sidebar/source-control/sync/use-git-history-commit-actions.ts:247"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "13"
+      ]
+    },
+    {
+      "id": "D-11-037",
+      "title": "Open a changed file as a diff",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Clicks a changed file in Source Control, then steps through its hunks with F7 and Shift+F7.",
+      "user_sees": "A diff tab of that file against its last committed or staged version; next and previous change jump between hunks.",
+      "rules": [
+        "Staged and unstaged versions of the same file open in separate tabs.",
+        "Single-click opens a preview tab that the next click reuses.",
+        "The diff opens in the split group the user asked for.",
+        "Closing a diff while it is loading never crashes the editor.",
+        "Re-opening a file whose diff tab is already open refreshes that tab's content.",
+        "A deleted image shows its last committed version."
+      ],
+      "acceptance": [
+        "Click an unstaged file → a diff tab opens showing the edit; press F7 → cursor moves to the next hunk."
+      ],
+      "compat": "Keybinding ids editor.nextChange (F7) and editor.previousChange (Shift+F7).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/editor-open-diff.test.ts:21",
+        "tests/e2e/golden-source-control-open-diff.spec.ts:15",
+        "src/renderer/src/lib/monaco-diff-editor-disposal.test.ts:12",
+        "registry:keybindings:editor.nextChange",
+        "registry:keybindings:editor.previousChange",
+        "src/renderer/src/store/slices/editor-open-diff.test.ts",
+        "src/main/git/status-diff.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "12"
+      ]
+    },
+    {
+      "id": "D-11-038",
+      "title": "One scrolling view of every change in the workspace",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Opens all changes, or the branch diff against base, from Source Control.",
+      "user_sees": "Every changed file's diff stacked in one tab, with an optional file tree, inline or side-by-side layout, whitespace and wrap toggles, expand and collapse all.",
+      "rules": [
+        "Defaults: inline layout, no wrap, whitespace hidden, file tree hidden; each is a setting.",
+        "The file tree is resizable within limits, filterable, and marks files already viewed.",
+        "Scroll position is kept when switching tabs and back.",
+        "Files changing underneath do not freeze the view.",
+        "The branch diff uses a snapshot of the base so it does not shift mid-review."
+      ],
+      "acceptance": [
+        "Change 10 files, open all changes → 10 sections; scroll to the 7th, switch tabs and back → still at the 7th.",
+        "Toggle side-by-side and whitespace → layout and markers change at once."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/combined-diff/CombinedDiffViewer.tsx:43",
+        "src/shared/combined-diff-file-tree-width.test.ts:10",
+        "src/renderer/src/store/slices/editor-branch-diff-snapshots.test.ts:26",
+        "tests/e2e/combined-diff-scroll-restore.spec.ts:406",
+        "tests/e2e/combined-diff-invalidation-freeze-repro.spec.ts:59",
+        "registry:settings-keys:diffDefaultView",
+        "registry:settings-keys:diffWordWrap",
+        "registry:settings-keys:diffShowWhitespace",
+        "registry:settings-keys:combinedDiffFileTreeVisibleByDefault"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "12"
+      ]
+    },
+    {
+      "id": "D-11-039",
+      "title": "Very large diffs are held back instead of freezing the app",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Opens a diff of a huge or generated file.",
+      "user_sees": "A message that the diff is too large to display safely, with its size limits; in the combined view the large file waits until the user chooses to load it.",
+      "rules": [
+        "Limits are by line count and by characters.",
+        "Diff data sent to the window has a size budget.",
+        "Diffs of files that have not changed since the last read are served from a cache.",
+        "A diff read that a newer change overtook is never cached."
+      ],
+      "acceptance": [
+        "Change a 100,000-line file, open all changes → the app stays responsive and that file shows a load button."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/LargeDiffFallback.tsx:32",
+        "tests/e2e/large-diff-freeze-repro.spec.ts:71",
+        "src/shared/git-diff-transport-budget.test.ts:81",
+        "src/main/git/status-diff-settled-cache.test.ts:127",
+        "src/main/git/status-diff-settled-cache.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-11-040",
+      "title": "Leave review notes on diff lines",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Hovers a diff line and clicks the plus, or selects lines and presses Mod+Shift+A, then types a note.",
+      "user_sees": "A note card under that line in both inline and side-by-side layouts; it can be edited in place or removed with a trash button.",
+      "rules": [
+        "Notes can be added only on lines that exist in the diff.",
+        "Edits are trimmed; an empty edit is refused.",
+        "Saved notes reserve their height so lines below do not jump.",
+        "The note popover stays inside the window and closes on an outside click.",
+        "Add Review Note is bound to Mod+Shift+A by default."
+      ],
+      "acceptance": [
+        "Add a note on line 12 → card appears under line 12; switch to side-by-side → card still under line 12.",
+        "Edit the note → the open card updates; click trash → it is gone."
+      ],
+      "compat": "Keybinding id editor.addReviewNote (default Mod+Shift+A).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/diff-comments/DiffCommentPopover.tsx:35",
+        "src/renderer/src/components/diff-comments/DiffCommentCard.tsx:45",
+        "src/renderer/src/components/diff-comments/useDiffCommentDecorator.commentable-lines.test.tsx:197",
+        "src/renderer/src/components/diff-comments/diff-comment-popover-position.test.ts:31",
+        "tests/e2e/diff-note-delete.spec.ts:23",
+        "tests/e2e/diff-note-edit.spec.ts:4",
+        "tests/e2e/diff-note-layout.spec.ts:44",
+        "registry:keybindings:editor.addReviewNote"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "12"
+      ]
+    },
+    {
+      "id": "D-11-041",
+      "title": "Collect review notes and send them to the agent",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Opens the notes section of Source Control and sends the notes to the workspace's agent, or copies them.",
+      "user_sees": "All notes listed by file; after sending, they are pasted into the agent as one message and marked sent.",
+      "rules": [
+        "Notes can be opened at their line, copied, deleted one by one, or cleared per file or all at once.",
+        "Each note is formatted as a short block with file, line and text; several notes are separated by blank lines.",
+        "Clearing delivered notes keeps any note edited while the send was pending.",
+        "If saving a note fails, the change is rolled back and the user is told.",
+        "Folder workspaces without Git keep notes too.",
+        "An empty notes section explains how to add one.",
+        "The send-notes command ships without a key; the user can bind one."
+      ],
+      "acceptance": [
+        "Add three notes on two files, send → the agent receives all three and they show as sent.",
+        "Edit a note during a send, clear delivered → the edited note stays."
+      ],
+      "compat": "Keybinding id sourceControl.sendReviewNotes (unbound by default).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/source-control/notes/notes-shelf.tsx:17",
+        "src/renderer/src/components/right-sidebar/source-control/notes/diff-comments-list.tsx:34",
+        "src/renderer/src/store/slices/diffComments.test.ts:141",
+        "src/renderer/src/store/slices/folder-workspace-diff-comments.test.ts:101",
+        "src/renderer/src/lib/diff-comments-format.test.ts:18",
+        "registry:keybindings:sourceControl.sendReviewNotes"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "07"
+      ]
+    },
+    {
+      "id": "D-11-042",
+      "title": "Review notes on Markdown documents",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Selects text in a Markdown file (rich editor, source editor or preview) and uses the add-review-note shortcut.",
+      "user_sees": "A note attached to the selection; the notes can be copied as one Markdown block for an agent.",
+      "rules": [
+        "On by default; a setting turns the Markdown review tools off.",
+        "Without a selection the shortcut does nothing.",
+        "Copied notes are sorted by file, line and time, grouped per file, and quote the selected text."
+      ],
+      "acceptance": [
+        "In the Markdown preview, select a sentence and press the shortcut → note popover opens; copy notes → clipboard holds the quoted sentence and note."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/markdown-add-review-note-shortcut.spec.ts:11",
+        "src/renderer/src/lib/markdown-review-notes.test.ts:31",
+        "src/renderer/src/lib/markdown-review-note-copy.test.ts:23",
+        "registry:settings-keys:markdownReviewToolsEnabled"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-11-043",
+      "title": "Tasks page lists GitHub issues and pull requests",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens Tasks, picks repositories, chooses a preset (all open, mine, assigned, needs review and so on) or types a GitHub search query.",
+      "user_sees": "A paged list of matching issues or PRs with state, labels, assignees and a checks pill; numbered page buttons at the bottom.",
+      "rules": [
+        "Whether the list shows issues or PRs follows the preset and any is:issue or is:pr in the query.",
+        "The repository picker shows one row per GitHub project, merging local and duplicate checkouts.",
+        "Repositories without a GitHub remote are left out; ones still being probed stay visible.",
+        "Pages beyond GitHub's search window say they cannot be reached.",
+        "Scroll position and recent pages are remembered when coming back.",
+        "The checks pill says passing, failing, running or unresolved.",
+        "Merged and open pull requests use distinct muted status colours.",
+        "The repository selection is remembered as the default for the next visit.",
+        "A source label names the GitHub host and signed-in account; with several repositories it shows the count, and unreachable hosts get a notice."
+      ],
+      "acceptance": [
+        "Choose the assigned preset → only items assigned to the user show; type is:pr → list switches to PRs.",
+        "Go to page 3, open an item, return → still on page 3 at the same scroll offset."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:view-ids:tasks",
+        "src/renderer/src/components/task-page/TaskPage.tsx:43",
+        "src/renderer/src/components/task-page-github-task-kind.test.ts:11",
+        "src/renderer/src/components/task-page-work-item-pagination.test.ts:43",
+        "src/renderer/src/components/task-page-default-repo-selection.test.ts:22",
+        "src/renderer/src/components/task-page-github-list-scroll-restore.test.ts:59",
+        "src/renderer/src/components/task-page-checks-pill.test.ts:4",
+        "src/main/github/client-work-items.test.ts:125",
+        "src/renderer/src/components/use-github-task-search-commit.test.ts:10",
+        "src/renderer/src/components/task-page-github-work-item-status.test.ts",
+        "registry:settings-keys:defaultRepoSelection",
+        "src/renderer/src/components/task-source-context-summary.test.ts:11"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-044",
+      "title": "Ways to open Tasks and its default view",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens Tasks from the title-bar button, the View menu or a bound shortcut; hides the button if unwanted.",
+      "user_sees": "The Tasks page opens on the default preset.",
+      "rules": [
+        "The Tasks button is shown by default and toggled by a View > Appearance menu checkbox.",
+        "The open-Tasks command ships without a key; the user can bind one.",
+        "The default preset is all open items; it is a setting."
+      ],
+      "acceptance": [
+        "Untick 'Show Tasks Button' → the button disappears; bind a key to view.tasks → the key opens Tasks."
+      ],
+      "compat": "Keybinding id view.tasks (unbound by default).",
+      "decision": "",
+      "evidence": [
+        "registry:keybindings:view.tasks",
+        "registry:menu-items:Show Tasks Button",
+        "registry:settings-keys:showTasksButton",
+        "registry:settings-keys:defaultTaskViewPreset"
+      ],
+      "round": 0,
+      "related": [
+        "15",
+        "16"
+      ]
+    },
+    {
+      "id": "D-11-045",
+      "title": "Tasks explains empty lists, missing sources and sign-in problems",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Opens Tasks with no repo selected, a query with no matches, a repo with no GitHub remote, or gh signed out.",
+      "user_sees": "A specific message for each case, such as select a source, no matches, no GitHub source detected, preferred issue source no longer configured, or how to sign in to gh.",
+      "rules": [
+        "A failure in one repository is shown on that repository without hiding results from others.",
+        "Sign-in help diagnoses whether gh is missing, signed out or lacks access."
+      ],
+      "acceptance": [
+        "Sign out of gh and open Tasks → a sign-in help message names the problem."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/task-page-empty-state.test.ts:4",
+        "src/renderer/src/store/slices/github-work-items-error-envelope.test.ts:12",
+        "src/renderer/src/components/github-project/GhAuthErrorHelp.test.ts:37",
+        "src/main/github/auth-diagnose.test.ts:10"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-11-046",
+      "title": "Create a GitHub issue from Tasks",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks new issue, picks the repository, enters a title, optional Markdown description, labels and assignees, and creates it.",
+      "user_sees": "The issue appears on GitHub and at the top of the list.",
+      "rules": [
+        "The target defaults to the first selected repository.",
+        "An unfinished draft is kept; switching repository clears labels and assignees that belong to the old one.",
+        "If the chosen repository disappears, the draft falls back to the first selected one.",
+        "A very long body that fails to save still creates the issue and keeps the draft for recovery."
+      ],
+      "acceptance": [
+        "Fill a draft, close the dialog, reopen → fields are restored.",
+        "Create an issue with a label → GitHub shows the issue with that label."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/task-page-new-issue-draft.test.ts:17",
+        "src/renderer/src/components/task-page-github-issue-creation.test.ts:23",
+        "src/main/github/issues.test.ts:85"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-047",
+      "title": "Close, reopen and comment on issues",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Closes an issue as completed, not planned, or duplicate of another issue number; reopens it; writes a comment.",
+      "user_sees": "The issue state changes on GitHub and in the list; the comment is posted.",
+      "rules": [
+        "A duplicate target is validated before sending; suggestions list other matching issues.",
+        "Validation failures are shown as readable messages."
+      ],
+      "acceptance": [
+        "Close an issue as duplicate of an existing number → GitHub shows it closed as duplicate."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/task-page-github-status-actions.test.ts:10"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-048",
+      "title": "Edits in Tasks show instantly and do not flicker back",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Changes an item's state, assignees, reviewers or labels from the list or dialog.",
+      "user_sees": "The change is shown at once; items that no longer match the current filter fade from the list; a failed change is undone with a message.",
+      "rules": [
+        "A slower search response that still shows the old value does not undo a confirmed change.",
+        "Two quick edits to different people on the same item both survive.",
+        "A hard refresh accepts GitHub's current state again."
+      ],
+      "acceptance": [
+        "Close an issue under the open filter → it leaves the list and does not reappear on the next refresh."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/task-page-github-work-item-mutations.test.ts:76",
+        "src/renderer/src/components/task-page-github-work-item-filter-membership.test.ts:21",
+        "src/renderer/src/components/task-page-github-dialog-state-authority.test.ts:49"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-049",
+      "title": "Start or resume a workspace from an issue or PR",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks start workspace on an issue or PR in Tasks, or resume when one already exists.",
+      "user_sees": "A new worktree is created (from the PR's branch for a PR) and an agent opens with the item's URL already in its prompt; resume jumps to the existing workspace.",
+      "rules": [
+        "A just-created issue can be started at once with its URL prefilled.",
+        "PRs from forks fetch the fork's branch first.",
+        "The workspace remembers which issue or PR it is attached to.",
+        "Item text passed to the agent is marked as outside data, stripped of terminal control characters and capped in size.",
+        "A note typed while creating the workspace goes above the item link in the first prompt.",
+        "An issue is linked by number, #number or issue URL; pull request URLs, non-positive numbers and junk are refused in the issue field."
+      ],
+      "acceptance": [
+        "Start from an issue → agent prompt contains the issue URL; go back and the item offers resume."
+      ],
+      "compat": "kolux worktree create --issue <number>; kolux worktree set --issue <number>.",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/github-created-issue-start-prefill.spec.ts:130",
+        "src/renderer/src/lib/github-work-item-workspace-attachment.test.ts:33",
+        "src/main/github/pr-start-point.test.ts:24",
+        "src/renderer/src/lib/github-pr-start-point.test.ts:14",
+        "src/renderer/src/components/task-page-workspace-composer-boundary.test.ts:30",
+        "src/cli/specs/core.ts:91",
+        "src/cli/specs/core.ts:142",
+        "src/renderer/src/lib/linked-work-item-context.test.ts:63",
+        "src/renderer/src/lib/linked-work-item-context.test.ts:183",
+        "src/shared/issue-link-input.test.ts:47"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "20"
+      ]
+    },
+    {
+      "id": "D-11-050",
+      "title": "Preview and edit an issue or PR in a dialog",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks an item in Tasks.",
+      "user_sees": "A dialog with the item's description, timeline (closed, reopened, assigned, mentioned and similar events), labels, assignees and actions, including opening a workspace.",
+      "rules": [
+        "Edits to the body keep an unsaved draft while the dialog is open.",
+        "The dialog stops re-rendering for list updates while closed.",
+        "While the body is not being edited it shows the latest version from GitHub."
+      ],
+      "acceptance": [
+        "Open an issue, add a label in the dialog → label shows in the dialog and the list."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/GitHubItemDialog.tsx:1",
+        "src/renderer/src/components/github-item-dialog-source-boundary.test.ts:24",
+        "src/renderer/src/components/github-body-draft-state.test.ts:4",
+        "src/renderer/src/components/github-body-draft-state.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-051",
+      "title": "Full pull request page inside Kolux",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a PR from Tasks.",
+      "user_sees": "Conversation, Checks and Files changed tabs; editable description, assignees, labels and reviewers; reactions; review threads with replies; close or reopen; rerun all or failed checks; fix broken checks with AI; copy link; open GitHub's merge box; start or resume a workspace.",
+      "rules": [
+        "Copy link shows a brief copied state.",
+        "Merging from the page needs the repository registered locally; otherwise it says so.",
+        "The Checks tab remembers its state between visits."
+      ],
+      "acceptance": [
+        "Open a PR, switch to Checks, rerun failed → GitHub reruns the failed jobs."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/PullRequestPage.tsx:1",
+        "src/renderer/src/components/pull-request-page-host-boundary.test.ts:76",
+        "src/renderer/src/components/github-link-copy-state.test.ts:10",
+        "src/renderer/src/components/github-checks-tab-state.test.ts:35"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-052",
+      "title": "Review a PR's files and mark them viewed",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the Files changed tab of a PR and marks files viewed.",
+      "user_sees": "All the PR's file diffs with inline or side-by-side layout and expandable context; viewed marks sync with GitHub.",
+      "rules": [
+        "Very large files are not loaded in full.",
+        "Review comments show their surrounding code.",
+        "A review comment's surrounding code can be expanded and stays expanded for that comment."
+      ],
+      "acceptance": [
+        "Mark a file viewed in Kolux → GitHub shows it viewed; unmark → cleared."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/github/client-file-viewed.test.ts:66",
+        "src/main/github/work-item-details-pr-files.test.ts:124",
+        "src/renderer/src/components/pull-request-page/files/combined-diff-section-index.test.tsx:95",
+        "src/renderer/src/components/github/pr-file-content-size.test.ts:5",
+        "src/renderer/src/components/comment-code-context-state.test.ts:8"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-11-053",
+      "title": "Mentions, reviewers and avatars",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Types @ in a comment, or adds reviewers and assignees.",
+      "user_sees": "A filtered list of people with avatars; reviewer suggestions include people who recently edited these files; each reviewer shows their review state.",
+      "rules": [
+        "Up to 15 reviewers can be requested.",
+        "Existing requests are kept; people on different GitHub hosts are kept apart.",
+        "Avatars fall back cleanly on GitHub Enterprise."
+      ],
+      "acceptance": [
+        "Type @ and two letters → matching people show; pick one → mention inserted."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/github/github-mention-option-filter.test.ts:13",
+        "src/renderer/src/components/github/github-pr-reviewer-candidate-filter.test.ts:14",
+        "src/renderer/src/components/task-page-github-reviewer-suggestions.test.ts:9",
+        "src/renderer/src/components/github/github-user-avatar.test.tsx:18",
+        "src/renderer/src/components/github/repro-8784-ghe-avatar-fallback.test.ts:18",
+        "src/renderer/src/components/github-pr-reviewer-display.test.ts:22"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-054",
+      "title": "Filter PR lists by state, people and labels",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the PR filter pickers in Tasks.",
+      "user_sees": "Filters for state, author, assignee, label, review requested and reviewed by, applied as a GitHub query.",
+      "rules": [
+        "Selecting a filter rewrites the search query; clearing it removes that part only."
+      ],
+      "acceptance": [
+        "Pick review requested: me → list shows only PRs awaiting the user's review."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/github/PRFilterSections.tsx:155",
+        "src/renderer/src/components/github/PRFilterPickers.test.ts:10"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-055",
+      "title": "Forks: choose whether issues come from upstream or your fork",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Works in a fork and sets where its issues are read from.",
+      "user_sees": "Issues come from the chosen repository; an indicator appears when issues and PRs come from different repositories.",
+      "rules": [
+        "The choice is stored per repository.",
+        "If the chosen source is removed, Tasks warns and falls back."
+      ],
+      "acceptance": [
+        "In a fork, choose upstream → issues list the parent repo's issues."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/github/client-issue-source.test.ts:145",
+        "src/main/ipc/github-issue-source-preference.test.ts:26",
+        "src/renderer/src/components/task-page-repo-source-divergence.test.ts:23"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-056",
+      "title": "GitHub Projects as an editable table",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Picks a GitHub Project (pinned, recent, browse, or paste a URL or owner/number) and opens one of its views.",
+      "user_sees": "A table of project items with sortable, groupable columns and editable cells (labels, assignees, numbers, text, issue type, iteration).",
+      "rules": [
+        "Board and roadmap views are marked unsupported, with a prompt to switch to a table view.",
+        "Rows can be limited to repositories open in Kolux or to selected ones; a repo not in Kolux offers to add it.",
+        "Items the user cannot see show as restricted.",
+        "Pinned and recent projects and the last view per project are remembered.",
+        "The view can be opened on GitHub."
+      ],
+      "acceptance": [
+        "Paste a project URL → its table view loads; edit a status cell → GitHub shows the new value."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/github-project/ProjectViewWrapper.tsx:21",
+        "src/renderer/src/components/github-project/ProjectPicker.tsx:57",
+        "src/renderer/src/components/github-project/ProjectCell.tsx:34",
+        "src/main/github/project-view.test.ts:32",
+        "src/main/github/project-view/project-field-mutations.test.ts:12",
+        "src/shared/github/project-ref-input.test.ts:10",
+        "src/renderer/src/components/github-project/group-sort.test.ts:115",
+        "src/renderer/src/components/github-project/project-row-filtering.test.ts:75",
+        "src/renderer/src/components/github-project/github-project-picker-filter.test.ts:28",
+        "registry:settings-keys:githubProjects"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-057",
+      "title": "GitHub Projects roadmap timeline",
+      "tier": "P2",
+      "pushed": null,
+      "state": "half-done",
+      "user_does": "Opens a project view laid out as a roadmap.",
+      "user_sees": "Items placed on a date timeline by their start and end fields.",
+      "rules": [
+        "The project picker still marks roadmap views unsupported, so it is unclear whether users can reach this timeline."
+      ],
+      "acceptance": [
+        "Open a roadmap view → items appear on the timeline at their dates, or the unsupported prompt appears (decide which)."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/github-project/ProjectRoadmap.tsx:43",
+        "src/renderer/src/components/github-project/ProjectRoadmap.test.tsx:99",
+        "src/shared/github/project-roadmap-timeline.test.ts:69"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-11-058",
+      "title": "Jump to a GitHub item by pasting its URL in the quick switcher",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Pastes a GitHub issue or PR URL into the Cmd+J switcher, or uses a digit chord.",
+      "user_sees": "The matching item, or the workspace attached to it, opens directly.",
+      "rules": [
+        "Digit chords pick the numbered entry shown in the switcher."
+      ],
+      "acceptance": [
+        "Paste a PR URL in the switcher → that PR opens."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/cmd-j-github-url-lookup.test.ts:27",
+        "src/renderer/src/hooks/useIpcEvents-cmd-j-digit-chord.test.ts:11",
+        "src/shared/keybindings-digit-index.test.ts:12"
+      ],
+      "round": 0,
+      "related": [
+        "16"
+      ]
+    },
+    {
+      "id": "D-11-059",
+      "title": "Paste a GitHub URL to start work on it",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Pastes an issue or PR URL into the new-workspace input.",
+      "user_sees": "The input recognises the link and switches to starting work on exactly that item.",
+      "rules": [
+        "A pasted URL never selects an older cached item with a similar number.",
+        "GitHub Enterprise URLs are recognised.",
+        "A pasted URL or #number is treated as an item lookup, an ordinary workspace name is not; oversized pasted text is refused."
+      ],
+      "acceptance": [
+        "Paste an issue URL → the input shows that issue's title; submit → workspace starts with the issue attached."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/smart-github-submit.test.ts:10",
+        "tests/e2e/github-url-smart-input-transition.spec.ts:250",
+        "src/renderer/src/lib/github-links.test.ts:10",
+        "src/renderer/src/lib/work-item-lookup-text.test.ts:5"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-060",
+      "title": "GitHub repos are recognised from any remote form",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Adds a repository whose remote uses HTTPS, SSH, an SSH host alias from the SSH config, or a GitHub Enterprise host.",
+      "user_sees": "GitHub features (PRs, checks, Tasks) work for it and it is grouped with other checkouts of the same project.",
+      "rules": [
+        "SSH host aliases are resolved to the real host.",
+        "Forks know both their own owner and the parent's.",
+        "Enterprise hosts use their own API address."
+      ],
+      "acceptance": [
+        "Clone through an SSH alias host → the workspace still shows its PR."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/github/github-repository-identity.ssh-host-alias.test.ts:107",
+        "src/main/github/github-enterprise-repository.test.ts:78",
+        "src/main/github/github-remote-identity-parsing.test.ts:12",
+        "src/main/source-control/forge-provider.test.ts:105"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-061",
+      "title": "Turn a plain folder into a Git repository",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Initialises Git for a folder workspace or converts the folder, reviews the proposed first commit, and commits.",
+      "user_sees": "A preview of the files the first commit will include, with secret-looking files left out by default; afterwards the folder works as a Git workspace.",
+      "rules": [
+        "Files that look like keys, tokens or env files are excluded unless the user adds them.",
+        "If Git is initialised outside Kolux, the folder workspace upgrades to a Git workspace on its own.",
+        "Initialising refuses a relative path or a path that is not an existing folder."
+      ],
+      "acceptance": [
+        "Init a folder containing a .env file → preview excludes it; commit → repository has one commit without it."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/repos/repo-init-git-handler.test.ts:75",
+        "src/main/ipc/repos/repo-convert-folder-to-git-handler.test.ts:26",
+        "src/main/ipc/repos/initial-commit-preview.test.ts:23",
+        "src/main/ipc/repos/repo-commit-initial-files-handler.test.ts:53",
+        "src/main/ipc/folder-repo-git-upgrade.test.ts:135",
+        "src/main/ipc/repos/repo-init-git-handler.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-062",
+      "title": "A failed clone says why in one line",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clones a repository and the clone fails.",
+      "user_sees": "One readable reason (for example the destination already exists) rather than raw progress output.",
+      "rules": [
+        "The last fatal line wins over trailing fragments."
+      ],
+      "acceptance": [
+        "Clone into an existing non-empty folder → message says the destination exists."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/git-clone-failure-message.test.ts:8"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-063",
+      "title": "Agents never stall on a hidden Git password prompt",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs an agent or an unattended automation that touches a remote needing credentials.",
+      "user_sees": "Git fails fast with an error instead of the agent hanging on a credential prompt nobody can see.",
+      "rules": [
+        "Applies to recognised agent launches and marked automation only; ordinary shells keep their prompts."
+      ],
+      "acceptance": [
+        "Have an agent pull from a private remote without stored credentials → the command errors within seconds; the same pull in a plain shell prompts."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/terminal-git-credential-guard.ts:7",
+        "src/main/ipc/terminal-git-credential-guard.test.ts:15"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "17"
+      ]
+    },
+    {
+      "id": "D-11-064",
+      "title": "Workspace shows its branch or detached commit",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Looks at a workspace's branch label.",
+      "user_sees": "The branch name, or a detached-HEAD label with the short commit when no branch is checked out.",
+      "rules": [
+        "If neither branch nor commit is known, no label is shown."
+      ],
+      "acceptance": [
+        "Check out a commit by hash → the label reads detached with that commit."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/worktree-git-identity-display.test.ts:8",
+        "src/renderer/src/store/slices/worktrees-git-identity-branch-title.test.ts:30"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "03"
+      ]
+    },
+    {
+      "id": "D-11-065",
+      "title": "Workspaces warn about unpushed commits",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Looks at a workspace in the sidebar.",
+      "user_sees": "A badge saying the branch is synced, ahead by some commits, unpublished with some commits, or cannot be checked.",
+      "rules": [
+        "A never-published branch whose commit count cannot be read shows as unverifiable, not synced."
+      ],
+      "acceptance": [
+        "Commit twice without pushing → badge shows two unpushed commits; push → badge clears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/git-unpushed-status.test.ts:9",
+        "src/renderer/src/components/sidebar/use-worktree-unpushed-badge.ts:13"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "02"
+      ]
+    },
+    {
+      "id": "D-11-066",
+      "title": "Git & worktrees settings page",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the Git settings page.",
+      "user_sees": "Branch prefix (git username, custom or none), default compare base (repository default or upstream), Source Control group order, GitHub API budget, and whether creating a workspace refreshes the base first.",
+      "rules": [
+        "The git-username prefix uses the configured username first, then the gh login; overly long names are refused.",
+        "Refreshing the base fast-forwards it only when safe and skips it when the base has uncommitted changes.",
+        "When refreshing is off and the local base is behind, Kolux suggests updating it unless its own worktree is dirty."
+      ],
+      "acceptance": [
+        "Set the prefix to custom 'feat' → the next workspace branch starts with feat/.",
+        "Leave the local base behind origin, create a workspace with refresh on → it starts from the updated base."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:settings-sections:git",
+        "registry:settings-keys:branchPrefix",
+        "registry:settings-keys:branchPrefixCustom",
+        "src/renderer/src/components/settings/GitPane.tsx:54",
+        "src/main/git/repo-username.test.ts:36",
+        "src/main/repo-git-username-enrichment.test.ts:48",
+        "src/main/git/worktree-add-local-base-refresh.test.ts:34",
+        "src/main/git/worktree-add-local-base-suggestion.test.ts:34"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-067",
+      "title": "Git side of creating, moving and removing worktrees",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Creates, moves or deletes a workspace.",
+      "user_sees": "A new worktree on its own branch with chosen ignored files copied in and shared folders linked; removal refuses or warns when there is unsaved work.",
+      "rules": [
+        "A branch name that already exists locally or on the configured remote is detected before creation.",
+        "Files listed in the repo-root include file (ignored files such as local env files) are copied into new worktrees.",
+        "Ignored folders listed under the worktree shared-directories key in the project config are shared, not copied; non-ignored ones are skipped.",
+        "Removal checks for uncommitted changes and submodule work first; the branch is deleted only when no other worktree holds it.",
+        "Moving a worktree keeps Git's bookkeeping correct.",
+        "Shared-folder entries that point outside the repository, are absolute, or point into Git's own folder are dropped before anything on disk is touched; duplicates and trailing slashes are normalised.",
+        "Worktree creations in one repository run one at a time; a failed creation does not block the next.",
+        "A branch kept when its worktree was removed is deleted later only while it still points at the commit saved at removal, and never while another worktree has it checked out.",
+        "If checking whether a base branch exists fails (for example the network drops), the answer is unknown, never missing; malformed branch input is not run at all."
+      ],
+      "acceptance": [
+        "List an ignored file in the include file, create a workspace → the file is present in the new worktree.",
+        "Delete a dirty workspace → Kolux refuses or asks before discarding."
+      ],
+      "compat": "Repo-root .worktreeinclude file (one path per line, # comments); kolux.yaml key worktree.sharedDirectories.",
+      "decision": "",
+      "evidence": [
+        "src/main/git/worktree-include-file.test.ts:31",
+        "src/main/git/worktree-shared-directories.test.ts:65",
+        "src/main/git/repo-branch-conflict.test.ts:5",
+        "src/main/git/remove-worktree.test.ts:73",
+        "src/main/git/remove-worktree-clean-preflight.test.ts:60",
+        "src/main/git/worktree-remove-branch-deletion.test.ts:34",
+        "src/main/git/worktree-move.test.ts:45",
+        "src/main/git/worktree-base-divergence.test.ts:38",
+        "src/main/git/worktree-shared-directories.test.ts:134",
+        "src/main/git/worktree-add-serialization.test.ts",
+        "src/main/git/remove-worktree-branch-cleanup.test.ts:397",
+        "src/main/git/worktree-base-ref-probe.test.ts:43"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-068",
+      "title": "See a worktree's changes and its overlap with others from the CLI",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs kolux worktree changes or kolux worktree overlap, optionally for a chosen worktree and as JSON.",
+      "user_sees": "The worktree's committed and uncommitted changes since its base, or which other worktrees touch the same files and whether merging would conflict.",
+      "rules": [
+        "Conflict prediction reports clean, conflicting with paths, or unverifiable on Git older than 2.38.",
+        "An unsupported Git is remembered and not probed again."
+      ],
+      "acceptance": [
+        "Edit the same file in two worktrees, run overlap → both are listed with that file."
+      ],
+      "compat": "kolux worktree changes [--worktree <selector>] [--json]; kolux worktree overlap [--worktree <selector>] [--json].",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/worktree-changes.ts:6",
+        "src/cli/specs/worktree-changes.ts:20",
+        "src/main/git/worktree-merge-tree-prediction.test.ts:15"
+      ],
+      "round": 0,
+      "related": [
+        "20",
+        "22"
+      ]
+    },
+    {
+      "id": "D-11-069",
+      "title": "Open a worktree's changed files from the CLI",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Runs kolux file open-changed with a mode.",
+      "user_sees": "The changed files open in the editor, as diffs, or both.",
+      "rules": [
+        "Mode edit opens files, diff opens diffs, both opens each."
+      ],
+      "acceptance": [
+        "Change two files, run open-changed in diff mode → two diff tabs open."
+      ],
+      "compat": "kolux file open-changed --mode edit|diff|both.",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/file.ts:35"
+      ],
+      "round": 0,
+      "related": [
+        "12",
+        "20"
+      ]
+    },
+    {
+      "id": "D-11-070",
+      "title": "Git stays responsive across many worktrees",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs many agent workspaces at once.",
+      "user_sees": "Source Control and status badges stay quick; git work for the visible workspace is not stuck behind background work.",
+      "rules": [
+        "Concurrent git processes are limited, with foreground work admitted first.",
+        "Git commands have time limits.",
+        "Identical status reads in flight are merged.",
+        "Old Git versions get fallbacks rather than errors; long Windows paths are handled."
+      ],
+      "acceptance": [
+        "Open 16 workspaces with changes → the focused panel refreshes within a second of an edit."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/git/command-runner/git-subprocess-admission.test.ts:35",
+        "src/main/git/status-read-coalescing.test.ts:58",
+        "src/shared/git-binary-compatibility.test.ts:114"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-11-071",
+      "title": "Invitation to star the project on GitHub",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Sees the star prompt on the landing screen or in Settings support and clicks it.",
+      "user_sees": "Kolux stars the repository through gh and stops asking once starred.",
+      "rules": [
+        "Whether the user has already starred is checked first; an unknown answer does not count as starred."
+      ],
+      "acceptance": [
+        "Click star with gh signed in → the repository shows as starred and the prompt hides."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/github/client-starred.test.ts:41",
+        "src/main/ipc/github-star-telemetry.test.ts:24",
+        "src/renderer/src/components/Landing.tsx:80",
+        "src/renderer/src/components/settings/GeneralSupportSection.tsx:72"
+      ],
+      "round": 0,
+      "related": [
+        "16"
+      ]
+    },
+    {
+      "id": "D-11-072",
+      "title": "GitLab merge requests, pipelines and issues",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Works in a GitLab repository.",
+      "user_sees": "Merge requests, pipeline checks with job logs, GitLab issues in Tasks, a GitLab item dialog and a GitLab API budget.",
+      "rules": [
+        "Create, merge and comment on merge requests from Source Control and Checks."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: owner kept GitHub only (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/gitlab/gl-utils.test.ts:39",
+        "src/main/ipc/gitlab.test.ts:145",
+        "src/shared/gitlab-job-log-excerpt.test.ts:9",
+        "src/renderer/src/lib/gitlab-links.test.ts:9",
+        "tests/e2e/repro-7732-gitlab-checks-job-details.spec.ts:115"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-073",
+      "title": "Bitbucket pull requests",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Works in a Bitbucket repository.",
+      "user_sees": "Bitbucket PRs and their status linked to workspaces, with stored Bitbucket credentials.",
+      "rules": [
+        "Credentials kept in a dedicated store."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: owner kept GitHub only (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/bitbucket/client.test.ts:57"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-074",
+      "title": "Azure DevOps pull requests",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Works in an Azure DevOps repository.",
+      "user_sees": "Azure DevOps PRs linked to workspaces, including on-premises servers.",
+      "rules": [
+        "Older servers are retried with a preview API version."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: owner kept GitHub only (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/azure-devops/repository-ref.test.ts:21"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-075",
+      "title": "Gitea pull requests",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Works in a Gitea repository.",
+      "user_sees": "Gitea PRs linked to workspaces.",
+      "rules": [
+        "Self-hosted Gitea addresses recognised from remotes."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: owner kept GitHub only (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/gitea/client.test.ts:60"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-076",
+      "title": "Jira issues as a task source",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Connects Jira and browses or creates issues in Tasks.",
+      "user_sees": "Jira issues listed, filtered and created with Jira's required fields, and workspaces started from them.",
+      "rules": [
+        "Create form adapts to the project's required fields."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: Tasks becomes GitHub-only (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/jira/issues.test.ts:73",
+        "src/renderer/src/store/slices/jira.test.ts:98",
+        "src/renderer/src/components/task-page-jira-create-fields.test.ts:20"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-077",
+      "title": "Linear issues as a task source",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Connects Linear, browses issues in Tasks, pastes a Linear URL to start work.",
+      "user_sees": "Linear issues with team filters and labelled filter chips, a remembered issue view, and workspaces started from a Linear URL.",
+      "rules": [
+        "Default team selection and the Linear settings page go with it."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: Tasks becomes GitHub-only and the linear settings section is cut (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/linear/issues.test.ts:96",
+        "src/shared/linear/issue-view-resume-state.test.ts:25",
+        "src/renderer/src/runtime/runtime-linear-client.test.ts:95",
+        "tests/e2e/linear-url-workspace-entry.spec.ts:111",
+        "tests/e2e/linear-filter-chip-labels.spec.ts:79",
+        "registry:settings-sections:linear",
+        "registry:settings-keys:defaultLinearTeamSelection"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-078",
+      "title": "kolux linear command group",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Runs kolux linear subcommands, including its MCP bridge.",
+      "user_sees": "Linear issues read and changed from the command line.",
+      "rules": [
+        "Goes with the Linear task source."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "kolux linear",
+      "decision": "default cut: Linear integration cut (table 1b; area 20 lists the group as cut). Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:cli-manifest:linear",
+        "src/cli/specs/linear.ts:5",
+        "src/cli/handlers/linear.ts:74"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-11-079",
+      "title": "Integrations settings page",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opens Settings > Integrations.",
+      "user_sees": "One place to connect GitHub, GitLab, Linear and other source hosts.",
+      "rules": [
+        "GitHub sign-in moves to the kept pages (Accounts & keys or Git & worktrees)."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: integrations section cut (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:integrations"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-080",
+      "title": "Task Sources settings and switching task providers",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Chooses the default task source and which providers appear in Tasks, then switches between them.",
+      "user_sees": "A source switcher on Tasks across GitHub, GitLab, Jira and Linear.",
+      "rules": [
+        "Tasks keeps GitHub only, so no switcher is needed."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: tasks section cut; Tasks page becomes GitHub-only (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:tasks",
+        "registry:settings-keys:defaultTaskSource",
+        "registry:settings-keys:visibleTaskProviders",
+        "src/renderer/src/components/task-page-source-switch-boundary.test.ts:19"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-081",
+      "title": "macOS developer permissions settings page",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opens the developer permissions section on macOS.",
+      "user_sees": "Status and shortcuts for macOS privacy permissions used by developer tools.",
+      "rules": [
+        "Listed with the integrations cut in table 1b."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: developer-permissions section cut (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:developer-permissions"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-11-082",
+      "title": "Sync a fork with its upstream",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Syncs a forked repository's branch with the parent repository.",
+      "user_sees": "The fork's branch updated from upstream.",
+      "rules": [
+        "Repo-level setting."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: repo-level fork sync cut (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/shared/git-fork-sync.test.ts:62"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-083",
+      "title": "Sparse-checkout workspaces",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Creates a workspace that checks out only chosen folders of a large repository.",
+      "user_sees": "A worktree containing only those folders.",
+      "rules": [
+        "Sparse state cached per worktree."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: repo-level sparse checkout cut (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/git/worktree-sparse-checkout.test.ts:45",
+        "src/main/git/add-sparse-worktree.test.ts:69"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-084",
+      "title": "Symlinked shared folders across worktrees",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Configures a repository so worktrees share folders through symbolic links.",
+      "user_sees": "Linked folders in each worktree, kept out of the change list and out of PR creation checks.",
+      "rules": [
+        "Repo-level setting."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: repo-level symlinks cut (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/git/status-shared-symlinks.test.ts:47",
+        "src/main/git/worktree-symlink-detection.test.ts:7"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-11-085",
+      "title": "Git, GitHub and AI text generation on remote SSH hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Works in a repository on a remote SSH host.",
+      "user_sees": "Source Control, PR creation and commit-message generation running on that host.",
+      "rules": [
+        "Area 18 remnant."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: SSH hosts and remote execution dropped with area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/github/client-ssh-provider-execution-boundary.test.ts:118",
+        "src/main/source-control/hosted-review-execution-host-routing.test.ts:269",
+        "src/main/text-generation/commit-message-text-generation-remote-execution.test.ts:8"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-11-086",
+      "title": "Git for repositories inside WSL runs inside the distro",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opens a repository stored in a WSL distribution from Windows.",
+      "user_sees": "Git and gh commands run inside that distribution, with a fallback to Windows gh.",
+      "rules": [
+        "Area 18 remnant (WSL execution); path handling itself was made local again on 2026-10-06 (area 12)."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: WSL execution dropped with area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/git/runner-wsl-direct-read.test.ts:93",
+        "src/main/git/wsl-linked-worktree-git-routing.test.ts:26"
+      ],
+      "round": 0,
+      "related": [
+        "18",
+        "12"
+      ]
+    }
+  ],
+  "notes": [
+    "Source Control panel UI tests live under right-sidebar and are mapped to area 05; the commit, push, discard, history, notes and create-PR behaviours are carded here (D-11-001 to 041) with related 05. Dedupe against area 05.",
+    "Misassigned titles in this dump, not carded: IME e2e specs and Git Bash discovery and PTY drain tests (03), paired-preview address bar (13), file/doc/raster preview and doc-preview grants (12), React commit-cascade telemetry and feedback issue URL (19), workspace Space git status and branch cleanup (01), agent-row tool preview (07).",
+    "GitHub Projects: the picker marks Board and Roadmap layouts unsupported, yet a tested roadmap timeline exists (D-11-057, half-done). Confirm whether it is reachable.",
+    "WSL git routing is carded D as an area 18 remnant (D-11-086), but the 2026-10-06 close-out made WSL paths local again. The owner should confirm whether git for \\\\wsl$ repositories stays.",
+    "WORK-3 (revert a commit from history) has no shipped marker; the history menu offers only copy, open and explain. It is not carded.",
+    "The 'Rebase from Base' remote menu item exists, but its exact flow (refresh base, then rebase) was not resolved; it appears only as a rule in D-11-007.",
+    "The star-the-repo prompt (D-11-071) is still wired on Landing and Settings support. Whether it survived the 2026-10-05 originality cleanup is unverified; its target repo may need to change (theme 10).",
+    "The developer-permissions (macOS) settings section is not a git feature. It is carded D here only because table 1b lists it with the integrations cut; it may belong to area 15.",
+    "Critic r1 (2026-10-06): pushed cleared on 25 P1/P2 cards that carried theme 2 or 3 (Git/GitHub integration is neither isolation nor agent status; a top-5 theme would force P0), and D-11-063 moved from theme 5 to 9 (fail-fast credential prompts are reliability, not a safety gate). P0 cards kept their themes.",
+    "Critic r1: no sample, registry, README, HANDOFF or triage row needed a new card; 36 rules were added to existing cards (evidence appended).",
+    "Critic r1: test files outside the sample worth a look in round 2: remote-drift probes, retarget divergence deadlines, GitHub markdown image URL input, smart GitHub submit, source-control launch-agent scope."
+  ]
+}

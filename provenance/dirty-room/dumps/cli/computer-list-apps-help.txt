@@ -1,0 +1,12 @@
+﻿kolux computer list-apps
+
+Usage: kolux computer list-apps [--json]
+
+List running apps available to computer-use
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+

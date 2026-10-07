@@ -1,0 +1,19 @@
+﻿kolux orchestration run-create
+
+Usage: kolux orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]
+
+Create and bind a lightweight orchestration Run
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --objective
+  --from
+  --retry-request
+
+Notes:
+  A Run is a namespace and home inbox. It never schedules or places workers.
+  --retry-request is only for exact recovery after an unknown mutation result.
+

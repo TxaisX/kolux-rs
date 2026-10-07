@@ -1,0 +1,12 @@
+﻿kolux computer capabilities
+
+Usage: kolux computer capabilities [--json]
+
+Show computer-use provider capabilities
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+

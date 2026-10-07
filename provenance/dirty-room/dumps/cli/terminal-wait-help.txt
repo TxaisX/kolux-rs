@@ -1,0 +1,15 @@
+﻿kolux terminal wait
+
+Usage: kolux terminal wait [--terminal <handle>] --for exit|tui-idle [--timeout-ms <ms>] [--json]
+
+Wait for a terminal condition
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --terminal <handle>  Runtime-issued terminal handle
+  --for exit|tui-idle    Wait condition to satisfy
+  --timeout-ms <ms>     Maximum wait time before timing out
+

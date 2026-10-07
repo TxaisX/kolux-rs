@@ -1,0 +1,16 @@
+﻿kolux emulator button
+
+Usage: kolux emulator button <name> [--device <id>] [--worktree <selector>] [--json]
+
+Hardware button (home, side_button, etc.)
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --device
+  --emulator
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --name <name>          Name for the new worktree or automation
+

@@ -1,0 +1,39 @@
+﻿kolux linear save-issue
+
+Usage: kolux linear save-issue [<id>] [--current] [--team <key|id>] [--title <title>] [--description <text> | --body-file <path|->] [--state <state>] [--assignee me|<user>|null] [--priority none|low|medium|high|urgent] [--estimate <number>|null] [--due-date <yyyy-mm-dd>|null] [--label <label>...] [--project <project>|null] [--parent-id <issue>|null] [--write-id <uuid>] [--workspace <id>] [--json]
+
+Create or update a Linear issue
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --current              Use the current Kolux worktree linked Linear issue
+  --team
+  --title <text>         Custom title for the terminal tab (omit to reset)
+  --description
+  --body <text>         Linear comment or issue body
+  --body-file <path|->  Read Linear body from a file or stdin
+  --state
+  --assignee
+  --priority
+  --estimate
+  --due-date
+  --label
+  --project
+  --parent-id
+  --write-id <uuid>     Retry id from linear_write_unconfirmed
+  --workspace <id>      Connected Linear workspace id
+  --id <id>             Identifier for a target item or permission
+
+Notes:
+  Without <id> or --current, creates an issue and requires --team and --title.
+  Labels replace the complete label set, matching Linear MCP save_issue semantics.
+  Use the literal null to clear assignee, estimate, due date, project, or parent.
+
+Examples:
+  $ kolux linear save-issue --team ENG --title "Fix auth" --priority high --json
+  $ kolux linear save-issue ENG-123 --title "Fix OAuth callback" --assignee me --json
+  $ kolux linear save-issue --current --project null --due-date null --json
+

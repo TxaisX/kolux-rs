@@ -1,0 +1,1997 @@
+{
+  "area": "12-editor-files",
+  "prefix": "EDIT",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-12-001",
+      "title": "Open, edit and save a file in an editor tab",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a file from the explorer, Quick Open, a terminal link or the CLI, types in it and presses Mod+S.",
+      "user_sees": "The file opens as a tab in the editor area with syntax colouring; the tab shows an unsaved mark while edits are pending; saving writes the file and clears the mark. Leaving for the terminal view and coming back finds the same tab with cursor, selection and scroll where they were.",
+      "rules": [
+        "Mod+S saves the active editor; if a floating editor panel is the active one it saves only that file and never falls through to the main editor.",
+        "On a screen that is not a workspace, Mod+S is left alone unless a floating editor is active.",
+        "A buffer whose only difference from disk is trailing whitespace is not reported as unsaved.",
+        "Cursor, selection and scroll position come back when a tab is remounted (tab switch, view switch, pane move).",
+        "Opening a file moves keyboard focus into the editor so the user can type at once.",
+        "If a file fails to load, the tab retries a bounded number of times, then shows an error with a \"Retry\" button.",
+        "A failed save shows an error toast and leaves the tab marked unsaved; an action that was waiting on that save does not go ahead.",
+        "The same file open in two split panes shares one text: typing in one shows in the other, a reload or other update made by Kolux does not mark either pane unsaved, and one save request writes the file once, from the pane that owns it."
+      ],
+      "acceptance": [
+        "Open a .ts file from the explorer, type a character → unsaved mark appears; press Mod+S → mark clears and the file on disk contains the character.",
+        "Switch to the terminal view and back → same tab active, cursor and scroll unchanged.",
+        "With a floating editor active and a different file open in the main editor, press Mod+S → only the floating file is written.",
+        "Make a file unreadable, open it → error with \"Retry\"; restore access, click Retry → content loads."
+      ],
+      "compat": "keybinding id editor.save; data category: open editor tabs per worktree",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/golden-file-open-edit-save.spec.ts:13",
+        "tests/e2e/file-open.spec.ts:57",
+        "src/renderer/src/components/editor/editor-cmd-save-target.test.ts:22",
+        "src/renderer/src/components/editor/editor-content-dirty-state.test.ts:39",
+        "src/renderer/src/components/editor/monaco-view-state-persistence.test.ts:39",
+        "src/renderer/src/components/editor/useEditorPanelFileLoadRetry.test.tsx:100",
+        "src/renderer/src/components/editor/pending-editor-focus-request.test.ts:16",
+        "registry:keybindings:editor.save",
+        "README.md:25",
+        "src/renderer/src/components/editor/editor-file-save-attempt.test.ts:31",
+        "src/renderer/src/components/editor/useEditorPanelSave.ts:30",
+        "src/renderer/src/components/editor/useEditorCmdSaveRequest.test.tsx:68",
+        "src/renderer/src/components/editor/monaco-programmatic-sync.test.ts:14"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-002",
+      "title": "Autosave, off by default, saves edits after a short idle delay",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Turns autosave on in settings and edits files without pressing Mod+S.",
+      "user_sees": "A short pause after typing, the edit is written to disk and the unsaved mark clears by itself.",
+      "rules": [
+        "Autosave is off on a fresh install.",
+        "The idle delay is user-set and clamped to a safe minimum and maximum.",
+        "Applies to normal edit tabs and to unstaged single-file diff tabs.",
+        "Never applies to staged diffs, the combined All Changes view, conflict views or read-only tabs.",
+        "Paused while a changed-on-disk banner is showing for that file, so it never overwrites another program's change.",
+        "The idle delay defaults to one second; a value under a quarter second or over ten seconds is pulled into that range, and an unreadable value falls back to the default."
+      ],
+      "acceptance": [
+        "Fresh profile → autosave setting is off.",
+        "Turn autosave on, edit a file, wait past the delay → file saved with no keypress.",
+        "Change the file outside Kolux while it has unsaved edits → banner appears and the file is not autosaved over."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/editor-autosave.test.ts:49",
+        "src/renderer/src/components/editor/editor-autosave-controller.test.ts:157",
+        "src/renderer/src/components/editor/editor-autosave-conflict-flow.test.ts:52",
+        "registry:settings-keys:editorAutoSave",
+        "registry:settings-keys:editorAutoSaveDelayMs",
+        "src/renderer/src/components/editor/editor-autosave.test.ts:101"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-12-003",
+      "title": "Changed-on-disk banner when an agent edits a file you have open",
+      "tier": "P0",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Has unsaved edits in a tab while an agent or another program rewrites the same file.",
+      "user_sees": "A banner above the editor says the file changed on disk and offers \"Reload\", \"Keep my edits\" and \"Compare\". Reload swaps in the disk version and shows a toast that can undo it; Keep my edits dismisses the banner; Compare opens a side-by-side with the disk version on the left and the buffer on the right.",
+      "rules": [
+        "Kolux's own saves never raise the banner (it remembers its recent writes).",
+        "A tab with no unsaved edits picks up the new disk content without a banner.",
+        "Tabs restored with unsaved drafts after a restart are checked against disk, and get the banner if the file moved on meanwhile.",
+        "Reload keeps undo history, so the reload itself can be undone.",
+        "Autosave is held off while the banner is up.",
+        "If the file is read twice in quick succession, a slower older read never replaces the newer content.",
+        "If the disk version cannot be read, Compare shows the read error instead of an empty comparison.",
+        "Reload always reads the file afresh from disk rather than reusing a read already in flight.",
+        "The Compare window carries its own Reload from Disk and Keep My Edits buttons; using either one closes the window.",
+        "A background tab whose file changed on disk reloads when it is next shown, not while hidden; a background tab with unsaved edits is left untouched."
+      ],
+      "acceptance": [
+        "Edit without saving, change the file from a terminal → banner appears within a second or two.",
+        "Click \"Reload\" → buffer equals disk and a toast offers undo; undo → the edits return.",
+        "Click \"Compare\" → disk version on the left, buffer on the right.",
+        "Save from Kolux → no banner."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/ExternalFileChangeBanner.test.tsx:69",
+        "src/renderer/src/components/editor/ExternalFileChangeCompareDialog.test.tsx:75",
+        "src/renderer/src/components/editor/editor-self-write-registry.test.ts:21",
+        "src/renderer/src/components/editor/editor-restored-tab-conflict-scan.test.ts:73",
+        "src/renderer/src/components/editor/useEditorPanelExternalContentEvents.test.tsx:105",
+        "src/renderer/src/components/editor/monaco-content-sync.undo-history.test.ts:33",
+        "src/renderer/src/components/editor/editor-external-watch-path-index.test.ts:25",
+        "src/renderer/src/components/editor/ExternalFileChangeCompareDialog.test.tsx:95",
+        "src/renderer/src/components/editor/useEditorPanelContentState.test.tsx:612",
+        "src/renderer/src/components/editor/useEditorPanelContentState.test.tsx:865",
+        "src/renderer/src/components/editor/ExternalFileChangeCompareDialog.test.tsx:113",
+        "src/renderer/src/components/editor/useEditorPanelExternalContentEvents.test.tsx:142"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-12-004",
+      "title": "Unsaved drafts and open editor tabs survive a quit or crash",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits Kolux (or it crashes) with editor tabs open, some with unsaved edits, then reopens it.",
+      "user_sees": "Each worktree comes back with the same editor tabs, the same active tab and the unsaved text still in the buffers, marked unsaved.",
+      "rules": [
+        "Unsaved text is kept as a draft per file and per worktree, not written to the real file.",
+        "Duplicate or damaged session entries are cleaned up on restore instead of opening twice.",
+        "Files that belonged to a worktree that no longer exists are not restored.",
+        "The language of each restored file is detected again rather than trusted from the saved session.",
+        "Removing a worktree throws away its editor state and drafts.",
+        "Read-only tabs come back read-only and never carry an unsaved draft.",
+        "A restored tab for a file that really lives in another of the user's open projects moves under that project, keeping its unsaved text, cursor and view mode, and from then on follows outside changes, deletes and renames there."
+      ],
+      "acceptance": [
+        "Edit two files without saving, quit, relaunch → both tabs reopen with the edits and the unsaved mark.",
+        "Delete a worktree, relaunch → none of its tabs reappear."
+      ],
+      "compat": "data category: editor session (open tabs per worktree, active tab, unsaved draft text)",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/workspace-session-editor-drafts.test.ts:44",
+        "src/renderer/src/store/slices/store-session-editor-hydration.test.ts:35",
+        "src/renderer/src/store/slices/editor-session-duplicate-restore.test.ts:138",
+        "src/renderer/src/store/slices/editor-state-worktree-purge-leak.test.ts:70",
+        "src/renderer/src/components/editor/restored-editor-owner-save-lifecycle.test.ts:77",
+        "src/renderer/src/store/slices/editor/file-ids/hydrated-editor-projections.test.ts:68",
+        "src/renderer/src/store/slices/restored-editor-owner-reparent.test.ts:93",
+        "src/renderer/src/store/slices/restored-editor-owner-reparent.test.ts:697"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-12-005",
+      "title": "Find and replace inside a code file",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+F in a code editor, or the replace shortcut (Mod+Alt+F on macOS, Mod+H elsewhere).",
+      "user_sees": "A find bar opens over the editor with match highlighting; the replace variant adds a replace field.",
+      "rules": [
+        "The search box is pre-filled only when the user has an explicit selection, never from the word under the cursor.",
+        "A rebound editor.find shortcut is honoured; holding the key down does not reopen find repeatedly.",
+        "Escape closes the find bar first; a second Escape reaches any dialog around the editor."
+      ],
+      "acceptance": [
+        "Select a word, press Mod+F → find box holds that word; with no selection → box keeps its last value.",
+        "Inside a dialog-hosted editor, press Escape with find open → only the find bar closes."
+      ],
+      "compat": "keybinding ids editor.find, editor.replace",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/monaco-find-options.test.ts:5",
+        "src/renderer/src/components/editor/monaco-find-widget.test.ts:30",
+        "src/renderer/src/components/editor/editor-shortcuts.test.ts:74",
+        "registry:keybindings:editor.find",
+        "registry:keybindings:editor.replace"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-006",
+      "title": "Editor word wrap, font, zoom and minimap",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Alt+Z, changes the editor font, zooms, or turns on the minimap.",
+      "user_sees": "Long lines wrap or scroll; text uses the chosen font; the editor text grows or shrinks; a minimap appears on the right when enabled.",
+      "rules": [
+        "Word wrap is on by default; Alt+Z toggles it.",
+        "With no editor font set, the editor follows the terminal font; with neither set it uses a monospace fallback.",
+        "Editor text size follows zoom but stays inside fixed bounds; diff editors render slightly smaller than edit tabs.",
+        "Minimap is off by default.",
+        "Notebook cells use the editor font, else the terminal font, else the app interface font."
+      ],
+      "acceptance": [
+        "Fresh profile → long lines wrap; Alt+Z → they scroll horizontally.",
+        "Change the terminal font with no editor font set → editor font changes to match."
+      ],
+      "compat": "keybinding id editor.toggleWordWrap",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/editor-font-zoom.test.ts:11",
+        "src/renderer/src/components/editor/MonacoEditor.font-family.test.tsx:68",
+        "src/renderer/src/components/editor/file-editor-word-wrap-options.test.ts:5",
+        "registry:keybindings:editor.toggleWordWrap",
+        "registry:settings-keys:editorWordWrap",
+        "registry:settings-keys:editorFontFamily",
+        "registry:settings-keys:editorMinimapEnabled",
+        "src/renderer/src/lib/editor-font-zoom.test.ts:51",
+        "src/renderer/src/components/editor/IpynbViewer.tsx:148"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-12-007",
+      "title": "Copy a selection with its file path and line numbers",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Selects lines in the editor and presses Mod+Alt+C, or copies a line reference.",
+      "user_sees": "The clipboard holds the selected text together with the file path and line range, ready to paste into an agent prompt; a single line reference is written as path:line.",
+      "rules": [
+        "A selection that ends at column 1 of the next line counts as ending on the line before.",
+        "A partial single-line selection is copied as plain text with no header.",
+        "A whole single line stays copyable with context.",
+        "While a copyable selection exists, a small hint beside it shows the copy-with-context shortcut as currently bound; the hint hides once that selection has been copied, and a brief confirmation appears by the selection.",
+        "On Linux with middle-click paste turned on, selecting text in the editor also fills the primary selection, up to a length cap."
+      ],
+      "acceptance": [
+        "Select lines 10-14 of a file, press Mod+Alt+C, paste → text is preceded by the path and 10-14.",
+        "Copy a line reference on line 7 → clipboard holds <path>:7."
+      ],
+      "compat": "keybinding id editor.copyContext; clipboard format path:line",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/selection-copy.test.ts:5",
+        "src/renderer/src/components/editor/line-copy-path.test.ts:5",
+        "src/renderer/src/components/editor/setup-contextual-copy.test.ts:37",
+        "registry:keybindings:editor.copyContext",
+        "src/renderer/src/components/editor/setup-contextual-copy.ts:38",
+        "src/renderer/src/components/editor/setup-contextual-copy.ts:86",
+        "src/renderer/src/components/editor/setup-contextual-copy.ts:210",
+        "src/renderer/src/components/editor/setup-contextual-copy.test.ts:88"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-008",
+      "title": "Very large pastes stay responsive or are refused cleanly",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Pastes a very large block of text into the code editor or the rich markdown editor, or uses Paste from the right-click menu.",
+      "user_sees": "Large pastes land in pieces without freezing the window; a paste past the hard limit is refused with a toast instead of hanging.",
+      "rules": [
+        "Right-click Paste behaves like the keyboard paste.",
+        "The same size guard applies in the rich markdown editor.",
+        "Right-click Paste honours whole-line copies (copied with nothing selected) and multi-cursor copies the way keyboard paste does when that editor option is on; read-only editors are never pasted into."
+      ],
+      "acceptance": [
+        "Paste a few MB of text → window stays interactive and the text arrives.",
+        "Paste past the limit → toast explains the refusal, buffer unchanged."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/monaco-large-text-paste.test.ts:91",
+        "src/renderer/src/components/editor/monaco-context-menu-paste.test.ts:87",
+        "src/renderer/src/components/editor/rich-markdown-large-text-paste.test.ts:86",
+        "src/renderer/src/components/editor/monaco-context-menu-paste.test.ts:104",
+        "src/renderer/src/components/editor/monaco-context-menu-paste.test.ts:129",
+        "src/renderer/src/components/editor/monaco-context-menu-paste.test.ts:150"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-009",
+      "title": "Merge-conflict blocks are highlighted and can be stepped through",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a file that has merge-conflict markers after a rebase or merge.",
+      "user_sees": "Each conflict's current and incoming parts are coloured differently, and the user can jump to the next or previous conflict, wrapping at the ends.",
+      "rules": [
+        "Navigation cycles in both directions.",
+        "Conflict-related file actions go to the right worktree even when several are open."
+      ],
+      "acceptance": [
+        "Open a file with two conflicts → both highlighted; next-conflict twice wraps back to the first."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/monaco-conflict-decorations.test.ts:14",
+        "src/renderer/src/components/editor/ConflictComponents.test.tsx:5",
+        "src/main/ipc/filesystem-conflict-operation-routing.test.ts:67"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-12-010",
+      "title": "Syntax colouring for Astro, Svelte, Vue, Nim and JSONL",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a .astro, .svelte, .vue, .nim or .jsonl file.",
+      "user_sees": "The file is coloured as its language, beyond the editor's built-in set.",
+      "rules": [
+        "Embedded script and style blocks in component files are coloured as their own language.",
+        "JSONL is treated as one JSON value per line."
+      ],
+      "acceptance": [
+        "Open a .svelte file → script, markup and style are each coloured."
+      ],
+      "compat": "file formats .astro .svelte .vue .nim .jsonl",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/monaco-languages/register-astro.test.ts:110",
+        "src/renderer/src/lib/monaco-languages/register-svelte.test.ts:122",
+        "src/renderer/src/lib/monaco-languages/register-vue.test.ts:108",
+        "src/renderer/src/lib/monaco-languages/register-nim.test.ts:22",
+        "src/renderer/src/lib/monaco-languages/register-jsonl.test.ts:21",
+        "src/renderer/src/lib/monaco-languages/textmate-language-registration.test.ts:32"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-011",
+      "title": "File-type icons and natural name ordering",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Browses files in the explorer, tabs or search results.",
+      "user_sees": "Each file carries an icon for its type; folders list before files and numbered names sort as people expect (file2 before file10).",
+      "rules": [
+        "A known exact file name (for example a lockfile or config file) picks the icon before the extension does; compound extensions are recognised.",
+        "Ties after natural ordering break the same way every time, not by disk order."
+      ],
+      "acceptance": [
+        "A folder with file1, file2, file10 lists them in that order, after any subfolders."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/file-type-icons.test.ts:25",
+        "src/shared/file-name-sort.test.ts:5"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-012",
+      "title": "Markdown opens in a rich editor, with source and preview modes",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a .md file, switches between rich, source and preview, presses Mod+Shift+V, or creates a new markdown note with Mod+Shift+M.",
+      "user_sees": "Markdown edit tabs open in a word-processor-like rich editor; source shows raw text; Mod+Shift+V opens a read-only preview tab labelled as a preview; Mod+Shift+O picks from the worktree's markdown files.",
+      "rules": [
+        "Edit tabs default to rich; markdown diffs default to source.",
+        "Files over about 600 KB open in source with a banner; \"Open anyway\" switches that one file to rich.",
+        "Content the rich editor cannot represent falls back to source with a banner explaining why.",
+        "If the rich editor fails to load, an error panel with \"Retry\" replaces it.",
+        "The markdown file list skips ignored and symlinked folders.",
+        "Choosing to open a large note in rich mode applies to that tab only; it is forgotten when a preview tab is replaced by another file.",
+        "The markdown file picker list is capped so very large repos stay responsive.",
+        "If listing the worktree's notes fails, opening the picker again retries rather than repeating the old failure."
+      ],
+      "acceptance": [
+        "Open README.md → rich view; switch to source → raw markdown; Mod+Shift+V → separate preview tab.",
+        "Open a 1 MB markdown file → source view with banner; click \"Open anyway\" → rich view."
+      ],
+      "compat": "keybinding ids editor.markdownPreview, tab.newMarkdown, tab.openMarkdown",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/markdown-render-mode.test.ts:5",
+        "src/renderer/src/components/editor/markdown-rich-mode.test.ts:13",
+        "src/renderer/src/components/editor/markdown-rich-size-limit.test.ts:6",
+        "src/renderer/src/store/slices/editor-rich-markdown-size-override.test.ts:31",
+        "src/renderer/src/components/editor/RichMarkdownErrorBoundary.lazy-chunk.test.tsx:83",
+        "src/renderer/src/components/editor/editor-labels.test.ts:19",
+        "src/main/ipc/filesystem-markdown-document-listing.test.ts:72",
+        "registry:keybindings:editor.markdownPreview",
+        "registry:keybindings:tab.newMarkdown",
+        "registry:keybindings:tab.openMarkdown",
+        "src/renderer/src/components/editor/markdown-document-list-request.test.ts:160"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-013",
+      "title": "Rich markdown editing: slash menu, tables, lists, code blocks, toggles",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Types / in the rich editor, builds a table, writes lists and code blocks.",
+      "user_sees": "A slash menu inserts headings, tables, diagrams, maths, emoji and collapsible toggles, filtered as the user types; tables, lists and code blocks behave like a document editor.",
+      "rules": [
+        "Tables: Tab and Shift+Tab move between cells, Enter moves down; row and column add or delete come from hover controls and a right-click menu.",
+        "Lists: Tab and Shift+Tab indent and outdent; Enter continues the list; Enter on an empty item ends it; task-list checkboxes toggle.",
+        "Code blocks show a language label and are syntax-coloured, re-colouring only what changed.",
+        "Collapsible toggles open and close from the keyboard.",
+        "Cut and delete on empty paragraphs remove the block cleanly.",
+        "Enter on the last table row adds a new row; Backspace in an empty row deletes that row.",
+        "The slash menu filter matches each item's alternate names as well as its label.",
+        "A code block in a language the editor does not know offers a plain-text choice in its language picker.",
+        "Spellcheck underlines are on by default in the rich editor and can be turned off in settings.",
+        "Nested collapsible toggles reopen as editable toggles; a nesting the editor cannot represent is kept as raw text, untouched.",
+        "Adding a table column gives it an equal share of the table width, and the insertion undoes in one step; Tab in the last cell adds a new row.",
+        "Deleting a row or column keeps the rest of the table valid and the header row intact; deleting the last remaining column removes the table.",
+        "Cut with nothing selected removes the whole block under the caret: a paragraph, a list item together with its sub-list, or only the current visual line of a hard-wrapped paragraph.",
+        "Table hover controls never get in the way of clicking into a cell, header cells included."
+      ],
+      "acceptance": [
+        "Type /table → a table appears; Tab from the last cell moves to the next row.",
+        "In a bullet list press Enter twice → list ends."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/rich-markdown-commands.test.ts:32",
+        "src/renderer/src/components/editor/rich-markdown-slash-command-filter.test.ts:24",
+        "src/renderer/src/components/editor/RichMarkdownSlashMenu.test.tsx:6",
+        "src/renderer/src/components/editor/rich-markdown-table-keyboard.test.ts:108",
+        "src/renderer/src/components/editor/rich-markdown-table-actions.test.ts:101",
+        "src/renderer/src/components/editor/rich-markdown-tab-key-handler.test.ts:263",
+        "src/renderer/src/components/editor/rich-markdown-list-continuation.test.ts:42",
+        "src/renderer/src/components/editor/rich-markdown-code-block-languages.test.ts:16",
+        "src/renderer/src/components/editor/rich-markdown-lowlight.test.ts:140",
+        "src/renderer/src/components/editor/rich-markdown-details-keyboard.test.ts:89",
+        "src/renderer/src/components/editor/rich-markdown-cut.test.ts:142",
+        "src/renderer/src/components/editor/rich-markdown-table-keyboard.test.ts",
+        "tests/e2e/markdown-table-row-backspace.spec.ts:61",
+        "tests/e2e/markdown-nested-toggle.spec.ts:29",
+        "registry:settings-keys:richMarkdownSpellcheckEnabled",
+        "src/renderer/src/components/editor/rich-markdown-slash-command-filter.test.ts",
+        "src/renderer/src/components/editor/rich-markdown-table-actions.test.ts:139",
+        "src/renderer/src/components/editor/rich-markdown-table-actions.test.ts:151",
+        "src/renderer/src/components/editor/rich-markdown-table-actions.test.ts:179",
+        "src/renderer/src/components/editor/rich-markdown-table-actions.test.ts:280",
+        "src/renderer/src/components/editor/rich-markdown-table-actions.test.ts:292",
+        "src/renderer/src/components/editor/rich-markdown-table-keyboard.test.ts:132",
+        "src/renderer/src/components/editor/rich-markdown-cut.test.ts:141",
+        "src/renderer/src/components/editor/rich-markdown-cut.test.ts:192",
+        "src/renderer/src/components/editor/RichMarkdownTableControls.test.tsx:31"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-014",
+      "title": "Markdown links, [[doc]] links and line anchors",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Mod-clicks a link in markdown, types [[ to link another note, or follows a link to file.ts#L10.",
+      "user_sees": "Web links open in the Kolux browser (Mod+Shift-click sends them to the system browser); [[ offers a completion list of the worktree's notes; relative .md links open as preview tabs; line anchors open the file scrolled to that line.",
+      "rules": [
+        "Line anchors accept #L10, #L10C5 and :10:5 forms; Windows drive letters are not mistaken for a line number.",
+        "Heading anchors use GitHub-style slugs.",
+        "An ambiguous [[name]] that matches more than one file is flagged rather than guessed.",
+        "Hovering a link in the rich editor shows a bubble to open, edit or copy it; there is a shortcut to add a link.",
+        "Reference-style links and HTML superscript citation links resolve like normal links.",
+        "Doc link targets typed with backslashes resolve the same as with forward slashes.",
+        "Links to files on a network share keep the server name when resolved.",
+        "In source mode, [[doc]] links are also underlined and clickable.",
+        "The link bubble draws above the side panels, never hidden behind the Explorer.",
+        "A link with a line anchor opens the note in source mode at that line; an anchor into the note already open moves within that tab instead of opening another.",
+        "Links to other kinds of file, or to notes outside the worktree, open as ordinary editor tabs (at the anchored line if one is given); a missing target shows a toast.",
+        "[[doc#heading]] links jump to that heading.",
+        "Reference-style link definitions are folded into their links and never show up as stray text.",
+        "A file link that names localhost counts as a local file.",
+        "A [[link]] never runs across a line break."
+      ],
+      "acceptance": [
+        "In preview, Mod-click https://example.com → opens in a Kolux browser tab; Mod+Shift-click → system browser.",
+        "Click a link to src/a.ts#L10 → a.ts opens with line 10 revealed.",
+        "Type [[ → list of markdown notes; pick one → link inserted and clickable."
+      ],
+      "compat": "link anchor formats #L<n>, #L<n>C<n>, :<line>:<col>; [[doc]] link syntax",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/markdown-preview-links.test.ts:15",
+        "src/renderer/src/components/editor/markdown-internal-links.test.ts:13",
+        "src/renderer/src/components/editor/markdown-doc-links.test.ts:39",
+        "src/renderer/src/components/editor/markdown-doc-completions.test.ts:26",
+        "src/renderer/src/store/slices/editor-markdown-link-activation.test.ts:100",
+        "src/shared/file-link-location.test.ts:5",
+        "src/renderer/src/components/editor/RichMarkdownLinkBubble.render.test.tsx:56",
+        "src/renderer/src/components/editor/rich-markdown-html-superscript-link.test.ts:71",
+        "src/renderer/src/components/editor/markdown-heading-slug.test.ts:5",
+        "src/renderer/src/components/editor/markdown-doc-links.test.ts:146",
+        "src/renderer/src/components/editor/monaco-markdown-doc-link-decorations.test.ts",
+        "tests/e2e/rich-markdown-link-bubble-stacking.spec.ts",
+        "src/renderer/src/store/slices/editor-markdown-link-activation.test.ts:298",
+        "src/renderer/src/store/slices/editor-markdown-link-activation.test.ts:313",
+        "src/renderer/src/store/slices/editor-markdown-link-activation.test.ts:518",
+        "src/renderer/src/store/slices/editor-markdown-link-activation.test.ts:631",
+        "src/renderer/src/components/editor/markdown-internal-links.test.ts:35",
+        "src/renderer/src/components/editor/markdown-internal-links.test.ts:87",
+        "src/renderer/src/components/editor/markdown-doc-links.test.ts:95",
+        "src/renderer/src/components/editor/markdown-doc-links.test.ts:174",
+        "src/renderer/src/components/editor/markdown-round-trip.test.ts:331",
+        "src/renderer/src/components/editor/markdown-preview-links.test.ts:290",
+        "src/renderer/src/components/editor/rich-markdown-doc-link.test.ts:42"
+      ],
+      "round": 0,
+      "related": [
+        "13"
+      ]
+    },
+    {
+      "id": "D-12-015",
+      "title": "Images in markdown: show local files, paste or insert new ones",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens markdown that references local images, or pastes a screenshot into the rich editor.",
+      "user_sees": "Local images render inline; a pasted or inserted image is copied into the worktree and a link to it is written into the note.",
+      "rules": [
+        "Screenshot file names with spaces still link correctly.",
+        "Images are loaded ahead so scrolling does not flash empty boxes.",
+        "A Windows path copied out of a terminal pastes as a usable path.",
+        "If an image cannot be inserted, an error is shown instead of silently doing nothing.",
+        "Pictures embedded inline as data are size-checked; oversized or malformed ones are not shown."
+      ],
+      "acceptance": [
+        "Paste a screenshot into a note → image appears and the note gains a relative link to a new file in the worktree."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/markdown-preview-local-images.test.ts:20",
+        "src/renderer/src/components/editor/useLocalImageSrc.test.ts:96",
+        "src/renderer/src/components/editor/rich-markdown-image-insert.test.ts:54",
+        "src/renderer/src/components/editor/rich-markdown-paste-image.test.ts:74",
+        "src/renderer/src/components/editor/rich-markdown-terminal-path-paste.test.ts:46"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-016",
+      "title": "Markdown table of contents, diagrams and maths",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the table of contents beside a long note, or writes a mermaid diagram or maths.",
+      "user_sees": "A side panel lists the headings and jumps to one on click; heading levels can be collapsed; mermaid blocks render as diagrams; inline and display maths render.",
+      "rules": [
+        "The contents panel only appears when the note has headings.",
+        "Collapsed heading levels are remembered.",
+        "Mermaid runs in its strict security mode and uses a dark-friendly theme.",
+        "Contents entries show the heading text without markdown formatting marks."
+      ],
+      "acceptance": [
+        "Open a note with five headings, open contents, click the fourth → view scrolls to it."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/markdown-table-of-contents.test.ts:12",
+        "src/renderer/src/components/editor/MarkdownTableOfContentsPanel.test.tsx:44",
+        "src/renderer/src/components/editor/markdown-toc-collapse-state.test.ts:55",
+        "src/renderer/src/components/editor/markdown-toc-visibility-gate.test.ts:7",
+        "src/renderer/src/components/editor/mermaid-config.test.ts:6",
+        "src/renderer/src/components/editor/rich-markdown-toc-heading-target.test.ts:17"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-017",
+      "title": "Find and replace in markdown preview and rich mode",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+F (find) or the replace shortcut in a markdown preview or rich tab.",
+      "user_sees": "A search bar highlights matches in the rendered note with options for match case and whole word; rich mode can also replace.",
+      "rules": [
+        "Enter and Escape are not swallowed while an input-method composition is in progress.",
+        "A markdown file opened from the explorer accepts Mod+F without first clicking into it.",
+        "Malformed content never crashes the search; it simply finds nothing.",
+        "Replace in a markdown note opens with Mod+Alt+F on macOS and Ctrl+H elsewhere.",
+        "Whole-word matching treats letters from every script, including characters outside the basic range, as word letters."
+      ],
+      "acceptance": [
+        "Open a note from the explorer, press Mod+F immediately → find bar opens and searches the note."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/markdown-preview-search.test.ts:11",
+        "src/renderer/src/components/editor/rich-markdown-search.test.ts:22",
+        "src/renderer/src/components/editor/RichMarkdownSearchBar.ime-enter.test.tsx:101",
+        "src/renderer/src/components/editor/markdown-preview-search-crash.test.tsx:57",
+        "tests/e2e/markdown-explorer-find-focus.spec.ts:6",
+        "src/renderer/src/components/editor/markdown-preview-search.test.ts:71",
+        "src/renderer/src/components/editor/markdown-preview-search.test.ts:100",
+        "src/renderer/src/components/editor/markdown-preview-search.test.ts:173"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-018",
+      "title": "Export a markdown note to PDF",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Chooses export to PDF from a markdown tab's actions menu.",
+      "user_sees": "A PDF of the rendered note is produced, with its images included.",
+      "rules": [
+        "In-memory images are embedded so they appear in the PDF.",
+        "A note with no title is exported as \"Untitled\"."
+      ],
+      "acceptance": [
+        "Export a note containing a pasted image → PDF shows the text and the image."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/export-active-markdown.test.ts:38",
+        "src/renderer/src/components/editor/markdown-export-html.test.ts:5",
+        "src/renderer/src/components/editor/markdown-export-extract.test.ts:39",
+        "src/renderer/src/components/editor/EditorPanelMarkdownActionsMenu.test.tsx:49"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-019",
+      "title": "Rich editing never rewrites the parts of a note you did not touch",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Edits one paragraph of a note in rich mode and saves.",
+      "user_sees": "Only that paragraph changes on disk; front matter, line endings, raw HTML and collapsible blocks elsewhere are left exactly as they were.",
+      "rules": [
+        "YAML (---) and TOML (+++) front matter are kept and not shown as body text.",
+        "Windows line endings, soft line breaks and inline HTML survive a round trip.",
+        "Opening and closing a note without edits leaves it unsaved-free and byte-identical.",
+        "Leaving the rich editor commits the latest typing at once, so a save right after includes it.",
+        "Hard-wrapped prose shows as one flowing paragraph in rich mode and keeps reflowing after nearby blocks are deleted.",
+        "In the preview, front matter shows as its own block above the note; the More actions menu hides or shows it per note, shown by default and remembered across restarts."
+      ],
+      "acceptance": [
+        "Open a CRLF note with YAML front matter in rich mode, change one word, save → git diff shows one changed line."
+      ],
+      "compat": "file format: markdown with YAML or TOML front matter",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/markdown-round-trip.test.ts:100",
+        "src/renderer/src/components/editor/markdown-frontmatter.test.ts:5",
+        "src/renderer/src/components/editor/rich-markdown-source-reconcile.test.ts:32",
+        "src/renderer/src/components/editor/details-markdown-html.test.ts:29",
+        "src/renderer/src/components/editor/markdown-dirty-state.test.ts:90",
+        "src/renderer/src/components/editor/rich-markdown-serialization-commit.test.ts:35",
+        "src/renderer/src/components/editor/EditorPanelMarkdownActionsMenu.tsx:100",
+        "src/renderer/src/components/editor/EditorPanel.tsx:321",
+        "src/renderer/src/components/editor/MarkdownPreviewSurface.tsx:68",
+        "src/renderer/src/store/slices/store-session-editor-hydration.test.ts:169"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-020",
+      "title": "Review notes on a file, sent to an agent",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Selects text in a note or code file, presses Mod+Shift+A, writes a comment, then uses the Send menu.",
+      "user_sees": "Comments sit in a rail beside rich markdown, anchored to their text. The Send menu lists agents running in this worktree with how long ago each changed state, plus a way to start a new agent; picking one delivers the notes to it.",
+      "rules": [
+        "The chosen agent is checked again at click time; if it is gone, nothing is sent.",
+        "If delivery fails the notes stay, nothing is lost.",
+        "Review tools can be turned off in settings (on by default).",
+        "Sending notes has a shortcut slot with no default key.",
+        "Adding a review note has its own shortcut, Mod+Shift+A by default and rebindable; holding the keys down adds only one note, and the keystroke passes through untouched when there is nothing to annotate.",
+        "Notes anchor to the right line whatever the file's line endings; notes that share an anchor are listed in source-line order."
+      ],
+      "acceptance": [
+        "Add two notes, send to a running agent → both arrive in its prompt and the rail clears.",
+        "Kill the agent between opening the menu and clicking it → notes remain unsent."
+      ],
+      "compat": "keybinding ids editor.addReviewNote, sourceControl.sendReviewNotes",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/NotesSendMenu.test.tsx:247",
+        "src/renderer/src/components/editor/ReviewNotesSendMenuContent.test.tsx:353",
+        "src/renderer/src/components/editor/rich-markdown-review-annotations.test.ts:17",
+        "src/renderer/src/components/editor/monaco-markdown-selection-annotation.test.ts:27",
+        "src/renderer/src/components/editor/markdown-preview-annotation-shortcut.test.ts:46",
+        "registry:keybindings:editor.addReviewNote",
+        "registry:keybindings:sourceControl.sendReviewNotes",
+        "registry:settings-keys:markdownReviewToolsEnabled",
+        "src/renderer/src/components/editor/editor-shortcuts.test.ts:207",
+        "src/renderer/src/components/editor/editor-shortcuts.test.ts:250",
+        "src/renderer/src/components/editor/rich-markdown-review-note-layout.test.ts:23"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "11"
+      ]
+    },
+    {
+      "id": "D-12-021",
+      "title": "Image viewer with zoom",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a PNG, JPG or other image file and zooms with Ctrl or Cmd plus the scroll wheel.",
+      "user_sees": "The image shows in its own tab; zoom stays anchored under the pointer and between fixed limits; a load failure shows an error instead of a blank tab.",
+      "rules": [
+        "At 100% a small image is not stretched up.",
+        "SVG files also count as text so their source can be diffed.",
+        "Trackpad pinch-zoom stops at the same minimum and maximum as wheel zoom."
+      ],
+      "acceptance": [
+        "Open an image, Ctrl-scroll up → zooms toward the pointer and stops at the maximum."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/ImageViewer.test.tsx:186",
+        "src/renderer/src/components/editor/image-viewer-zoom.test.ts:14",
+        "src/shared/binary-file-extensions.test.ts:11"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-022",
+      "title": "PDF viewer remembers scale and scroll position",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a PDF, zooms and scrolls, switches away and back.",
+      "user_sees": "The PDF opens fitted to the tab width; scale and scroll position are where they were left for that file.",
+      "rules": [
+        "Saved scroll positions are cleared when the tab closes.",
+        "A remembered page past the end of a document that got shorter opens at the last page; a malformed remembered position is ignored."
+      ],
+      "acceptance": [
+        "Scroll to page 5, switch tabs and back → still on page 5."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/pdf-scale-preference.test.ts:11",
+        "src/renderer/src/components/editor/pdf-view-position.test.ts:12",
+        "src/renderer/src/components/editor/pdf-view-position.test.ts:90",
+        "src/renderer/src/components/editor/pdf-view-position.test.ts:99",
+        "src/renderer/src/components/editor/pdf-scale-preference.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-023",
+      "title": "CSV and TSV files shown as a table",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a .csv or .tsv file.",
+      "user_sees": "Rows and columns render as a grid.",
+      "rules": [
+        "The separator is detected from the content.",
+        "A byte-order mark at the start is ignored.",
+        "Quoted fields with commas or line breaks stay in one cell."
+      ],
+      "acceptance": [
+        "Open a semicolon-separated .csv → columns split on semicolons."
+      ],
+      "compat": "file formats .csv .tsv",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/csv-parse.test.ts:9"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-024",
+      "title": "Jupyter notebooks: edit cells and run Python",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens an .ipynb file, edits, adds, deletes or reorders cells, and runs a Python cell.",
+      "user_sees": "Cells render as code and markdown blocks; running a cell first asks whether to trust the file, saves it, then shows the output under the cell and writes it into the notebook.",
+      "rules": [
+        "Running never happens on an untrusted notebook.",
+        "Multi-line cell source is preserved exactly.",
+        "Very long or line-heavy cells show a bounded preview so the notebook never freezes.",
+        "Cells can be added, deleted and switched between code and markdown; notebook-level details the viewer does not show are kept when the file is saved."
+      ],
+      "acceptance": [
+        "Open a notebook, run a print cell → trust prompt; accept → output appears and is saved in the file."
+      ],
+      "compat": "file format .ipynb (cells, sources, outputs)",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/ipynb-parse.test.ts:22",
+        "src/renderer/src/components/editor/ipynb-code-cell-lines.test.ts:18",
+        "src/renderer/src/components/editor/useIpynbCellExecution.test.tsx:58",
+        "src/renderer/src/components/editor/useIpynbDocumentEditing.test.tsx:64",
+        "src/renderer/src/components/editor/ipynb-parse.test.ts:94",
+        "src/renderer/src/components/editor/ipynb-parse.test.ts:149"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-025",
+      "title": "Preview an HTML file in the built-in browser",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens an .html file or its working-tree diff and asks for a preview.",
+      "user_sees": "The page renders in a Kolux browser tab next to the source.",
+      "rules": [
+        "Offered for edit tabs and for diffs of files that still exist in the working tree."
+      ],
+      "acceptance": [
+        "Open index.html, choose preview → a browser tab shows the rendered page."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/editor-panel-render-model.test.ts:65"
+      ],
+      "round": 0,
+      "related": [
+        "13"
+      ]
+    },
+    {
+      "id": "D-12-026",
+      "title": "Live tail of a log file",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks \"View Log\" on an AI Vault session row.",
+      "user_sees": "A read-only tab that keeps appending new lines as the log grows.",
+      "rules": [
+        "Half-written lines wait until complete.",
+        "If the log is rotated or truncated, the view reloads from the top."
+      ],
+      "acceptance": [
+        "Append lines to the log from a terminal → they appear in the tab within a second."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/useLocalLogTail.test.tsx:88",
+        "src/renderer/src/components/editor/local-log-tail-decoder.test.ts:24"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-027",
+      "title": "Single-file diff tab: inline or side-by-side, change navigation",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a changed file's diff from source control or `kolux file diff`, and steps through changes with F7 and Shift+F7.",
+      "user_sees": "A diff tab, inline by default, switchable to side-by-side; the actions menu toggles whitespace and word wrap; F7 jumps to the next change and Shift+F7 to the previous.",
+      "rules": [
+        "Inline view hides the original-side line numbers.",
+        "Whitespace changes and word wrap are both off by default.",
+        "Shift plus the scroll wheel scrolls sideways in whichever side is under the pointer.",
+        "Staged and unstaged diffs are separate tabs; the header marks which one it is.",
+        "The diff refreshes when git status changes.",
+        "Unstaged diffs are editable and save to the working file.",
+        "An open unstaged diff keeps showing its content when the file gets staged elsewhere instead of going blank; it still reloads while its own unstaged row is listed.",
+        "The previous and next change buttons in the header are disabled while the diff has no changes and enable as soon as changes appear."
+      ],
+      "acceptance": [
+        "Open a diff → inline; switch to side-by-side → two columns; F7 → cursor on the next hunk.",
+        "Change the file in a terminal → diff updates without reopening."
+      ],
+      "compat": "keybinding ids editor.nextChange, editor.previousChange",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/diff-editor-line-number-options.test.ts:9",
+        "src/renderer/src/components/editor/diff-editor-whitespace-options.test.ts:5",
+        "src/renderer/src/components/editor/diff-editor-word-wrap-options.test.ts:5",
+        "src/renderer/src/components/editor/diff-editor-shift-wheel-scroll.test.ts:50",
+        "src/renderer/src/components/editor/diff-navigation-context.test.tsx:94",
+        "src/renderer/src/components/editor/editor-panel-diff-reload.test.ts:24",
+        "registry:keybindings:editor.nextChange",
+        "registry:settings-keys:diffDefaultView",
+        "registry:settings-keys:diffShowWhitespace",
+        "registry:settings-keys:diffWordWrap",
+        "README.md:25",
+        "src/renderer/src/components/editor/useEditorPanelContentState.test.tsx:511",
+        "src/renderer/src/components/editor/useEditorPanelContentState.test.tsx:560",
+        "src/renderer/src/components/editor/EditorPanelHeader.tsx:225"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-12-028",
+      "title": "Huge diffs ask before rendering",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Opens the diff of a very large or very changed file.",
+      "user_sees": "Instead of freezing, the tab shows a prompt to load the full diff; loading it renders as usual.",
+      "rules": [
+        "Saving from a large diff still works after it is loaded."
+      ],
+      "acceptance": [
+        "Open a diff of a 50k-line generated file → load prompt; click load → diff renders."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/large-diff-render-limit.test.ts:25",
+        "src/renderer/src/components/editor/LargeDiffLoadPrompt.test.tsx:12",
+        "src/renderer/src/components/editor/useDiffViewerLargeDiffLifecycle.test.tsx:55",
+        "src/renderer/src/components/editor/diff-viewer-large-diff-save-action.test.ts:5"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-12-029",
+      "title": "\"All Changes\" combined diff with a file tree",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens All Changes for a worktree to review every changed file in one scroll.",
+      "user_sees": "One tab with a section per changed file; an optional file tree on the side to jump, filter and mark files as viewed; a commit-message area for branch reviews.",
+      "rules": [
+        "The file tree is hidden by default, can be resized, and stays fast with thousands of files.",
+        "Sections load as they come into view; above a changed-line limit a section waits for a click; images and binaries load on their own.",
+        "Scroll position and view are restored when the tab comes back.",
+        "Sections reload when git status changes.",
+        "Inline editors grow to fit their content.",
+        "Each inline section's height is capped so a huge or newline-heavy file cannot make one section enormous; sections hold an estimated height before they render so scrolling does not jump; image diffs take their natural height.",
+        "A section reuses content loaded earlier only when that file's change is unchanged; otherwise it loads again.",
+        "A section still loading or waiting for a click never counts as viewed; a file with both staged and unstaged changes gets two tree entries, each jumping to its own section."
+      ],
+      "acceptance": [
+        "Change 30 files, open All Changes → sections appear as you scroll; toggle the file tree → filter by name and jump to a file.",
+        "Mark a file viewed, switch tabs and back → mark and scroll kept."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/combined-diff/resolve-changes/combined-diff-entries.test.ts:12",
+        "src/renderer/src/components/editor/combined-diff/browse-files/combined-diff-file-tree.test.ts:26",
+        "src/renderer/src/components/editor/combined-diff-on-demand-load.test.ts:11",
+        "src/renderer/src/components/editor/combined-diff/load-sections/combined-diff-load-scheduler.test.ts:18",
+        "src/renderer/src/components/editor/combined-diff/remember-view/use-combined-diff-view-restore.test.tsx:65",
+        "src/renderer/src/components/editor/combined-diff/review-controls/combined-diff-commit-message.test.ts:9",
+        "src/renderer/src/components/editor/monaco-auto-height.test.ts:17",
+        "registry:settings-keys:combinedDiffFileTreeVisibleByDefault",
+        "README.md:25",
+        "src/renderer/src/components/editor/monaco-auto-height.test.ts:24",
+        "src/renderer/src/components/editor/monaco-auto-height.test.ts:46",
+        "src/renderer/src/components/editor/diff-section-layout.test.ts:40",
+        "src/renderer/src/components/editor/combined-diff/resolve-changes/combined-diff-section-cache-match.test.ts:43",
+        "src/renderer/src/components/editor/combined-diff/browse-files/combined-diff-file-tree.test.ts:33"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-12-030",
+      "title": "CI check details tab with \"Fix with AI\"",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a CI check from a pull request's checks list.",
+      "user_sees": "An editor tab with the check's steps and their status, its annotations, a copy button for the whole card, and \"Fix with AI\" for a failing check.",
+      "rules": [
+        "\"Fix with AI\" needs a hosted review (pull request) to exist.",
+        "Clicking an annotation opens that file and line in the editor, but only for files inside the worktree.",
+        "The tab header shows the check name, with no copyable path.",
+        "Each check has one tab per worktree: opening it again returns to that tab, and two checks with the same name never share one."
+      ],
+      "acceptance": [
+        "Open a failing check → steps listed, \"Fix with AI\" enabled; click an annotation → file opens at its line."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/check-run-details-tab.test.ts:9",
+        "src/renderer/src/components/editor/check-run-details-fix-with-ai.test.ts:137",
+        "src/renderer/src/components/editor/check-job-step-status.test.ts:5",
+        "src/renderer/src/components/editor/check-annotation-open.test.ts:26",
+        "src/renderer/src/components/editor/check-annotation-path.test.ts:21",
+        "src/renderer/src/components/editor/CheckRunCopyButton.test.tsx:30",
+        "src/renderer/src/components/editor/check-run-details-tab.test.ts:41"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-12-031",
+      "title": "Editor tab header, closing tabs and untitled files",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Reads or copies the path in the tab header, opens the file from a diff, closes tabs one at a time or all at once with Mod+Alt+W.",
+      "user_sees": "The header shows the full path (copyable) plus a diff or staged marker; from a diff an action opens the real file; closing the last editor tab shows a browser tab or the landing page.",
+      "rules": [
+        "Opening the file from a diff is disabled when the file was deleted.",
+        "All Changes shows its own label but still copies the worktree path.",
+        "Closing a new untitled file that was never typed in deletes it; one created from a template is kept.",
+        "Closing tabs frees their memory and cached view state.",
+        "An untitled file is deleted on close only when Kolux can tell which worktree it belongs to; otherwise it is left on disk.",
+        "Closing a tab frees only that tab's content; another open tab whose name merely starts the same way is never affected."
+      ],
+      "acceptance": [
+        "Open a diff of a deleted file → open-file action disabled.",
+        "Mod+Alt+W → all editor tabs close."
+      ],
+      "compat": "keybinding id tab.closeAll",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/editor-header.test.ts:19",
+        "src/renderer/src/components/editor/EditorPanelHeader.test.tsx:102",
+        "src/renderer/src/store/slices/editor-close-file-cleanup.test.ts:112",
+        "src/renderer/src/components/editor/closed-editor-tab-cache-sweep.test.ts:11",
+        "src/renderer/src/components/editor/untitled-file-rename-path.test.ts:5",
+        "registry:keybindings:tab.closeAll",
+        "src/renderer/src/components/editor/diff-monaco-model-disposal.test.ts:150"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-032",
+      "title": "Renaming or moving a file keeps its open tab and unsaved edits",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Renames or drags a file in the explorer while it is open with unsaved edits.",
+      "user_sees": "The tab follows the file to its new name and keeps the unsaved edits.",
+      "rules": [
+        "If the move hits a name collision, it is undone and the tab stays on the old path.",
+        "A move still in flight does not lose edits typed meanwhile.",
+        "After Kolux moves a file that has unsaved edits, autosave waits until the new location is confirmed on disk; a tab already showing the changed-on-disk banner keeps the banner; a pending jump to a line follows the file to its new path."
+      ],
+      "acceptance": [
+        "Open a.ts, type without saving, rename to b.ts → tab now says b.ts and the edit is still there."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/editor-rekey-open-files.test.ts:52",
+        "src/renderer/src/lib/execute-open-editor-path-move.test.ts:58",
+        "src/renderer/src/components/editor/editor-path-move-inflight.test.ts:13",
+        "src/renderer/src/store/slices/restored-editor-owner-reparent.test.ts:93",
+        "src/renderer/src/store/slices/editor-rekey-open-files.test.ts:187",
+        "src/renderer/src/store/slices/editor-rekey-open-files.test.ts:203",
+        "src/renderer/src/store/slices/editor-rekey-open-files.test.ts:226",
+        "src/renderer/src/store/slices/editor-rekey-open-files.test.ts:241",
+        "src/renderer/src/store/slices/editor-rekey-open-files.test.ts:306"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-033",
+      "title": "Explorer tree: browse, select and move with the keyboard",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the explorer (Mod+Shift+E) and navigates the worktree's folders with mouse or keys.",
+      "user_sees": "A tree of the worktree; arrows, Home and End move; Right opens a folder or steps into it, Left closes it or steps to its parent; Mod-click and Shift-click select several items.",
+      "rules": [
+        "A symlink expands only once it is confirmed to be a folder; otherwise it opens as a file.",
+        "Expanded folders and scroll are kept when the explorer is hidden and shown again, and reset when the worktree changes.",
+        "Very large folders stay smooth (only visible rows are drawn)."
+      ],
+      "acceptance": [
+        "Mod+Shift+E → explorer opens; Down, Right, Down, Enter → opens the first file of the second folder.",
+        "Shift-click two rows apart → three selected."
+      ],
+      "compat": "keybinding id sidebar.explorer.toggle; view id explorer",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/file-explorer-keyboard-navigation.test.ts:53",
+        "src/renderer/src/components/right-sidebar/file-explorer-selection.test.ts:22",
+        "src/renderer/src/components/right-sidebar/useFileExplorerKeys.test.ts:32",
+        "src/renderer/src/components/right-sidebar/file-explorer-reset.test.ts:8",
+        "registry:view-ids:explorer",
+        "registry:keybindings:sidebar.explorer.toggle"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-034",
+      "title": "Explorer file operations: create, rename, copy, delete, undo, drag and drop in",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Creates, renames, copies, deletes or drags files in the explorer, drops files in from the desktop, and presses Mod+Z if they slip.",
+      "user_sees": "Changes happen on disk and in the tree at once; deleted items go to the system trash; undo and redo reverse explorer changes; path and relative path can be copied from a shortcut.",
+      "rules": [
+        "New files and folders never overwrite something already there; copies never overwrite.",
+        "Inline rename commits when focus leaves and is discarded by Escape; changing only the letter case is allowed; renaming onto an existing name is refused.",
+        "Several selected items are deleted after one confirmation; one failure does not stop the rest.",
+        "Items on a WSL share are deleted permanently because that share has no trash.",
+        "Dragging a folder with its own children selected moves just the folder; the tree scrolls when dragging near its edge.",
+        "Dropping from the desktop copies folders recursively, renames top-level clashes, and refuses symlinks.",
+        "Undo is Mod+Z, redo Mod+Shift+Z (Ctrl+Y also on Windows and Linux).",
+        "Renaming a symlink renames the link, never its target.",
+        "A rename that changes only the Unicode form of the same name is allowed, like a case-only rename.",
+        "Two renames aimed at the same destination run one after the other, so only one can claim it.",
+        "Delete (also Mod+Backspace on macOS) deletes the selection; copy path and copy relative path each have a shortcut."
+      ],
+      "acceptance": [
+        "Create notes.md where notes.md exists → refused, original untouched.",
+        "Delete two files → one confirm, both in the trash; Mod+Z → both back.",
+        "Drop a folder from the desktop onto a folder that has the same name inside → copy lands under a new name."
+      ],
+      "compat": "keybinding ids fileExplorer.undo, fileExplorer.redo, fileExplorer.copyPath, fileExplorer.copyRelativePath, fileExplorer.delete",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/filesystem-mutations.test.ts:98",
+        "src/main/ipc/filesystem.test.ts:460",
+        "src/main/ipc/filesystem-import.test.ts:183",
+        "src/renderer/src/components/right-sidebar/file-explorer-batch-deletion.test.ts:16",
+        "src/renderer/src/components/right-sidebar/file-explorer-inline-rename-flow.test.tsx:98",
+        "src/renderer/src/components/right-sidebar/useFileExplorerDragDrop.test.ts:5",
+        "src/renderer/src/runtime/file-explorer-delete-owner-provenance.test.ts:163",
+        "registry:keybindings:fileExplorer.undo",
+        "registry:keybindings:fileExplorer.delete",
+        "registry:keybindings:fileExplorer.copyRelativePath",
+        "src/main/ipc/filesystem-mutations.test.ts",
+        "src/main/destination-serialized-local-rename.test.ts",
+        "registry:keybindings:fileExplorer.copyPath",
+        "tests/e2e/floating-tab-rename-filesystem-alias.spec.ts:7"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-035",
+      "title": "Explorer toolbar, name filter, row actions and live refresh",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses the explorer toolbar and right-click menu, or types in the name filter.",
+      "user_sees": "Refresh (with a spinner), collapse all, and an overflow menu that shows or hides git-ignored files and dotfiles and opens the folder in other apps; the filter narrows rows by name; row menus offer find in folder, open in terminal, view file, add as project and copy. The tree updates on its own when files change on disk.",
+      "rules": [
+        "Git-ignored files are shown by default.",
+        "\"Find in folder\" opens search scoped to that folder.",
+        "\"Add as project\" appears only where the folder could be a project.",
+        "Bursts of disk changes are batched into one refresh; if the watcher is overwhelmed, the whole tree reloads.",
+        "Watchers stop promptly when a worktree is deleted.",
+        "A project opened through a symlink, a Windows junction or a differently-cased path still refreshes live.",
+        "Removing a worktree first stops its file watching, including a watcher that is still starting; if the watching cannot be stopped, the removal reports the failure."
+      ],
+      "acceptance": [
+        "Create a file from a terminal → it appears in the tree without clicking refresh.",
+        "Type \"test\" in the filter → only matching rows remain; clear button restores all."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/FileExplorerToolbar.test.tsx:180",
+        "src/renderer/src/components/right-sidebar/FileExplorerNameFilter.test.tsx:36",
+        "src/renderer/src/components/right-sidebar/FileExplorerRow.actions.test.tsx:50",
+        "src/renderer/src/components/right-sidebar/file-explorer-add-project-action.test.ts:41",
+        "src/main/ipc/filesystem-watcher.test.ts:100",
+        "src/main/ipc/filesystem-watcher-removal-deadline.test.ts:79",
+        "tests/e2e/file-explorer-watch-refresh.spec.ts:7",
+        "registry:settings-keys:showGitIgnoredFiles",
+        "src/main/ipc/watcher-event-root-path-rewrite.test.ts:9",
+        "src/main/ipc/filesystem-watcher-local-unsubscribe.test.ts:355",
+        "src/main/ipc/filesystem-watcher-local-unsubscribe.test.ts:676"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-036",
+      "title": "Quick Open a file by name (Mod+P)",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+P and types part of a file name.",
+      "user_sees": "A fuzzy-matched list of the worktree's files, best name matches first; hovering a result shows its full path; Enter opens it.",
+      "rules": [
+        "Matches in the file name rank above matches only in the folder path; at most 50 results show.",
+        "An empty query lists files in natural order.",
+        "Nested worktrees and tool folders such as .next, .cache, .vscode and .idea are left out.",
+        "Needs ripgrep; if missing, the dialog explains how to install it and can retry, and falls back to git's file list where possible.",
+        "Stays fast on worktrees with around 100,000 files.",
+        "When the file list hits its cap, the dialog says the list is incomplete instead of implying it is the whole worktree.",
+        "The new-tab menu's file search ranks results the same way and shows the full path on hover.",
+        "A one-off failure to start the file search tool is retried instead of telling the user to install ripgrep.",
+        "The hover path follows the pointer and sets the file name apart from its folder."
+      ],
+      "acceptance": [
+        "Mod+P, type \"panel\" → files named *panel* above files merely inside a panel folder.",
+        "Hover a result → full path tooltip follows the pointer."
+      ],
+      "compat": "keybinding id worktree.quickOpen",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/quick-open-search.test.ts:13",
+        "src/renderer/src/components/quick-open-file-list.test.ts:34",
+        "src/renderer/src/components/quick-open-file-list.react.test.tsx:165",
+        "src/main/ipc/filesystem-list-files.test.ts:90",
+        "src/main/ipc/filesystem-list-files-install-rg.test.ts:72",
+        "src/main/ipc/filesystem-search-file-paths.test.ts:77",
+        "src/renderer/src/components/file-path-cursor-tooltip.test.ts:9",
+        "tests/e2e/quick-open-file-paths.spec.ts:9",
+        "registry:keybindings:worktree.quickOpen",
+        "src/renderer/src/components/quick-open-file-list.react.test.tsx",
+        "tests/e2e/tab-create-entry-file-paths.spec.ts:9",
+        "src/main/ipc/filesystem-search-file-paths.test.ts:153",
+        "src/renderer/src/components/file-path-cursor-tooltip.test.ts:52"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-037",
+      "title": "Search across files in a worktree (Mod+Shift+F)",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens search, types text, sets options and include or exclude patterns.",
+      "user_sees": "Results grouped by file with match counts and the matching line; clicking a match opens the file at it. A failed search shows why instead of an empty list.",
+      "rules": [
+        "Default: case-insensitive plain text, includes hidden files, skips .git.",
+        "Options: match case, whole word, regular expression.",
+        "Include and exclude take comma-separated patterns; a bare pattern matches at any depth; a backslash keeps a literal comma.",
+        "Result count is capped and the panel says when results were cut short; very long lines are trimmed around the match.",
+        "Falls back to git's own search if ripgrep is unavailable; slow searches time out; over-long queries are refused.",
+        "The explorer view switches between file names and contents search."
+      ],
+      "acceptance": [
+        "Search \"todo\" → case-insensitive hits; tick match case → only exact-case hits.",
+        "Exclude \"*.test.ts\" → no test files in results."
+      ],
+      "compat": "keybinding id sidebar.search.toggle; include/exclude pattern syntax",
+      "decision": "",
+      "evidence": [
+        "src/shared/text-search.test.ts:21",
+        "src/main/ipc/filesystem-search-git.test.ts:33",
+        "src/main/ipc/filesystem-search-rg-timeout.test.ts:116",
+        "src/shared/search-match-count.test.ts:17",
+        "src/renderer/src/components/right-sidebar/SearchResultsPane.test.tsx:23",
+        "src/renderer/src/components/right-sidebar/file-search-include-pattern.test.ts:8",
+        "src/renderer/src/components/right-sidebar/FileExplorerViewSwitch.test.tsx:19",
+        "registry:keybindings:sidebar.search.toggle",
+        "registry:view-ids:search"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-038",
+      "title": "Search the codebase for what is selected in the editor",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Selects text (or puts the cursor on a word) in the editor and starts a files search.",
+      "user_sees": "The search panel opens pre-filled with the selection, or with the word under the cursor.",
+      "rules": [
+        "A multi-line selection is collapsed to one line for the query."
+      ],
+      "acceptance": [
+        "Cursor on a function name, start a files search → name already in the box and results shown."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/file-search-selection.test.ts:24",
+        "src/renderer/src/components/editor/monaco-codebase-search.test.ts:33",
+        "src/renderer/src/components/right-sidebar/search-match-open.test.ts:44"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-039",
+      "title": "Dropping files from the desktop goes where you dropped them",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Drags files or folders from the operating system onto different parts of Kolux.",
+      "user_sees": "On the project list it adds a project; on a terminal it types the path; on a composer or kit input it attaches; on an explorer folder it copies in; anywhere else it opens in the editor.",
+      "rules": [
+        "Drops with too many files or too many bytes are refused.",
+        "Dragging files inside Kolux carries a bounded list of paths without duplicates.",
+        "Only files from outside Kolux count as a desktop drop; dragged text, web links and moves inside Kolux's own explorer are not treated as one."
+      ],
+      "acceptance": [
+        "Drop a .txt file on the editor area → it opens as a tab.",
+        "Drop a folder on the project list → new project added."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/native-file-drop.test.ts:16",
+        "src/renderer/src/lib/workspace-file-drag.test.ts:32",
+        "src/shared/native-file-drop.test.ts:20"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "03",
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-040",
+      "title": "Per-workspace handoff note that can be handed to an agent",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Opens the Handoff section in the right sidebar, writes a note, and optionally clicks \"Hand to agent…\".",
+      "user_sees": "A collapsible note box private to this workspace that saves itself and shows Saving, Saved, a save error, or how long ago it was updated. Handing it to an agent opens that agent in a new tab with the note as its first prompt and appends a dated line saying who it was handed to.",
+      "rules": [
+        "Collapsed by default; available for every kind of workspace.",
+        "Saves after a short pause in typing and when focus leaves.",
+        "Each workspace (host plus folder path) has its own note; a folder workspace and a worktree of it do not share one.",
+        "Notes are capped at 256 KB.",
+        "The agent list shows only agents found on that machine and respects the default and disabled agents.",
+        "A damaged note file reads as empty instead of crashing; writes are all-or-nothing."
+      ],
+      "acceptance": [
+        "Type a note, wait a second → \"Saved\"; restart → note still there.",
+        "Hand it to Claude → new tab running Claude with the note submitted; note gains a handed-to line.",
+        "Open a different worktree → its note is empty."
+      ],
+      "compat": "data category: handoff notes per workspace (text and last-updated time)",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/right-sidebar/handoff/HandoffPanel.tsx:22",
+        "src/renderer/src/components/right-sidebar/handoff/HandoffPanel.tsx:131",
+        "src/shared/workspace-handoff-record.ts:8",
+        "src/renderer/src/components/right-sidebar/handoff/handoff-autosave.test.ts:9",
+        "src/main/ipc/workspace-handoff.test.ts:43",
+        "src/main/workspace-handoff/workspace-handoff-store.test.ts:21",
+        "src/shared/workspace-handoff-key.test.ts:5",
+        "src/renderer/src/store/slices/workspace-handoff.test.ts:25"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-041",
+      "title": "\"Open in Code\" and \"Answer in Code\" jump to the agent's pane",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Picks an item in the Inbox (or a lane on the Floor, or a needs-you entry in the sidebar) and clicks \"Open in Code\", or presses Enter.",
+      "user_sees": "Kolux switches to the Code (terminals) view, selects that worktree, reveals it in the sidebar and focuses the exact tab and pane where the agent is running. For a question or permission it cannot answer inline, the button reads \"Answer in Code\" and lands the user in the pane to answer it there.",
+      "rules": [
+        "Enter on a selected Inbox item does the same as the button.",
+        "Questions and permission prompts are answered inline when the agent's terminal is live and the prompt can be read; otherwise the item offers \"Answer in Code\".",
+        "Opening marks the item visited."
+      ],
+      "acceptance": [
+        "Inbox item for a waiting agent → \"Open in Code\" → Code view, right worktree, right pane focused.",
+        "Permission item whose terminal has exited → shows \"Answer in Code\" instead of inline buttons."
+      ],
+      "compat": "keybinding id view.code",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/inbox/inbox-open-in-code.ts:1",
+        "src/renderer/src/components/inbox/InboxDetail.tsx:24",
+        "src/renderer/src/components/inbox/InboxDetail.tsx:70",
+        "src/renderer/src/components/inbox/InboxPage.tsx:37",
+        "src/renderer/src/components/floor/floor-lane-activation.ts:9",
+        "src/renderer/src/components/sidebar/terminals-next-needs-you-command.ts:64",
+        "registry:keybindings:view.code"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-042",
+      "title": "`kolux file` CLI: open a file, open a diff, open everything changed",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux file open`, `kolux file diff` or `kolux file open-changed` from a terminal inside a worktree.",
+      "user_sees": "The file, its diff, or every changed file opens in the Kolux editor for the right worktree; with --json the command prints machine-readable output.",
+      "rules": [
+        "Paths may be relative to the worktree or absolute inside it.",
+        "Without --worktree the worktree is worked out from the current directory.",
+        "diff shows unstaged changes unless --staged is given.",
+        "open-changed defaults to diffs; --mode edit opens files and skips deleted ones; --mode both opens both.",
+        "An absolute path opens in the innermost worktree that contains it, so a worktree nested inside another wins over its parent."
+      ],
+      "acceptance": [
+        "`kolux file open src/a.ts` in a worktree → a.ts opens in that worktree's editor.",
+        "`kolux file open-changed --mode edit` with one deleted and two modified files → two edit tabs."
+      ],
+      "compat": "CLI: kolux file open <path> [--worktree <selector>] [--json]; kolux file diff <path> [--staged] [--worktree <selector>] [--json]; kolux file open-changed [--mode edit|diff|both] [--worktree <selector>] [--json]; selectors id:, name:, branch:, issue:, path:, active, current",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/file.ts:6",
+        "src/cli/specs/file.ts:20",
+        "src/cli/specs/file.ts:35",
+        "registry:cli-manifest:file open",
+        "registry:cli-manifest:file diff",
+        "registry:cli-manifest:file open-changed",
+        "src/shared/runtime-workspace-file-owner.test.ts:29",
+        "src/shared/runtime-workspace-file-owner.test.ts:38",
+        "src/main/runtime/kolux-runtime-resolve-known-workspace-file-target.ts:70"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-12-043",
+      "title": "Open a worktree or folder in an external editor or the file manager",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses the \"Open in\" menu on a worktree or the explorer overflow menu.",
+      "user_sees": "A menu of the apps the user has set up (VS Code out of the box) plus the system file manager; picking one opens the folder there.",
+      "rules": [
+        "Every launcher is offered for local folders.",
+        "The list is edited in General settings: add a ready-made preset or a custom app (a label and a launch command), edit or remove rows; rows missing a label or command are dropped and the list is capped.",
+        "An app with a blank command falls back to VS Code.",
+        "Relative or missing paths are refused, and a launch failure is reported rather than ignored."
+      ],
+      "acceptance": [
+        "With VS Code installed, \"Open in\" → VS Code opens the worktree folder."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/external-editor-open-capability.ts:8",
+        "src/renderer/src/lib/external-editor-open-capability.test.ts:5",
+        "src/renderer/src/components/sidebar/WorktreeOpenInMenu.tsx:14",
+        "src/renderer/src/components/right-sidebar/FileExplorerToolbar.test.tsx:299",
+        "src/renderer/src/components/settings/OpenInMenuSetting.tsx:47",
+        "src/shared/open-in-applications.test.ts:5",
+        "src/main/ipc/shell.test.ts:263",
+        "registry:settings-keys:openInApplications"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-044",
+      "title": "Files on WSL shares open and save like local files again",
+      "tier": "P0",
+      "pushed": 5,
+      "state": "live",
+      "user_does": "On Windows, opens a project that lives inside WSL (a \\\\wsl$ or \\\\wsl.localhost path) and edits, searches and watches its files.",
+      "user_sees": "The explorer, editor, search and file watching all work on the WSL project as they do on a local disk.",
+      "rules": [
+        "WSL roots count as local paths, not network shares.",
+        "Searches on a WSL project run ripgrep inside the chosen distro and translate paths back.",
+        "If the WSL watcher runs out of capacity it retries rather than going silent.",
+        "Deletes on WSL shares are permanent (no trash there).",
+        "Windows long paths are handled for creating and removing folders.",
+        "On Windows, a removal that fails for a passing reason (a file briefly locked) is retried a few times.",
+        "A file reached through its WSL path and through its Windows drive alias counts as the same file for change detection, while names inside the Linux filesystem stay case-sensitive."
+      ],
+      "acceptance": [
+        "Add a project under \\\\wsl.localhost\\Ubuntu\\home\\me\\app → explorer lists files; edit and save one; search finds text in it."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "docs/research/closeout-2026-10-06.md:17",
+        "src/main/local-worktree-filesystem.test.ts:67",
+        "src/main/ipc/filesystem-watcher-native-capacity.test.ts:68",
+        "src/shared/text-search.test.ts:206",
+        "src/main/ipc/filesystem.test.ts:473",
+        "registry:settings-keys:terminalWindowsWslDistro",
+        "src/main/local-worktree-filesystem.test.ts:128",
+        "src/renderer/src/components/editor/editor-external-watch-path-index.test.ts:59"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "18"
+      ]
+    },
+    {
+      "id": "D-12-045",
+      "title": "File access stays inside your projects and refuses foreign network shares",
+      "tier": "P0",
+      "pushed": 5,
+      "state": "live",
+      "user_does": "Opens, saves or follows links to files, including paths an agent printed in a terminal.",
+      "user_sees": "Files inside the user's projects work normally; reads and writes outside them, symlinks that escape a project, and paths on another machine's network share are refused before anything touches disk.",
+      "rules": [
+        "A path that resolves outside the project through a symlink is refused.",
+        "Terminal file links that point at a different network host are refused.",
+        "Any parent-folder segment (..) in a network path is treated as a foreign host.",
+        "Access granted to an outside path covers that exact path only, not the folder under it.",
+        "macOS system path aliases are treated as the same place.",
+        "A save or file action started for a folder workspace is refused if that workspace's folder changes before it completes, rather than writing to the wrong place."
+      ],
+      "acceptance": [
+        "Ask to open a file through a symlink pointing outside the worktree → refused.",
+        "Click a terminal link to \\\\otherhost\\share\\x.txt → refused without a network probe."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "docs/research/closeout-2026-10-06.md:17",
+        "src/main/ipc/filesystem-allowed-roots.test.ts:268",
+        "src/main/ipc/filesystem.test.ts:223",
+        "src/main/ipc/filesystem-import.test.ts:342",
+        "src/renderer/src/lib/editor-file-operation-owner.test.ts:277",
+        "src/renderer/src/components/editor/restored-editor-owner-save-lifecycle.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "10"
+      ]
+    },
+    {
+      "id": "D-12-046",
+      "title": "Saves are all-or-nothing and huge or binary files are handled safely",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Saves files, or opens very large and binary files.",
+      "user_sees": "A save either fully lands or leaves the old file intact, even if the app dies mid-write; large text files open; binary files other than images are not shown as garbage text.",
+      "rules": [
+        "Saves write a temporary file, flush it to disk and swap it in; no temporary file is left behind.",
+        "Text reads are bounded; files above the old 5 MB limit now open.",
+        "Large files of unknown type are sniffed before being treated as text."
+      ],
+      "acceptance": [
+        "Open a 20 MB log → it opens.",
+        "Open a .zip → no text view."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/durable-file-write.test.ts:29",
+        "src/main/durable-file-write-syscall-proof.test.ts:54",
+        "src/shared/node-bounded-file-reader.test.ts:35",
+        "src/shared/binary-file-extensions.test.ts:5",
+        "src/main/ipc/filesystem.test.ts:526",
+        "src/main/ipc/filesystem.test.ts:382"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-12-047",
+      "title": "Worktree switcher search (Mod+J palette)",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Opens the worktree palette and types.",
+      "user_sees": "With nothing typed, recent worktrees; typing matches worktree name, branch, emoji shortcode, repo and worktree together, pull-request or issue numbers and links, comments, host and port numbers.",
+      "rules": [
+        "Name matches rank first.",
+        "Repo-plus-worktree queries match across both parts.",
+        "Every word of a multi-word query must match somewhere in the entry.",
+        "Absurdly long queries are refused before searching."
+      ],
+      "acceptance": [
+        "Type a PR number → the worktree linked to that PR is first."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/worktree-palette-search.test.ts:66",
+        "src/renderer/src/lib/worktree-palette-search.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-048",
+      "title": "Search in repo and base-branch pickers",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Types into the repository picker or the base-branch picker.",
+      "user_sees": "A filtered list of repos or branches, kept to a manageable size.",
+      "rules": [
+        "Results are bounded so huge orgs or branch lists stay responsive."
+      ],
+      "acceptance": [
+        "Type part of a branch name in the base picker → matching branches listed."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/repo-search.test.ts:17",
+        "src/shared/base-ref-search-result.test.ts:5",
+        "src/shared/repo-search-limits.test.ts:15"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-12-049",
+      "title": "Settings search stays responsive",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+F on the settings screen and types.",
+      "user_sees": "Settings filter to matching entries as the user types, without lag.",
+      "rules": [
+        "Filtering waits for a brief pause in typing.",
+        "Only the active settings page is drawn while searching.",
+        "Clearing the search box shows every setting again at once, without waiting for the typing pause."
+      ],
+      "acceptance": [
+        "Type quickly in settings search → no dropped keystrokes; results match."
+      ],
+      "compat": "keybinding id settings.search",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/settings-search-state.test.ts:25",
+        "tests/e2e/settings-search-responsiveness.spec.ts:14",
+        "registry:keybindings:settings.search",
+        "src/renderer/src/store/slices/settings-search-state.test.ts:41"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-12-050",
+      "title": "Project picture taken from an icon file in the repo",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Adds a project whose repository contains a favicon or logo file.",
+      "user_sees": "The project shows that image as its icon.",
+      "rules": [
+        "Only recognised icon file names and image types are used."
+      ],
+      "acceptance": [
+        "Add a repo with a favicon → project row shows it."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/repo-icon-file-detection.test.ts:39"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-12-051",
+      "title": "Editing, searching and downloading files on remote hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opened, searched, watched and downloaded files of an SSH or remote-runtime worktree.",
+      "user_sees": "Remote files behaved like local ones; downloads opened a save dialog and copied the file down.",
+      "rules": [
+        "All remote file traffic went through a provider per host."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: area 18 remote hosts and runtimes are dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/runtime/runtime-file-client.test.ts:24",
+        "src/renderer/src/runtime/runtime-file-client-download.test.ts:16",
+        "src/main/ipc/filesystem-download-transfers.test.ts:85",
+        "src/renderer/src/runtime/runtime-file-client-watch.test.ts:13",
+        "src/renderer/src/runtime/runtime-file-client-search-listing.test.ts:26",
+        "src/renderer/src/lib/runtime-workspace-file-route.test.ts:56",
+        "src/main/ipc/filesystem-watcher-dormant-rearm.test.ts:90"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-12-052",
+      "title": "Simulator palette search",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Searched the list of iOS and Android simulators to open one in a pane.",
+      "user_sees": "Matching simulators by name, platform or version.",
+      "rules": [],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: area 18 mobile emulator pane is dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/lib/simulator-palette-search.test.ts:98"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-12-053",
+      "title": "Opening a file in its system app never runs a program",
+      "tier": "P0",
+      "pushed": 5,
+      "state": "live",
+      "user_does": "Clicks a file link that Kolux hands to the operating system (from a terminal or a markdown note), or opens a finished browser download.",
+      "user_sees": "Ordinary documents open in their usual app. A program, script, installer or shortcut is never launched: the file manager opens with the file selected instead.",
+      "rules": [
+        "Launchable files are recognised by type on every platform (programs, scripts, installers, shortcuts and similar), ignoring letter case and any trailing dots or spaces in the name.",
+        "On macOS and Linux a file with its execute permission set is treated as launchable even without an extension.",
+        "Relative paths, missing files, links that are not file links, and file links that name another machine are ignored.",
+        "The same check applies everywhere Kolux opens a file outside itself."
+      ],
+      "acceptance": [
+        "Click a terminal link to a .bat, .ps1, .exe or .lnk file → the file manager opens with it selected; nothing runs.",
+        "On Linux, an extensionless file with the execute bit → revealed, not run; the same file without the bit → opens in its default app.",
+        "Click a link to a .txt file → it opens in the default text app.",
+        "Open a link to a file on another computer → nothing happens."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/shell.ts:133",
+        "src/main/ipc/shell.test.ts:790",
+        "src/main/ipc/shell.test.ts:853",
+        "src/main/ipc/shell.test.ts:723",
+        "src/renderer/src/components/terminal-pane/terminal-file-open-routing.ts:180",
+        "src/renderer/src/components/browser-pane/navigate/use-browser-page-navigation-downloads.ts:235",
+        "commit a3987cf13 2026-10-06 (exec detection)",
+        "dumps/records/handoff-recent-work.md:9"
+      ],
+      "round": 1,
+      "related": [
+        "03",
+        "10",
+        "13"
+      ]
+    },
+    {
+      "id": "D-12-054",
+      "title": "A new markdown note starts untitled and is named on its first save",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+Shift+M (or picks new markdown from the Mod+J palette or the floating panel), types, then saves.",
+      "user_sees": "A new tab opens at the end of the tab row on an empty note created at the worktree root as untitled.md (then untitled-2.md, untitled-3.md and so on). The first save asks for a name; the name may include folders, which are created; the tab follows the file to its new name with its text.",
+      "rules": [
+        "A new note never overwrites an existing file; if a name is taken in the meantime the next number is tried, and after 100 taken names creation fails with a message.",
+        "The naming step refuses a name that already exists; keeping the suggested name simply saves.",
+        "A new note starts with no unsaved mark and opens as an edit tab, not a preview.",
+        "When a split group is chosen as the target, the note opens there rather than in the group that happens to be active.",
+        "Closing a new note that was never typed in deletes it (see the tab-closing card)."
+      ],
+      "acceptance": [
+        "Press Mod+Shift+M twice in a fresh worktree → untitled.md and untitled-2.md exist and two tabs sit at the end of the tab row.",
+        "Type in a new note and press Mod+S → a name prompt appears; enter notes/plan.md → the folder is created, the file moves there and the tab follows with its text.",
+        "Enter a name that already exists → the prompt shows an error and nothing moves."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/create-untitled-markdown.test.ts:26",
+        "src/renderer/src/lib/create-untitled-markdown.test.ts:72",
+        "src/renderer/src/components/editor/useEditorPanelSave.ts:26",
+        "src/renderer/src/components/editor/useUntitledFileRename.ts:40",
+        "src/renderer/src/store/slices/new-markdown.test.ts:127",
+        "src/renderer/src/store/slices/new-markdown.test.ts:317",
+        "src/renderer/src/store/slices/new-markdown.test.ts:387",
+        "src/renderer/src/components/cmd-j/quick-actions.ts:102",
+        "registry:keybindings:tab.newMarkdown"
+      ],
+      "round": 1,
+      "related": [
+        "03",
+        "05"
+      ]
+    },
+    {
+      "id": "D-12-055",
+      "title": "New markdown notes can start from the repo's own templates",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Keeps markdown templates in a templates folder inside the repo's hidden Kolux folder, then creates a new markdown note.",
+      "user_sees": "Before the note is created a picker lists Blank plus each template by a readable name. Choosing a template fills the new note with its text, with placeholders for the title, date, time, date-and-time and file name filled in; cancelling creates nothing.",
+      "rules": [
+        "Only markdown files count as templates; subfolders are searched; symlinks and dependency folders are skipped.",
+        "Template names are made from the file name, turned into words with a capital first letter.",
+        "Placeholders tolerate spaces inside the braces; dates use year-month-day and times use 24-hour hours and minutes; unknown placeholders are left exactly as typed.",
+        "With no templates folder, no picker appears and a blank note is created.",
+        "A note created from a template is kept on close even if never edited."
+      ],
+      "acceptance": [
+        "Put two markdown templates in the repo's templates folder → Mod+Shift+M shows a picker with Blank and both names.",
+        "A template with a date placeholder → the new note shows today's date as year-month-day.",
+        "Remove the folder → Mod+Shift+M creates a blank note with no picker.",
+        "Pick a template, then close the note without typing → the file stays on disk."
+      ],
+      "compat": "Existing repos keep their templates in the repo-level Kolux templates folder; reading the same place keeps them working.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/markdown-document-templates.test.ts:39",
+        "src/renderer/src/lib/markdown-document-templates.test.ts:80",
+        "src/renderer/src/lib/markdown-document-templates.test.ts:135",
+        "src/renderer/src/lib/markdown-template-picker-request.ts",
+        "src/renderer/src/components/editor/MarkdownTemplatePicker.tsx:18",
+        "src/renderer/src/lib/create-untitled-markdown.test.ts:122",
+        "path: <repo>/.kolux/templates"
+      ],
+      "round": 1,
+      "related": []
+    },
+    {
+      "id": "D-12-056",
+      "title": "Each file tab has a view switch, including a Changes view of uncommitted edits",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a file from the worktree and flips the small view switch in the tab header, for example to Changes while an agent is editing it.",
+      "user_sees": "Code files offer Edit and Changes; markdown offers Source, Rich and Changes; diagram files and CSV/TSV files offer their source and a rendered view plus Changes; notebooks offer only source and rendered cells. Changes shows the last commit beside the working copy, unsaved typing included, and the working side stays editable.",
+      "rules": [
+        "Only one view shows at a time; the switch replaces any separate source/preview control for that tab.",
+        "Changes compares against the last commit (uncommitted changes), not against the base branch; its hover text says so.",
+        "Edits made in Changes behave like edits in the normal view: unsaved mark, autosave and close prompts all apply.",
+        "When there is nothing uncommitted, a banner says so instead of an empty diff.",
+        "After a commit, pull or rebase made elsewhere, the committed side refreshes without losing undo history on the working side; a cached Changes view in a background tab refreshes after an outside edit.",
+        "Changes is not offered for untitled files, files outside the worktree, binary files or notebooks, and never on diff or conflict tabs, which already show changes.",
+        "The CSV/TSV rendered view is a read-only table and is not presented as editable.",
+        "Export to PDF is unavailable while a note is in Changes; very large diffs follow the same ask-before-rendering rule as diff tabs."
+      ],
+      "acceptance": [
+        "Open a modified code file → switch shows Edit and Changes; pick Changes → last commit on one side, working copy on the other; type on the working side → tab shows unsaved.",
+        "Open an unmodified file in Changes → a no-uncommitted-changes banner, not a blank diff.",
+        "Open a notebook → no Changes option; open an untitled note → no Changes option.",
+        "Commit the file from a terminal while Changes is open → the committed side updates; undo still works on the working side."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/ChangesModeView.tsx:12",
+        "src/renderer/src/components/editor/ChangesModeView.tsx:64",
+        "src/renderer/src/components/editor/ChangesModeView.tsx:69",
+        "src/renderer/src/components/editor/ChangesModeView.test.tsx:65",
+        "src/renderer/src/components/editor/EditorViewToggle.tsx:18",
+        "src/renderer/src/components/editor/EditorViewToggle.tsx:59",
+        "src/renderer/src/components/editor/EditorViewToggle.tsx:69",
+        "src/renderer/src/components/editor/markdown-preview-controls.ts:15",
+        "src/renderer/src/components/editor/markdown-preview-controls.test.ts:39",
+        "src/renderer/src/components/editor/editor-panel-file-mode.ts:7",
+        "src/renderer/src/components/editor/editor-panel-render-model.ts:113",
+        "src/renderer/src/components/editor/editor-panel-render-model.test.ts:158",
+        "src/renderer/src/components/editor/useEditorPanelExternalContentEvents.test.tsx:182",
+        "src/renderer/src/components/editor/useEditorPanelVisibilityContentState.test.tsx:448"
+      ],
+      "round": 2,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-12-057",
+      "title": "Formatting toolbar above the rich markdown editor",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a markdown note in rich mode and clicks a toolbar button instead of typing markdown or using the slash menu.",
+      "user_sees": "A slim toolbar sits above every note in rich mode with buttons for body text, headings 1 to 3, bold, italic, strikethrough, bullet list, numbered list, checklist, quote, link and image, each named in a tooltip on hover. A More blocks menu adds headings 4 and 5 and a collapsible section. A click applies the choice to the current selection or block.",
+      "rules": [
+        "The toolbar is shown whenever a note is in rich mode; source mode and the read-only preview do not have it.",
+        "Clicking a button never takes focus out of the text, so the caret and selection stay where they were.",
+        "Heading, list, checklist and quote buttons toggle: pressing the same one again on that block turns it back into body text.",
+        "Link opens the same link editing as the add-link shortcut; Image opens the same picker as inserting an image.",
+        "A list started from the toolbar behaves like any other: Enter on its empty last item ends the list and leaves the caret in a plain paragraph.",
+        "Today the buttons do not light up to show formatting already applied at the caret."
+      ],
+      "acceptance": [
+        "Open a note in rich mode → toolbar visible above the text; switch the tab to source → toolbar gone.",
+        "Select a word and click Bold → the word turns bold, the selection is unchanged and typing continues in the note.",
+        "Click Numbered list, type one item, press Enter twice → the list ends and the caret sits in a plain paragraph.",
+        "Open More blocks → Heading 4, Heading 5 and a collapsible section are offered; choosing the section inserts a toggle block."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/editor/RichMarkdownToolbar.tsx:43",
+        "src/renderer/src/components/editor/RichMarkdownToolbar.tsx:104",
+        "src/renderer/src/components/editor/RichMarkdownToolbar.tsx:162",
+        "src/renderer/src/components/editor/RichMarkdownToolbarButton.tsx:26",
+        "src/renderer/src/components/editor/RichMarkdownEditorSurface.tsx:200",
+        "tests/e2e/markdown-ordered-list-exit.spec.ts:62",
+        "src/renderer/src/components/editor/rich-markdown-key-handler.test.ts (leaves toolbar-created empty ordered lists to the default Enter behavior)"
+      ],
+      "round": 3,
+      "related": []
+    }
+  ],
+  "notes": [
+    "Overlap with 05: explorer, search panel and handoff-panel UI tests live in components/right-sidebar (area 05 dump). Carded here because area 12 scope names explorer, search and the handoff note (D-12-033 to 038, 040, 045), all with related 05; the area 05 reader may card the same UI, so dedupe there.",
+    "Overlap with 11: diff tabs, large-diff prompt, All Changes, check details, conflict markers and review notes are carded here because their tests sit in components/editor; each has related 11. The check-details tab still handles GitLab jobs, which table 1b cuts to D; not split out here.",
+    "WSL: the 2026-10-06 close-out made WSL roots local again (D-12-044, live), but the area 18 cut names 'WSL execution'. Running ripgrep inside the chosen distro for search (and terminalWindowsWslDistro) may count as WSL execution; owner to decide.",
+    "Titles in this dump that belong to other areas and are not carded: agent-state-file-reader (07), shell-wrapper generated-file snapshot, line-editor ready scanner and shell executable file types (03/10), secure-file coarse-ctime re-hardening (07), kolux-yaml file resolution (01), editor branch line total (11), editor-file-operation-owner and runtime-workspace-file-owner (internal plumbing).",
+    "State: improvement card WORK-4 (browser and editor surface checks on the installed build) is unshipped, so editor cards are live-unverified; only the 2026-10-06 close-out items (D-12-044, 045) are live.",
+    "Not runtime-verified per a source comment: the inline-answer path that decides between answering in the Inbox and showing 'Answer in Code' (D-12-041).",
+    "Swarm 'Open file' from the 2026-10-05 redesign was not found under components/editor; it most likely belongs to area 03 or 05 and is not carded here.",
+    "No H or X cards: nothing in the area is flagged off or dev-only, and file-type and 'Open in' icons are generic lucide glyphs, not third-party logos. No registry file was missing.",
+    "Critic round 1 (2026-10-06): added D-12-053 (executables never launched, P0 live from the 10-06 close-out), D-12-054 (untitled markdown note lifecycle), D-12-055 (repo markdown templates); rules added to 17 cards; D-12-043 user_sees corrected (the Open-in list is user-edited, default VS Code).",
+    "Round 1 triage rows for the file-watcher process (pool, supervisor, canary, entry path) are NOT-USER-FACING; only batching, overload reload, aliased-root refresh and prompt stop are behaviour (D-12-035).",
+    "Critic round 2 (2026-10-06): added D-12-056 (per-tab view switch with the Changes view of uncommitted edits; found via the export-disabled-in-Changes sample title); rules added to 18 cards (001, 003, 006, 007, 008, 012, 013, 014, 017, 019, 022, 027, 029, 032, 036, 042, 044, 045). Sample titles about runtime/SSH routing, remote downloads, SSH watchers and runtime-owner isolation are DROP under D-12-051. No tier, state or theme changes were needed this round.",
+    "Critic round 3 (2026-10-06): added D-12-057 (formatting toolbar above the rich markdown editor; no unit tests, found via the toolbar-created case in the ordered-list-exit e2e triage row). Rules added to 15 cards (001, 002, 003, 004, 013, 014, 020, 024, 029, 030, 031, 035, 036, 039, 049). Sample titles about SSH watchers, runtime file routing, remote downloads, HUB-owned explorer renames and remote repo-icon probes are DROP under D-12-051; simulator palette titles DROP under D-12-052. No tier, state or theme changes were needed this round."
+  ]
+}

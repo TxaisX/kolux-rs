@@ -1,0 +1,15 @@
+﻿kolux tab profile create
+
+Usage: kolux tab profile create --label <name> [--scope <isolated|imported>] [--no-ua-spoof] [--json]
+
+Create a browser session profile for browser tabs
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --label
+  --scope
+  --no-ua-spoof         Keep Electron's native user agent
+

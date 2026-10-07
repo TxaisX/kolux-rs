@@ -1,0 +1,101 @@
+# 03-terminals-panes random sample round 2 (100 of 11360): file	title
+src/renderer/src/lib/notes-send-agent-targets.test.ts	uses launch ownership when promoting a stale unknown status-backed pane
+src/renderer/src/components/terminal-pane/RunningTerminalCloseDialog.test.tsx	names the tab so a background close is not ambiguous
+src/renderer/src/components/terminal-pane/terminal-pane-split-with-inherited-cwd.test.ts	does not resolve cwd or split a stale manager when the live manager is gone
+src/renderer/src/lib/simulator-tab-palette-activation.test.ts	activates the simulator tab and switches the app to the simulator view
+src/main/ipc/pty-applied-size-reporting.test.ts	falls back to the requested size when getAppliedSize throws
+src/renderer/src/components/terminal-pane/pty-connection-windows-cjk-repaint.test.ts	applies the Windows CJK repaint path to SSH panes on Windows clients after terminal input
+src/main/pty/legacy-terminal-shim-dir.test.ts	does not collapse .. when classifying a shim PATH entry
+src/renderer/src/lib/pane-manager/terminal-linkifier-hover-reset.test.ts	is true only while a link is currently hovered
+tests/e2e/terminal-column-desync-repro.spec.ts	pty:getSize reports the size the PTY actually applied
+src/shared/terminal-output-side-effects.test.ts	never feeds synthetic frames to the 133/PR scanners
+src/renderer/src/components/terminal-pane/pty-size-reassertion.test.ts	keeps a single read in flight and converges when the grid oscillates across resolves
+src/main/daemon/history-reader.test.ts	returns null for corrupt meta.json
+src/renderer/src/components/terminal-pane/session-restored-banner-pane-state.test.tsx	upgrades a restored pane to resume-unavailable and keeps identity otherwise
+src/renderer/src/components/terminal-pane/pty-connection-hibernation-wake.test.ts	disarms input modes and resumes a hibernated agent session on visibility reveal
+src/renderer/src/components/terminal-pane/parked-terminal-command-status.test.ts	rejects scrape status when Claude launch metadata owns the pane
+src/main/daemon/daemon-tcc-attribution.test.ts	fails open without a recorded spawning binary
+src/renderer/src/components/terminal-pane/pty-connection-remote-snapshot-source-grid.test.ts	keeps the pane grid when the host published no snapshot dimensions
+src/main/persistence-workspace-session-scrollback.test.ts	stores maybe-remote terminal scrollback out of workspace session JSON
+src/main/daemon/daemon-pty-adapter-history-checkpoints.test.ts	logs a periodic checkpoint failure that arrives after its deadline
+src/renderer/src/components/floating-terminal/FloatingTerminalPanel.empty-state.test.tsx	does not bootstrap a terminal tab when the panel opens empty
+src/renderer/src/components/terminal-pane/use-terminal-pane-global-effects-sync-fit-registration.test.ts	skips global sync-fit registration for hidden non-measurable terminal panes
+src/renderer/src/components/terminal-pane/terminal-link-remote-runtime-ssh-open.test.ts	falls back to the source editor when the preview plan is unsupported
+src/renderer/src/components/terminal-pane/xterm-bypass-policy-non-mac.test.ts	suppresses 229 / Process keyups so kitty release reporting cannot leak
+src/main/pty/windows-environment-path.test.ts	does not let an older async read replace a newer synchronous refresh
+src/renderer/src/components/terminal-pane/terminal-parked-tab-watchers.test.ts	keeps exit→closeTab parity when the tab is not parked
+src/renderer/src/components/terminal-pane/pty-connection-visible-pane-output-pause-latch.test.ts	red: a reveal that lands mid-rebind must still end with the visible pane unpaused
+src/renderer/src/components/terminal-pane/pty-transport-input-write.test.ts	rejects oversized local IPC terminal input before renderer-to-main writes
+src/renderer/src/lib/parked-terminal-host-hydration.test.ts	drops a parked tab that acquired a PTY by other means
+src/renderer/src/runtime/web-session-tabs-sync-terminal-mirroring.test.ts	adopts host viewMode when this client has no prior tab
+src/renderer/src/components/terminal-pane/pty-connection-hidden-query-snapshot-restore.test.ts	keeps all visible bytes after a pending hidden ESC becomes non-query output
+src/renderer/src/lib/pane-manager/terminal-webgl-auto-policy.test.ts	keeps Linux auto panes on DOM when WebGL2 is unavailable
+src/renderer/src/components/terminal-pane/terminal-live-layout-reconciliation.test.ts	plans a host-added split leaf from an already-mounted source leaf
+src/main/ipc/worktrees-delete-pty-teardown.test.ts	rejects concurrent deletes for the same worktree id with different options
+src/renderer/src/store/slices/terminal-tab-retirement-store.test.ts	lets a paired host own runtime teardown while pruning local state
+src/renderer/src/components/terminal-pane/pty-transport-input-write.test.ts	routes a thrown renderer write to the owning transport recovery callback
+src/main/ipc/worktrees-delete-pty-teardown.test.ts	keeps the PTY gate strict for a confirmed delete that only sets force
+src/renderer/src/components/terminal-pane/terminal-appearance.test.ts	suppresses repeat pushes when the resolved mode has not changed
+src/renderer/src/components/terminal-pane/replay-guard.test.ts	never probes after a normal completion
+src/main/ipc/pty-controller-ownership-routing.test.ts	answers unknown for SSH-owned ids whose provider has no probe
+src/main/daemon/pty-subprocess-handle-lifecycle.test.ts	forceKill sends SIGKILL to the child pid
+src/renderer/src/components/terminal-pane/mouse-hide-while-typing.test.ts	hides cursor when terminal emits data
+src/renderer/src/components/terminal-pane/renderer-owned-agent-status-registry.test.ts	scopes authority per pane
+src/renderer/src/lib/pane-manager/terminal-ligatures-addon.test.ts	evicts the least-recently-used segment
+src/renderer/src/runtime/runtime-terminal-stream.test.ts	keeps the shared terminal multiplexer until the last watcher closes
+src/renderer/src/components/terminal-pane/pty-connection-remote-snapshot-source-grid.test.ts	only reproduces the host frame when it is parsed at the host grid
+src/renderer/src/components/terminal-pane/agent-completion-coordinator-hook-title-precedence.test.ts	suppresses late process-exit backstop after process inspection follows hook completion
+src/main/ghostty/index.test.ts	keeps successfully imported settings when a later config is too large
+src/main/daemon/pty-subprocess-handle-lifecycle.test.ts	routes onExit events
+src/renderer/src/lib/pane-manager/terminal-write-pipeline-health.test.ts	a throwing handler never escapes the certification timer
+src/renderer/src/lib/ensure-simulator-tab-behavior.test.ts	stamps an inactive local simulator amid a same-id host collision
+src/shared/draft-paste-ready-scanner-grok-trace-replay.test.ts	delivers on the composer frame instead of waiting out the hard timeout
+src/renderer/src/lib/agent-paste-draft-submit-retry.test.ts	holds the PTY input transaction across the retry Enter
+src/main/ghostty/mapper.test.ts	maps middle-click-action primary-paste to primary selection paste
+tests/e2e/terminal-long-table-scroll-restore.spec.ts	keeps real emoji markdown table right edge clean after restore and scroll
+src/renderer/src/lib/pane-manager/pane-drag-reorder.test.ts	returns cleanup that removes handle listeners and cancels active drag capture
+src/shared/terminal-title-classification-memo.test.ts	evicts oldest entries instead of growing without bound
+src/renderer/src/components/terminal-pane/deferred-split-pane-handoff.test.ts	discards every handoff for one tab without touching another tab
+src/renderer/src/components/terminal-pane/terminal-paste-coordinator.test.ts	cancels before writing when the target changed during async clipboard read
+src/renderer/src/components/terminal-pane/terminal-cold-park-exempt-flip.react185.test.tsx	settles every capability flip without approaching the update-depth limit
+src/renderer/src/store/slices/terminals-hydration.test.ts	stashes deferred SSH session ids for worktrees not yet in worktreesByRepo
+src/renderer/src/components/terminal-pane/terminal-pane-menu-diagnostics-action.test.ts	toasts failure when building the snapshot itself throws
+src/renderer/src/components/terminal-pane/terminal-paste-operation-order.test.ts	waits for an active startup frame before opening a user paste frame
+src/main/daemon/daemon-pty-adapter-concurrent-recovery.test.ts	recovers concurrent spawns rejected by an adapter-initiated disconnect
+src/renderer/src/components/floating-terminal/FloatingTerminalPanel.focus.test.tsx	refreshes terminal native input focus when the floating panel opens
+src/renderer/src/components/terminal-pane/agent-completion-coordinator-stamped-turn-boundary.test.ts	keeps sibling tail suppression after the host stamped all-clear arrives first
+src/main/ipc/pty-delivery-health-heal.test.ts	zeroes renderer in-flight delivery counters when the renderer lifecycle resets
+src/renderer/src/components/terminal-pane/terminal-windows-shift-enter.test.ts	keeps launch ownership on its original leaf after a split sibling survives
+src/main/daemon/daemon-self-retirement-respawn.test.ts	releases a temporary lease when a tombstone wins the respawn race
+src/renderer/src/components/terminal-pane/terminal-hidden-view-parking.test.ts	allows folder-workspace sessions owned by the workspace
+src/renderer/src/lib/terminal-quick-command-search.test.ts	returns all commands for an empty query
+src/shared/terminal-output-side-effects.test.ts	detects OSC 133;D split across chunk boundaries (BEL and ST terminated)
+src/shared/terminal-startup-cwd.test.ts	resolves relative paths against the worktree
+src/renderer/src/lib/pane-manager/focus-follows-mouse.test.ts	switches focus when all gates pass
+src/renderer/src/runtime/web-session-focus-intent-visible-tab.test.ts	does not match a browser tab against an editor coarse address
+src/renderer/src/components/terminal-pane/terminal-link-osc-url-routing.test.ts	ignores http links without the platform modifier on desktop
+src/renderer/src/components/terminal-pane/pty-connection-reattach-binding.test.ts	does not replace a split sibling with the tab-level source PTY
+src/renderer/src/components/terminal-pane/agent-completion-coordinator-process-cadence.test.ts	throttles a hidden agent pane to the 3s backstop cadence over a 60s window
+src/main/daemon/daemon-incarnation-evidence.test.ts	requires Windows CIM evidence even when signal-zero reports a missing pid
+src/renderer/src/lib/windows-terminal-capabilities.test.ts	loads SSH Windows host capabilities through the SSH preflight bridge
+src/renderer/src/components/tab-bar/drop-indicator.test.ts	returns an empty string for null indicator
+tests/e2e/daemon-slow-health-check-preservation.spec.ts	preserves a live daemon PTY when the daemon is too slow for the startup health check
+src/main/daemon/headless-emulator-snapshot-cost.bench.test.ts	measures PTY pump stall when a checkpoint lands mid-stream
+src/renderer/src/components/terminal-pane/codex-auto-approval-notification-suppression.test.ts	does not suppress non-Codex or done statuses
+src/renderer/src/components/terminal-pane/remote-runtime-pty-transport-stream-reconnect.test.ts	processes binary remote data chunks through the terminal parser
+src/main/daemon/daemon-respawn-throttle.test.ts	does not count a cached handle as a new attempt
+src/renderer/src/runtime/web-session-tabs-sync-client-owned-page-content.test.ts	takes host content for a streamed page even when a local row exists
+src/renderer/src/store/slices/terminal-pane-detach-agent-retention.test.ts	recognizes the same run after chained transfers
+src/renderer/src/lib/windows-terminal-capabilities.test.ts	shares WSL, PowerShell, and Git Bash availability between terminal UI consumers
+src/shared/pty-startup-ingress.test.ts	keeps POSIX, WSL, malformed, and unrelated output unchanged
+src/renderer/src/runtime/web-session-tabs-sync-terminal-mirroring.test.ts	removes a null-pty pending activation tab when the host publishes the initial terminal
+src/main/ipc/pty-spawn-env-codex-home-routing.test.ts	does not leak inherited hook receiver env if the hook server is unavailable
+src/renderer/src/components/terminal-pane/replay-guard.test.ts	releases immediately when the probe write throws (terminal disposed mid-replay)
+src/renderer/src/components/terminal-pane/pty-connection-agent-session-resume.test.ts	uses sleeping-record launch config for pane cold restore after settings change
+src/renderer/src/lib/terminal-links.test.ts	still strips trailing punctuation from bare filenames
+src/main/ipc/pty-runtime-kill-and-exit.test.ts	ignores a late provider exit after synthesizing kill exit
+tests/e2e/terminal-pane-close-layout-consistency.spec.ts	close immediately after reveal remount, before panes settle
+src/renderer/src/lib/terminal-worktree-route.test.ts	keeps an explicitly runtime-owned worktree on its runtime for teardown
+src/renderer/src/store/slices/agent-generated-tab-title.test.ts	stays disabled by default when agent prompts arrive
+tests/e2e/terminal-tab-close-running-confirm-mouse.spec.ts	middle-clicking a busy tab prompts, and cancelling keeps the tab
+src/renderer/src/components/terminal-pane/xterm-bypass-policy-ios.test.ts	claims Shift-typed double consonants, which start 깨 꿈 딸 빵 쓰다 짜다

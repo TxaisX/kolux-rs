@@ -1,0 +1,101 @@
+# 10-plan-review-protected random sample round 3 (100 of 133): file	title
+src/renderer/src/components/plan-review/plan-review.test.ts	collapses consecutive and leading/trailing blank lines without empty sections
+src/main/protected-actions/protected-action-hook-script.test.ts	stops asking once the rule is switched off
+src/shared/protected-actions-match.test.ts	still rejects overlapping bracket classes repeated back to back
+src/main/persistence-floating-terminal-trust.test.ts	seeds trusted floating workspace directories from legacy explicit cwd values
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	resolves the pending decision as skip when another modal takes the slot
+src/main/claude-trust-preset.test.ts	preserves existing config keys and other projects while marking a new one
+src/shared/protected-actions-match.test.ts	applies a project override on top of the global list
+src/renderer/src/components/plan-review/plan-review.test.ts	returns no sections for an empty or all-blank plan
+src/renderer/src/components/plan-review/PlanReviewButton.test.tsx	renders the button and opens the sheet when approval.plan is set
+src/renderer/src/components/plan-review/plan-review.test.ts	appends the trimmed general note after comments
+src/main/protected-actions/protected-action-attempts.test.ts	stores commands with secrets redacted, never the raw key
+src/renderer/src/components/settings/ProtectedActionsPane.test.tsx	project scope toggle writes projectOverrides[repoId].disabledRuleIds
+src/main/persistence-floating-terminal-trust.test.ts	persists the floating cwd migration marker when a legacy explicit cwd is unavailable
+src/main/persistence-floating-terminal-trust.test.ts	drops blank floating workspace trust paths on load
+src/renderer/src/lib/kolux-hook-trust.test.ts	falls back to a deterministic hash when crypto.subtle is unavailable
+src/main/persistence-floating-terminal-trust.test.ts	preserves custom notification sound paths from persisted settings
+src/renderer/src/components/settings/ProtectedActionsPane.test.tsx	adding a custom rule with an invalid regex shows the error and does not save
+src/shared/protected-actions-match.test.ts	names the segment that matched in a chain
+src/renderer/src/components/plan-review/PlanReviewButton.test.tsx	renders nothing for a non-plan approval (e.g. Bash)
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	rejects an empty worktreeNames array
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	disables Request changes with no comments and no note, enables Approve
+src/main/agent-trust-presets.test.ts	trusts the main repository root for a linked worktree without reading commondir
+src/main/protected-actions/protected-action-hook-script.test.ts	lets %s through with neutral JSON
+src/main/persistence-protected-secret-fail-closed.test.ts	evicts ciphertext when decrypted SSH recovery validation rejects the record
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	leaves the answered decision alone when the dialog closes the slot itself
+src/main/protected-secret-persistence.test.ts	keeps unavailable ciphertext sealed across recovery until replacement or clear
+src/shared/protected-actions-match.test.ts	matches custom prefix, contains and regex rules
+src/main/persistence-floating-terminal-trust.test.ts	preserves editorAutoSaveDelayMs when set in persisted data
+src/renderer/src/lib/kolux-hook-trust.test.ts	produces a stable hex digest via crypto.subtle
+src/main/ipc/agent-trust.test.ts	rejects more than ${MAX_PRE_TRUST_WORKTREES} worktree names before planning any path
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	adding a comment enables Request changes and persists to the draft cache
+src/shared/protected-actions-bypass-regressions.test.ts	timeout with a duration suffix
+src/renderer/src/components/plan-review/plan-review-send.test.ts	cancel after the send already fired cancels the chat send handle
+src/main/persistence-protected-secret-fail-closed.test.ts	keeps loaded ciphertext sealed through same-instance recovery
+src/main/claude-trust-preset.test.ts	batches worktrees marked within the same window into a single write, none resolving early
+src/shared/protected-actions-hook-decision.test.ts	uses the worktree path as the workspace, not just the current directory
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	resolves the pending decision as skip when the slot is closed outright
+src/shared/protected-actions-bypass-regressions.test.ts	accepts ordinary regexes with up to two adjacent repeats
+src/renderer/src/components/plan-review/plan-review-send.test.ts	sends immediately when the pane has already left the plan prompt
+src/main/persistence-protected-secret-fail-closed.test.ts	honors explicit clears during an outage without later resurrecting ciphertext
+src/main/protected-secret-persistence.test.ts	surfaces an uninstalled secret store instead of degrading silently
+src/main/agent-trust-presets.test.ts	writes ~/.cursor/projects/<slug>/.workspace-trusted with the cwd payload
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	Approve sends the Allow byte and closes the sheet
+src/shared/protected-actions-hook-decision.test.ts	honours the master switch
+src/shared/protected-actions-match.test.ts	asks for %s
+src/shared/protected-actions-hook-decision.test.ts	covers the PowerShell tool and raw-JSON transport bodies
+src/main/protected-actions/protected-action-attempts.test.ts	keeps the newest 50 and clears on request
+src/renderer/src/components/plan-review/plan-review.test.ts	ignores blank lines inside a fenced code block
+src/main/agent-trust-presets.test.ts	preserves existing config keys and updates an existing project block
+src/shared/protected-actions-match.test.ts	asks for a relative recursive delete when neither cwd nor workspace is known
+src/main/ipc/agent-trust.test.ts	rejects a folder repo
+src/main/agent-trust-presets.test.ts	writes ~/.codex/config.toml with the project marked trusted
+src/shared/protected-actions-hook-decision.test.ts	carries the global list and per-project lists, and selects by project
+src/shared/protected-actions-match.test.ts	lets %s run
+src/main/ipc/agent-trust.test.ts	no-ops for a non-claude agent without touching the trust file
+src/main/protected-actions/protected-action-hook-script.test.ts	prints neutral JSON for non-tool events and when Kolux env is missing
+src/main/ipc/agent-trust.test.ts	rejects a non-local (SSH) repo
+src/renderer/src/components/plan-review/plan-review.test.ts	clears a stored draft
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	shows the truncated notice only when plan.truncated is true
+src/main/ipc/agent-trust.test.ts	rejects a repo it cannot find
+src/renderer/src/components/plan-review/plan-review.test.ts	evicts the oldest entry once the cache exceeds 128 scopes
+src/main/agent-trust-presets.test.ts	does not broaden trust through arbitrary or adversarial Git metadata
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	Request changes sends the formatted feedback and clears the draft
+src/main/persistence-protected-secret-fail-closed.test.ts	keeps undecryptable ciphertext sealed from consumers and later saves
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	plans one distinct path per name for a full ${MAX_PRE_TRUST_WORKTREES}-name wave
+src/main/claude-trust-preset.test.ts	writes hasTrustDialogAccepted for the workspace after the collection window elapses
+src/main/persistence-floating-terminal-trust.test.ts	preserves temporarily unavailable floating workspace trust paths on load
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	accepts a well-formed wave request
+src/renderer/src/components/plan-review/plan-review.test.ts	returns an empty draft when nothing was stored
+src/main/agent-trust-presets.test.ts	is idempotent — re-marking the same workspace does not overwrite trustedAt
+src/shared/protected-actions-bypass-regressions.test.ts	unwraps Git Bash doubled-slash cmd //c
+src/main/claude-trust-preset.test.ts	resolves without waiting when the workspace is already trusted
+src/renderer/src/components/settings/ProtectedActionsPane.test.tsx	toggling a default rule writes disabledDefaultIds
+src/renderer/src/components/plan-review/plan-review-send.test.ts	falls back to sending after the wait ceiling when status never changes
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	shows the no-longer-waiting notice and disables actions when the plan no longer matches
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	rejects an unknown agent
+src/main/protected-actions/protected-action-attempts.test.ts	marks it denied when the turn ends without the tool running
+src/shared/protected-actions-hook-decision.test.ts	asks for a protected Bash command and explains why
+src/renderer/src/components/plan-review/plan-review-send.test.ts	sends ESC first, then the formatted feedback once the pane leaves the plan prompt
+src/shared/protected-actions-match.test.ts	never runs a backtracking-prone regex that bypassed validation
+src/shared/protected-actions-bypass-regressions.test.ts	bare cd goes home, so a following relative delete is outside the workspace
+src/main/ipc/agent-trust.test.ts	writes every planned path in exactly one call for a full 6-name wave
+src/shared/protected-actions-match.test.ts	decodes powershell -EncodedCommand
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	rejects an invalid name the same way createLocalWorktree would
+src/renderer/src/components/plan-review/PlanReviewButton.test.tsx	renders nothing when the pane has no interactivePrompt
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	rejects a non-string entry in worktreeNames
+src/renderer/src/components/plan-review/plan-review.test.ts	starts with the fixed header
+src/main/persistence-floating-terminal-trust.test.ts	round-trips selected terminal theme names across reload
+src/shared/protected-actions-match.test.ts	drops a switched-off default rule
+src/main/protected-actions/protected-action-attempts.test.ts	records a waiting attempt and marks it allowed when that tool call finishes
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	computes the exact path createLocalWorktree would use for the same repo and name
+src/main/persistence-floating-terminal-trust.test.ts	keeps legacy rightSidebarOpenByDefault readable from persisted data
+src/shared/protected-actions-bypass-regressions.test.ts	recognises /q/s joined and del /s/q
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	keeps later trust prompts working after one is evicted
+src/main/persistence-floating-terminal-trust.test.ts	canonicalizes persisted floating workspace trust paths on load
+src/main/persistence-floating-terminal-trust.test.ts	preserves legacy home shorthand as the floating terminal cwd
+src/main/agent-trust-presets.test.ts	preserves existing config keys and dedups already-trusted folders
+src/main/agent-trust-presets.test.ts	queues behind an in-flight Codex trust-config mutation
+src/main/persistence-floating-terminal-trust.test.ts	preserves editorAutoSave when set to true in persisted data
+src/renderer/src/components/plan-review/plan-review.test.ts	splits on blank lines and tracks 1-indexed line ranges

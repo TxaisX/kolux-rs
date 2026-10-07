@@ -1,0 +1,58 @@
+platform	menu	path	item_type	label	menu_i18n_key	accelerator	shortcut_hint_action_id	triggers	evidence
+darwin only	macOS app menu (label=app.name or appMenuLabel)	macOS app menu (label=app.name or appMenuLabel)	role	About				role:about	src/main/menu/register-app-menu.ts:151
+darwin only	macOS app menu (label=app.name or appMenuLabel)	macOS app menu (label=app.name or appMenuLabel) > Check for Updates...	click	Check for Updates...	menu.checkForUpdates			onCheckForUpdates({includePrerelease,includePerfPrerelease,localBuild?}); modifier-click variants: shift=prerelease, meta=perf prerelease, alt=localBuild	src/main/menu/register-app-menu.ts:118,152
+darwin only	macOS app menu (label=app.name or appMenuLabel)	macOS app menu (label=app.name or appMenuLabel) > Settings	click	Settings	menu.settings	(display-only hint, tab-appended)	app.settings	onOpenSettings()	src/main/menu/register-app-menu.ts:123,153
+darwin only	macOS app menu (label=app.name or appMenuLabel)		separator						src/main/menu/register-app-menu.ts:154
+darwin only	macOS app menu (label=app.name or appMenuLabel)		role	Services				role:services	src/main/menu/register-app-menu.ts:155
+darwin only	macOS app menu (label=app.name or appMenuLabel)		separator						src/main/menu/register-app-menu.ts:156
+darwin only	macOS app menu (label=app.name or appMenuLabel)		role	Hide				role:hide	src/main/menu/register-app-menu.ts:157
+darwin only	macOS app menu (label=app.name or appMenuLabel)		role	Hide Others				role:hideOthers	src/main/menu/register-app-menu.ts:158
+darwin only	macOS app menu (label=app.name or appMenuLabel)		role	Show All (unhide)				role:unhide	src/main/menu/register-app-menu.ts:159
+darwin only	macOS app menu (label=app.name or appMenuLabel)		separator						src/main/menu/register-app-menu.ts:160
+darwin only	macOS app menu (label=app.name or appMenuLabel)		role	Quit				role:quit	src/main/menu/register-app-menu.ts:161
+win32/linux only	File	File	click	Settings	menu.settings	(display-only hint)	app.settings	onOpenSettings()	src/main/menu/register-app-menu.ts:123,171
+win32/linux only	File		separator						src/main/menu/register-app-menu.ts:172
+win32/linux only	File		role	Exit	menu.exit			role:quit (label override)	src/main/menu/register-app-menu.ts:173
+all	Edit	Edit	role	Undo (registerAccelerator:false on non-mac)				role:undo	src/main/menu/register-app-menu.ts:184
+all	Edit		role	Redo (registerAccelerator:false on non-mac)				role:redo	src/main/menu/register-app-menu.ts:185
+all	Edit		separator						src/main/menu/register-app-menu.ts:186
+all	Edit		role	Cut				role:cut	src/main/menu/register-app-menu.ts:187
+all	Edit		click	Copy	menu.copy	Command+C (macOS only)		focused webContents.copy() or send ui:appMenuSelectionAction copy; macOS fallback sendActionToFirstResponder copy:	src/main/menu/app-menu-selection-item.ts:16,src/main/menu/register-app-menu.ts:188
+all	Edit		click	Paste	menu.paste	CmdOrCtrl+V		send ui:appMenuPaste to focused window; macOS fallback paste:	src/main/menu/register-app-menu.ts:193
+all	Edit		click	Select All	menu.selectAll	Command+A (macOS only)		focused webContents.selectAll() or send ui:appMenuSelectionAction select-all	src/main/menu/app-menu-selection-item.ts:16,src/main/menu/register-app-menu.ts:212
+all	View	View	click	Reload	menu.reload			reloadFocusedWindow(false) -> onBeforeReload + webContents.reload()	src/main/menu/register-app-menu.ts:283
+all	View		click	Force Reload	menu.forceReload	(display-only hint)	app.forceReload	reloadFocusedWindow(true) -> reloadIgnoringCache	src/main/menu/register-app-menu.ts:287
+all	View		role	Toggle Developer Tools				role:toggleDevTools	src/main/menu/register-app-menu.ts:290
+all	View		separator						src/main/menu/register-app-menu.ts:291
+all	View		click	Reset Size	menu.resetSize	(display-only hint)	zoom.reset	onZoomReset()	src/main/menu/register-app-menu.ts:293
+all	View		click	Zoom In	menu.zoomIn	(display-only hint)	zoom.in	onZoomIn()	src/main/menu/register-app-menu.ts:297
+all	View		click	Zoom Out	menu.zoomOut	(display-only hint)	zoom.out	onZoomOut()	src/main/menu/register-app-menu.ts:301
+all	View		separator						src/main/menu/register-app-menu.ts:304
+all	View		hint-only (no click handler)	Open Worktree Palette	menu.openWorktreePalette	(display-only hint)	worktree.palette	none (no click)	src/main/menu/register-app-menu.ts:311
+all	View		separator						src/main/menu/register-app-menu.ts:312
+all	View	View > Workspace View (only when isWorkspaceViewMenuEnabled(); followed by separator)	submenu	Workspace View	menu.workspaceView				src/main/menu/workspace-view-menu.ts:35;src/main/menu/register-app-menu.ts:314
+all	View	View > Workspace View	radio	Agents	menu.workspaceViewAgents			onSetWorkspaceView("agents")	src/main/menu/workspace-view-menu.ts:38
+all	View	View > Workspace View	radio	Board	menu.workspaceViewBoard			onSetWorkspaceView("board")	src/main/menu/workspace-view-menu.ts:44
+all	View	View > Workspace View	radio	Terminals	menu.workspaceViewTerminals			onSetWorkspaceView("terminals")	src/main/menu/workspace-view-menu.ts:50
+all	View	View > Workspace View	separator						src/main/menu/workspace-view-menu.ts:56
+all	View	View > Workspace View	hint-only (no click handler)	Cycle Workspace View	menu.cycleWorkspaceView	(display-only hint)	view.cycleWorkspaceView	none (no click)	src/main/menu/workspace-view-menu.ts:59
+all	View		role	Toggle Full Screen				role:togglefullscreen	src/main/menu/register-app-menu.ts:315
+all	View		separator						src/main/menu/register-app-menu.ts:316
+all	View	View > Appearance	submenu	Appearance	menu.appearance				src/main/menu/register-app-menu.ts:228
+all	View	View > Appearance	click	Toggle Left Sidebar	menu.toggleLeftSidebar	(display-only hint)	sidebar.left.toggle	onToggleLeftSidebar()	src/main/menu/register-app-menu.ts:237
+all	View	View > Appearance	click	Toggle Right Sidebar	menu.toggleRightSidebar	(display-only hint)	sidebar.right.toggle	onToggleRightSidebar()	src/main/menu/register-app-menu.ts:242
+all	View	View > Appearance	checkbox	Show Status Bar	menu.showStatusBar			onToggleAppearance(statusBarVisible)	src/main/menu/register-app-menu.ts:246
+all	View	View > Appearance	separator						src/main/menu/register-app-menu.ts:251
+all	View	View > Appearance	checkbox	Show Tasks Button	menu.showTasksButton			onToggleAppearance(showTasksButton)	src/main/menu/register-app-menu.ts:253
+all	View	View > Appearance	checkbox	Show Automations Button	menu.showAutomationsButton			onToggleAppearance(showAutomationsButton)	src/main/menu/register-app-menu.ts:259
+all	View	View > Appearance	checkbox	Show Kolux Mobile Button	menu.showMobileButton			onToggleAppearance(showMobileButton)	src/main/menu/register-app-menu.ts:265
+all	View	View > Appearance	checkbox	Show Titlebar App Name	menu.showTitlebarAppName			onToggleAppearance(showTitlebarAppName)	src/main/menu/register-app-menu.ts:271
+all	Window	Window	role	Minimize				role:minimize	src/main/menu/register-app-menu.ts:323
+all	Window		role	Zoom				role:zoom	src/main/menu/register-app-menu.ts:323
+all	Help	Help	click	Report Crash...	menu.reportCrash			onOpenCrashReport(window)	src/main/menu/register-app-menu.ts:138,329
+all	Help		separator						src/main/menu/register-app-menu.ts:330
+all	Help		click	Explore Kolux	menu.exploreKolux			onOpenFeatureTour(window)	src/main/menu/register-app-menu.ts:128,331
+all	Help		click	Getting Started with Kolux	menu.gettingStarted			onOpenSetupGuide(window)	src/main/menu/register-app-menu.ts:133,332
+win32/linux only	Help		separator						src/main/menu/register-app-menu.ts:336
+win32/linux only	Help		role	About				role:about	src/main/menu/register-app-menu.ts:337
+win32/linux only	Help		click	Check for Updates...	menu.checkForUpdates			same handler as macOS item	src/main/menu/register-app-menu.ts:338

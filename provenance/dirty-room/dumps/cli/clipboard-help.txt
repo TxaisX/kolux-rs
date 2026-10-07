@@ -1,0 +1,10 @@
+﻿kolux clipboard
+
+Usage: kolux clipboard <command> [options]
+
+Commands:
+  read               Read clipboard contents
+  write              Write text to clipboard
+
+Run `kolux clipboard <command> --help` for command-specific usage.
+

@@ -1,0 +1,1798 @@
+{
+  "area": "04-agent-status-hooks",
+  "prefix": "STAT",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-04-001",
+      "title": "Managed status hooks tell Kolux what every supported agent CLI is doing",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Starts any supported agent CLI in a Kolux terminal without configuring anything.",
+      "user_sees": "Each session's dot, tab and the views flip between working, needs you, stopped and done as the agent itself reports events, instead of Kolux guessing from screen text.",
+      "rules": [
+        "Kolux writes its own entries into each agent's user-level hook config so status flows with zero setup.",
+        "Covered by hooks: Claude Code, OpenClaude, Codex, Gemini, Antigravity, Amp, Command Code, Cursor Agent, Droid, Kimi, Hermes, Copilot, Grok and Devin; MiMo Code and Pi/OMP report through a plugin or extension instead.",
+        "Every hook posts a small event to a local, token-protected hook server inside Kolux, tagged with the pane it came from, so two agents in one tab never mix.",
+        "All agent events reduce to four states: working, waiting on the user, blocked with a cause, done (plus interrupted as a flavour of done).",
+        "Payload fields are capped before storage: tool name about 60 chars, tool input about 160, assistant reply about 8000, interactive prompt about 16000, agent type 40, model 120, at most 32 child agents; multi-line prompts collapse to one line and dispatch preambles are shortened.",
+        "Question and plan text keeps its line breaks; only the ordinary prompt is folded onto one line."
+      ],
+      "acceptance": [
+        "Start Claude in a pane and send a prompt → the pane reads working within about a second; when the reply ends → done.",
+        "Make the agent ask for a tool permission → the pane switches to needs you.",
+        "Repeat with Codex and Gemini → same transitions without any manual setup."
+      ],
+      "compat": "Hook event names per agent as in the hook-events registry; each managed hook posts JSON over local HTTP to the hook server at a per-agent path (e.g. /hook/devin) with a pane key and token from the terminal environment.",
+      "decision": "",
+      "evidence": [
+        "README.md:21",
+        "registry:readme-features:Live status",
+        "registry:hook-events:claude:Stop",
+        "src/main/agent-hooks/managed-agent-hook-controls.test.ts:76",
+        "src/shared/agent-status-types.test.ts (parses interactivePrompt without single-line collapse)"
+      ],
+      "round": 0,
+      "related": ["02", "03", "05"]
+    },
+    {
+      "id": "D-04-002",
+      "title": "Agents settings switch turns managed status hooks on or off",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Opens Settings → Agents and flips 'Agent status hooks'.",
+      "user_sees": "With the switch off, Kolux removes the hook entries it owns from every agent config and stops putting them back on launch; status then falls back to terminal-title guessing. Turning it on reinstalls them.",
+      "rules": [
+        "Default is on.",
+        "Only Kolux-managed entries are removed; the user's own hooks stay.",
+        "The helper text under the switch explains that off removes the hooks and stops reinstalling them."
+      ],
+      "acceptance": [
+        "Turn the switch off → Claude's settings file no longer holds Kolux hook entries and a relaunch does not re-add them.",
+        "Turn it back on → entries return and live status resumes on the next prompt."
+      ],
+      "compat": "Global setting key agentStatusHooksEnabled (boolean, default true).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/AgentsPane.tsx:292",
+        "src/shared/default-global-settings.ts:210",
+        "registry:settings-keys:agentStatusHooksEnabled"
+      ],
+      "round": 0,
+      "related": ["17"]
+    },
+    {
+      "id": "D-04-003",
+      "title": "kolux agent hooks command group reports and controls hook installation",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs the agent hooks commands from any shell to check, enable, disable or pre-stage the hooks.",
+      "user_sees": "A per-agent install report (installed, partial, not installed, or error with a reason) and the ability to switch the managed hooks on or off without opening Settings; a Codex preparation step that makes the Codex hooks trusted ahead of a launch.",
+      "rules": [
+        "Every subcommand except prepare-codex accepts --json for machine-readable output.",
+        "Partial means some managed events are missing or a stale managed entry sits under a retired event.",
+        "Malformed agent config files report an error status instead of being overwritten."
+      ],
+      "acceptance": [
+        "Run the status command with --json → one entry per agent with its install state.",
+        "Run off then status → every agent reports not installed."
+      ],
+      "compat": "kolux agent hooks status [--json]; kolux agent hooks on [--json]; kolux agent hooks off [--json]; kolux agent hooks prepare-codex.",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/agent-hooks.ts:6",
+        "src/cli/specs/agent-hooks.ts:12",
+        "registry:cli-manifest:agent hooks status",
+        "src/main/droid/hook-service.test.ts:112"
+      ],
+      "round": 0,
+      "related": ["20"]
+    },
+    {
+      "id": "D-04-004",
+      "title": "Hooks are installed only for agent CLIs that are actually present and enabled",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Launches Kolux with some agent CLIs installed and some agents turned off in Settings.",
+      "user_sees": "Kolux touches config files only for agents it positively finds on the machine, and removes its hooks from agents the user has disabled.",
+      "rules": [
+        "Detection scans the PATH once for all agents and also trusts explicit executable overrides; a shell-environment failure falls back to the inherited PATH with a warning.",
+        "If detection fails, Kolux installs nothing (fails closed).",
+        "Startup never removes hooks for an agent that merely was not detected, since another Kolux profile may rely on them; existing scripts are refreshed instead.",
+        "Agents disabled in Settings have their managed hooks removed."
+      ],
+      "acceptance": [
+        "With only Claude installed → only Claude's config gains Kolux hooks.",
+        "Disable Gemini in Settings → Gemini's managed hooks disappear on the next sync."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/managed-agent-hook-controls.test.ts:76",
+        "src/main/agent-hooks/local-agent-cli-presence.test.ts:30"
+      ],
+      "round": 0,
+      "related": ["02"]
+    },
+    {
+      "id": "D-04-005",
+      "title": "Hook installs never clobber the user's own hooks or config",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Keeps personal hooks or custom settings in an agent's config while Kolux manages its own entries.",
+      "user_sees": "User-written hooks, unrelated keys, comments and formatting survive every install and removal; only entries Kolux owns are added, refreshed or swept.",
+      "rules": [
+        "Managed entries are recognised by their command or script path, including older direct-command and exec-form shapes, and removed without touching nested user hooks.",
+        "Stale managed entries under events Kolux no longer uses are swept on reinstall.",
+        "File permissions of the config are preserved when it is rewritten.",
+        "Formats handled: JSON, JSONC with comments (Devin), TOML with a delimited managed block (Kimi), YAML plugin lists (Hermes), plugin files (Amp, MiMo).",
+        "A user-authored plugin or hook file with the same name as Kolux's is never overwritten.",
+        "Installs from several Kolux processes take a shared lock so their writes never interleave; a lock left behind by a crashed install is cleaned up, and a late release never removes a lock another process now holds."
+      ],
+      "acceptance": [
+        "Add a personal PreToolUse hook to Gemini, reinstall → the personal hook is still there and only one Kolux entry exists.",
+        "Remove Kimi hooks → the config file matches what the user had before install."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/installer-utils.test.ts:343",
+        "src/main/kimi/hook-service.test.ts:76",
+        "src/main/gemini/hook-service.test.ts:52",
+        "src/main/amp/hook-service.test.ts:33",
+        "src/main/agent-hooks/managed-hook-install-lock.test.ts",
+        "src/main/agent-hooks/managed-hook-runtime.test.ts",
+        "src/shared/managed-agent-command-token.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-006",
+      "title": "Hook scripts stay harmless outside Kolux, time-bounded, and replay after a restart",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs the same agent CLI in a plain terminal outside Kolux, or quits Kolux while agents keep running.",
+      "user_sees": "Outside Kolux the hooks do nothing and print nothing; a slow or closed Kolux never stalls the agent; events fired while Kolux was down are applied when it comes back.",
+      "rules": [
+        "Without the Kolux pane key or endpoint in the environment the hook exits successfully and writes nothing.",
+        "Every managed hook entry carries a config-level timeout, and POSIX wrappers bound curl with connect and total time limits.",
+        "Events that cannot be delivered are appended to a spool file, one atomic write per record; torn or incomplete lines are skipped on replay.",
+        "Windows wrappers post through curl.exe without spawning PowerShell, disable delayed expansion, and sanitise quotes or trailing backslashes in agent home paths.",
+        "Some agents strip the token variables; their scripts recover the endpoint from a file instead.",
+        "Each running Kolux, including parallel development builds, publishes its own owner-only endpoint record, so an agent never posts to the wrong instance; after a restart the record carries the new address."
+      ],
+      "acceptance": [
+        "Run Claude in a non-Kolux terminal → no output, no errors, exit code 0 from the hook.",
+        "Quit Kolux mid-turn, let the agent finish, relaunch → the pane shows done."
+      ],
+      "compat": "Hook endpoint discovered via environment variables set in Kolux terminals plus an endpoint file; spool directory for undelivered events.",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/hook-script-outside-kolux.test.ts:31",
+        "src/main/agent-hooks/managed-hook-timeout.test.ts:211",
+        "src/main/agent-hooks/spool.test.ts:38",
+        "src/main/antigravity/windows-hook-payload-delivery.test.ts:183",
+        "src/main/agent-hooks/server-endpoint-file-lifecycle.test.ts:157",
+        "src/main/agent-hooks/windows-direct-cmd-hook-command.test.ts"
+      ],
+      "round": 0,
+      "related": ["19"]
+    },
+    {
+      "id": "D-04-007",
+      "title": "Claude Code and OpenClaude status mapping",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Works with Claude: prompts, approves tools, answers questions, compacts, runs subagents.",
+      "user_sees": "Status follows the turn precisely: working while it thinks or runs tools, needs you on a permission, question or plan, done when the turn ends, stopped with a cause on failure.",
+      "rules": [
+        "Prompt submit and tool events mean working; Stop means done, or interrupted when the user broke off the turn.",
+        "A question tool or a plan-exit tool means waiting even when no separate permission event follows.",
+        "A permission request stays visible until that same tool resumes; activity from another subagent does not clear it.",
+        "Session start marks a session boundary only for startup, resume or clear; it is not a finished task.",
+        "A manual compact ends as a boundary done; an automatic compact changes nothing; the pre-compact event is never registered.",
+        "A Stop that arrives while child agents or background shells still run keeps the session working.",
+        "OpenClaude gets the identical mapping in its own config."
+      ],
+      "acceptance": [
+        "Claude asks a multiple-choice question → needs you; answer it → working again on the next tool step.",
+        "Run /compact manually → pane settles without a completion notification."
+      ],
+      "compat": "Events registered: SessionStart, UserPromptSubmit, Stop, StopFailure, SubagentStart, SubagentStop, TeammateIdle, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, PostCompact; config in ~/.claude/settings.json hooks, honouring CLAUDE_CONFIG_DIR.",
+      "decision": "",
+      "evidence": [
+        "registry:hook-events:claude:PermissionRequest",
+        "registry:hook-events:openclaude:Stop",
+        "src/main/agent-hooks/server-claude-permission-visibility.test.ts:30",
+        "src/main/agent-hooks/server.claude-interactive-question.test.ts:36"
+      ],
+      "round": 0,
+      "related": ["10"]
+    },
+    {
+      "id": "D-04-008",
+      "title": "Codex status mapping and automatic hook trust",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Codex in a pane and approves or answers its requests.",
+      "user_sees": "Codex shows working, needs you on approvals and input requests, done with its last reply; its nested subagents appear with role and model; Codex never nags about trusting Kolux's hooks.",
+      "rules": [
+        "Session start and prompt submit mean working; Stop means done and carries the last reply.",
+        "A user-input request tool or a permission request means waiting and shows the pending tool input.",
+        "Kolux's hook never decides an approval; Codex still shows its own approval prompt.",
+        "Kolux grants Codex's hook-trust entries using Codex's own hashes and keeps a ledger of what it granted; mirrored runtime configs never copy system hook trust.",
+        "Concurrent launches on one host write the trust config once.",
+        "Kolux appends its entry last in Codex's own hooks file, keeping the user's entries and their trust positions; if trust cannot be granted the file is restored byte for byte (or removed when Kolux created it), and an unreadable or malformed hooks file is left untouched while Kolux uses its private Codex home instead.",
+        "The user's own Codex hooks and their approvals are mirrored into Kolux's private Codex home and refreshed when the originals change; Kolux's status hook runs before them, and an approval the user revokes is removed from the mirror.",
+        "Trust is re-granted when the managed hook entry changes; a granted entry is never counted as covering a different one."
+      ],
+      "acceptance": [
+        "Launch Codex in a fresh profile → no hook-trust prompt appears and status updates on the first prompt.",
+        "Codex asks to run a command → needs you, and Codex's own approve/deny choice is still offered."
+      ],
+      "compat": "Codex events: SessionStart, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, SubagentStart, SubagentStop, Stop; trust entries in Codex config.toml.",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-codex-normalization.test.ts:162",
+        "src/main/agent-hooks/server-codex-normalization.test.ts:30",
+        "src/main/codex/codex-hook-trust-grant.test.ts:116",
+        "src/main/codex/codex-config-mirror.test.ts:76",
+        "src/main/codex/codex-real-home-hook-install.test.ts:281",
+        "src/main/codex/codex-real-home-hook-install.test.ts:162",
+        "src/main/codex/codex-hook-system-trust.test.ts",
+        "src/main/codex/config-toml-trust-hook-upsert.test.ts",
+        "src/main/codex/hook-service-user-hook-mirroring.test.ts:118",
+        "src/main/codex/codex-hook-trust-grant.test.ts"
+      ],
+      "round": 0,
+      "related": ["07"]
+    },
+    {
+      "id": "D-04-009",
+      "title": "Gemini status mapping",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Gemini CLI in a pane.",
+      "user_sees": "Working while Gemini plans or calls tools, with the tool name and input; done when the agent turn ends.",
+      "rules": [
+        "Before-agent and before/after-tool events mean working; after-agent means done.",
+        "Tool input falls back to the args field when the input field is missing.",
+        "Gemini has no permission hook, so its waiting state comes from the terminal title fallback.",
+        "Older pre/post tool event names from Antigravity-compatible payloads are still understood, and stale managed entries under them are swept on reinstall."
+      ],
+      "acceptance": [
+        "Ask Gemini to read a file → the pane shows the tool name while it runs, then done."
+      ],
+      "compat": "Gemini events: BeforeAgent, AfterAgent, BeforeTool, AfterTool, PreToolUse, PostToolUse.",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-gemini-normalization.test.ts:30",
+        "registry:hook-events:gemini:AfterAgent",
+        "registry:hook-events:gemini:PreToolUse"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-010",
+      "title": "Antigravity status mapping",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Antigravity in a pane.",
+      "user_sees": "Working during invocations and tools, needs you when it asks a question or permission, done only once it is fully idle.",
+      "rules": [
+        "A Stop while Antigravity is not fully idle keeps the pane working; tool hooks stay active after such a Stop.",
+        "Ask-question and ask-permission tools mean waiting, and the hook answers so Antigravity still asks the user.",
+        "The final reply text is read from the transcript.",
+        "Install writes a global hooks bundle plus a managed script."
+      ],
+      "acceptance": [
+        "Antigravity asks for permission → needs you; it finishes all work → done."
+      ],
+      "compat": "Antigravity events: PreInvocation, PostInvocation, Stop, PreToolUse, PostToolUse; global hooks.json bundle.",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-hook-listener-antigravity.test.ts:415",
+        "src/main/antigravity/hook-service.test.ts:60"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-011",
+      "title": "Amp status mapping via a managed plugin",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Amp in a pane, sometimes cancelling a turn.",
+      "user_sees": "Working while Amp runs, done at the end, interrupted when the turn was cancelled.",
+      "rules": [
+        "Session start is ignored; agent start and tool events mean working; agent end means done, or interrupted if cancelled.",
+        "Kolux installs a system plugin file; an existing user plugin with the same name is never overwritten; removal deletes only Kolux files.",
+        "A stale managed plugin missing required handlers reports partial."
+      ],
+      "acceptance": [
+        "Cancel an Amp turn → the pane shows interrupted, not done, and no completion notification fires."
+      ],
+      "compat": "Amp plugin events: session.start, agent.start, tool.call, tool.result, agent.end.",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-amp-normalization.test.ts:290",
+        "src/main/amp/hook-service.test.ts:33"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-012",
+      "title": "Cursor Agent status mapping",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Cursor Agent in a pane.",
+      "user_sees": "Working while it runs, done or interrupted at the end, and no notification spam from shell or MCP steps.",
+      "rules": [
+        "Prompt submit, tool, shell and MCP events mean working; shell and MCP steps never trigger a notification.",
+        "Stop with any status other than completed means interrupted.",
+        "An after-response event only means done if the previous status was already done.",
+        "Install follows Cursor's top-level command schema and keeps user entries.",
+        "Cursor's own session start is deliberately not hooked because it can fire while idle; its session end is understood but not installed."
+      ],
+      "acceptance": [
+        "Cursor runs several shell commands → no notification until the turn completes."
+      ],
+      "compat": "Cursor events: beforeSubmitPrompt, stop, preToolUse, postToolUse, postToolUseFailure, beforeShellExecution, beforeMCPExecution, afterAgentResponse, sessionStart, sessionEnd.",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-cursor-normalization.test.ts:52",
+        "src/main/cursor/hook-service.test.ts:105",
+        "registry:hook-events:cursor:sessionStart",
+        "registry:hook-events:cursor:sessionEnd"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-013",
+      "title": "Droid status mapping",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Factory's Droid in a pane.",
+      "user_sees": "Working during turns, needs you for high-risk or ask-the-user tools and permission prompts, done when idle.",
+      "rules": [
+        "Session start is ignored because Droid fires it while idle; subagent stop is ignored.",
+        "Notifications are read by their text: permission prompts mean waiting, idle prompts mean done, anything else is ignored.",
+        "Ctrl+C interrupt inference is never applied to Droid.",
+        "When Factory has hooks disabled globally the install reports partial."
+      ],
+      "acceptance": [
+        "Droid asks to run a high-risk command → needs you."
+      ],
+      "compat": "Droid events: SessionStart, UserPromptSubmit, Stop, SubagentStop, PreToolUse, PostToolUse, PermissionRequest, Notification.",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-droid-normalization.test.ts:41",
+        "src/main/droid/hook-service.test.ts:112",
+        "src/main/agent-hooks/server-interrupt-inference-guards.test.ts:614"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-014",
+      "title": "Command Code status mapping from tool events and its transcript",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Command Code in a pane.",
+      "user_sees": "Working during tool use and done at Stop, with the prompt and last reply pulled from its transcript.",
+      "rules": [
+        "Only tool start, tool end and Stop are hooked; prompt and reply text come from the transcript file.",
+        "Very long or newline-heavy transcripts are read without slowing down.",
+        "The script finds the endpoint even when Command Code strips token variables.",
+        "For turns with no tool use Kolux reads Command Code's screen: only after its banner has appeared does thinking text mean working (with the submitted prompt captured) and a return to the idle prompt mean done; another agent merely mentioning Command Code never arms this.",
+        "A new prompt appearing in the transcript while the agent is still working starts a new turn; tool pings within the same prompt do not."
+      ],
+      "acceptance": [
+        "Finish a Command Code turn → done with the last reply shown."
+      ],
+      "compat": "Command Code events: PreToolUse, PostToolUse, Stop.",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-hook-listener-command-code-transcript.test.ts:25",
+        "src/main/command-code/hook-service.test.ts:90",
+        "src/shared/command-code-output-status.test.ts:12",
+        "src/shared/command-code-output-status.test.ts:308",
+        "src/shared/command-code-output-status.test.ts:93",
+        "src/shared/command-code-turn-boundary.test.ts:5"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-015",
+      "title": "Kimi status mapping in a managed TOML block",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Kimi in a pane.",
+      "user_sees": "Working, needs you on questions and permissions, done or interrupted at Stop, and stopped with a cause when Kimi hits a limit.",
+      "rules": [
+        "A rate-limit stop failure means blocked with the limit cause, never done; a normal Stop stays plain done.",
+        "Install appends one delimited block below the user's own config; reinstall never duplicates it; removal restores the original.",
+        "A hand edit that deletes only the closing marker is recovered; a block written under the product's former name is replaced, not doubled."
+      ],
+      "acceptance": [
+        "Install then remove Kimi hooks → the config file is byte-identical to before."
+      ],
+      "compat": "Kimi events: UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, Stop, StopFailure; managed block in Kimi config.toml.",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-hook-listener/providers/kimi-events.test.ts:8",
+        "src/main/kimi/hook-service.test.ts:76"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-016",
+      "title": "Hermes status mapping via an enabled plugin",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Hermes in a pane.",
+      "user_sees": "Working during model and tool calls, needs you on approval requests, done when a model call or session ends.",
+      "rules": [
+        "Kolux installs a plugin and enables it in the Hermes config, keeping other enabled plugins and removing Kolux from the disabled list.",
+        "A plugin present but not enabled reports partial; malformed plugin lists are normalised.",
+        "Payloads are bounded before they are sent."
+      ],
+      "acceptance": [
+        "Hermes requests approval → needs you; approval given → working."
+      ],
+      "compat": "Hermes hooks: on_session_start, pre_llm_call, post_llm_call, pre_tool_call, post_tool_call, pre_approval_request, post_approval_response, on_session_end, on_session_finalize, on_session_reset; plugin enabled in config.yaml.",
+      "decision": "",
+      "evidence": [
+        "src/main/hermes/hook-service.test.ts:33",
+        "src/shared/agent-hook-listener-hermes-codex-droid.test.ts:45"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-017",
+      "title": "Copilot CLI status mapping",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs GitHub Copilot CLI in a pane.",
+      "user_sees": "Working during turns, needs you when Copilot asks the user something or shows a permission or elicitation dialog, done at the end.",
+      "rules": [
+        "An ask-the-user tool means blocked with the question shown.",
+        "An error event means working if recoverable, otherwise done.",
+        "Older camelCase event names are still accepted.",
+        "Kolux writes a dedicated user-level hook file under the Copilot home, forces its version field and clears a disable-all flag in that file only.",
+        "Subagent and pre-compact events are registered but change nothing."
+      ],
+      "acceptance": [
+        "Copilot asks a question → needs you with the question text visible."
+      ],
+      "compat": "Copilot events: SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, ErrorOccurred, PermissionRequest, Notification; hook file under COPILOT_HOME.",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-copilot-normalization.test.ts:145",
+        "src/main/copilot/hook-service.test.ts:60",
+        "registry:hook-events:copilot:SubagentStop",
+        "registry:hook-events:copilot:PreCompact"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-018",
+      "title": "Grok status mapping with a shared, quit-time-cleaned hook config",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Grok in a pane, quits Kolux, edits or clears Grok's hook config by hand.",
+      "user_sees": "Grok status updates without notification spam; Kolux removes its Grok hook config when it quits, and respects any manual edit or clearing.",
+      "rules": [
+        "Routine tool-permission notifications keep the pane working and never notify.",
+        "Stop failure and session end both mean done.",
+        "On quit the managed config is removed (with a timeout) unless another live Kolux process still owns it; unverifiable peers keep it.",
+        "A config the user cleared is not restored on the next launch, but is restored when the user turns hooks back on.",
+        "Writes are atomic and never overwrite or delete a newer user edit.",
+        "Honours GROK_HOME when set.",
+        "A session id reported by Grok can never make Kolux read outside Grok's chat-history folder.",
+        "When Kolux cannot identify the machine, boot or profile of another owner, it treats that owner as alive and leaves the config in place.",
+        "Wave 2: other Grok Notification events are judged by wording: a permission/approval/feedback/question notice means waiting, a notice showing Grok's idle input prompt means done; only the permission_prompt-typed generic tool-permission notice at info level (or no level) is routine and dropped; notification text never replaces the cached prompt; Grok's user_query wrapper is stripped from the submitted prompt, also when the closing tag is missing."
+      ],
+      "acceptance": [
+        "Quit Kolux → Grok's managed hook config is gone.",
+        "Clear the config by hand, relaunch → Kolux leaves it cleared."
+      ],
+      "compat": "Grok events: SessionStart, UserPromptSubmit, Stop, StopFailure, SessionEnd, PreToolUse, PostToolUse, PostToolUseFailure, Notification; dedicated global hook config under GROK_HOME.",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/grok-hook-session-cleanup.spec.ts:31",
+        "src/main/grok/hook-service.test.ts:360",
+        "src/main/grok/grok-hook-owners.test.ts:22",
+        "src/main/startup/main-process-quit.ts:161",
+        "tests/e2e/droid-notification.spec.ts:259",
+        "src/shared/agent-hook-listener-grok.test.ts",
+        "src/main/agent-hooks/managed-hook-owner-identity.test.ts",
+        "registry:hook-events:grok|Notification",
+        "src/shared/agent-hook-listener/providers/grok-events.ts:56-90",
+        "src/shared/agent-hook-listener/providers/grok-tool-fields.ts:91-129",
+        "src/shared/agent-hook-listener/provider-event-routing.ts:23-34",
+        "src/shared/agent-hook-listener/prompt-fields.ts:77-87",
+        "src/shared/agent-hook-listener-grok.test.ts:248",
+        "src/shared/agent-hook-listener-grok.test.ts:279",
+        "src/shared/agent-hook-listener-grok.test.ts:320",
+        "src/shared/agent-hook-listener-grok.test.ts:346"
+      ],
+      "round": 0,
+      "related": ["19"]
+    },
+    {
+      "id": "D-04-019",
+      "title": "Devin status mapping in its JSONC config",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Devin CLI in a pane.",
+      "user_sees": "Working during turns, needs you on permission requests, done or interrupted at Stop; a warning when Devin is also set to import Claude's config.",
+      "rules": [
+        "Session start is ignored; Stop marked as interrupted by the user means interrupted.",
+        "Install keeps comments, formatting and unrelated keys; uses APPDATA on Windows.",
+        "When Devin's import setting would also load Claude's hooks, the status detail warns about the overlap.",
+        "A compaction event means working; session end means done.",
+        "Wave 2: Kolux's managed Claude hook script checks DEVIN_PROJECT_DIR; inside a Devin session it prints neutral empty JSON and posts nothing (Windows and POSIX scripts), so a Devin pane is never also reported as a Claude session; the OpenClaude script has no Devin skip."
+      ],
+      "acceptance": [
+        "Install into a config with comments → comments still present after install and removal."
+      ],
+      "compat": "Devin events: SessionStart, UserPromptSubmit, Stop, PostCompaction, SessionEnd, PreToolUse, PostToolUse, PermissionRequest; endpoint /hook/devin.",
+      "decision": "",
+      "evidence": [
+        "src/main/devin/hook-service.test.ts:42",
+        "src/main/devin/hook-config-json.test.ts:56",
+        "src/main/devin/hook-service.test.ts:240",
+        "registry:hook-events:devin:PostCompaction",
+        "registry:hook-events:devin:SessionEnd",
+        "registry:hook-events:claude|* (all 13 Claude rows, Windows wrapper column)",
+        "src/main/claude/claude-managed-hook-script.ts:87-91",
+        "src/main/claude/claude-managed-hook-script.ts:108-115",
+        "src/main/claude/hook-service.ts:116",
+        "src/main/claude/hook-service.test.ts:264",
+        "src/main/claude/hook-service.test.ts:597",
+        "src/main/claude/hook-service.test.ts:831"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-020",
+      "title": "MiMo Code reports status through a Kolux plugin in an overlay home",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs MiMo Code in a pane.",
+      "user_sees": "Working while busy, needs you on permissions and questions, done when idle, without Kolux editing MiMo's real config.",
+      "rules": [
+        "Kolux mirrors the user's MiMo config into a shared overlay home and installs its status plugin there; the overlay is reused across launches.",
+        "Busy events keep the cached user prompt.",
+        "A sub-task the plugin has confirmed stays busy until its own idle arrives; every concurrent background sub-task is accounted for; the final reply is flushed before the idle report; a permission or question clears when the user answers it."
+      ],
+      "acceptance": [
+        "MiMo asks for permission → needs you; it goes idle → done."
+      ],
+      "compat": "MiMo plugin events: SessionBusy, SessionIdle, MessagePart, PermissionRequest, AskUserQuestion.",
+      "decision": "",
+      "evidence": [
+        "src/main/mimo/hook-service.test.ts:48",
+        "src/main/agent-hooks/server-mimo-code-normalization.test.ts:66",
+        "src/main/mimo/status-plugin/hook-plugin-fail-open-ownership.test.ts",
+        "src/main/mimo/status-plugin/hook-plugin-background-child-completion.test.ts",
+        "src/main/mimo/status-plugin/hook-plugin-message-part-throttle.test.ts",
+        "src/shared/mimo-code-permission-status.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-021",
+      "title": "Pi and OMP report status and prompts through a Kolux extension",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Pi or OMP in a pane.",
+      "user_sees": "Status updates, needs you while a question or approval dialog is open in the agent, back to done when it closes; the tab title follows the agent.",
+      "rules": [
+        "Opening a generic dialog clears an old question card; closing it returns an idle session to done.",
+        "Approval forwarding applies only to OMP, never to a genuine Pi process.",
+        "OMP's later terminal end after a continuation still settles the turn.",
+        "A separate titlebar extension feeds the tab title.",
+        "Kolux never overwrites the agent's own working title, which carries its session name and folder; it swaps only the brand part, and an idle compaction never takes over a spinner already running.",
+        "The agent's own state marker in its title drives status, ordinary titles never trigger it, and a stale working title is cleared.",
+        "Kolux tells Pi from OMP by how it was launched; when OMP runs Pi underneath, the pane is recognised as OMP. OMP keeps its own data files in the real home."
+      ],
+      "acceptance": [
+        "OMP asks for approval → needs you; approve → working."
+      ],
+      "compat": "Kolux agent-status extension and titlebar extension loaded into Pi/OMP.",
+      "decision": "",
+      "evidence": [
+        "src/main/pi/agent-status-ui-prompt.test.ts:74",
+        "src/main/pi/agent-status-omp-approval-forwarding.test.ts:44",
+        "src/main/pi/agent-status-extension-omp-lifecycle.test.ts:58",
+        "src/shared/omp-pi-semantic-title-preservation.test.ts",
+        "src/main/pi/titlebar-extension-source.test.ts",
+        "src/shared/pi-state-title-marker.test.ts",
+        "src/shared/pi-agent-kind.test.ts",
+        "src/shared/foreground-wrapper-agent.test.ts:11",
+        "src/main/pi/titlebar-extension-service.test.ts",
+        "tests/e2e/pi-ui-prompt-status.spec.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-022",
+      "title": "Stopped state names why an agent halted: limit, sign-in or provider error",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Hits a usage limit, an expired login or a provider outage mid-session.",
+      "user_sees": "The session reads Stopped with the reason (limit reached, sign in again, the AI had an error) instead of Done, plus the reset time when the agent supplied one; Board chips use matching short wording.",
+      "rules": [
+        "Rate-limit failures map to limit; authentication, organisation-not-allowed and verification failures map to sign-in; any other or unknown error maps to provider error.",
+        "A failure event with no error or caused by an interrupt is not classified as stopped.",
+        "The stop reason and reset time travel with the blocked status and are dropped once the pane later reaches done.",
+        "Claude and Kimi both report this state.",
+        "Label wording: limit reached (plus the reset time when known), sign in again, provider error."
+      ],
+      "acceptance": [
+        "Simulate a rate-limit stop failure → session shows stopped for the limit with the reset time; no task-complete notification.",
+        "Send a new prompt that completes → the stopped reason disappears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-hook-listener/providers/claude-stop-failure.test.ts:30",
+        "src/renderer/src/store/slices/agent-status-stop-reason.test.ts:8",
+        "src/renderer/src/components/agents-view/agents-view-status.ts:100",
+        "src/renderer/src/components/board/board-card-status.ts:50",
+        "registry:hook-events:claude:StopFailure",
+        "src/renderer/src/lib/agent-stop-reason-label.test.ts:4"
+      ],
+      "round": 0,
+      "related": ["05", "06", "07"]
+    },
+    {
+      "id": "D-04-023",
+      "title": "Agent Stopped desktop notification",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Leaves an agent running and switches away; the agent stops on a limit or sign-in problem.",
+      "user_sees": "One OS notification saying the agent stopped and why, with the reset time when known; never a task-complete message.",
+      "rules": [
+        "Fires once per stop episode; repeated failure events do not repeat it.",
+        "A normal finish never triggers it.",
+        "Controlled by the 'Agent Stopped' toggle, default on."
+      ],
+      "acceptance": [
+        "Trigger an auth stop failure twice in one episode → exactly one notification naming sign-in."
+      ],
+      "compat": "Notification settings field agentStopped (default true).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/hooks/agent-stop-failure-notifications.test.ts:39",
+        "src/main/ipc/notification-options.test.ts:34",
+        "src/renderer/src/components/settings/NotificationsPane.tsx:202"
+      ],
+      "round": 0,
+      "related": ["06", "07"]
+    },
+    {
+      "id": "D-04-024",
+      "title": "Monitoring state when an agent's turn ended but background work runs",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Lets Claude start a background shell or a session cron and finish its turn.",
+      "user_sees": "The dot shows a yellow activity glyph meaning it is monitoring background tasks rather than done, until the background work ends.",
+      "rules": [
+        "Monitoring starts only after the foreground turn has settled.",
+        "Terminal-title or in-band status repaints do not clear monitoring; only a hook does.",
+        "When the background work ends the pane reaches done.",
+        "Claude's background task list decides when monitoring ends."
+      ],
+      "acceptance": [
+        "Have Claude start a long background command and end its reply → pane shows monitoring; when the command exits → done."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-hook-listener/providers/claude-roster-state.ts:125",
+        "src/renderer/src/components/AgentStateDot.tsx:45",
+        "src/main/agent-hooks/server-ingest-terminal-status.test.ts:30",
+        "src/shared/claude-background-task-status.test.ts"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-04-025",
+      "title": "Status carries the tool in flight, the prompt and the last reply",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Glances at a session card, Board card or Inbox row while an agent works.",
+      "user_sees": "The current tool and a short preview of its input (for edits, the file path), the prompt that started the turn, and the agent's last reply when it finishes.",
+      "rules": [
+        "Tool output is flagged so it is never shown as the agent's reply.",
+        "Some updates (task bookkeeping tools) produce no input preview to avoid misleading text.",
+        "Agents without reply text in their hook payload have it read from their transcript.",
+        "In the last reply, Unicode line and paragraph separators become ordinary line breaks and long runs of blank lines are capped."
+      ],
+      "acceptance": [
+        "Agent edits a file → its card shows the edit tool and file path; on finish → the reply preview."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-gemini-normalization.test.ts:30",
+        "src/shared/agent-hook-listener-command-code-transcript.test.ts:25",
+        "src/shared/agent-status-types.test.ts (folds Unicode line/paragraph separators)"
+      ],
+      "round": 0,
+      "related": ["05"]
+    },
+    {
+      "id": "D-04-026",
+      "title": "Sub-agents and teammates are tracked under their lead session",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Lets Claude or Codex spawn subagents or a team.",
+      "user_sees": "The lead session stays working while any child works, lists its children with role and model, and surfaces a child's permission request as needs you.",
+      "rules": [
+        "A child's pending permission clears when that teammate goes idle or a full roster no longer lists it; unrelated lead progress does not clear it.",
+        "Rosters are capped; a truncated background-task snapshot is marked as such and live children it omitted are kept.",
+        "Subagent turns are announced at their Stop with their own text.",
+        "A teammate going idle never ends the lead's working state, even when Kolux has no cached status for the lead; a child that was swept as gone is never put back to working."
+      ],
+      "acceptance": [
+        "Lead finishes while a subagent still works → lead shows working until the child ends."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-claude-child-permission-lifecycle.test.ts:77",
+        "src/main/agent-hooks/server-codex-normalization.test.ts:30",
+        "registry:hook-events:claude:SubagentStart",
+        "src/shared/agent-hook-listener-startless-child-lifecycle.test.ts",
+        "src/main/codex/codex-subagent-roster.test.ts"
+      ],
+      "round": 0,
+      "related": ["05", "08"]
+    },
+    {
+      "id": "D-04-027",
+      "title": "Waiting rows carry the plan or question text",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Gets a plan to review or a question from the agent.",
+      "user_sees": "The waiting status includes the plan or question so views can show it as a card; it clears as soon as the agent moves on after the answer.",
+      "rules": [
+        "Plans over the size cap are truncated and flagged as truncated.",
+        "An answered question clears when later tool work starts, also for permission-shaped questions; a real permission is never cleared by the answer keystroke."
+      ],
+      "acceptance": [
+        "Claude exits plan mode → the waiting status shows the plan text."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-claude-normalization.test.ts:327",
+        "src/main/agent-hooks/server.claude-interactive-question.test.ts:36"
+      ],
+      "round": 0,
+      "related": ["10", "05"]
+    },
+    {
+      "id": "D-04-028",
+      "title": "Interrupts show as interrupted, not done",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Presses Ctrl+C or Escape to stop an agent mid-turn, or cancels inside the agent.",
+      "user_sees": "The session settles as interrupted with no completion notification and drops out of Done today.",
+      "rules": [
+        "Ctrl+C or Escape during working lets Kolux infer an interrupt when the agent sends no Stop.",
+        "No inference while a subagent or background shell is still working; never for Droid.",
+        "Late hook events cannot bring an interrupted turn back to working.",
+        "Agents that report cancellation themselves (Amp, Cursor, Kimi, Devin, Claude) map it to interrupted."
+      ],
+      "acceptance": [
+        "Press Escape while Claude works → pane shows interrupted, no notification."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-interrupt-inference-guards.test.ts:109",
+        "src/main/agent-hooks/server-cursor-normalization.test.ts:52"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-04-029",
+      "title": "New sessions, resumes, clears and manual compacts are not counted as finished work",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Starts, resumes or clears an agent session, or compacts it by hand.",
+      "user_sees": "The pane settles quietly: no notification, no unread mark, no entry in Done today.",
+      "rules": [
+        "A real completion displaced by a boundary is still kept in history and still counted.",
+        "The compacted turn keeps its summary as the label.",
+        "A manual compact ends a stuck working row as a quiet done; the compaction's own summariser finishing never resolves the pane; a compact that starts and is aborted leaves the pane as it was; an automatic compact lets the turn's own Stop close it.",
+        "Wave 2: after a compaction the agent submits a machine-written continuation message; a UserPromptSubmit whose prompt opens with that continuation wording (case-insensitive, leading whitespace skipped, bounded head) is ignored for Claude, OpenClaude and Kimi: no new turn, cached user prompt kept; prompts that only quote it further in still count."
+      ],
+      "acceptance": [
+        "Run /clear in Claude → no notification and the unread count does not rise."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/agent-status-session-boundary-done.test.ts:39",
+        "src/renderer/src/components/activity/useActivityUnreadCount.test.ts:33",
+        "src/main/agent-hooks/manual-compact-hook-stream.test.ts:404",
+        "src/main/claude/compact-status-registration.test.ts:123",
+        "src/main/claude/compact-status-registration.test.ts:155",
+        "src/main/claude/compact-status-registration.test.ts:196",
+        "registry:hook-events:claude|UserPromptSubmit",
+        "registry:hook-events:openclaude|UserPromptSubmit",
+        "registry:hook-events:kimi|UserPromptSubmit",
+        "src/shared/agent-hook-listener/prompt-fields.ts:89-95",
+        "src/shared/agent-hook-listener/providers/claude-events.ts:95-97",
+        "src/shared/agent-hook-listener/providers/kimi-events.ts:28",
+        "src/shared/harness-injected-user-turns.ts:42",
+        "src/shared/harness-injected-user-turns.ts:73-88",
+        "src/shared/harness-injected-user-turns.test.ts:65",
+        "src/shared/agent-hook-listener-claude-turn-state.test.ts:280"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-030",
+      "title": "Last known status survives a restart and is confirmed by the first live event",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits or restarts Kolux while agents are mid-turn or waiting.",
+      "user_sees": "Sessions come back showing their last status marked as not yet confirmed, then update as soon as a live event arrives; ghost subagents from before the restart are cleared.",
+      "rules": [
+        "Saved status has an expiry and a version; a corrupt file is treated as empty.",
+        "A restored row is never treated as fresh, whatever its age; an identical live terminal-status observation confirms it.",
+        "A restored permission does not suppress the first live working event.",
+        "Restored child rows with no live process are reaped so a pane that slept through completion reaches done; rows whose process cannot be proven dead are kept.",
+        "Status snapshots replayed at startup wait until their pane has loaded.",
+        "A terminal that cannot be re-linked to status reporting after an upgrade shows a blocked row telling the user to restart that terminal."
+      ],
+      "acceptance": [
+        "Restart Kolux with an agent waiting → it reappears as waiting (unconfirmed); approve in the terminal → status updates live."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-status-types.test.ts:28",
+        "src/main/agent-hooks/server-last-status-hydrate-confirmation.test.ts:47",
+        "src/main/agent-hooks/restored-subagent-liveness-sweep.test.ts:117",
+        "src/renderer/src/hooks/useIpcEvents-agent-status-snapshot-replay.test.ts",
+        "src/renderer/src/lib/migration-unsupported-agent-entry.ts:19",
+        "src/renderer/src/lib/migration-unsupported-agent-entry.test.ts"
+      ],
+      "round": 0,
+      "related": ["03", "19"]
+    },
+    {
+      "id": "D-04-031",
+      "title": "Gone agents and closed tabs stop reporting status",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Closes a tab, or the agent process dies while its shell stays open.",
+      "user_sees": "No phantom working or waiting rows linger for agents that are gone; a pane reused for a new agent starts clean.",
+      "rules": [
+        "A working or waiting row whose process is certainly dead is retired.",
+        "When the shell outlived the agent the resume identity is kept for a later resume.",
+        "Late events for a closed tab are dropped for the rest of the session; other tabs are unaffected.",
+        "A retired pane comes back only on a genuine new-turn boundary."
+      ],
+      "acceptance": [
+        "Kill the agent process while it shows needs you → the row clears.",
+        "Close a tab, let a late hook arrive → nothing reappears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/ended-process-reconciliation.test.ts:116",
+        "src/main/agent-hooks/server-closed-tab-suppression.test.ts:131",
+        "src/main/agent-hooks/server-retired-pane-new-turn.test.ts:83"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-04-032",
+      "title": "Status older than 30 minutes is shown as unverified",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Leaves a session alone for a long time.",
+      "user_sees": "A working row with no update for half an hour switches to a no-recent-update look rather than claiming the agent is still working; the Inbox lists it as unverifiable while its terminal is alive.",
+      "rules": [
+        "The staleness window is 30 minutes.",
+        "Same-turn heartbeats do not reset unread counts; the next real heartbeat revives the row."
+      ],
+      "acceptance": [
+        "Freeze an agent's hooks for 31 minutes → its dot shows no recent update."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-status-freshness.ts:7",
+        "src/renderer/src/components/AgentStateDot.tsx:45"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-033",
+      "title": "Terminal-title fallback detects status when no hook reports",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs an agent whose hooks are off, missing or not supported.",
+      "user_sees": "Kolux still shows working, waiting or done by reading the terminal title the agent sets.",
+      "rules": [
+        "Recognises braille spinners, Gemini's working, idle, permission and timer symbols, Claude's title prefixes, and words like ready, idle, done, working, thinking, running.",
+        "Titles that look like file paths are rejected.",
+        "Each agent gets a readable label; noisy titles are normalised to a stable form.",
+        "Claude Code's quarter-circle busy glyphs count as working; a non-agent title appearing mid-turn does not drop the working state.",
+        "Which agent a title belongs to comes from evidence the agent itself emits (its anchored name or vendor marker), never from a name in the task text, a worktree name or a model name alone; conflicting evidence of the same kind resolves to unknown, and the order of title parts does not decide.",
+        "Agents without managed hooks (Aider, Goose, Cline, Qwen Code, Rovo Dev, Kilocode, Kiro, Charm, Auggie, Codebuff, Continue, Mistral Vibe, OpenClaw, Autohand Code, Ante, Trae, Prime Agent) rely entirely on this fallback."
+      ],
+      "acceptance": [
+        "Turn hooks off, run Gemini, trigger a permission → the pane still shows needs you."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/agent-status.test.ts:29",
+        "src/shared/repro-13889-claude-quarter-circle-busy-title.test.ts",
+        "src/renderer/src/lib/agent-status.test.ts",
+        "src/shared/agent-title-evidence.test.ts",
+        "src/shared/agent-title-identity-characterization.test.ts",
+        "src/shared/agent-title-agy-gemini-collision.test.ts",
+        "src/shared/agent-decorative-title-signature.test.ts",
+        "src/shared/agent-title-decoration.test.ts",
+        "src/shared/osc-title-scan-tail.test.ts",
+        "registry:agent-catalog:managed_hooks_status"
+      ],
+      "round": 0,
+      "related": ["03", "07"]
+    },
+    {
+      "id": "D-04-034",
+      "title": "In-band OSC 9999 status from terminal output",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs a tool or script that prints Kolux's status escape sequence.",
+      "user_sees": "The pane status changes accordingly and the escape sequence never appears as text in the terminal.",
+      "rules": [
+        "Ordinary output passes through untouched.",
+        "An OSC update cannot wipe hook-only details such as completion text or monitoring mode; a hook clears those.",
+        "An OSC completion keeps the cached provider session; an OSC new turn drops it."
+      ],
+      "acceptance": [
+        "Print the OSC 9999 sequence with a working status → pane shows working and the terminal shows no garbage."
+      ],
+      "compat": "OSC 9999 escape sequence carrying a status payload; stripped from terminal data before rendering.",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-status-osc.test.ts:16",
+        "src/main/agent-hooks/server-ingest-terminal-status.test.ts:30"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-04-035",
+      "title": "Tab titles follow agent status, with optional auto-generated titles",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Watches tabs while agents work; optionally turns on 'Auto-generate tab titles' in Settings → Agents.",
+      "user_sees": "A tab that said the agent needed action is rewritten once the agent is done; with auto titles on, tabs get a short generated name from the task; a manual rename always wins.",
+      "rules": [
+        "Auto-generate is off by default.",
+        "Many generated titles arriving together are applied in one batch.",
+        "When generated titles are disabled, views ignore them and fall back to prompt or history.",
+        "For agents whose own titles do not show state (Codex for ready and action needed, Devin, Pi and OMP) Kolux writes its own '<agent> ready' or '<agent> - action required' title from hook status, and animates a working spinner except where the agent's own working title already carries one or carries session details.",
+        "All synthetic spinners advance on one shared tick; decorative spinner frames are skipped while the window is hidden, while final-state titles always go through; a pane whose terminal disappeared drops out of the tick."
+      ],
+      "acceptance": [
+        "Agent finishes after asking for permission → tab no longer shows the action-required title.",
+        "Rename a tab by hand with auto titles on → the manual name stays."
+      ],
+      "compat": "Global setting key tabAutoGenerateTitle (boolean, default false).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/hooks/ipc-events/agent-status-terminal-title-tab-write.test.ts:74",
+        "src/renderer/src/components/settings/AgentsPane.tsx:308",
+        "src/shared/default-global-settings.ts:211",
+        "src/renderer/src/store/slices/agent-status-batch.test.ts:226",
+        "src/shared/synthetic-agent-title.test.ts:25",
+        "src/shared/synthetic-agent-title.test.ts:41",
+        "src/main/synthetic-title-spinner.test.ts:9",
+        "src/main/synthetic-title-visibility.test.ts:5"
+      ],
+      "round": 0,
+      "related": ["03", "17"]
+    },
+    {
+      "id": "D-04-036",
+      "title": "Working-agent counts per workspace",
+      "tier": "P2",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Looks at the sidebar or workspace cards.",
+      "user_sees": "How many agents are working in each workspace, counting split panes separately; slept or never-opened workspaces show as inactive.",
+      "rules": [
+        "Counts fall back to live tabs when pane-level titles are unavailable."
+      ],
+      "acceptance": [
+        "Split one tab and run two agents → the workspace shows two working."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/agent-status-count.test.ts:73"
+      ],
+      "round": 0,
+      "related": ["01", "05"]
+    },
+    {
+      "id": "D-04-037",
+      "title": "Resumable agents are recorded at quit and sleep",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits Kolux or puts a workspace to sleep while agents are mid-task.",
+      "user_sees": "Those agents can be resumed later across every workspace; agents that were already done are not offered for resume.",
+      "rules": [
+        "Capture covers all worktrees, not just the active one.",
+        "Provider session details are saved before sleep-time rows are dropped."
+      ],
+      "acceptance": [
+        "Quit with agents working in two workspaces → both are offered for resume on relaunch."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/agent-status-quit-capture.test.ts:786"
+      ],
+      "round": 0,
+      "related": ["03", "19"]
+    },
+    {
+      "id": "D-04-038",
+      "title": "Pull request status refreshes when an agent finishes",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Lets an agent finish work on a branch that has a pull request.",
+      "user_sees": "The workspace's PR status refreshes shortly after the agent completes, without a manual refresh.",
+      "rules": [
+        "Only one refresh per completion; repeated done updates do not repeat it.",
+        "Skipped when no status lane or PR surface is visible."
+      ],
+      "acceptance": [
+        "Agent finishes on a PR branch with the PR panel visible → PR status updates."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/store/slices/agent-status-pr-refresh-handoff.test.ts:56"
+      ],
+      "round": 0,
+      "related": ["11"]
+    },
+    {
+      "id": "D-04-039",
+      "title": "First agent work renames the new worktree's branch and title",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Creates a worktree with a placeholder name and starts an agent on a task.",
+      "user_sees": "Once the agent starts real work, the branch and display name change to a short slug of the task, and Kolux asks before renaming the folder on disk to match.",
+      "rules": [
+        "Folder renaming can be disabled; branch and display rename still work.",
+        "Incidental work-item markers do not override the generated name.",
+        "Folder-only projects get a title rename without touching git.",
+        "Earlier rename errors clear after a successful rename."
+      ],
+      "acceptance": [
+        "Start an agent in a fresh worktree → branch is renamed to a task slug and a folder-rename prompt appears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/first-work-branch-rename.test.ts:234"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-04-040",
+      "title": "Claude statusline feeds rate limits and context to usage",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Runs Claude in Kolux.",
+      "user_sees": "Usage and context figures in Kolux update from Claude's own statusline data.",
+      "rules": [
+        "Posts with a bad token are rejected.",
+        "Context-only posts do not enter the rate-limit feed.",
+        "This feed supplies the context figure behind the session usage meter on Board cards, tabs and the Agents view."
+      ],
+      "acceptance": [
+        "Run a Claude turn → the usage pill reflects the latest rate-limit data."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/agent-hooks/server-claude-statusline.test.ts:32",
+        "src/renderer/src/components/usage/session-usage-meter-model.ts:1",
+        "src/renderer/src/store/slices/agent-context-usage.ts:2",
+        "dumps/records/handoff-recent-work.md:22"
+      ],
+      "round": 0,
+      "related": ["06"]
+    },
+    {
+      "id": "D-04-041",
+      "title": "Desktop notification when an agent finishes or needs permission",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Leaves an agent working and switches to something else.",
+      "user_sees": "An OS notification when the agent completes, naming the agent, previewing its reply and naming the repo when several repos are active; also one when Claude asks for permission.",
+      "rules": [
+        "No notification for session boundaries, replayed events, Cursor shell steps or Grok routine permission prompts.",
+        "Blocked and interrupted turns use their own wording.",
+        "Each subagent turn and each background-shell turn gets its own notification identity.",
+        "Works even when the agent's workspace is not the active one.",
+        "Controlled by 'Agent Task Complete', default on."
+      ],
+      "acceptance": [
+        "Let Codex finish in an inactive workspace → one notification with its reply preview."
+      ],
+      "compat": "Notification settings field agentTaskComplete (default true).",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/notifications-message-formatting.test.ts:69",
+        "src/renderer/src/hooks/agent-hook-completion-background-turn-notifications.test.ts:144",
+        "tests/e2e/droid-notification.spec.ts:259",
+        "src/renderer/src/components/settings/NotificationsPane.tsx:169"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-042",
+      "title": "Notifications settings page",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Opens Settings → Notifications to choose which events alert them, and presses 'Send Test Notification'.",
+      "user_sees": "A master switch that greys out everything below it; toggles for task complete, terminal bell, agent stopped, usage alerts; a quiet-agent minutes field; 'Suppress While Focused'; a test button that confirms when the OS actually showed the notification and otherwise links to the OS notification settings.",
+      "rules": [
+        "Defaults: enabled on, task complete on, terminal bell off, agent stopped on, quiet alert 10 minutes, usage alerts on, suppress while focused on.",
+        "Missing fields in saved settings read as on (quiet threshold as 10).",
+        "On macOS and Windows a not-shown test offers 'Open Settings' for the OS panel; elsewhere it says the platform is not supported.",
+        "Usage-alert notifications are suppressed when that toggle is off."
+      ],
+      "acceptance": [
+        "Turn the master switch off → child controls disable.",
+        "Press the test button with OS notifications allowed → a confirmation appears."
+      ],
+      "compat": "Global setting key notifications with fields enabled, agentTaskComplete, terminalBell, agentStopped, quietAgentThresholdMinutes, usageAlerts, suppressWhenFocused, customSoundId, customSoundPath, customSoundVolume.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/NotificationsPane.tsx:148",
+        "src/shared/constants.ts:126",
+        "tests/e2e/notification-settings.spec.ts:32",
+        "src/main/ipc/notifications-retention-lifecycle.test.ts:195",
+        "src/main/ipc/notifications-delivery-gating.test.ts:136",
+        "registry:settings-sections:notifications",
+        "registry:settings-keys:notifications"
+      ],
+      "round": 0,
+      "related": ["17", "06"]
+    },
+    {
+      "id": "D-04-043",
+      "title": "Notification sound choice, custom file and volume",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Picks a notification sound, or chooses a custom audio file, and sets the volume.",
+      "user_sees": "Notifications play the chosen sound at the chosen volume; the OS default sound is used when nothing custom is set.",
+      "rules": [
+        "Built-in choices: system default plus about nine short tones; custom loads an allowed audio file.",
+        "With a custom sound the native notification is silenced so only one sound plays.",
+        "Default volume 100."
+      ],
+      "acceptance": [
+        "Choose a custom file → the next notification plays it and not the OS sound."
+      ],
+      "compat": "Sound ids: system, two-tone, bong, thump, blip, sonar, blop, ding, clack, beep, custom.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/NotificationSoundSection.tsx:106",
+        "src/main/ipc/notifications-custom-sound.test.ts:101",
+        "src/shared/notification-settings-types.ts:50"
+      ],
+      "round": 0,
+      "related": ["17"]
+    },
+    {
+      "id": "D-04-044",
+      "title": "Notifications are de-duplicated, rate-limited and open the right pane",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs many agents at once, then clicks a notification.",
+      "user_sees": "No bursts of duplicates; clicking a notification brings Kolux forward on the pane that raised it.",
+      "rules": [
+        "Repeat notifications for one worktree are merged, including a task-complete plus a terminal bell for the same event.",
+        "A cooldown limits repeats; its memory is bounded during bursts; explicit test notifications skip it.",
+        "Suppressed while the window is focused when that option is on.",
+        "Each agent event gets a stable notification id so the same event is never shown twice.",
+        "Clicking focuses the originating pane in the main window."
+      ],
+      "acceptance": [
+        "Two completions from the same worktree within the cooldown → one notification.",
+        "Click a notification → the source pane is focused."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/notifications-delivery-gating.test.ts:420",
+        "src/main/ipc/notifications-delivery-gating.test.ts:473",
+        "src/main/ipc/notifications-retention-lifecycle.test.ts:48",
+        "src/shared/agent-notification-id.test.ts:5"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-04-045",
+      "title": "Quiet-agent alert when a working agent goes silent",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Leaves an agent working; it hangs or stalls without output.",
+      "user_sees": "After the set number of minutes with no terminal output, one notification says the agent has gone quiet.",
+      "rules": [
+        "Default threshold 10 minutes; 0 turns it off.",
+        "Fires once per silence episode; any new output resets the timer; leaving the working state clears it.",
+        "Silence is measured from terminal output, not hook events.",
+        "Rows in the agent dashboard drawer show a compact quiet badge with the silent time ('quiet 12m', 'quiet 1h')."
+      ],
+      "acceptance": [
+        "Set the threshold to 1 minute and stall an agent → one alert after a minute, none after that until output resumes and stops again."
+      ],
+      "compat": "Notification settings field quietAgentThresholdMinutes (default 10).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/hooks/agent-quiet-notifications.test.ts:62",
+        "src/renderer/src/components/settings/NotificationsPane.tsx:223",
+        "src/shared/constants.ts:126",
+        "src/renderer/src/lib/agent-stop-reason-label.test.ts:30",
+        "src/renderer/src/components/dashboard/DashboardAgentRow.tsx:161",
+        "src/renderer/src/lib/agent-quiet-state.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-04-046",
+      "title": "Sign-in expiry notice outside Settings",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Works normally while a saved account's sign-in has expired.",
+      "user_sees": "A notice in the main app, not buried in Settings, saying the account needs signing in again, with a 'Sign in again' action.",
+      "rules": [
+        "Shown for the account whose sign-in lapsed; acting on it starts the sign-in flow."
+      ],
+      "acceptance": [
+        "Expire a saved Claude account's sign-in → the notice appears; complete sign-in → it disappears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/accounts/AccountReauthNotice.tsx:111"
+      ],
+      "round": 0,
+      "related": ["07"]
+    },
+    {
+      "id": "D-04-047",
+      "title": "Tray icon with an attention dot while Kolux is hidden",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Hides or minimises Kolux while agents work.",
+      "user_sees": "The tray icon gains an amber dot when an agent completes or a terminal rings its bell; the tray menu reopens or quits the app.",
+      "rules": [
+        "The dot lights only while the window is hidden or minimised, never while it is visible.",
+        "Windows: tray icon with Open and Quit, left-click opens. macOS: template status item with the full menu. Linux: no tray.",
+        "Development builds carry a DEV marker in the icon and tooltip, kept across the attention swap.",
+        "Closing to tray is off by default."
+      ],
+      "acceptance": [
+        "Minimise Kolux and let an agent finish → amber dot appears; restore the window → dot clears."
+      ],
+      "compat": "Global setting key minimizeToTrayOnClose (default false).",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/notifications-delivery-gating.test.ts:221",
+        "src/main/tray/tray-attention-icon.test.ts:51",
+        "src/main/tray/system-tray.test.ts:195",
+        "registry:settings-keys:minimizeToTrayOnClose"
+      ],
+      "round": 0,
+      "related": ["19"]
+    },
+    {
+      "id": "D-04-048",
+      "title": "Dock and taskbar badge counts workspaces with unseen results",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Switches away from Kolux while agents finish.",
+      "user_sees": "The app badge shows how many workspaces have unseen agent results and clears when they are all viewed.",
+      "rules": [
+        "Unread tabs are counted once under their workspace.",
+        "Large counts are capped; zero clears the badge; clearing failures are ignored."
+      ],
+      "acceptance": [
+        "Two workspaces finish unseen → badge shows 2; view both → badge clears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/dock/unread-badge.test.ts:37",
+        "src/renderer/src/lib/unread-badge-count.test.ts:25"
+      ],
+      "round": 0,
+      "related": ["19"]
+    },
+    {
+      "id": "D-04-049",
+      "title": "Viewing a finished session marks it seen",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Opens or focuses a pane whose agent finished while they were away.",
+      "user_sees": "The unread mark, glow and badge contribution clear on their own; a session the user explicitly marked unread stays unread.",
+      "rules": [
+        "Works for panes in the main grid and in a floating panel.",
+        "A turn timestamped ahead of the local clock is acknowledged exactly once.",
+        "A focused pane whose status has not arrived yet (startup race) stays tracked and is acknowledged once its status appears."
+      ],
+      "acceptance": [
+        "Agent finishes in a background tab → open the tab → unread clears without a click."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/hooks/useAutoAckViewedAgent.test.ts:38",
+        "src/renderer/src/hooks/useAutoAckViewedAgent.test.ts",
+        "src/renderer/src/store/slices/ui-acknowledge-agents-clock-skew.test.ts"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-04-050",
+      "title": "Inbox lists everything that needs the user, is running, or finished today",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Clicks the bell button labelled 'Notifications' in the top bar, then moves through items with the arrow keys.",
+      "user_sees": "Three groups: needs you (questions and permissions, newest first), waiting on agent (running, plus unverifiable stale ones), and done today (newest first, at most 20); a detail panel with changes, branch, host, files changed and lines, and buttons 'Open in Code' and 'Answer in Code'; an all-clear state when nothing needs attention.",
+      "rules": [
+        "Approval-shaped prompts are labelled as permissions, plain prompts as questions.",
+        "Interrupted rows and rows older than 30 minutes are left out of done today.",
+        "Up and Down move through needs, then waiting, then done; Enter opens the item.",
+        "The 'Show Inbox' shortcut exists but ships unbound.",
+        "With nothing selected, Down picks the first row and Up the last; movement clamps at the ends; if the selected item vanishes, selection returns to the first row."
+      ],
+      "acceptance": [
+        "Two agents waiting and one done → Inbox shows two under needs you and one under done today.",
+        "Press Down with nothing selected → first row selected; Enter → opens it."
+      ],
+      "compat": "Top-level view id inbox; keybinding id view.inbox (unbound by default).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/inbox/inbox-items.test.ts:85",
+        "src/renderer/src/components/inbox/inbox-list-navigation.test.ts:28",
+        "src/renderer/src/components/inbox/inbox-items.ts:65",
+        "src/renderer/src/components/app-shell/WorkspaceTopBarActions.tsx:37",
+        "registry:view-ids:inbox",
+        "registry:keybindings:view.inbox",
+        "src/renderer/src/components/inbox/inbox-list-navigation.test.ts:36"
+      ],
+      "round": 0,
+      "related": ["05", "12"]
+    },
+    {
+      "id": "D-04-051",
+      "title": "Shortcut jumps to the next session that needs the user",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Presses the 'Next That Needs You' shortcut.",
+      "user_sees": "Focus moves to the next terminal whose agent is waiting on them, cycling through all such sessions.",
+      "rules": [
+        "Bound to Mod+J on Windows and Linux, Mod+Shift+J on macOS."
+      ],
+      "acceptance": [
+        "With two agents waiting, press the shortcut twice → focus visits both."
+      ],
+      "compat": "Keybinding id terminals.focusNextNeedsYou.",
+      "decision": "",
+      "evidence": [
+        "src/shared/keybindings/definitions-next-needs-you.ts:15",
+        "registry:keybindings:terminals.focusNextNeedsYou"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-04-052",
+      "title": "One status vocabulary for dots, chips and labels",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Hovers or reads a session's status dot in tabs, pane headers, Board or Agents.",
+      "user_sees": "Consistent states with their own glyphs: working (spinner), monitoring background tasks, blocked, waiting for input, needs attention for permissions, interrupted, failed, done (check), idle, and no recent update.",
+      "rules": [
+        "Blocked and waiting both map to the permission look.",
+        "The Agents view adds starting and can't-reach labels; stopped labels name the cause.",
+        "The working spinner turns at 12 steps a second, every spinner on screen in step, and stays still under reduced motion.",
+        "Hovering a status indicator shows its explanation after about 200 ms."
+      ],
+      "acceptance": [
+        "Drive one agent through working, waiting, done → the dot glyph and tooltip change each time."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/AgentStateDot.tsx:45",
+        "src/renderer/src/components/agents-view/agents-view-status.ts:100",
+        "src/renderer/src/components/AgentWorkingSpinner.test.tsx:186",
+        "src/renderer/src/components/AgentWorkingSpinner.test.tsx:57",
+        "src/renderer/src/components/AgentWorkingSpinner.test.tsx:111",
+        "src/renderer/src/components/AgentStateDot.test.ts",
+        "src/renderer/src/components/StateIndicatorTooltip.test.tsx:19"
+      ],
+      "round": 0,
+      "related": ["03", "05"]
+    },
+    {
+      "id": "D-04-053",
+      "title": "Agent reasoning folds into collapsed Thought rows in the Agents view",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live",
+      "user_does": "Reads an agent's transcript in the Agents view and clicks a 'Thought' row.",
+      "user_sees": "Each reasoning message appears as a one-line collapsed Thought row; clicking opens or closes it, and the toolbar's expand-all opens them all.",
+      "rules": [
+        "The row is a real button, so Enter and Space toggle it.",
+        "The Agents rail is a 268px card in the new look and a 240px flat rail otherwise."
+      ],
+      "acceptance": [
+        "Open a session with reasoning → Thought rows collapsed; press expand-all → all open."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/native-chat/NativeChatThoughtBlock.tsx:7",
+        "dumps/records/handoff-recent-work.md:9"
+      ],
+      "round": 0,
+      "related": ["05", "14"]
+    },
+    {
+      "id": "D-04-054",
+      "title": "Closing an agent ends its whole process tree",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Closes a pane or tab running an agent, or kills the agent's terminal.",
+      "user_sees": "The agent and every process it started, including detached ones, stop; nothing keeps running or holding files in the background.",
+      "rules": [
+        "On POSIX the kill covers detached process groups found under the agent.",
+        "On Windows exits are verified, ignoring unrelated processes that reused a parent's PID and pruning stale branches.",
+        "Ending a tree never kills Kolux's own processes (such as its embedded browser); if the OS refuses the tree kill, the root process Kolux owns is still ended."
+      ],
+      "acceptance": [
+        "Start an agent that spawns a detached server, close its pane → the server process is gone."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/agent-descendant-process-kill.spec.ts:22",
+        "src/main/windows-descendant-exit-verification.test.ts:22",
+        "src/main/own-chromium-tree-kill-guard.test.ts",
+        "src/main/refused-tree-kill-root-termination.test.ts"
+      ],
+      "round": 0,
+      "related": ["03", "19"]
+    },
+    {
+      "id": "D-04-055",
+      "title": "Repository setup and archive scripts from kolux.yaml or local settings",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Commits a kolux.yaml to a repo, or sets scripts in local settings, to prepare new worktrees and clean up removed ones.",
+      "user_sees": "Kolux runs the setup script when a worktree is created and the archive script when it is removed, using whichever source the repo's policy selects.",
+      "rules": [
+        "Local settings are used by default even when kolux.yaml defines a command; a legacy shared-first policy means kolux.yaml only.",
+        "Setup hooks are read from the target worktree's own kolux.yaml.",
+        "Batch scripts stay on cmd.exe even when the terminal is Git Bash; a half-activated conda env is not used."
+      ],
+      "acceptance": [
+        "Create a worktree in a repo with a setup script → the script runs in the new worktree."
+      ],
+      "compat": "kolux.yaml file at the repository root holding setup, archive and issue-command scripts.",
+      "decision": "",
+      "evidence": [
+        "src/main/hooks-effective-hook-resolution.test.ts:165"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-04-056",
+      "title": "Repository scripts need the user's trust before they run",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Opens a repo whose kolux.yaml defines setup scripts or default tab commands.",
+      "user_sees": "A trust prompt listing exactly what will run before anything runs; Kolux asks again if the scripts change.",
+      "rules": [
+        "Trust is tied to a hash of the script content.",
+        "If trust cannot be checked, nothing runs."
+      ],
+      "acceptance": [
+        "Change the setup script after trusting it → the prompt reappears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/ensure-hooks-confirmed.test.ts:119"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-04-057",
+      "title": "Activity feed of agent threads (experimental, off)",
+      "tier": "H",
+      "pushed": 3,
+      "state": "hidden",
+      "user_does": "Turns on the experimental Activity setting and opens the Activity view.",
+      "user_sees": "A feed of agent threads grouped by status with a scope filter, a filter box focused by Cmd/Ctrl+F, unread counts, row hover cards with mark-read, a 'Clear completed' action, and agent rows that focus the matching split pane.",
+      "rules": [
+        "Off by default and forced off for all users by a one-time migration.",
+        "Clear completed removes only completed and interrupted threads.",
+        "Session-boundary dones are not counted as unread."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "registry:settings-keys:experimentalActivity",
+        "registry:settings-keys:experimentalActivityDefaultedOffForAllUsers",
+        "registry:view-ids:activity",
+        "src/renderer/src/components/activity/activity-clear-completed.test.ts:124",
+        "src/renderer/src/components/activity/activity-thread-hover-card.test.tsx:115",
+        "tests/e2e/activity-agent-pane-isolation.spec.ts:231"
+      ],
+      "round": 0,
+      "related": ["05", "21"]
+    },
+    {
+      "id": "D-04-058",
+      "title": "Terminal attention marks for background output and bells (experimental, off)",
+      "tier": "H",
+      "pushed": 3,
+      "state": "hidden",
+      "user_does": "Turns on experimental terminal attention.",
+      "user_sees": "Background terminals with new activity get an unread mark that clears on focus; a bell in the focused tab raises a marker that clears on click or Escape; agent completions feed this even when OS notifications are off.",
+      "rules": [
+        "Off by default."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "registry:settings-keys:experimentalTerminalAttention",
+        "tests/e2e/terminal-attention.spec.ts:161",
+        "tests/e2e/terminal-attention.spec.ts:227",
+        "src/renderer/src/hooks/agent-hook-completion-notifications.test.ts:252"
+      ],
+      "round": 0,
+      "related": ["03", "21"]
+    },
+    {
+      "id": "D-04-059",
+      "title": "WSL hook relay for agents running inside WSL",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Runs an agent in a WSL distro from Kolux on Windows.",
+      "user_sees": "Status from the WSL agent reaches Kolux through a relay that installs the managed hooks inside the distro's home.",
+      "rules": [
+        "A failed relay marks the distro failed and retries only after a cooldown."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: area 18 (remote, SSH, WSL relay) dropped by the owner 2026-10-05. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/agent-hooks/wsl-hook-relay-manager.test.ts:125"
+      ],
+      "round": 0,
+      "related": ["18"]
+    },
+    {
+      "id": "D-04-060",
+      "title": "Managed hooks installed on SSH remote hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Runs an agent on an SSH host from Kolux.",
+      "user_sees": "Kolux installs POSIX hook scripts on the remote, including Codex trust entries, so remote agents report status.",
+      "rules": [
+        "Remote scripts are always POSIX even from a Windows host.",
+        "SSH-launched panes are never reaped by the local liveness sweep."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: area 18 (remote, SSH, WSL relay) dropped by the owner 2026-10-05. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/agent-hooks/remote-hook-service-installers.test.ts:37"
+      ],
+      "round": 0,
+      "related": ["18"]
+    },
+    {
+      "id": "D-04-061",
+      "title": "Grok questions show needs you with the question text",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs Grok in a pane and gets asked a question by it.",
+      "user_sees": "The pane switches to needs you and the question travels with the status so views can show a question card; once answered the pane is back to working and the card is gone.",
+      "rules": [
+        "Grok auto-allows its ask_user_question tool, so no permission event fires; PreToolUse for an AskUserQuestion-class tool name (toolName, tool_name or name) alone means waiting and carries the questions as interactivePrompt.",
+        "The question tool's own PostToolUse means working and drops interactivePrompt.",
+        "PostToolUseFailure for the question tool (e.g. a cancelled question) means working and never recreates the question card.",
+        "Every other PreToolUse still means working."
+      ],
+      "acceptance": [
+        "Grok asks a multiple-choice question → needs you, with the question text visible.",
+        "Answer it → working, and the question card is gone.",
+        "Cancel the question instead → working, with no question card."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:hook-events:grok|PreToolUse",
+        "src/shared/agent-hook-listener/providers/grok-events.ts:38-53",
+        "src/shared/agent-hook-listener-grok.test.ts:116",
+        "src/shared/agent-hook-listener-grok.test.ts:164"
+      ],
+      "round": 4,
+      "related": ["05"]
+    },
+    {
+      "id": "D-04-062",
+      "title": "Late events after a finished Antigravity or Amp turn never bring back working",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Lets Antigravity or Amp finish a turn and looks away.",
+      "user_sees": "The finished pane stays done; a stray event arriving after the end never flips it back to working or leaves a stuck spinner.",
+      "rules": [
+        "After a fully idle Antigravity Stop, the transcript path is remembered per pane; later PostInvocation, PreToolUse or PostToolUse events naming the same transcript are dropped (events without a transcript path are not matched).",
+        "A Stop with fullyIdle false does not record the transcript as completed.",
+        "After Amp agent.end, the thread cache key is marked completed; later tool.call and tool.result events for that thread are dropped.",
+        "A fresh PreInvocation (Antigravity) or agent.start (Amp) begins a new turn and clears that memory; Amp session.start also clears the turn cache.",
+        "Amp keys the memory by thread id within a pane, so one ended thread does not silence another thread in the same pane."
+      ],
+      "acceptance": [
+        "Antigravity finishes, then a late tool event for the same transcript arrives → the pane stays done.",
+        "Amp ends a thread, then a late tool result for it arrives → the pane stays done.",
+        "Start a new Antigravity prompt afterwards → working again."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:hook-events:antigravity|PostInvocation",
+        "registry:hook-events:antigravity|PostToolUse",
+        "registry:hook-events:amp|tool.call",
+        "registry:hook-events:amp|tool.result",
+        "src/shared/agent-hook-listener/providers/antigravity-events.ts:24-33",
+        "src/shared/agent-hook-listener/providers/antigravity-events.ts:80-83",
+        "src/shared/agent-hook-listener/providers/amp-events.ts:38-46",
+        "src/shared/agent-hook-listener/providers/amp-events.ts:84-86",
+        "src/shared/agent-hook-listener-antigravity.test.ts:433",
+        "src/shared/agent-hook-listener-antigravity.test.ts:469",
+        "src/main/agent-hooks/server-amp-normalization.test.ts:157",
+        "src/main/agent-hooks/server-amp-normalization.test.ts:216"
+      ],
+      "round": 4,
+      "related": []
+    }
+  ],
+  "notes": [
+    "Many test files mapped to 04 belong elsewhere and were not carded: composer* (02), native-chat structured Claude/Codex adapters and SDK exit-proof/root-kill tests under main/claude and main/codex (14), Codex account-vault resume (07), watched-worktree catalog notifications (01).",
+    "Cards D-04-055/056 (kolux.yaml setup/archive scripts and their trust prompt) are 'hooks' in a different sense and likely belong to area 01; exact kolux.yaml key names were not verified.",
+    "Grok is the only agent whose managed hooks are removed at quit; every other agent keeps Kolux hooks installed between runs while the setting is on. Confirm this asymmetry is intended.",
+    "The hook server still accepts relay-forwarded events (manual-compact relay tests, retired-pane relay source); once area 18 is cut these paths look unreachable.",
+    "Paired mobile/web clients appear only as traces here (structured adapter mobile deadlines, paired-client refresh); no card written, left to the area 18 inventory.",
+    "Overlaps: statusline usage feed and usage alerts (06); sign-in expiry notice and Stopped sign-in cause (07); Inbox Open in Code / Answer in Code (12); Next That Needs You, unread auto-ack and Done glow (03); tray menu (19).",
+    "No X cards: no third-party agent icons surfaced in this area's evidence; the agent catalog in area 02 likely owns them.",
+    "Activity view is still registered as a top-level view id while its flag is forced off for all users; the Inbox replaced it as the daily surface.",
+    "Critic r1: D-04-054 overlaps D-07-051 and D-19-053 (process-tree kill on close); merge or cross-reference at spec time.",
+    "Critic r1: agent identity from titles was folded into D-04-033 rules; D-03-058 (area 03) also claims title-based identity. Foreground-process identity is D-07-050 (area 07); its card lacks the wrapper rule (OMP wrapping Pi is recognised as OMP), now recorded on D-04-021.",
+    "Critic r1: D-04-040 raised to P0 because the 10-05 session usage meter reads its context figure.",
+    "Wave 2 patch (2026-10-06, round 4): added D-04-061 (Grok question tool means waiting) and D-04-062 (late Antigravity/Amp events after a finished turn are dropped); amended D-04-018 (Grok Notification wording and prompt wrapper), D-04-019 (Claude hook skips inside Devin) and D-04-029 (compaction continuation prompt ignored for Claude, OpenClaude, Kimi). Amended rules start with 'Wave 2:'."
+  ]
+}

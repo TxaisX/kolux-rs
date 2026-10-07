@@ -1,0 +1,101 @@
+# 11-git-review random sample round 3 (100 of 5410): file	title
+src/main/github/project-view.test.ts	rejects reserved single/double dot
+src/renderer/src/store/slices/github-work-items-runtime-routing.test.ts	bounds work-item cache entries across many repos
+src/renderer/src/store/slices/github-worktree-refresh-if-stale.test.ts	fetches linked issue details when the issue card section is visible
+src/main/git/runner-command-exec.test.ts	falls back to generic batch-mode SSH when opted-in config is unset
+src/main/gitlab/client-mr-review-actions.test.ts	fetches the current title before marking a merge request ready
+src/main/gitlab/mappers.test.ts	handles a single object with status
+src/main/git/remote-ref-probe-cache.test.ts	does not cache a probe killed on its deadline as a definitive miss
+src/main/github/github-api-repository.test.ts	keeps an indeterminate auth inventory unverifiable during candidate discovery
+src/main/ipc/folder-repo-git-upgrade.test.ts	costs one .git stat per folder project per tick and never lists a directory
+src/renderer/src/components/github-item-dialog-source-boundary.test.ts	routes PR file contents and runtime viewed invalidations through the task source context
+src/main/github/client-issue-source.test.ts	uses upstream for issue-only queries and origin for PR-only queries
+src/shared/git-discard-path-safety.test.ts	allows missing child paths whose nearest existing parent is the worktree
+src/main/git/status-discard-symlink.test.ts	removes untracked nested git repos selected for discard
+src/shared/git-history-message-allocation.test.ts	keeps a multiline commit body intact without materializing every message line
+src/main/ipc/terminal-git-credential-guard.test.ts	forwards only the guard decision and scalars to a detached host
+src/main/git/pack-refs-lock-ownership.test.ts	refuses a lock whose recorded owner is still running
+src/renderer/src/components/task-page-github-list-scroll-restore.test.ts	keeps the remembered offset armed when the list never becomes tall enough
+src/main/ipc/terminal-preview.test.ts	pushes a resync only when the PTY grid dimensions change
+src/shared/git-branch-line-total.test.ts	returns an all-zero total for a pure rename rather than omitting it
+src/main/git/worktree-configured-paths-concurrency.test.ts	bounds shared-directory stats while retaining configured order
+src/renderer/src/components/task-page-jira-create-fields.test.ts	trims plain string values
+src/main/github/pr-head-tracking-ref.test.ts	fails the pull-head fetch when the remote is not configured
+src/renderer/src/store/slices/worktrees-linked-review-push-target.test.ts	hydrates a missing push target for an existing linked GitHub PR
+src/renderer/src/runtime/gitlab-job-trace-client.test.ts	returns null for a check that is not a GitLab job, touching no transport
+src/main/git/fetch-error-classification.test.ts	does not match auth or network failures
+src/renderer/src/lib/linear-linked-work-item.test.ts	recognizes Linear-linked composer sources by provider or identifier
+src/main/github/client-pr-checks.test.ts	maps stale and startup_failure conclusions to failure and action_required to its own state
+src/main/git/worktree-mutation-route-invalidation.test.ts	drops the target route even when `git worktree add` fails late
+src/main/gitlab/mr-head-tracking-ref.test.ts	fetches a GitLab MR head into its remote-scoped Kolux ref for local repos
+tests/e2e/source-control-pr-generation-switch.spec.ts	keeps pending commit message generation attached to its original worktree
+src/renderer/src/components/task-page-cache-selectors.test.ts	selects host-scoped work-item cache entries for remote repos
+src/renderer/src/store/slices/hosted-review.test.ts	uses a distinct runtime method for stacked pull request creation
+src/main/gitlab/merge-request-creation.test.ts	creates SSH-backed merge requests without using the remote path as a local cwd
+src/main/jira/issues.test.ts	uses Server/DC api base path for comment attachment metadata lookup
+src/renderer/src/lib/smart-github-submit.test.ts	treats GitHub issue and pull URLs as submit-time source intent
+src/main/bitbucket/repository-ref.test.ts	does not cache transient SSH provider failures as unsupported repos
+src/main/github/client-pr-checks.test.ts	reports a resource-neutral not-found error when a workflow-run rerun 404s
+src/main/github/conflict-summary.test.ts	keeps WSL-distro derivations isolated from host derivations
+src/renderer/src/components/task-page-work-item-pagination.test.ts	never touches the count for window or failure outcomes
+src/main/git/worktree-porcelain-parsing.test.ts	preserves a locked marker and its reason
+src/main/gitlab/gl-utils.test.ts	returns undefined for an absent or unparseable header
+tests/e2e/source-control-discard-confirmation.spec.ts	keeps long untracked-file confirmation usable and deletes on confirm
+src/shared/commit-message-prompt.test.ts	treats bare `\\r` progress frames as line boundaries
+src/renderer/src/lib/react-commit-cascade-telemetry.test.ts	stays silent below the notice limit
+src/main/git/fork-remote-refspec.test.ts	builds the narrow (trailing-* suffixed) and wide refspec shapes
+src/main/git/repo-branch-conflict.test.ts	reports a remote conflict from the batched answer
+src/renderer/src/lib/linear-issue-workspace-attachment.test.ts	finds the first non-archived workspace linked to the issue identifier
+src/renderer/src/lib/react-commit-cascade-observer.test.ts	breadcrumbs when no hook can be reached at all
+src/renderer/src/runtime/runtime-linear-client.test.ts	rejects oversized local Linear search queries before IPC
+src/main/github/client-issue-source.test.ts	omits gh api cache args for no-cache recent work-item requests
+src/main/github/client-pr-check-details.test.ts	fetches check-run output, annotations, and workflow jobs for inline details
+src/main/git/gh-rate-limit-breaker.test.ts	matches primary rate-limit 403s but not secondary limits
+src/main/gitlab/gl-utils.test.ts	returns empty list for output with no hosts
+src/renderer/src/store/slices/diffComments.test.ts	rolls back on persist failure
+src/renderer/src/lib/github-source-runtime-context.test.ts	routes a runtime-owned repo to its owner runtime when the source view is local
+src/main/ipc/gitlab.test.ts	routes local WSL project GitLab issue, MR, work-item, and todo IPC through project git options
+src/main/text-generation/commit-message-text-generation-failure-sanitization.test.ts	keeps a scheme:// remedy URL intact while still redacting paths
+src/shared/commit-message-plan.test.ts	keeps the generated Codex model when model-like text follows an option terminator
+src/renderer/src/runtime/runtime-linear-client.test.ts	rejects filtered reads before an older runtime can return unfiltered issues
+src/renderer/src/lib/smart-github-submit.test.ts	uses the resolved PR title for workspace name, display name, and linked PR metadata
+src/main/git/upstream.test.ts	does not mark remote.pushDefault plus origin base branch as a push target
+src/main/git/canonical-repo-key.test.ts	returns undefined when Git printed nothing usable
+src/main/git/status-diff.test.ts	keeps distinct diff inputs on separate in-flight reads
+src/renderer/src/components/diff-comments/diff-comment-popover-position.test.ts	flips the popover above the line when it would overflow the bottom
+src/main/gitlab/issues.test.ts	gets a single issue from the project ref
+src/renderer/src/components/pull-request-page-host-boundary.test.ts	routes comment mutations through runtime source context when needed
+src/main/github/client-work-items.test.ts	returns open issues and PRs for the all-open preset query
+src/shared/gitlab-projects.test.ts	moves an existing entry to the front (dedupes by host + path)
+src/main/git/wsl-process-group-termination.test.ts	retains the guest identity from a large coalesced stderr chunk
+src/main/ipc/github-pr-refresh-routing.test.ts	keeps manual PR refresh validation strict
+src/shared/git-branch-line-total.test.ts	includes untracked additions the ranged diff cannot see
+src/main/git/command-runner/git-admission-span.test.ts	keeps the manual spawn span open through queue wait and child close
+src/main/git/upstream.test.ts	keeps a configured upstream whose remote name contains a slash
+src/renderer/src/store/slices/worktrees-git-identity-branch-title.test.ts	preserves linked reviews when branch identity only changes ref formatting
+src/shared/linear/issue-view-resume-state.test.ts	round-trips a restored view unchanged
+src/main/git/worktree-add-serialization.test.ts	lets the next creation run after one fails
+src/main/jira/client.test.ts	sends a non-browser User-Agent on Jira POST requests
+src/main/git/repo.test.ts	finds a local slashed branch when the query repeats the full branch name
+src/main/github/github-api-repository.test.ts	combines local repository and GitHub host execution options
+src/main/gitlab/mappers.test.ts	marks UNKNOWN when detailed_merge_status is non-mergeable but not a conflict
+src/main/linear/teams.test.ts	fetches every page of team labels
+src/main/git/fork-remote-stale-branch-refspec.test.ts	retries once after dropping a stale refspec, and returns on success
+src/renderer/src/store/slices/github-pr-branch-coordinator-events.test.ts	does not unlink an ambiguous worktree id shared by multiple hosts
+tests/e2e/korean-ime-terminal-shift-enter-commit.spec.ts	${chord.name} sends once with ${order}
+src/renderer/src/store/slices/github-pr-branch-hosted-review-cache.test.ts	does not overwrite a non-GitHub hosted review from GitHub PR refresh events
+src/main/git/worktree-created-description-real-git.test.ts	rejects a path that is not a worktree
+src/shared/keybindings-digit-index.test.ts	matches via the physical-code fallback when the key value is unavailable
+src/main/ipc/hosted-review.test.ts	uses the explicit owner when duplicate repos share an id and path
+src/renderer/src/components/github/pr-comment-code-context.test.ts	extracts newline-heavy context without splitting the full source
+src/main/git/wsl-linked-worktree-git-routing.test.ts	scopes a cached route to the exact primed folder workspace
+src/shared/git-fork-sync.test.ts	pushes the upstream default branch when the fork is only behind
+src/main/linear/issue-context-client.test.ts	normalizes explicit search workspace credential-load failures
+src/shared/git-unpushed-status.test.ts	reports synced for a never-published branch with no local commits
+src/main/git/local-repo-ref-maintenance.test.ts	translates a WSL repo answer back to the UNC path the main process can open
+src/main/github/client-work-items.test.ts	routes local WSL work-item listing through repo resolution and gh execution options
+src/main/gitlab/mappers-workitem.test.ts	produces a unified GitLabWorkItem with branch + author
+src/main/git/runner-gh-rate-limit-breaker.test.ts	keeps other buckets working while one bucket is blocked
+src/shared/doc-preview-scheme.test.ts	reports an empty relative path for a root request
+src/main/git/status-symlink-probe-budget.test.ts	probes matching normalized paths, retaining duplicate probes and original order
+src/main/text-generation/commit-message-text-generation-model-discovery.test.ts	keeps the Codex home locked after a discovery timeout until the child closes

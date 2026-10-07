@@ -1,0 +1,25 @@
+﻿kolux worktree overlap
+
+Usage: kolux worktree overlap [--worktree <selector>] [--json]
+
+Compare a worktree against its sibling worktrees for shared files and merge conflicts
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+
+Notes:
+  Read-only. Run before editing: a non-empty sharedFiles for a sibling means coordinate before touching those files.
+  sharedFiles come from each worktree's `worktree changes` file set (committed + uncommitted).
+  conflictPrediction compares committed branch tips only, via `git merge-tree --write-tree`; it does not see uncommitted changes on either side.
+  conflictPrediction is "unverifiable" on Git before 2.38 (no `--write-tree`), when either worktree is SSH-hosted, or if the check itself fails ΓÇö never reported as "clean" in those cases.
+  Bounded to the target worktree's own repo; it never scans other repos or refs. Includes every git worktree of that repo, including ones hidden from the sidebar.
+  A folder workspace returns unsupported: "folder" with no siblings, instead of failing.
+
+Examples:
+  $ kolux worktree overlap --json
+  $ kolux worktree overlap --worktree active --json
+

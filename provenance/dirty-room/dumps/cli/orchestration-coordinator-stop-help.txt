@@ -1,0 +1,15 @@
+﻿kolux orchestration coordinator-stop
+
+Usage: kolux orchestration coordinator-stop [--json]
+
+Retired: load the current orchestration skill
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+
+Notes:
+  This command performs no effects and returns the exact `skills get orchestration --full` recovery action.
+

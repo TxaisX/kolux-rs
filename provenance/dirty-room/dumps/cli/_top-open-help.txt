@@ -1,0 +1,16 @@
+﻿kolux open
+
+Usage: kolux open [--json]
+
+Launch Kolux and wait for the runtime to be reachable
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+
+Examples:
+  $ kolux open
+  $ kolux open --json
+

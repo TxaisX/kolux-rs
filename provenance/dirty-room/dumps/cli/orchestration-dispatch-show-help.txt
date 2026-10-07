@@ -1,0 +1,15 @@
+﻿kolux orchestration dispatch-show
+
+Usage: kolux orchestration dispatch-show --task <task_id> [--preamble] [--from <handle>] [--json]
+
+Show dispatch context for a task
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --task
+  --preamble
+  --from
+

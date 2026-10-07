@@ -1,0 +1,19 @@
+﻿kolux worktree rm
+
+Usage: kolux worktree rm --worktree <selector> [--force] [--run-hooks] [--json]
+
+Remove a worktree from Kolux and git
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --force                Force worktree removal when supported; does not force branch deletion
+  --run-hooks
+
+Notes:
+  Repo-defined kolux.yaml archive hooks are skipped unless --run-hooks is passed.
+  For Git worktrees, removal also attempts to delete the checked-out local branch, with or without --force. Kolux retains branches it knows predated the worktree and any branch whose changes it cannot prove are already merged.
+

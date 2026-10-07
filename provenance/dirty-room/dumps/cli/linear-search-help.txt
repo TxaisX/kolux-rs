@@ -1,0 +1,19 @@
+﻿kolux linear search
+
+Usage: kolux linear search <query> [--limit <n>] [--workspace <id>|all] [--json]
+
+Search connected Linear workspaces
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --limit <n>            Maximum number of rows to return
+  --workspace <id|all>  Connected Linear workspace id, or all
+  --query <text>        Text to search across Linear issues
+
+Examples:
+  $ kolux linear search "auth bug"
+  $ kolux linear search ENG --workspace all --json
+

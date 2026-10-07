@@ -1,0 +1,101 @@
+# 16-onboarding random sample round 1 (100 of 444): file	title
+src/renderer/src/components/feature-tips/CmdJPaletteFeatureTipVisual.test.tsx	falls back to default per-key chips when the live binding is unassigned
+src/renderer/src/components/onboarding/onboarding-milestones.test.ts	writes the timestamp the first time a milestone fires
+src/renderer/src/components/onboarding/onboarding-milestones.test.ts	treats an absent field the same as null
+src/renderer/src/components/feature-wall/FeatureWallSetupWorkflowActions.test.tsx	falls back to the first git repo when the active project is a folder
+src/main/star-nag/service-threshold-prompt.test.ts	does not show threshold prompts while the persisted cooldown is active
+src/renderer/src/components/feature-wall/feature-wall-setup-checklist-localized-copy.test.ts	has valid Korean and English catalog entries for all setup checklist steps
+src/renderer/src/components/feature-wall/feature-wall-animation-visibility.test.tsx	pauses the agent-status activity cycle while hidden and resumes in place
+src/renderer/src/components/feature-wall/feature-wall-setup-progress.test.ts	does not block agent capabilities on unavailable Computer Use access
+src/renderer/src/components/onboarding/use-onboarding-kit-state.test.ts	launches immediately, without opening the dialog, when the sample workspace prefills every required input and an agent is connected
+src/renderer/src/components/feature-wall/feature-wall-setup-progress.test.ts	does not pre-complete the step when two repos contribute only main checkouts
+src/renderer/src/components/feature-wall/newcomer-setup-checklist-items.test.ts	is true once every item is done and the signals have loaded
+src/renderer/src/components/feature-wall/newcomer-setup-checklist-items.test.ts	returns the first undone item in that order
+src/renderer/src/components/onboarding/use-onboarding-flow.test.ts	finishWithPlainSession() does nothing without a workspace
+src/shared/telemetry-feature-wall-events.test.ts	accepts the close depth summary payload
+src/renderer/src/components/feature-wall/feature-wall-setup-progress.test.ts	does not mark the step complete from an unconfirmed non-main worktree placeholder
+src/renderer/src/components/feature-wall/use-feature-wall-completion.test.ts	keeps persisted review visits and drops duplicates or unknown steps
+src/renderer/src/components/feature-wall/ConnectIntegrationsList.test.tsx	lists the code host alongside a connected tracker in the task summary
+src/renderer/src/components/contextual-tours/workspace-creation-tour-handoff.test.ts	opens the workspace composer without a tour handoff outside the agent sessions tour
+src/renderer/src/components/feature-wall/feature-wall-rail-navigation.test.ts	moves up past the current row
+src/renderer/src/components/contextual-tours/ContextualTourOverlay.test.tsx	wires Skip and Next callbacks
+src/renderer/src/components/feature-wall/FeatureWallSetupWorkflowActions.test.tsx	prompts for a project before setup-guide actions that need one
+src/renderer/src/components/contextual-tours/ContextualTourOverlay.test.tsx	can hide the primary action when the real target is the CTA
+src/renderer/src/components/contextual-tours/contextual-tour-gate.test.ts	advances the workspace-agent-sessions tour from split to the create-worktree step
+src/renderer/src/components/feature-wall/use-feature-wall-completion.test.ts	keeps setup-backed substeps complete after detection later reports unavailable
+src/main/star-nag/service-force-show-races.test.ts	allows force_show to bypass the persisted cooldown
+src/renderer/src/components/star-nag/StarNagToastHost.test.tsx	renders exact onboarding toast copy and confirms only after direct star succeeds
+src/renderer/src/components/feature-tips/feature-tip-startup-gate.test.ts	opens the CLI feature tip first for an existing user on app open
+src/renderer/src/components/onboarding/FeatureSetupInlineTerminal.test.tsx	uses the host command builder when the WSL runtime needs repair
+src/shared/telemetry-feature-wall-events.test.ts	accepts only known tile ids for tile focus telemetry
+src/renderer/src/store/slices/ui-contextual-tours.test.ts	does not start while a root confirmation surface is visible
+src/renderer/src/components/feature-wall/newcomer-setup-checklist-items.test.ts	is true only for the guided-first-run flow version (5)
+src/renderer/src/components/feature-tips/CmdJPaletteFeatureTipVisual.test.tsx	clears pending timers on unmount
+src/renderer/src/components/contextual-tours/ContextualTourOverlay.test.tsx	does not dismiss directly on global Escape when the panel button is missing
+src/renderer/src/components/onboarding/use-onboarding-your-work-state.test.ts	pickFolder hands off to the existing Add Project flow
+src/renderer/src/store/slices/ui-contextual-tours.test.ts	does not auto-start tours for profiles that are not eligible
+src/main/star-nag/service-prompt-moments.test.ts	queues onboarding completed while an agent value moment star check is in flight
+src/renderer/src/components/contextual-tours/contextual-tour-floating-position.test.ts	picks a parked target back up when it moves with no observer event
+src/renderer/src/components/feature-tips/feature-tip-telemetry.test.ts	tracks command palette tip exposure and acknowledgement
+src/shared/feature-tips.test.ts	describes the command palette tip as a passive acknowledgement
+src/renderer/src/components/contextual-tours/ContextualTourOverlay.visibility.test.tsx	pauses the 500ms full pass while hidden and re-measures on return
+src/renderer/src/components/contextual-tours/contextual-tour-overlay-measurement.test.ts	shows all defined browser steps in progress even when step 3 is hidden
+src/shared/feature-tips.test.ts	skips the CLI tip when the CLI is already installed
+src/shared/contextual-tours.test.ts	points the tasks tour at the row workspace action before toolbar fallbacks
+src/renderer/src/components/onboarding/YourWorkStep.test.tsx	lays out each sample card icon beside its title, not stacked above it
+src/renderer/src/components/contextual-tours/contextual-tour-floating-position.test.ts	keeps the panel glued to a target that moves for several frames after one wake
+src/renderer/src/components/star-nag/StarNagToastHost.test.tsx	dismisses active toast on hide without recording a user dismissal
+src/shared/telemetry-kolux-cli-feature-tip.test.ts	rejects raw CLI details and unknown result values
+src/renderer/src/components/feature-tips/feature-tip-cli-install-action.test.ts	returns needs-attention when the launcher is installed but not visible on PATH
+src/renderer/src/store/slices/ui-contextual-tours.test.ts	stores whether the feature was interacted with before the tour request
+src/renderer/src/components/feature-tips/CmdJPaletteFeatureTipVisual.test.tsx	does not schedule animation timers when reduced motion is preferred
+src/renderer/src/components/feature-tips/feature-tip-modal-state.test.ts	keeps rendering the opened tip after app open has marked it seen
+src/renderer/src/components/onboarding/OnboardingSkipConfirmationDialog.test.tsx	tells the person how to resume instead of just reassuring them it is quick
+src/renderer/src/components/setup-guide/use-setup-guide-telemetry.test.ts	emits visible setup-guide completions during the startup baseline window
+src/shared/contextual-tours.test.ts	orders the browser tour as grab, annotate, then import cookies
+src/renderer/src/components/contextual-tours/use-contextual-tour.test.ts	can record after hydration while preserving an explicit pre-open snapshot
+src/renderer/src/components/feature-wall/use-feature-wall-completion.test.ts	does not complete setup-backed items before the user visits them in the tour
+src/renderer/src/components/contextual-tours/workspace-creation-tour-handoff.test.ts	hands off from the agent sessions create-worktree step to the workspace-creation tour
+src/renderer/src/components/star-nag/StarNagToastHost.test.tsx	routes Later and unresolved close through existing star nag paths
+src/renderer/src/components/feature-wall/use-feature-wall-completion.test.ts	keeps the review workflow complete after the notes visit is restored
+src/main/star-nag/service-threshold-prompt.test.ts	logs a threshold exposure exactly once while the card remains visible
+src/renderer/src/components/contextual-tours/contextual-tour-gate.test.ts	skips missing later steps and keeps progress relative to visible steps
+src/renderer/src/components/onboarding/onboarding-flow-state.test.ts	keeps the v3 in-progress fallback
+src/main/star-nag/service-prompt-moments.test.ts	queues onboarding completed while a threshold star check is in flight
+src/renderer/src/components/onboarding/onboarding-folder-agent-startup.test.ts	seeds after a dismissed onboarding run before any project was added
+src/renderer/src/components/feature-wall/use-feature-wall-completion.test.ts	keeps persisted workbench visits and drops duplicates or unknown steps
+src/renderer/src/components/onboarding/onboarding-folder-agent-startup.test.ts	does not infer an agent from auto mode
+src/renderer/src/components/feature-wall/use-integration-connection-status.test.ts	starts with review active and tasks upcoming when nothing is connected
+src/renderer/src/components/setup-guide/use-setup-guide-progress.test.ts	marks old profiles as legacy-complete when the sidebar checklist was dismissed
+src/renderer/src/components/onboarding/use-onboarding-flow.test.ts	starts on screen 1 (welcome) for a fresh profile
+src/renderer/src/components/contextual-tours/contextual-tour-gate.test.ts	returns null when the target is inside a hidden subtree
+src/renderer/src/components/contextual-tours/use-contextual-tour.test.ts	waits for persisted seen ids before allowing a tour request
+src/renderer/src/store/slices/ui-contextual-tours.test.ts	marks contextual tours seen and persists them once
+src/renderer/src/components/onboarding/use-onboarding-kit-state.test.ts	opens the dialog instead of launching when the workspace is a real folder (required input not prefilled)
+src/main/star-nag/service-prompt-moments.test.ts	consumes agent value moment for cooldown suppression without showing later in the same version
+src/renderer/src/components/onboarding/onboarding-dismiss-target.test.ts	ignores non-primary clicks
+src/renderer/src/components/contextual-tours/request-contextual-tour-when-ready.test.ts	retries a forced tour request until the target starts
+src/renderer/src/components/feature-wall/feature-wall-setup-progress.test.ts	marks the browser step complete once a non-blank page has been viewed
+src/renderer/src/components/onboarding/onboarding-feature-setup.test.ts	builds privacy-safe telemetry payloads for selected feature setup items
+src/renderer/src/components/feature-wall/FeatureWallSetupWorkflowActions.test.tsx	chooses the active git repo for setup-guide workspace creation
+src/renderer/src/components/feature-tips/CmdJPaletteFeatureTipVisual.test.tsx	renders double-tap shortcut chips without plus separators
+src/renderer/src/components/star-nag/StarNagToastHost.test.tsx	does not dismiss the current main session when replacing an active toast
+src/renderer/src/components/contextual-tours/request-contextual-tour-when-ready.test.ts	stops when another tour becomes active before the target starts
+src/main/star-nag/service-direct-star.test.ts	records failed direct star after dismissal without clearing the cooldown or re-showing
+src/renderer/src/components/feature-wall/use-integration-connection-status.test.ts	does not show cached CLI auth as connected while preflight is stale or errored
+src/renderer/src/components/feature-wall/use-feature-wall-completion.test.ts	requires the Browser Use skill before completing the workbench browser step
+src/renderer/src/components/feature-wall/feature-wall-setup-progress.test.ts	marks all active steps complete without historical terminal split interaction
+src/main/star-nag/service-prompt-moments.test.ts	shows agent value moment prompts once per app version after eligibility passes
+src/renderer/src/components/contextual-tours/request-contextual-tour-when-ready.test.ts	can wait for another tour to clear before requesting the target tour
+src/renderer/src/components/onboarding/use-onboarding-your-work-state.test.ts	materializes the selected sample, closes the auto-opened launch-agents modal, and preselects its kit
+src/renderer/src/components/onboarding/onboarding-feature-setup.test.ts	skips openSetup and warns when the macOS Computer Use helper app is unavailable
+src/renderer/src/components/feature-wall/newcomer-setup-checklist-items.test.ts	returns null once every item is done
+src/renderer/src/components/onboarding/onboarding-flow-state.test.ts	leaves v6 progress at or before welcome unaffected (view_choice was right after it)
+src/renderer/src/components/onboarding/onboarding-folder-agent-startup.test.ts	queues the persisted default agent with onboarding telemetry
+src/main/star-nag/service-outcome-telemetry.test.ts	does not emit confirmed star telemetry for web fallback handoff
+src/renderer/src/components/contextual-tours/use-contextual-tour-target-watch.test.tsx	disconnects the MutationObserver after the retry cap when the target never appears
+src/renderer/src/components/contextual-tours/contextual-tour-gate.test.ts	does not start when the required first target is missing
+src/renderer/src/components/contextual-tours/ContextualTourOverlay.test.tsx	renders target rings only for steps that request a target pulse
+src/renderer/src/components/contextual-tours/ContextualTourOverlay.test.tsx	renders configured step controls inside the tour panel
+src/main/star-nag/service-prompt-moments.test.ts	shows onboarding completed prompts on the toast surface
+src/renderer/src/components/feature-wall/newcomer-setup-checklist-completion-toast.test.ts	does not fire again on a later mount once already shown (persisted, not per-launch)

@@ -1,0 +1,13 @@
+﻿kolux computer permissions
+
+Usage: kolux computer permissions [--id <accessibility|screenshots>] [--json]
+
+Open computer-use permission setup
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --id <id>             Identifier for a target item or permission
+

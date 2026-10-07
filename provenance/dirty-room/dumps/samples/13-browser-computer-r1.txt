@@ -1,0 +1,101 @@
+# 13-browser-computer random sample round 1 (100 of 3187): file	title
+src/main/browser/browser-cookie-import.test.ts	rejects non-JSON files
+src/main/browser/doc-preview-guest-policy.test.ts	blocks an external navigation without offering it to the renderer
+src/renderer/src/components/browser-pane/annotate/markup-screenshot-compose.test.ts	tries full size first, then shrinks (PNG only, descending)
+src/main/browser/browser-manager-grab-selection.test.ts	supports different cancellation reasons
+src/renderer/src/components/browser-pane/workspace-doc/HtmlDocPreview.toolbar.test.tsx	identifies the document by its workspace path and owning machine
+src/main/browser/cdp-ws-proxy.test.ts	detaches debugger and closes server on stop
+src/main/computer/desktop-script-provider-cache.test.ts	targets cached elements by session and window id after observe without a window selector
+src/shared/browser-url.test.ts	rejects non-web schemes for in-app navigation
+src/renderer/src/store/slices/browser-workspace-doc-location.test.ts	refuses a grant url arriving as the document title
+src/main/browser/browser-manager-auth-user-agent.test.ts	leaves the UA untouched on auth hosts for a popup owned by a native-UA profile
+src/main/browser/browser-client-upload-staging.test.ts	removes the staged directory when the page is released
+src/main/browser/agent-browser-orphan-sweep.test.ts	still sweeps when the flag holds any other value
+src/main/browser/browser-session-proxy.test.ts	carries bypass rules through to each partition
+src/main/browser/browser-route-webcontents-registry.test.ts	bounds unregistered route guests and destroys excess attachments
+src/main/browser/browser-client-host-placement-preparation.test.ts	starts the exact capable paired host and returns its client identity
+src/renderer/src/components/browser-pane/host-guest/use-webview-drag-passthrough-active.test.tsx	reports the drag state and re-renders on both edges
+src/renderer/src/components/browser-pane/ClientHostedBrowserPagePane.dead-guest.test.tsx	shows unavailability when a load-failure fallback finds the guest gone
+src/renderer/src/store/slices/browser.test.ts	repairs a stale active browser unified-tab label on an otherwise unchanged title update
+src/main/browser/remote-browser-socks-server.test.ts	normalizes listener wildcards only at the final route boundary
+src/main/browser/browser-text-insertion.test.ts	sends bounded CDP insertText chunks in order
+src/main/browser/client-route-cookie-import-source-store.test.ts	survives a process restart
+src/renderer/src/components/browser-pane/host-guest/webview-registry.test.ts	preserves explicit zoom across a parent-drift replacement
+src/renderer/src/components/browser-pane/host-guest/browser-guest-paint-retention.test.ts	flattens across tabs
+src/renderer/src/runtime/web-session-tabs-sync-browser-tabs.test.ts	replays a pre-response browser snapshot after canonical placement and focus are known
+src/main/browser/browser-certificate-trust-controller.test.ts	fails closed when an accepted endpoint presents a replacement bad certificate
+src/main/browser/browser-route-guest-popups.test.ts	gives popup descendants the same gesture-gated handler
+src/main/computer/desktop-script-provider-errors.test.ts	normalizes list-windows responses after provider handshake
+src/main/browser/browser-manager-grab-mode.test.ts	returns false when no grab is active
+src/renderer/src/components/browser-pane/stream-remote/remote-browser-stream-lifecycle.test.ts	keeps a transport error actionable when the stream never said ready
+src/main/ipc/browser-preview-tool-authorization.test.ts	still disposes a browser page grab through the same door
+src/renderer/src/components/browser-pane/annotate/useGrabMode.test.ts	keeps grab mode active when Escape comes from inside an annotation-edit row
+src/renderer/src/components/browser-pane/assemble-chrome/context-menu-positioning.test.ts	flips left when menu overflows right edge
+src/main/browser/doc-preview-guest-policy.test.ts	routes nothing for a scripted location change or window.open, whenever input happened
+src/renderer/src/store/slices/browser.test.ts	updates inactive browser pages without relabeling or rebuilding the workspace map
+src/main/browser/browser-guest-shortcut-forwarding.test.ts	resolves ctrl wheel direction from guest mouse input
+src/main/browser/browser-client-upload-command.test.ts	rejects a params payload whose files are not remote path strings
+src/renderer/src/runtime/web-runtime-session-browser-create-staged-hosting-intent.test.ts	waits in the group the user dragged the staged tab into
+src/main/browser/paired-runtime-browser-network-route.test.ts	binds and releases the exact browser-host outbound memory lease
+src/main/browser/doc-preview-grant-registry.test.ts	refuses parent traversal, absolute escapes and empty paths
+src/main/computer/desktop-script-provider-client.test.ts	preserves provider window indexes when the snapshot has no stable window id
+src/renderer/src/runtime/web-runtime-session-browser-create-staging.test.ts	leaves rows a snapshot already adopted alone when the unwind runs
+src/renderer/src/runtime/web-session-tabs-sync-host-restart-browser-rows.test.ts	answers for the placeholder epoch once it carries a version
+src/main/browser/browser-network-tunnel-client.test.ts	fails a never-connected stream on timeout and notifies the remote
+src/renderer/src/components/browser-pane/annotate/BrowserAnnotationSendMenuContent.test.tsx	is wired into both browser annotation send surfaces
+src/main/browser/browser-route-identity.test.ts	rejects empty and unbounded identity components
+src/main/browser/browser-cookie-import.test.ts	skips entries with missing required fields
+src/main/browser/agent-browser-bridge-session-lifecycle.test.ts	destroys session on process swap and re-inits with --cdp
+src/main/browser/agent-browser-bridge-command-transport.test.ts	enforces conditional wait timeouts at the bridge layer
+src/renderer/src/lib/browser-history-match.test.ts	honours the limit and returns the shared empty array when nothing matches
+src/main/computer/sidecar-client.test.ts	marks synthetic action results without provider verification as unverified
+src/main/browser/snapshot-engine.test.ts	assigns refs to interactive elements
+src/main/browser/browser-manager-client-hosted-downloads.test.ts	routes a route-guest popup download through the opener page instead of desktop Downloads
+src/main/browser/browser-network-tunnel-session.test.ts	caps aggregate retained destination bytes and releases exact stream accounting
+src/renderer/src/components/browser-pane/stream-remote/remote-browser-keyboard.test.ts	serializes modified letter shortcuts
+src/renderer/src/components/browser-pane/assemble-chrome/context-menu-positioning.test.ts	corrects positive offset (ancestor pushed element right/down)
+src/main/browser/browser-manager-grab-mode.test.ts	returns null and cleans up if guest is destroyed
+src/renderer/src/lib/workspace-session-staged-browser-tabs.test.ts	keeps adopted browser tabs and returns the snapshot untouched when nothing is staged
+src/main/browser/browser-client-host-command-dispatcher.test.ts	releases a retired generation cache before charging its replacement
+src/main/browser/browser-client-page-published-url.test.ts	stores a url exactly at the inventory url cap
+src/main/browser/grab-guest-script.test.ts	teardown script cancels pending awaitClick
+src/main/browser/browser-manager-guest-shortcuts.test.ts	respects disabled browser guest tab-switch bindings
+src/main/browser/browser-cookie-import.comet.test.ts	rejects explicit Comet profile selections that escape the browser root
+src/renderer/src/runtime/browser-workspace-tab-close-plan.test.ts	still host-closes a pageless mirror whose environment the worktree cannot name
+src/renderer/src/components/browser-pane/workspace-doc/workspace-doc-page-pane.test.tsx	refuses while the reader is in a different browser tab
+src/main/ipc/browser-preview-tool-authorization.test.ts	drives the preview guest from %s
+src/main/browser/browser-route-identity.test.ts	scopes partition ownership to one kolux profile and one environment
+src/main/browser/browser-manager-guest-shortcuts.test.ts	forwards browser guest Ctrl+Tab keydown and Ctrl release
+src/main/browser/doc-preview-guest-policy.test.ts	binds the guest from the main frame only
+src/main/browser/browser-client-page-command-executor.test.ts	keeps legacy-valid command identities when inventory cannot encode them
+src/main/browser/browser-cookie-import-write.test.ts	never writes a cookie whose partition could not be read, and counts it
+src/renderer/src/components/browser-pane/stream-remote/remote-browser-stream-lifecycle.test.ts	closes a page the runtime reports as missing instead of retrying it
+src/main/browser/browser-network-tunnel-client.test.ts	destroys every stream when the route closes or rejects a frame
+src/main/browser/browser-session-registry.test.ts	deletes a non-default profile
+src/renderer/src/runtime/web-session-browser-placement.test.ts	keeps its group and its cleanup claim when a later snapshot marks it again
+src/renderer/src/lib/pane-manager/client-hosted-browser-row-state.test.ts	treats a group with no active tab as the same empty selection context
+src/shared/browser-client-host-protocol.test.ts	negotiates page commands independently of the legacy lease stream
+src/renderer/src/hooks/useIpcEvents-close-routing-active-browser-tab.test.ts	no-ops when a source page belongs to no live workspace
+src/shared/browser-client-host-reconciliation-protocol.test.ts	negotiates reconciliation only beside commands and complete inventory
+src/main/browser/cdp-bridge-integration.test.ts	clears readyState polling timers when navigation times out
+src/main/browser/browser-route-session-registry.test.ts	bounds callers waiting on one pending partition setup
+src/renderer/src/components/browser-pane/describe-page/browser-page-url-display.test.ts	titles blank tabs New Tab and otherwise uses the provided title
+src/renderer/src/components/browser-pane/host-guest/browser-page-guest-recovery.test.ts	deduplicates manual retry while recovery is pending
+src/main/browser/browser-client-page-command-executor.test.ts	holds network resources when a failed mount may have created a guest
+src/renderer/src/components/browser-pane/assemble-chrome/browser-workspace-pane.adoption-chrome.test.tsx	adopts a client-hosted page without remounting the chrome
+src/main/browser/local-ssh-browser-partition-identity.test.ts	keeps the storage identity aligned with the paired nested-SSH identity
+src/renderer/src/store/slices/browser-page-conversion.test.ts	the return leg swaps convertedFrom for convertedTo, so Forward can re-cross
+src/renderer/src/store/slices/store-session-browser-hydration.test.ts	adopts a remote page this session already created
+src/main/browser/browser-manager-grab-mode.test.ts	tears down an armed overlay when disabling before selection starts
+src/main/browser/grab-guest-script.test.ts	arm script only allows safe attributes
+src/main/browser/browser-client-page-command-executor.test.ts	releases every exact resource when guest registration fails
+src/renderer/src/store/slices/browser-webview-cleanup.test.ts	re-remembers explicit zoom past the destroy-path forget (eviction is not a close)
+src/main/browser/browser-cookie-import.test.ts	never registers a restart replay when staging is unavailable
+src/renderer/src/runtime/web-session-browser-placement.test.ts	stays spent when the create rehomes onto a host-minted page id
+src/main/browser/paired-runtime-browser-client-host-runtime.test.ts	returns a rejected promise when pairing resolution fails
+src/main/browser/browser-session-cookie-staging.scoped.test.ts	rolls back the merge and keeps the staged retry when an insert fails
+src/renderer/src/lib/browser-history-match.test.ts	floors the recency contribution at zero rather than penalising old entries
+src/renderer/src/components/browser-pane/navigate/browser-reload-action.test.ts	reports not-ready when a live guest rejects the reload
+src/renderer/src/components/browser-pane/browser-download-destination-toast.test.ts	names the remote path and the execution host without repeating the file name
+src/main/browser/browser-client-file-channel-reconnect.test.ts	ignores a superseded connection failure and reports no channel once closed
+src/main/browser/browser-guest-shortcut-forwarding.test.ts	cleans up context-menu listener on teardown

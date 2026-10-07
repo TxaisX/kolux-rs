@@ -1,0 +1,20 @@
+﻿kolux linear relation remove
+
+Usage: kolux linear relation remove [<id>] [--current] --related <issue> --type blocks|blocked-by|related|duplicate-of [--workspace <id>] [--json]
+
+Remove a Linear issue relation
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --current              Use the current Kolux worktree linked Linear issue
+  --related
+  --type
+  --workspace <id>      Connected Linear workspace id
+  --id <id>             Identifier for a target item or permission
+
+Examples:
+  $ kolux linear relation remove ENG-1 --related ENG-2 --type related --json
+

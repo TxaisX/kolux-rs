@@ -1,0 +1,101 @@
+# 08-orchestration random sample round 2 (100 of 6440): file	title
+src/main/runtime/terminal-list-stale-leaf-liveness.test.ts	never demotes on an unavailable inventory — unknown liveness is not absence
+src/main/runtime/orchestration/db.test.ts	listTasksWithDispatch joins active dispatch metadata
+src/main/runtime/browser-client-download-transfers.test.ts	retries the relay collision rejection, which carries no errno code
+src/main/runtime/rpc/methods/orchestration/runs/migration-behavior.test.ts	rejects acknowledgment of legacy mail without effects
+src/main/runtime/orchestration/coordinator-decision-gates.test.ts	accepts the canonical sender of an imported federated Dispatch
+src/shared/orchestration-fleet-attention.test.ts	projects only successful root work as root completion
+src/main/runtime/rpc/dispatcher-feature-interactions.test.ts	records unmarked browser display RPCs as agent browser use
+src/main/runtime/rpc/methods/orchestration/worker/worker-output.test.ts	redacts dispatch capabilities from terminal composer drafts
+src/main/runtime/rpc/terminal-prompt-delivery-receipt.test.ts	returns all 16 busy-turn prompts as queued without duplicate Enter
+src/main/runtime/rpc/methods/github.test.ts	updates GitHub project issue types on the runtime server
+src/main/runtime/kolux-runtime-tests/terminal-listing.spec.ts	ignores cwd-only controller PTYs for malformed explicit worktree IDs
+src/main/runtime/rpc/methods/git.test.ts	rejects branch diff revisions that are not full object ids
+src/main/runtime/rpc/methods/orchestration/messaging/send.test.ts	throws when group resolves to no recipients
+src/main/runtime/kolux-runtime-tests/agent-status-and-waits-part-02.spec.ts	prefers fresh explicit working state over a stale permission title
+src/main/runtime/agent-session-reservation-admission.test.ts	exempts the requesting session so a committed create can be re-run
+src/main/runtime/rpc/methods/orchestration/messaging/send.test.ts	rejects an identity-less lifecycle send resolved through the coordinator handle
+src/main/runtime/mobile-subscribe-integration.test.ts	onPtyExit cleans up mobileSubscribers and pending timers
+src/main/runtime/rpc/methods/orchestration/gates/gate-run-authorization.test.ts	G3 refuses an unattested caller once the adopted Run is claimed
+src/main/runtime/rpc/methods/orchestration/worker/workers-new-worktree.test.ts	uses the exact setup handle instead of a configured tab title
+src/main/runtime/rpc/ws-transport.test.ts	binds the preferred port when the persisted fallback is taken
+src/main/runtime/agent-prompt-submission-runtime.test.ts	does not send another Enter after cancellation during verification
+src/main/runtime/rpc/methods/repo.test.ts	validates additive source settings at the remote RPC boundary
+src/main/runtime/orchestration/orchestration-worker-dispatch-db.test.ts	rolls back worker-start mutation acceptance when the Task cannot start
+src/main/runtime/browser-screencast-driver-attribution.test.ts	takes the mobile presence lock for a phone-scoped subscriber
+src/main/runtime/orchestration/structured-worker-group-addressing.test.ts	reaches a structured worker through @all
+src/main/runtime/kolux-runtime-tests/terminal-handles-and-agent-status-part-03.spec.ts	does not recognize partial Antigravity startup output as an agent
+src/main/runtime/kolux-runtime-structured-session-restore.test.ts	keeps historical journal parsing outside the terminal-safety fence
+src/main/runtime/rpc/methods/native-chat.test.ts	clips a pathological text block at the safety ceiling for mobile clients
+src/main/runtime/orchestration/db.test.ts	creates a task with no deps as ready
+src/main/runtime/kolux-runtime-terminal-create-idempotency.test.ts	adopts the original PTY after a runtime-process restart without rerunning startup
+src/main/runtime/terminal-list-stale-leaf-liveness.test.ts	keeps a leaf connected when its ptyId is in the controller inventory
+src/main/runtime/orchestration/federation-sync.test.ts	leaves the durable watermark suppressing acks after the checkpoint is released
+src/main/runtime/mobile-pairing-userdata-path.test.ts	skips legacy migration when only part of the canonical credential pair exists
+src/main/runtime/kolux-runtime-automations.test.ts	clears session reuse when retargeting to new-per-run
+src/main/runtime/kolux-runtime-browser-screencast-fanout.test.ts	replays the joiner snapshot that its pre-ready gate refused
+src/main/runtime/agent-prompt-submission-windows-submit-delay.test.ts	no longer burns the flat 1_500 ms on a common-sized prompt
+src/main/runtime/rpc/methods/client-ui.test.ts	accepts the whole debounced App writer payload
+src/main/runtime/rpc/methods/orchestration/federation/federation.test.ts	stops only the exact remote agent terminal
+src/main/runtime/rpc/methods/git.test.ts	forwards commit-message settings to the runtime
+src/main/runtime/structured-worker-terminal-read.test.ts	honours limit, and claims no cursor space it cannot honour
+src/main/runtime/kolux-runtime-tests/terminal-handles-and-agent-status-part-03.spec.ts	does not let stale PTY status override a fresh neutral PTY title
+src/main/runtime/mobile-session-terminal-retirement.test.ts	de-persists an exact leaf without removing its live sibling
+src/main/runtime/remote-desktop-driver.test.ts	does not retain a remote reclaim target when only a phone suppresses host resize
+src/main/runtime/kolux-runtime-tests/mobile-summaries.spec.ts	keeps hook monitoring mode when a newer mode-less OSC row reports the same work
+src/main/runtime/rpc/methods/worktree.test.ts	persists smart sort order on the runtime server
+src/main/runtime/rpc/methods/orchestration/runs/runs.test.ts	fences an unbound direct waiter when its pane creates a Run
+src/main/runtime/kolux-runtime-tests/agent-status-and-waits.spec.ts	continues terminal agent status fanout when a callback throws
+src/main/runtime/rpc/methods/browser.test.ts	routes browser session and environment controls to the runtime server
+src/main/runtime/mobile-subscribe-integration.test.ts	set/get round-trip
+src/shared/orchestration-task-display.test.ts	uses explicit task title and display name when provided
+src/main/runtime/orchestration-mailbox-detached-routing.test.ts	does not wake a filtered direct waiter for a routed type
+src/main/runtime/runtime-browser-client-page-creation.test.ts	does not retire a replacement after the close proof settles late
+src/main/runtime/rpc/methods/clipboard.test.ts	deletes upload state when saving fails during commit
+src/main/runtime/agent-session-pty-write-enforcement.test.ts	withholds the submit when the lease moves during the text/suffix pause
+src/main/runtime/orchestration/preamble.test.ts	uses === TASK === separator with the task spec appended
+src/main/runtime/rpc/orchestration-legacy-takeover-delivery.test.ts	lets a worker ask the new coordinator and get an answer after principal revocation
+src/main/runtime/rpc/methods/session-tab-agent-capability-mutations.test.ts	rejects ${method.name} when the structured row is hidden
+src/main/runtime/terminal-query-responder.test.ts	answers ?996n from palette luminance, not the pushed app mode (dark palette, light app mode)
+src/main/runtime/terminal-list-execution-host-scope.test.ts	leaves the host unset — never local — for a paired PTY that names no environment
+src/main/runtime/kolux-runtime-tests/terminal-side-effect-facts-part-02.spec.ts	falls back to the available mirror when authoritative provider history is unavailable
+src/main/runtime/rpc/methods/session-tabs-retirement-proof-delta.test.ts	resends the full proof set on the first frame of a fresh stream
+src/main/runtime/kolux-runtime-tests/runtime-availability.spec.ts	starts unavailable with no authoritative window
+src/main/runtime/rpc/orchestration-commit-notify-characterization.test.ts	replays one generic reply after notification throws post-commit
+src/main/runtime/kolux-runtime-tests/worktree-removal-and-reconciliation.spec.ts	stamps createdAt alongside lastActivityAt so CLI-created worktrees get the Recent-sort grace window
+src/main/runtime/kolux-runtime-tests/lineage-and-scan-cache-part-02.spec.ts	uses the connection-scoped repo when local and SSH repo ids collide
+src/main/runtime/rpc/methods/worktree-schemas.test.ts	validates additive navigation intent
+src/main/runtime/client-hosted-browser-row-hydration-census.test.ts	keeps the runtime accessor to its one IPC caller
+src/main/runtime/browser-host-lease-registry.test.ts	restores exact authority when reattach arrives before old connection cleanup
+src/main/runtime/rpc/methods/orchestration/worker/worker-routing-tier.test.ts	accepts --agent alongside --tier when it matches the coordinator agent
+src/main/runtime/rpc/methods/orchestration-structured-worker-redrive.test.ts	treats a re-attach reset as the same coalesced edge
+src/main/runtime/rpc/methods/github.test.ts	lists work items on the runtime server
+src/main/runtime/browser-host-client-page-creation.test.ts	rejects placement on a host owned by another paired device
+src/main/runtime/rpc/methods/session-tab-agent-status-projection.test.ts	withholds Claude rows from a paired runtime client that never negotiated them
+src/main/runtime/rpc/methods/orchestration/messaging/send.test.ts	returns invalid_argument for worker_done group sends through the dispatcher
+src/main/runtime/rpc/orchestration-legacy-takeover-dispatcher.test.ts	keeps post-takeover legacy ask routed to the adopted Run
+src/main/runtime/rpc/methods/orchestration/messaging/ask.test.ts	replies to a message
+src/main/runtime/mobile-presence-lock.test.ts	starts idle for unknown PTY
+src/main/runtime/rpc/methods/github.test.ts	lists issues on the runtime server
+src/main/runtime/orchestration/worker-provider-session.test.ts	rejects WSL relay provenance for a different local distro
+src/main/runtime/kolux-runtime-tests/terminal-creation-and-readiness-part-09.spec.ts	does not invoke a stale graph-leaf focus notifier after queued PTY work
+src/main/runtime/runtime-file-target-connection-field-ratchet.test.ts	routes through a module the compiler still checks
+src/main/runtime/rpc/methods/orchestration/worker/worker-launch-preferences.test.ts	requires exactly one task identity
+src/main/runtime/kolux-runtime-files-ssh-chunk-reads.test.ts	refuses a remote directory before reading
+src/main/runtime/terminal-list-payload-size.test.ts	drops ~30% of the wire payload when a caller opts out of visualLayouts
+src/main/runtime/rpc/methods/session-tabs-inventory-census-race.test.ts	deduplicates a post-watermark notification already projected by the census
+src/main/runtime/rpc/methods/orchestration/federation/federation-lifecycle-settlement.test.ts	returns a Run-home rejection for a mismatched remote task
+src/main/runtime/orchestration-structured-chat-lease.test.ts	withholds delayed pointer Enter when Structured Chat takes the lease
+src/main/runtime/kolux-runtime-tests/worktree-removal-and-reconciliation-part-03.spec.ts	treats forced runtime deletion of an already-missing unregistered worktree as cleanup
+src/main/runtime/host-terminal-close-persistence-durability.test.ts	pre-existing host-authoritative membership rebases the close away (not ours)
+src/main/runtime/structured-session-worktree-teardown.test.ts	closes them under force instead of orphaning the child
+src/main/runtime/kolux-runtime-tests/mobile-session-tabs-part-09.spec.ts	materializes a slept pane for a paired desktop client tab click, which asks for no wake
+src/main/runtime/orchestration/adopted-structured-pointer-delivery.test.ts	still writes through when nothing owns the pane
+src/main/runtime/terminal-identity-probe.test.ts	propagates "could not look" rather than reporting it as a dead handle
+src/main/runtime/fit-override-integration.test.ts	full lifecycle: fit → getSize → restore → verify PTY dims
+src/main/runtime/rpc/methods/worktree-rm-host-qualification.test.ts	fails closed when an old-client row has no host evidence
+src/main/runtime/mobile-notification-replay.test.ts	does not duplicate an event that arrived on both live stream and replay
+src/main/runtime/terminal-interactive-wait-visibility.test.ts	reports no wait once the agent is idle again
+src/main/runtime/kolux-runtime-tests/mobile-summaries.spec.ts	marks saved browser tabs as host sidebar activity like desktop
+src/main/runtime/worktree-list-host-scope.test.ts	does not report configured hosts as omitted from a --repo listing
+src/main/runtime/runtime-git-branch-compare-admission.test.ts	forwards background admission to the SSH execution host

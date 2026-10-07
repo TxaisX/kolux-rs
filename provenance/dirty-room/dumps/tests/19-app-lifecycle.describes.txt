@@ -1,0 +1,585 @@
+# 19-app-lifecycle: count	describe title  (584 unique)
+9	createMainWindow
+7	updater
+5	Store
+2	preflight
+1	app icon selection
+1	resolveAppImageRuntimeIdentity
+1	hasAppImagePathEnvironment
+1	asar-transparent rm
+1	renderer crash breadcrumb attribution
+1	coalescedBreadcrumbs stays bounded (leak regression)
+1	orphaned coalesced breadcrumb cleanup
+1	crash breadcrumb store
+1	a per-pane burst against the fixed-size ring
+1	formatCrashReportCopyText
+1	CrashReportStore
+1	attachDetails
+1	waitForCrashMinidump
+1	captureMinidumpSignature
+1	Crashpad dump pruning
+1	recordDurableCrashBreadcrumb
+1	expected teardown state
+1	buildGpuCrashDiagnostics
+1	GpuCrashDiagnosticsRecorder
+1	GPU crash diagnostics production wiring
+1	GpuCrashFallbackTracker
+1	isGpuFallbackCrashCandidate
+1	1.4.190 win32 GPU-child crash cluster
+1	engageGpuFallbackAfterCrashBurst
+1	promptForGpuFallbackRecoveredLaunch
+1	handleGpuFallbackRecoveredLaunch
+1	recovered safe-graphics production wiring
+1	promptForGpuFallbackRestart
+1	main process lifecycle identity
+1	parseMinidumpCrashSignature
+1	minidumpSignatureDetails
+1	pre-gone host memory
+1	shouldRecordProcessGoneCrash
+1	shouldRecoverRendererAfterProcessGone
+1	ProcessGoneDedupe
+1	process gone diagnostics
+1	recordProcessGoneCrash killed/1 ordering
+1	recordProcessGoneCrash
+1	minidump signature attachment
+1	sibling process-death attribution
+1	RendererRecoveryCircuitBreaker
+1	self-initiated tree kill breadcrumb
+1	buildSuppressedProcessGoneBreadcrumbData
+1	classifySubprocessCommand
+1	recordSubprocessSpawn
+1	startMainThreadChurnProbe
+1	renameDurable
+1	hang detection marker
+1	createHangWatchdogDetectionLoop
+1	resolveHangWatchdogWorkerPath
+1	main_thread_hang_detected telemetry schema
+1	recordHangObservation
+1	watchdog worker entry
+1	installMainThreadHangWatchdog
+1	removeHostTree against a tree holding an asar archive
+1	AppImage CLI registration startup repair
+1	diagnostics IPC handlers
+1	isSupportedFeedbackImageContentType
+1	validateFeedbackImages
+1	submitFeedback (PROD-1: opens a GitHub issue, never contacts a server)
+1	testLocalNetworkConnection
+1	WatcherProcessCrashFuse
+1	isCommandOnPath
+1	WSL preflight caching
+1	Windows preflight Path refresh reproduction
+1	describeReadDirPathShape
+1	buildReadDirErrorBreadcrumb
+1	runtime environment diagnostics broadcast
+1	registerRuntimeEnvironmentHandlers
+1	telemetry IPC handlers
+1	cancelUnreadResponseBody
+1	LinuxLidSleepAssertion
+1	quoteForPosixShell
+1	resolveTrustedExecutable
+1	buildLinuxPackageInstallCommand
+1	hasTrustedPackageManagerFor
+1	redactLinuxPackageInstallText
+1	createUpdaterDiagnosticLogger
+1	captureLinuxPackageArtifact
+1	clearTrackedLinuxPackageArtifact
+1	getLinuxRootPackageType
+1	isExternallyManagedLinuxInstall
+1	loadLocalBuildCandidate
+1	packaged local build compatibility contract
+1	startLocalBuildFeed
+1	probeMacosFullDiskAccess
+1	getMacosFullDiskAccessStatus
+1	ensureMacPressAndHoldDefault
+1	platform guard
+1	respects an explicit user setting
+1	domains we do not own
+1	failures leave the decision open
+1	interpretDefaultsRead
+1	refuses to call a failed probe unset
+1	readBundleIdentifierFromExecutablePath
+1	startup wiring
+1	MacosSystemSleepAssertion
+1	tcc prompt notice threshold
+1	parseTccPromptEvent
+1	isKoluxAttributedPrompt
+1	MacosTccPromptWatch
+1	collectMemorySnapshot on Windows
+1	parsePsOutput
+1	collectSubtree
+1	collectMemorySnapshot
+1	host memory
+1	host availability parsers
+1	hydrateLocalPtyRegistryAtBoot
+1	process memory metric
+1	parseWindowsProcessOutput
+1	parseTypeperfProcessOutput
+1	default-session proxy request guard
+1	classifyMacSystemResolverHealth
+1	readCurrentProcessMacSystemResolverHealth
+1	parseMacTailscaleDnsDiagnostic
+1	withMacTailscaleDnsHintForDiagnostic
+1	withMacTailscaleDnsHint
+1	applyProxySettingsToSession
+1	Electron proxy settings
+1	architectural invariant — telemetry / observability lane isolation
+1	bundle — submission ID
+1	bundle — collection
+1	validateUploadUrl
+1	uploadBundle and deleteBundle
+1	diagnostic upload HTTP
+1	withGitSpan sampling
+1	addWorktreeCreatePhaseAttributes
+1	local-file-sink — basic write
+1	local-file-sink — rotation
+1	local-file-sink — listing + clearing
+1	local-file-sink — robustness
+1	redactString command-line and non-http URL secrets
+1	environment line redaction parity
+1	redactor — provider-key fingerprints
+1	${label}
+1	redactor — labeled key-value
+1	redactor — URL userinfo strip
+1	redactor — .env-shape line
+1	redactor — attribute-key blocklist
+1	redactor — server mode adds install_id keys
+1	redactor — recursive value redaction
+1	redactor — idempotence
+1	redactor — span shape
+1	tracer — basic span lifecycle
+1	tracer — attributes and events
+1	tracer — context propagation via AsyncLocalStorage
+1	tracer — withSpan auto-fail on throw
+1	tracer — no-op when sink is unset
+1	guided first run (flow v5) normalization
+1	view-choice screen removed again (flow v7) normalization
+1	normalizeNotificationSettings ACCT-2/AGENT-4 fields
+1	persistedNotificationSettingsRepaired
+1	updateSettings terminalMinimumContrastRatio
+1	updateSettings views & sessions defaults
+1	migrateAgentYoloDefaults
+1	stripRetiredGlobalSettings
+1	corrupt primary when the safety copy cannot be written
+1	corrupt primary state file
+1	migrateLegacyPersistedKeysAndValues
+1	MetadataLineageOperations batch metadata pruning
+1	retired Agents sidebar setting
+1	app theme setting
+1	retired default TUI agent
+1	workspace-views: terminalGridChrome is never stamped by the per-load normalizer
+1	workspace-views P0: customAgents
+1	Views & sessions settings (screen 12)
+1	normalizeLoadedProjectCatalog
+1	persisted-state redundancy
+1	applySecretSentinelSubstitutions
+1	persisted state survives a save/load round trip
+1	store signals to the worktree metadata prune gate
+1	Store keeps runtime-authored session fields across desktop writes
+1	HOST_PARTITION_REDUNDANT_GLOBAL_FIELDS
+1	parseWorkspaceSessionsByHostId global-field residue
+1	workspace session terminal binding replay
+1	worktree meta alias projection
+1	worktree metadata write normalization
+1	persisted remint pane-key aliases
+1	remapManuallyUnreadTurnPaneKeys
+1	deleting a workspace owner session fields
+1	workspace session worktree ownership
+1	normalizeTerminalLayoutSnapshotForPersistence
+1	workspace pane normalization tab index
+1	preserving runtime-authored workspace session fields
+1	createAutomationRun
+1	listAutomationRunsPage
+1	local worktree metadata scan expectations
+1	pruneSessionlessMissingLocalWorktreeMetadataForRepo
+1	selectProbeableLocalWorktreeMetadataCandidates
+1	mergeProjectHostSetupCompatibilityState
+1	normalizeWorktreeLinkedItemMetadata
+1	gcStaleWorktreeMeta
+1	gcStaleWorktreeMeta unreachable storage
+1	async persistence write path avoids synchronous fs syscalls
+1	Store.migrateTabSwitchKeybindings
+1	Store.migrateWorkspaceView
+1	Store.migrateWorktreeIdentity
+1	feature interaction UI broadcast benchmark
+1	Store host-partitioned workspace sessions
+1	load-time normalization durability
+1	loading Store extraction seams
+1	loading Store write-risk characterization
+1	httpProxyUrl secret recovery
+1	persistence single-serialize save guard
+1	proxy-guarded fetch call-site audit (main)
+1	quit-path durable writes never park the main thread
+1	shell startup feature selection
+1	shell startup identity scanner
+1	shell startup output scanner
+1	isTransientSqliteContention
+1	classifySqliteReadFailure
+1	SyncDatabase statement cache
+1	SyncDatabase read-only opens under contention
+1	bootstrap fatal exit guard
+1	maybeAutoRenameWorkspaceOnFirstStructuredTurn
+1	CLI launch redirect: entry-path form
+1	CLI launch redirect: command form
+1	CLI launch redirect: spawning
+1	installDevParentDisconnectQuit
+1	installDevParentWatchdog
+1	installDevParentSignalQuit
+1	patchPackagedProcessPath
+1	configureDevUserDataPath
+1	configureKoluxUserDataPathEnv
+1	shouldInstallManagedHooks
+1	configureElectronNetworkCompatibility
+1	disableUnsupportedChromiumFeatures
+1	enableMainProcessGpuFeatures
+1	safe graphics mode startup switches
+1	startup ordering
+1	shouldSuppressDevEducation
+1	suppressDevEducationForStore
+1	dev-instance-identity
+1	ensureVirtualDisplayForHeadlessServe
+1	hasUsableLinuxDisplay
+1	startFirstWindowStartupServices
+1	gpu-fallback-marker
+1	GPU fallback command-line switches
+1	handleGpuChildCrash vs the install-dir ACL verdict
+1	presentGpuFallbackRecoveredLaunchPrompt vs a marker retired since it was read
+1	headless PTY registry hydration ordering
+1	host port bootstrap wiring
+1	hydrateShellPath
+1	mergePathSegments
+1	Windows shell PATH hydration
+1	legacy worker renderer recovery
+1	resolveLoginShellEnvironment
+1	main-process fatal error guards
+1	ready-phase concurrency
+1	initial proxy application ordering
+1	os-opened markdown delivery ownership
+1	markdownPathsFromArguments
+1	OsOpenedMarkdownFileState
+1	resolveOpenedMarkdownDocuments
+1	os-opened markdown wiring
+1	pre-gone crash sampling startup wiring
+1	migrateLegacyNightshiftUserData
+1	translatedSymlinkTarget
+1	computeRendererHeapCeilingMb
+1	enableRendererHeapHeadroom
+1	cleanupRetiredOpenCodeUserData
+1	run-electron-vite-dev web client prepare
+1	run-electron-vite-dev
+1	secret protection report deferral wiring
+1	secure DNS census
+1	serve desktop activation wiring
+1	createServeDesktopActivationGate
+1	serve argv rewrite vs CLI launch redirect ordering
+1	serve-mode-argv
+1	getServeOptions
+1	registerServeSignalHandlers
+1	pre-ready termination under real Electron
+1	headless lock-loss exit contract
+1	acquireSingleInstanceLock
+1	shouldActivateDesktopForSecondInstance
+1	SINGLE_INSTANCE_ALREADY_RUNNING_EXIT_CODE
+1	shouldSkipSingleInstanceLock
+1	logSingleInstanceLockFailure
+1	shouldBypassSingleInstanceLock
+1	logSingleInstanceLockBypass
+1	writeStartupDiagnosticLine
+1	isStartupDiagnosticsEnabled
+1	logStartupDiagnostic
+1	shouldQuitWhenAllWindowsClosed
+1	Windows desktop shell PATH startup
+1	probeWindowsInstallDirAcl
+1	startWindowsInstallDirAclRepairIfPoisoned
+1	describeInstallDirAclPoison
+1	install-dir ACL repair vs the GPU safe-graphics marker
+1	isInstallDirAclSuspect
+1	repairKnownPoisonedInstallDirBeforeWindow
+1	a repair marker recording a completed repair
+1	a clean probe verdict
+1	the probe-pending grace window
+1	isBlockingInstallDirAclRepairInFlight
+1	install-dir ACL repair startup wiring
+1	repairWindowsInstallDirPackageAcl
+1	isInstallDirAclPoisonVerdict
+1	Windows shell PATH hydration coordination
+1	Windows shell PATH ownership
+1	Windows shell PATH restoration
+1	ensureWindowsUserDataAclGrant
+1	createWslCliReconciliationStartupBarrier
+1	burst-cap
+1	classifyError
+1	setOptIn()
+1	persistBannerAcknowledgeWithoutEmitting()
+1	shouldOptOutSdkAtInit()
+1	shutdownTelemetry()
+1	track()
+1	cohort-classifier
+1	resolveConsent
+1	install-id
+1	generateInstallId
+1	readInstallId
+1	onboarding-cohort-classifier
+1	onboarding feature setup telemetry validation
+1	telemetry validator warn cache
+1	validate
+1	update install exit watchdog
+1	detectWindowsInstallLockProcessName (PROD-4)
+1	resolveUpdateInstallOutcome (PROD-4)
+1	topChangelogLines (PROD-3)
+1	fetchChangelog (PROD-3: reads the GitHub release, never a .invalid placeholder)
+1	registerAutoUpdaterHandlers linux package artifact tracking
+1	recordUpdaterLifecycle
+1	linux package recovery actions
+1	fetchNewerReleaseTagsWithReadiness
+1	fetchNewerReleaseTag
+1	listReleaseBuilds
+1	resolveTargetBuild
+1	updater test harness real-timer tracking
+1	abandoned updater instance
+1	updater module loader
+1	updater check failure handling
+1	compareVersions
+1	isPrereleaseVersion
+1	isMissingUpdateManifestFailure
+1	isBenignCheckFailure
+1	statusesEqual
+1	isReleaseAssetsPublishingFailure
+1	quitAndInstall failure carries the updater cause
+1	updater externally managed Linux installs
+1	updater Linux root packages
+1	updater mac install handoff
+1	attachMainWindowServices
+1	writeFileToClipboard
+1	saveClipboardImageBufferAsTempFile
+1	buildClipboardImageThumbnail
+1	registerClipboardHandlers
+1	remote clipboard cleanup benchmark
+1	remote clipboard staging failures
+1	legacy remote clipboard cleanup scheduling
+1	remote clipboard staging filesystem contract
+1	remote clipboard staging ownership
+1	legacy remote clipboard staging compatibility
+1	clipboard image paste for a runtime-owned SSH workspace
+1	writeClipboardTextAndVerify
+1	readWindowsClipboardImageFileAsPng
+1	renderer recovery reload watchdog
+1	system resume relay
+1	minimize to tray on close (win32)
+1	buildEditableContextMenuTemplate
+1	rich markdown context-menu table targets
+1	focusExistingMainWindow
+1	isBackgroundLaunch
+1	isWindowlessLaunch
+1	showWindowWithoutStealingFocus
+1	applyBackgroundActivationPolicy
+1	getOtherProfileWorktreeIdsForHistoryGc
+1	getKnownWorktreeIdsForHistoryGc
+1	createMacAppActivationHandler
+1	isMacosTahoeOrNewer
+1	main window visibility helpers
+1	main window webview security
+1	kolux-preview scheme admission
+1	requestMobileMarkdownFromRenderer
+1	privileged window navigation policy
+1	renderer document navigation
+1	RendererPublicationThrottle
+1	presentRendererRecoveryPrompt
+1	superseding recovery navigations
+1	runtime renderer notification sender
+1	requestSessionTabCloseFromRenderer
+1	isTerminalSessionWindowRendererForPty
+1	openOrFocusTerminalSessionWindow
+1	closeTerminalSessionWindow
+1	focusTerminalSessionWindow
+1	listTerminalSessionWindows
+1	requestTerminalTabCloseFromRenderer
+1	updater linux package recovery IPC handlers
+1	resolveWindowCloseAction
+1	windows command line recovery health
+1	parseWindowsCimProcessRows
+1	windows process table
+1	PowerShell fallback when the native binding is absent
+1	sticky wedge
+1	resolving the native reader
+1	warning when command-line recovery is refused host-wide
+1	windows-process-tree command line patch
+1	windows-process-tree command line addon
+1	terminatePtyJob
+1	listPtyJobProcessIds
+1	assignHostProcessToKillOnCloseJob
+1	PTY Job Object teardown breadcrumbs
+1	terminateWindowsProcessTree
+1	native preload destructive app actions
+1	readRendererProcessMemory
+1	native preload linux package recovery methods
+1	renderer startup runtime routing
+1	crash report submit notices
+1	CrashReportDialogSurface overflow containment
+1	useCrashReportCopy
+1	React #185 bystander attribution
+1	RecoverableRenderErrorBoundary lazy chunk containment
+1	RecoverableRenderErrorBoundary after a recovery reload never lands
+1	githubProjectKeys
+1	isPreflightIssueDismissed
+1	landing preflight issues
+1	landing preflight runtime boundary
+1	LinuxPackageInstallRecoveryCard copy
+1	LinuxPackageInstallRecoveryCard copy action
+1	LinuxPackageInstallRecoveryCard hashing state
+1	LinuxPackageInstallRecoveryCard details
+1	LinuxPackageInstallRecoveryCard reveal
+1	LinuxPackageInstallRecoveryCard without a usable command
+1	LinuxPackageInstallRecoveryCard keyboard
+1	update card error model precedence
+1	UpdateCard install consent
+1	UpdateCard Windows signature failures
+1	UpdateCard hourly builds
+1	UpdateCard local builds
+1	UpdateCard Linux package-install recovery
+1	UpdateCard recovery keyboard and motion
+1	setUpdateStatus changelog caching
+1	dismissUpdate
+1	updateCardCollapsed
+1	markUpdateReassuranceSeen
+1	hydratePersistedUI update fields
+1	UpdateCard visibility gates
+1	HTTP/2 update error detection
+1	full update lifecycle through setUpdateStatus
+1	UpdateInstallFailureNotice (PROD-4)
+1	UpdateReadyToast
+1	window-close-request-coordinator
+1	delayed agent startup subscription
+1	app command dispatch
+1	app menu selection actions
+1	renderer crash diagnostics
+1	exact V8 heap statistics
+1	process footprint outside the heap counters
+1	shouldRenderDesktopWindowChrome
+1	feature education telemetry helpers
+1	hasAttachableFeedbackImage
+1	readFeedbackImageFiles
+1	httpLinkActionDestinationsFor
+1	buildHttpLinkActions
+1	resolveModifierRouting
+1	modifier routing across link source owners
+1	openHttpLink
+1	openHttpLink modifier routing
+1	local preflight context caches
+1	local preflight context
+1	isMacAppDataPath
+1	shouldPollActiveGitStatus
+1	getRendererAppPlatform
+1	session write subscriber defers writes across a closed persistence gate
+1	startup UI hydration fallback
+1	typing latency diagnostic lifecycle
+1	summarizeLatencySamples
+1	typingSampleDurationMs
+1	summarizeWorktreeNesting
+1	summarizeTypingScaleCensus
+1	typing latency sample window
+1	getUpdateCheckClickOptions
+1	registerUpdaterBeforeUnloadBypass
+1	formatWindowLabel
+1	formatRateLimitWindowChipLabel
+1	installWindowVisibilityInterval
+1	installWindowVisibilityTimeoutPoller
+1	installWindowVisibilitySubscriptionParking
+1	collectActiveWorkspaceSshTargetIds
+1	reconnectSshTargetForRendererStartup
+1	restoreSshConnectionsForStartup
+1	createMemorySlice
+1	capturePersistedUIWriteBaseline
+1	PERSISTED_UI_WRITE_BASELINE_FIELDS
+1	diffPersistedUIWriteFields
+1	manuallyUnreadTurnsByPaneKey write round-trip
+1	agentPermissionModeByWorktree write round-trip
+1	persistedUIWriteFieldsToWireUpdate
+1	createPreflightSlice
+1	runtime-status diagnostics
+1	refreshRuntimeEnvironmentStatus diagnostics
+1	app version comparison
+1	child_process import boundary
+1	closeProcessRegistry
+1	forceTerminateProcessTree
+1	process-tree-kill breadcrumb seam
+1	RetryableProcessExitProof
+1	runProcess termination failure
+1	resolveSpawn
+1	runProcessSync
+1	bounded output
+1	unkillable children
+1	abort
+1	stdin delivery failures
+1	a signal that is already aborted
+1	output truncation
+1	parseWindowsCmdShim
+1	quoteWindowsArgument
+1	buildWindowsCmdShimCommandLine
+1	isCmdInterpretedProgram
+1	line breaks
+1	direct child-process calls hide the Windows console
+1	hasCodexNativeDraftFlag
+1	shouldUseShellReadyStartupDelivery
+1	feature education telemetry constants
+1	local build compatibility
+1	capturedDigitRowChordsFromSymbolicHotkeysJson
+1	resolveCapturedDigitChordsForLayout
+1	findMacSystemHotkeyConflicts
+1	parseManualNetworkAddress
+1	IPv4
+1	Tailscale MagicDNS hostname
+1	arbitrary hostnames (DDNS / self-hosted domains)
+1	port suffix
+1	IPv6
+1	full URL
+1	length and whitespace
+1	parseServerShareAddress
+1	isNetworkHostPath
+1	isForeignNetworkHostPath
+1	network proxy settings
+1	evaluateCompat
+1	evaluateRuntimeCompat
+1	quick-open readdir memory limits
+1	react update depth attribution
+1	release channel
+1	Windows setup-agent sequencing
+1	setup script prompt schemas
+1	setup script telemetry payload builders
+1	buildStartupCommandSubmission
+1	isBracketedPasteSafeShell
+1	$name
+1	commonPropsSchema
+1	feature education telemetry event schemas
+1	feature_interaction_usage_bucket_reached schema
+1	app_starred_kolux schema
+1	star_nag_outcome schema
+1	agent_error schema
+1	daemon_lifecycle schema
+1	workspace_created schema
+1	agent_started schema
+1	agent_prompt_sent schema
+1	agent_hook_unattributed schema
+1	add_repo_setup_step_action schema
+1	add_repo_default_checkout_handoff schema
+1	workspace_create_failed schema
+1	settings_changed schema
+1	exported enum schemas
+1	remote_outbound_budget_close schema
+1	evaluateUpdateInstallAttempt
+1	isWindowsSignatureCheckUnavailableFailure
+1	isWindowsSignatureMismatchFailure
+1	openWindowsConsoleInput
+1	stdioForWindowsInteractiveChild
+1	expandWindowsEnvironmentVariables
+1	expandWindowsPathEnvironmentVariables
+1	windows lane tree removal
+1	parseSddlDacl
+1	resolveSddlSid
+1	localDomainSidOf
+1	transient lock removal options
+1	POSIX fresh startup golden
+1	assertPairedClientWindowRevealed
+1	paired client background safety
+1	macOS press-and-hold default
+1	off macOS
+1	Resource Manager unbound-session safety

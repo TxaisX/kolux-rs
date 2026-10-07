@@ -1,0 +1,34 @@
+﻿kolux linear create
+
+Usage: kolux linear create --title <title> [--body <text> | --body-file <path|->] [--team <key|id>] [--project <projectId-or-exact-name>] [--state <stateId|exact-name>] [--assignee me|<userId>] [--priority none|low|medium|high|urgent] [--estimate <number>] [--due-date <yyyy-mm-dd>] [--label <labelId-or-exact-name>]... [--parent <id> | --parent-current] [--write-id <uuid>] [--workspace <id>] [--json]
+
+Create a Linear issue
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --title <text>        New Linear issue title
+  --body <text>         Linear comment or issue body
+  --body-file <path|->  Read Linear body from a file or stdin
+  --team <key>          Linear team key
+  --project
+  --state
+  --assignee
+  --priority
+  --estimate
+  --due-date
+  --label
+  --parent <id>         Parent Linear issue key, id, or URL
+  --parent-current      Use the current linked issue as parent
+  --write-id <uuid>     Retry id from linear_write_unconfirmed
+  --workspace <id>      Connected Linear workspace id
+
+Notes:
+  Use --body-file - to read multiline issue bodies from stdin.
+
+Examples:
+  $ kolux linear create --title "Investigate flaky login" --team ENG --project "Launch"
+  $ kolux linear create --title "Follow-up bug" --parent-current --body-file - --json
+

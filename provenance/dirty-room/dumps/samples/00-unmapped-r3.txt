@@ -1,0 +1,101 @@
+# 00-unmapped random sample round 3 (100 of 2893): file	title
+src/shared/client-environment-info.test.ts	formats version, OS, and optional shell for copy-paste
+src/shared/branch-prefix.test.ts	returns the git username for the git-username strategy
+src/renderer/src/store/slices/codex-restart-notice-lifecycle.test.ts	leaves the notice map identity alone when nothing is dismissable
+src/renderer/src/store/slices/local-detected-agent-state.test.ts	retries after an authoritative refresh fails without a usable cache
+src/renderer/src/components/hover-reveal-touch-action-visibility.test.ts	declares the can-hover variant so touch devices skip the hover-only hide
+src/shared/grok-session-paths.test.ts	reuses a successful discovery from cache without another scan
+src/shared/map-with-concurrency.test.ts	clamps a limit below one to a single worker instead of stalling
+src/shared/agent-decorative-title-signature.test.ts	returns null for ordinary non-agent titles
+src/shared/branch-name-from-work.test.ts	strips a leaked username prefix the model folded into the slug
+src/shared/host-setting-overrides.test.ts	does not mutate the input map
+src/main/pwsh.test.ts	does not duplicate an in-flight async probe for a synchronous caller
+src/main/ipc/app.test.ts	returns the selected macOS input mode before the keyboard layout fallback
+src/renderer/src/store/slices/set-runtime-environments-purge-wiring.test.ts	purges the removed env owned repo/rows/setup/tab
+src/shared/constants.test.ts	defaults the menu bar icon on so the value round-trips across platforms
+src/renderer/src/runtime/runtime-host-connection-state.test.ts	still counts a workspace-window-closed remote server as a connected host
+src/renderer/src/lib/setup-script-prompt.test.ts	ignores legacy prompt dismissals and honors the generation prompt version
+src/shared/omp-pi-semantic-title-preservation.test.ts	collapses frames under a multiplexer prefix
+src/main/ipc/codex-config-sync.test.ts	reports synced when the selection runs directly on the real home
+src/renderer/src/components/task-source-context-summary.test.ts	builds a visible unavailable-source notice from host availability
+src/renderer/src/store/slices/tabs-session-hydration.test.ts	deletes omitted target chrome while preserving sibling references
+src/shared/codex-pet-sprite-defaults.test.ts	upgrades the legacy baked-default fingerprint with durations
+src/shared/secure-path-hardening-cache.test.ts	evicts the least-recently-used entry at the count boundary
+src/renderer/src/lib/create-untitled-markdown.test.ts	creates untitled files through the selected runtime environment
+src/renderer/src/store/slices/detected-agents.test.ts	does not keep previous context agents when detection fails after a context switch
+src/renderer/src/lib/agent-hibernation-coordinator.test.ts	never runs two pane teardowns at the same time
+src/shared/omp-pi-semantic-title-preservation.test.ts	still synthesizes terminal states for %s
+src/renderer/src/runtime/sync-runtime-graph-scheduling.test.ts	changes when only tab group split ratios change
+src/renderer/src/components/feature-interaction-writer-boundaries.test.ts	suppresses Tasks surface telemetry for in-page provider switches and detail opens
+src/main/ipc/markdown-documents.test.ts	treats actual parent traversal as outside the root
+src/renderer/src/store/slices/runtime-status.test.ts	drops a recent compatibility failure once a status refresh succeeds
+src/renderer/src/components/task-source-context-summary.test.ts	summarizes multiple repo-backed hosts without hiding the selected count
+src/renderer/src/lib/connection-context.test.ts	keeps explicit folder workspace provenance isolated from unrelated same-path SSH repos
+src/renderer/src/lib/session-write-subscriber.test.ts	holds a write whose change arrived while shouldSchedulePersist returned false
+src/renderer/src/lib/runtime-session-mirror-targets.test.ts	uses creation time for environments paired before pairing revisions existed
+src/shared/constants.test.ts	enables primary selection paste on macOS by default
+src/renderer/src/runtime/runtime-rpc-client.test.ts	rejects missing advertised runtime capabilities with the caller message
+src/shared/pr-check-severity-order.test.ts	orders normalized provider states with stable ties
+src/main/ipc/parcel-watcher-process-entry.test.ts	bounds pending event batches while child IPC reports backpressure
+src/shared/codex-pet-sprite-defaults.test.ts	does not throw on a corrupted animation entry that matches the outer fingerprint
+src/main/ipc/runtime-environment-federated-read-routing.test.ts	falls back to one-shot with the envelope when shared control is unavailable
+src/renderer/src/components/SelectedTextCopyMenu.test.tsx	stays open when a resize reports the same viewport size
+src/renderer/src/store/selectors.test.ts	keeps active terminal chrome stable across title-only tab updates
+src/shared/ws-outbound-backpressure-queue.test.ts	bounds zero-byte frames independently of the queued-byte cap
+src/main/ipc/cli.test.ts	records removal from the resolved default distro
+src/renderer/src/components/feature-interaction-writer-boundaries.test.ts	records GitLab provider-depth for detail opens, workspace use, and dialog mutations
+src/main/synthetic-title-spinner.test.ts	drops panes whose pty mapping disappeared
+src/renderer/src/runtime/runtime-rpc-result.test.ts	matches codes re-wrapped into a transport message with no cause
+src/main/ipc/parcel-watcher-disconnect-termination.test.ts	reports physical-exit failure instead of early pending-crawl cancellation
+src/renderer/src/store/store-identity-churn-probe.test.ts	does not flag writes that change the value
+src/renderer/src/lib/primary-selection.test.ts	does not arm suppression while primary selection is disabled
+src/renderer/src/lib/shutdown-checkpoint-guard.test.ts	resets after a paired-web dirty-file veto regardless of listener order
+src/shared/quick-open-filter.test.ts	handles Windows-style roots and paths
+src/shared/client-environment-info.test.ts	omits shell when unset and falls back unknown fields
+src/renderer/src/lib/path.test.ts	keeps the POSIX root when resolving a file in the filesystem root
+src/shared/constants.test.ts	uses platform-consistent separators for the default workspace directory
+src/renderer/src/store/store-listener-census.test.ts	counts the hook copy and the inner api as the same pool
+src/renderer/src/runtime/use-runtime-session-mirror-environment-key.test.ts	does not rescan remote ownership for unrelated store writes or parent renders
+src/main/ipc/parcel-watcher-process-entry.test.ts	reports native unsubscribe rejection without acknowledging handle release
+src/main/ipc/markdown-documents.test.ts	keeps in-root path segments that merely start with parent traversal text
+src/shared/claude-background-task-status.test.ts	resumes on task notifications and user slash commands after interruption
+src/renderer/src/components/QuickOpen.mount-gating.test.tsx	unmounts subscribed content after the close linger
+src/shared/execution-host-registry.test.ts	hides runtime-owned (ephemeral VM) SSH targets from repo-derived hosts
+src/renderer/src/store/slices/codex-restart-notice-lifecycle.test.ts	raises the prompt for two different accounts that read the same
+src/main/ipc/command-path-resolver.test.ts	rejects a match reached via a relative PATH entry (absolute-only gate)
+src/renderer/src/lib/migration-unsupported-agent-entry.test.ts	returns a stable synthetic entry for the same migration record
+src/renderer/src/runtime/runtime-rpc-result.test.ts	rejects diagnostic mentions and cyclic causes
+src/renderer/src/store/slices/ui-modal-slot-dismissal.test.ts	dismisses each entry across consecutive replacements
+src/renderer/src/store/slices/local-detected-agent-state.test.ts	joins an authoritative refresh instead of starting a later detect
+src/shared/claude-background-task-status.test.ts	retains live child rows when an agent inventory is partial or has a future status
+src/shared/setup-runner-command.test.ts	never hands a batch runner to bash, even from a Git Bash pane
+src/main/ipc/cli.test.ts	does not consult WSL listing at all when an explicit distro is given
+src/main/ipc/runtime-environment-request-connections.test.ts	blocks standing creation while manual intent is disconnected
+src/shared/repro-13889-claude-quarter-circle-busy-title.test.ts	does not claim Gemini’s ◇ idle glyph, which neighbors the spinner block
+src/renderer/src/store/store-identity-churn-probe.test.ts	ignores a write zustand itself drops as identical
+src/shared/ws-outbound-backpressure-queue.test.ts	drops a retained backlog and signals once when a drain send throws
+src/shared/quick-open-readdir-walk.test.ts	stops ignored-directory expansion when the signal aborts
+src/renderer/src/lib/primary-selection.test.ts	uses the system selection clipboard on Linux when the preload API exists
+src/shared/cross-platform-path.test.ts	keeps the Linux tail case-sensitive and refuses a non-WSL path
+src/renderer/src/lib/language-detect.test.ts	maps .proto files to the Monaco built-in proto language id, not the alias
+src/renderer/src/runtime/runtime-rpc-result.test.ts	matches structured runtime failures through wrapped causes
+src/main/ipc/cli.test.ts	keeps successful installation successful when advisory registry persistence fails
+src/renderer/src/components/codex-restart-chip.test.tsx	does not re-render for unrelated PTY and notice churn
+src/shared/host-setting-overrides.test.ts	falls back when settings are null/undefined
+src/shared/constants.test.ts	defaults on only for Windows
+src/renderer/src/runtime/sync-runtime-graph-parked-leaf.test.ts	publishes a parked tab leaf while a parked watcher still owns its PTY
+src/shared/structural-value-equality.test.ts	walks nested plain records rebuilt by structured clone
+src/shared/setup-runner-command.test.ts	converts a drive path to the MSYS form Git Bash uses
+src/shared/issue-link-input.test.ts	rejects non-positive numbers and junk
+src/renderer/src/lib/shutdown-checkpoint-guard.test.ts	publishes the failure cause and records a crash breadcrumb
+src/main/ipc/runtime-environments-capability-cache.test.ts	clears shared-control capability cache when a runtime is removed and re-added
+src/shared/claude-background-task-status.test.ts	keeps foreground child work active before falling back to monitoring
+src/renderer/src/store/selectors.test.ts	still prefers the host-matching row when one repo ID spans hosts
+src/shared/feature-interactions.test.ts	covers every feature id with a telemetry category
+src/renderer/src/store/slices/ui-page-navigation.test.ts	returns to the graduated Agents view after visiting settings
+tests/e2e/multi-client-navigation-isolation.spec.ts	keeps two paired browser clients and the host on independent worktrees
+src/renderer/src/lib/sha256.test.ts	matches crypto.subtle SHA-256 across crossing block boundaries
+tests/e2e/pr11346-selected-runtime-add.spec.ts	routes every Add Project path to a selected non-default headed runtime @headful
+src/shared/branch-name-from-work.test.ts	leads with a custom naming prompt so overrides can own style
+src/shared/execution-host.test.ts	prefers explicit worktree ownership before repo and focused-host fallbacks
+src/shared/agent-title-agy-gemini-collision.test.ts	labels %s as Antigravity

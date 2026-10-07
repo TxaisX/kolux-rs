@@ -1,0 +1,19 @@
+﻿kolux linear estimate set
+
+Usage: kolux linear estimate set [<id>] [--current] --to <number> [--workspace <id>] [--json]
+
+Set a Linear issue estimate
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --current              Use the current Kolux worktree linked Linear issue
+  --to <state>          Exact Linear workflow state name
+  --workspace <id>      Connected Linear workspace id
+  --id <id>             Identifier for a target item or permission
+
+Examples:
+  $ kolux linear estimate set --current --to 3 --json
+

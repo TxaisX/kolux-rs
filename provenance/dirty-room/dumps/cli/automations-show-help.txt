@@ -1,0 +1,17 @@
+﻿kolux automations show
+
+Usage: kolux automations show <id> [--json]
+
+Show one Kolux automation
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --id <id>             Identifier for a target item or permission
+
+Examples:
+  $ kolux automations show 2f9e...
+  $ kolux automations show --id 2f9e... --json
+

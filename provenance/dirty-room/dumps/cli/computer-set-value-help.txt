@@ -1,0 +1,22 @@
+﻿kolux computer set-value
+
+Usage: kolux computer set-value --app <app> --element-index <n> (--value <text> | --value-stdin) [--window-id <id> | --window-index <n>] [--restore-window] [--no-screenshot] [--json]
+
+Set the value of a settable app element
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --session <id>        Snapshot namespace for a related computer-use workflow
+  --app <app>            App name, bundle ID, or pid:N
+  --window-id <id>      Target a window id from list-windows
+  --window-index <n>   Target a window index from list-windows
+  --restore-window     Bring the target app/window forward before the operation
+  --no-screenshot       Skip screenshot capture after the operation
+  --element-index <n>   Element index from get-app-state
+  --value <text>         Value to fill or select
+  --value-stdin         Read set-value payload from stdin
+

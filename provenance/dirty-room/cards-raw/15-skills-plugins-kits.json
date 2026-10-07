@@ -1,0 +1,1362 @@
+{
+  "area": "15-skills-plugins-kits",
+  "prefix": "SKILL",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-15-001",
+      "title": "Six ready-made starter kits for common business jobs",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Browses the starter kits to pick a job for a small team of AIs to do on their own files.",
+      "user_sees": "Six kits: analyse a spreadsheet, clean and merge two data files, a marketing campaign report, a research brief, a sales follow-up list and a weekly metrics summary. Each has a category (data, marketing, research, sales, operations), a time estimate of 15 to 25 minutes, the inputs it needs and three named roles.",
+      "rules": [
+        "Every kit has exactly three roles, a unique id, its own icon, at least one input, a category and an estimated time.",
+        "Each role names a preferred AI: spreadsheet analysis (analyst Claude, report builder Codex writing an HTML report, checker Grok); clean and merge (merger Codex writing the merged CSV, quality notes Claude, spot-check Grok); marketing (writer Claude, metrics table Codex, context scan Grok); research (researcher Grok, writer Claude, comparison table Codex); sales (lead scorer Codex, follow-up drafts Claude, data-quality check Grok); weekly metrics (calculator Codex, one-page HTML summary Claude, anomalies Grok).",
+        "Inputs: spreadsheet analysis takes one required CSV and an optional question; clean and merge takes two required CSVs and an optional merge instruction; marketing takes a required metrics CSV and an optional focus; research takes a required topic as text and an optional Markdown or text notes file; sales takes a required CRM export CSV and an optional priority; weekly metrics takes a required KPI CSV and an optional emphasis.",
+        "Some roles wait for another: the spreadsheet checker waits for the analyst, the merge spot-check waits for the merger, the weekly anomalies role waits for the calculator. A waits-for always names another role in the same kit.",
+        "Every role writes only inside its own results subfolder.",
+        "Every placeholder in a role prompt maps to a declared input, and every required input is used by at least one prompt.",
+        "Every file input has a bundled sample file and every text input has a non-empty sample value."
+      ],
+      "acceptance": [
+        "The catalog lists exactly six kits with distinct ids, each with three roles.",
+        "For every kit, each declared file input has a sample file shipped with the app.",
+        "A kit whose role prompt references an undeclared input fails the catalog check."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/starter-kits/starter-kit-catalog.test.ts:13",
+        "src/shared/starter-kits/starter-kit-prompts.test.ts:22"
+      ],
+      "round": 0,
+      "related": [
+        "16",
+        "02"
+      ]
+    },
+    {
+      "id": "D-15-002",
+      "title": "Starter kit gallery and its entry points",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Opens the kit gallery from the Landing screen's kit block, from the starter-kits row in the launch dialog (with a see-all link), or from the newcomer setup checklist.",
+      "user_sees": "A gallery of kit cards. Each card shows the kit's icon, title, summary, category badge, time estimate and every role with the AI it will be given, or a not-connected marker when no AI can take it.",
+      "rules": [
+        "Each bundled kit has a distinct icon; an unknown kit falls back to a generic icon.",
+        "The gallery dialog is hosted outside the Landing screen so it stays open when Landing unmounts.",
+        "Picking a kit opens its setup dialog.",
+        "A recent-runs section appears in the gallery only when there are past runs (see D-15-014)."
+      ],
+      "acceptance": [
+        "Click the Landing kit block → the gallery opens with six cards.",
+        "With only Claude connected → every role on every card shows Claude.",
+        "Navigate away from Landing while the gallery is open → the gallery stays open."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/StarterKitCard.test.tsx:42",
+        "src/renderer/src/components/starter-kits/StartWithKitBlock.test.tsx:42",
+        "src/renderer/src/components/starter-kits/starter-kit-icon.test.tsx:9"
+      ],
+      "round": 0,
+      "related": [
+        "16",
+        "02",
+        "05"
+      ]
+    },
+    {
+      "id": "D-15-003",
+      "title": "Kit roles are handed to the AIs the user has connected",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Opens a kit with some mix of Claude, Codex and Grok connected.",
+      "user_sees": "Each role is assigned an AI. With all three connected each role gets its preferred AI; with fewer, the roles are shared out among what is connected.",
+      "rules": [
+        "A role gets its preferred AI when that AI is connected.",
+        "Roles whose preferred AI is missing are given out in turn from the connected AIs in a fixed order: Claude, Codex, Grok.",
+        "With no AI connected there are no assignments.",
+        "Only Claude, Codex and Grok can take kit roles; an AI the user has disabled is not offered."
+      ],
+      "acceptance": [
+        "Claude, Codex and Grok connected → every role shows its preferred AI.",
+        "Only Codex connected → all three roles show Codex.",
+        "Grok disabled in settings → no role is assigned to Grok."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/starter-kits/starter-kit-prompts.test.ts:22",
+        "src/renderer/src/components/starter-kits/use-starter-kit-available-agents.test.tsx:32"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "07"
+      ]
+    },
+    {
+      "id": "D-15-004",
+      "title": "Kit setup dialog collects inputs and blocks bad files",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Fills in a kit's inputs: types or pastes a file path, uses Browse, drags a file in, or types text, then presses Start kit.",
+      "user_sees": "One field per input with the kit's hint as helper text, optional fields labelled as such, the folder where results will be saved, and Start kit enabled only when everything required is present and valid.",
+      "rules": [
+        "No AI connected → a connect notice appears and Start kit is disabled.",
+        "A required-field warning appears only after the field loses focus while empty, and clears once filled.",
+        "An Excel file (.xlsx or .xls) shows a guidance card asking for CSV and disables Start at once; a CSV path that does not exist is flagged after a short pause; text inputs are never checked against disk.",
+        "Start stays disabled while any file path does not exist.",
+        "Browse opens the system file picker filtered to the input's accepted types (all files if none), starting in the project folder; cancelling leaves the field unchanged. Extensions are compared without the dot and ignoring case.",
+        "Pasting a path copied with the system's copy-as-path command strips one layer of surrounding quotes.",
+        "Dropping several files takes the first one; folders are ignored; a dropped file of an unaccepted type still fills the field; a drop aimed at a different input is ignored.",
+        "A non-blocking warning shows when an assigned AI's account is close to its usage limit.",
+        "Changing the kit resets the folder and all inputs."
+      ],
+      "acceptance": [
+        "Type a path ending in .xlsx → guidance card appears and Start kit is disabled immediately.",
+        "Paste a quoted path → the field holds the path without quotes.",
+        "Leave a required field empty and tab away → required warning appears; type a value → it clears.",
+        "Browse then cancel → the field keeps its previous value."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx:127",
+        "src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx:266",
+        "src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx:97",
+        "src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx:196",
+        "src/renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx:50",
+        "src/main/starter-kits/starter-kit-file-picker.test.ts:31"
+      ],
+      "round": 0,
+      "related": [
+        "06",
+        "07"
+      ]
+    },
+    {
+      "id": "D-15-005",
+      "title": "Try a kit with bundled sample data, and remember past inputs",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Clicks Try with sample data in a kit's setup, or reopens a kit they have run before.",
+      "user_sees": "The kit's sample files are copied into a samples folder in the user's home, that folder opens as a project, and the inputs are filled with the sample files and sample text. On a later run of the same kit, fields fill with the values used last time.",
+      "rules": [
+        "Sample data is copied to a per-kit folder under a samples folder in the user's home; copying is idempotent and never overwrites an existing copy.",
+        "The samples folder is registered as a project and its workspace opened.",
+        "When the current workspace already is the kit's sample folder (first run), the inputs fill with sample values without a click; a real project never prefills samples.",
+        "Remembered values only fill fields the sample pass left empty.",
+        "Only non-empty values are remembered; nothing is remembered from a sample-data workspace; remembered values for inputs a kit no longer declares are ignored.",
+        "If the sample copy or project registration fails, a friendly toast explains it.",
+        "In the installed app the bundled samples are read from the app's unpacked resources."
+      ],
+      "acceptance": [
+        "Click Try with sample data → a samples folder appears in home, opens as a project, and every required input is filled.",
+        "Click it twice → the second copy changes nothing on disk.",
+        "Run a kit with real inputs, reopen it in the same project → the fields show the previous values."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/starter-kits/starter-kit-sample-materialization.test.ts:54",
+        "src/renderer/src/components/starter-kits/starter-kit-sample-data.test.ts:36",
+        "src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx:55",
+        "src/renderer/src/components/starter-kits/starter-kit-input-memory.test.ts:23"
+      ],
+      "round": 0,
+      "related": [
+        "16",
+        "01"
+      ]
+    },
+    {
+      "id": "D-15-006",
+      "title": "Starting a kit opens one titled session per role",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Presses Start kit.",
+      "user_sees": "One AI session per role opens in the grid, each titled with the role and the AI's name, and a toast says how many AIs are working on the kit and that most kits take 5 to 20 minutes.",
+      "rules": [
+        "All seats share the project's checkout; a kit does not create a worktree per AI.",
+        "The seat title is the role title, a middle dot, then the AI's name.",
+        "Each seat uses its AI's default model.",
+        "A role that waits for another opens idle with no prompt (see D-15-008).",
+        "An idle empty first tab is reused for the first seat.",
+        "Before launching, results left from an earlier run are collected into a dated folder and a toast names it; nothing is deleted. If that check fails the launch goes ahead.",
+        "The run record is written before launch; if writing it fails, an error toast warns that results tracking may not work.",
+        "If no seat could start, an error toast says so.",
+        "The mapping from role to session is saved only when every seat launched.",
+        "If the folder already holds a run of a different kit, the user is warned and offered Start anyway; in the setup dialog the warning is inline, not a toast. The same kit or no earlier run launches straight away."
+      ],
+      "acceptance": [
+        "Start the spreadsheet kit with three AIs → three panes open, titled with role and AI name, and the checker pane is idle.",
+        "Start a kit in a folder that holds results from a different kit → an inline warning with Start anyway appears and nothing launches until it is pressed.",
+        "Start a kit where previous results exist → a toast names a new dated folder holding those results, and the originals are untouched."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/starter-kit-launch.ts:36",
+        "src/renderer/src/components/starter-kits/starter-kit-launch.test.ts:107",
+        "src/renderer/src/components/starter-kits/starter-kit-launch.test.ts:250",
+        "src/renderer/src/components/starter-kits/starter-kit-launch.test.ts:393",
+        "src/renderer/src/components/starter-kits/use-starter-kit-run-conflict.test.tsx:55"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "03"
+      ]
+    },
+    {
+      "id": "D-15-007",
+      "title": "Every kit seat gets the same plain working rules",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Starts a kit and reads what each AI was asked to do.",
+      "user_sees": "Each AI receives its role prompt with the user's inputs filled in, followed by a fixed block of rules that keeps it to read-only use of the user's files and plain deliverables.",
+      "rules": [
+        "Input placeholders are replaced by the user's values; a missing optional input becomes empty.",
+        "The rules: read inputs but never change, move or delete existing files; write only inside the role's own results folder; never install software; built-in tools may be used for calculations.",
+        "Deliverables are Markdown, CSV, or a single self-contained HTML file with inline SVG charts and no external scripts.",
+        "The rules list the exact files the role must produce, then ask for a one-line completion marker file in the role's folder.",
+        "The AI writes for a busy manager and does not mention the rules or the marker file in its output.",
+        "The same rule text is reused by the custom-agent builder's results-folder scope, which is cut (area 02)."
+      ],
+      "acceptance": [
+        "Start a kit and inspect a seat's first prompt → the inputs appear in place of placeholders and the rules block lists that role's deliverable files.",
+        "Leave an optional input empty → no placeholder text remains in the prompt."
+      ],
+      "compat": "Each role writes into its own subfolder of a results folder in the project and finishes by writing a DONE.md marker there; deliverables are .md, .csv or one self-contained .html.",
+      "decision": "",
+      "evidence": [
+        "src/shared/starter-kits/starter-kit-prompts.test.ts:93"
+      ],
+      "round": 0,
+      "related": [
+        "02"
+      ]
+    },
+    {
+      "id": "D-15-008",
+      "title": "A waiting kit role starts when the role it depends on finishes",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Starts a kit that has a dependent role (for example a checker) and leaves it running.",
+      "user_sees": "The dependent role's session sits idle and shows it is waiting on the named role; once that role finishes, the dependent session receives its prompt and starts working.",
+      "rules": [
+        "The prompt is sent only when the upstream role's completion marker exists from this run and the dependent session has been located.",
+        "The prompt is delivered once; if sending fails it is retried on the next status change.",
+        "A completion marker left from an earlier run does not count."
+      ],
+      "acceptance": [
+        "Spreadsheet kit: the analyst writes its marker → the checker receives its prompt exactly once.",
+        "A marker file older than the run start exists before launch → the checker stays waiting."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/use-kit-queued-roles.test.tsx:68"
+      ],
+      "round": 0,
+      "related": [
+        "08"
+      ]
+    },
+    {
+      "id": "D-15-009",
+      "title": "Kit results strip above the session grid",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Works in a project where a kit is running or has run.",
+      "user_sees": "A collapsible strip docked above the sessions showing the kit's icon and title, how many of the roles have finished, Open results, Collect results, and a toggle to expand one row per role.",
+      "rules": [
+        "Nothing is shown when the workspace has no kit run.",
+        "While a run exists and the strip is expanded, results are rechecked about every 10 seconds; checking pauses while the window is hidden or the strip is collapsed, and runs at once on expand.",
+        "Returning focus to the window rechecks whether a kit run exists.",
+        "Open results opens the results folder in the system file manager.",
+        "With no kit run recorded, the strip checks once when it appears and does not keep polling."
+      ],
+      "acceptance": [
+        "Open a project with no kit run → no strip.",
+        "Start a kit → strip shows zero of three finished; when one role writes its marker → within about 10 s it shows one of three.",
+        "Collapse the strip → no further polling until expanded."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/KitResultsPanel.tsx:81",
+        "src/renderer/src/app-shell/AppWorkspaceShell.tsx:243",
+        "src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx:134",
+        "src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx:121",
+        "src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "05"
+      ]
+    },
+    {
+      "id": "D-15-010",
+      "title": "Each kit role row shows what that AI is doing",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Expands the kit strip while the kit runs.",
+      "user_sees": "One row per role with a plain status: not ready yet, waiting for the named role, working (with minutes elapsed after the first minute), finished, from the last run, needs you, or stopped with a reason.",
+      "rules": [
+        "Finished means the role's completion marker was written at or after the run start, even if the session still looks busy.",
+        "A declared file older than the run start shows as from the last run.",
+        "Working shows plain text for the first minute, then adds elapsed minutes.",
+        "Needs you: an ordinary permission or question wait shows a plain needs-you label; a known blocking prompt (such as Codex asking to review hooks) shows a click-to-answer hint; a Claude sign-in prompt shows a sign-in hint with Open AI connections.",
+        "Stopped: a usage limit, a sign-in problem, or a plain exit with no reason each get their own label (actions in D-15-011).",
+        "Finished rows offer Preview and Open for each result file (D-15-012).",
+        "Clicking a row focuses that role's session; a row whose session cannot be located is not clickable; buttons inside a row do not trigger the row click.",
+        "Sessions are matched to roles by the saved role-to-session mapping, falling back to AI and launch order without matching one session twice.",
+        "Each role's session is probed for its live state on an interval."
+      ],
+      "acceptance": [
+        "Role writes its marker while the pane still shows activity → row shows finished.",
+        "Role has worked 3 minutes → row shows working with 3 minutes.",
+        "Claude seat asks for sign-in → row shows the sign-in hint and Open AI connections opens the AI connections settings."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/kit-role-live-state.test.ts:28",
+        "src/renderer/src/components/starter-kits/KitRoleRow.test.tsx:60"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "03"
+      ]
+    },
+    {
+      "id": "D-15-011",
+      "title": "Recover a stuck kit role: move it, sign in, or restart",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Sees a kit role stopped by a usage limit, a sign-in problem or an exit, and uses the row's action.",
+      "user_sees": "Limit-stopped rows offer Move to followed by another connected AI's name; sign-in rows offer a sign-in action; exited rows offer Restart. The role relaunches in a new session and the row follows it.",
+      "rules": [
+        "Move to is hidden when no other AI is connected.",
+        "Move and restart launch one seat for that role on the chosen AI and save it as the role's session.",
+        "The sign-in action opens the AI connections settings.",
+        "If settings cannot be read, Move and Restart launch nothing."
+      ],
+      "acceptance": [
+        "Claude seat hits its limit with Codex connected → Move to Codex launches one Codex session for that role and the row tracks it.",
+        "Only one AI connected and it hits its limit → no Move to button.",
+        "Seat exits without a reason → Restart relaunches it on the same AI."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts:121",
+        "src/renderer/src/components/starter-kits/KitRoleRow.test.tsx:60",
+        "src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "07"
+      ]
+    },
+    {
+      "id": "D-15-012",
+      "title": "Preview or open a kit's result files",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Clicks Preview or Open next to a finished role's file.",
+      "user_sees": "Preview shows the file inside Kolux next to the AI's session; Open hands it to the system's default app.",
+      "rules": [
+        "HTML results preview in the built-in browser pane; Markdown in the rendered Markdown preview; CSV and anything else as a read-only editor tab.",
+        "A preview always opens beside the AI's tab, never replacing it, and reuses an existing split.",
+        "Collect results success shows a toast; failure shows a friendly toast."
+      ],
+      "acceptance": [
+        "Preview an HTML report → it opens in a browser pane split beside the role's session.",
+        "Preview a CSV → read-only editor tab; typing does nothing.",
+        "Preview twice → the same split is reused."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts:105"
+      ],
+      "round": 0,
+      "related": [
+        "12",
+        "13"
+      ]
+    },
+    {
+      "id": "D-15-013",
+      "title": "Collect a kit's results into one dated folder with a summary page",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Clicks Collect results.",
+      "user_sees": "A new folder inside the results folder named after the kit and the date and time, holding copies of every result file, a README saying which role and AI made each file, and a single Results page that shows everything in one place.",
+      "rules": [
+        "Folder name is the kit title, a dash, then a 12-hour date and time with no colons (noon and midnight show as 12).",
+        "Only the declared files are copied; missing ones are reported; originals are never changed.",
+        "The README ends with an auditing section listing a SHA-256 hash for each file.",
+        "The Results page is self-contained: Markdown is rendered with raw HTML escaped and javascript links or images dropped; non-Markdown files are linked, not inlined.",
+        "The run's history entry is marked collected.",
+        "A declared file that is a symbolic link is treated as missing; paths that escape the results folder (parent hops, absolute or drive paths, a look-alike sibling folder, or a link anywhere along the way) are refused."
+      ],
+      "acceptance": [
+        "Collect after all roles finish → a dated folder with every result, a README with hashes, and a Results page that opens offline.",
+        "A Markdown result containing a script tag → the Results page shows it as text.",
+        "A role's declared file replaced by a link to a file outside → it is reported missing and not copied."
+      ],
+      "compat": "Collected folder: <kit title> – <Mon D YYYY, H.MM AM/PM> inside the project's results folder, containing the copied files, README.md and Results.html.",
+      "decision": "",
+      "evidence": [
+        "src/main/starter-kits/starter-kit-results-collection.ts:40",
+        "src/main/starter-kits/starter-kit-results-collection.test.ts:83",
+        "src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts:33",
+        "src/main/starter-kits/starter-kit-results-path-guard.test.ts:98"
+      ],
+      "round": 0,
+      "related": [
+        "10"
+      ]
+    },
+    {
+      "id": "D-15-014",
+      "title": "Kit run record and recent kit runs",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Returns to the kit gallery after running kits.",
+      "user_sees": "A recent kit runs list naming each kit and folder, with Open results and Open project.",
+      "rules": [
+        "The list is hidden when there are no runs.",
+        "Open results opens the collected folder, or the live results folder if nothing was collected.",
+        "Open project switches to the matching workspace, or shows an error when no registered project matches the folder.",
+        "Each project keeps a run record in its results folder; a record over 256 KB or malformed is ignored.",
+        "History is kept per folder and globally; each list holds the newest 50, newest first, and the same folder, kit and start time is recorded once."
+      ],
+      "acceptance": [
+        "No runs yet → no recent runs section.",
+        "Run 51 kits → the list holds the newest 50.",
+        "Delete the project from Kolux, click Open project → an error, not a crash."
+      ],
+      "compat": "Per-project run record file .kolux-kit.json in the results folder; global run history in the app's user-data folder.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/StarterKitGalleryDialog.test.tsx:45",
+        "src/renderer/src/components/starter-kits/starter-kit-run-history-actions.test.ts:49",
+        "src/main/starter-kits/starter-kit-run-history-store.test.ts:113",
+        "src/main/starter-kits/starter-kit-run-record-store.test.ts:92"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-15-015",
+      "title": "Kits only run in local projects or the samples folder",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Tries to use a kit in a remote workspace or an arbitrary folder.",
+      "user_sees": "Kits are not offered for remote workspaces; kit actions on a folder that is not a registered local project or inside the samples folder are refused.",
+      "rules": [
+        "Remote, SSH and remote-runtime workspaces are excluded from kits.",
+        "Kit actions accept only absolute paths to existing folders that are registered local projects or sit under the home samples folder.",
+        "Relative paths, missing paths, files, SSH projects and unknown kit ids are rejected."
+      ],
+      "acceptance": [
+        "Ask the kit service to record a run for a folder that is not a project → rejected.",
+        "Open a remote workspace → no kit entry point is offered."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/starter-kits/starter-kits-ipc.test.ts:263",
+        "src/renderer/src/components/starter-kits/starter-kit-remote-gate.test.ts:11"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "18"
+      ]
+    },
+    {
+      "id": "D-15-016",
+      "title": "Kits mark first-run milestones and carry a tour target",
+      "tier": "P2",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Launches a first kit, then opens or collects its results.",
+      "user_sees": "The newcomer checklist ticks off launching a first kit and seeing first results; a contextual tour can point at the kit results strip.",
+      "rules": [
+        "Launch records the first-kit-launched milestone.",
+        "Open results or Collect results records the first-results milestone.",
+        "The results strip exposes a target the guided tour can highlight."
+      ],
+      "acceptance": [
+        "Launch any kit → the first-kit checklist item is ticked.",
+        "Click Open results → the first-results item is ticked."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx:256",
+        "src/renderer/src/components/starter-kits/starter-kit-launch.test.ts:107"
+      ],
+      "round": 0,
+      "related": [
+        "16"
+      ]
+    },
+    {
+      "id": "D-15-017",
+      "title": "Skills page lists every skill the AIs can see",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the Skills page, searches, and filters by AI or by where the skill comes from.",
+      "user_sees": "A full-page list of skills with name, description and date, a search box, a Filter by agent menu, source chips with counts, Refresh, Clear filters, and a Skill folders popover showing which folders were scanned.",
+      "rules": [
+        "Header has Close (Escape), the title, and a more-actions menu holding Delete skills.",
+        "Agent filter offers all agents, each AI, and the shared skills folder.",
+        "Source chips: home, workspace, bundled and plugin, each with a count.",
+        "Search rejects an oversized pasted query.",
+        "A row with no description or no date shows a plain placeholder for it.",
+        "The folders popover marks each root as not found, a remote repo not scanned, or not scanned; a skill reached through a link counts under every root that reached it.",
+        "States: scanning; no matches (with Clear filters); no skills found (with Refresh); scan failed (with Retry).",
+        "Escape closes the page but never steals Escape from a focused input.",
+        "Long paths are truncated inside the row, never widening the page.",
+        "Closing the page returns to the view that was open before it."
+      ],
+      "acceptance": [
+        "Open Skills with skills in home and in the repo → both appear with correct source counts.",
+        "Filter by Codex → only skills visible to Codex remain; Clear filters restores all.",
+        "Scan fails → a failure state with Retry; Retry rescans."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/skills/SkillsPage.test.tsx:139",
+        "src/renderer/src/components/skills/skills-filter.test.ts:27",
+        "src/renderer/src/components/skills/skill-source-inventory.test.ts:43",
+        "src/main/ipc/skill-ipc-main-window.test.ts:15",
+        "registry:view-ids:skills",
+        "src/renderer/src/store/slices/ui/ui-slice-view-actions.ts:49"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-15-018",
+      "title": "Sidebar Skills button, off by default",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Turns on the Skills button, then uses it to open the Skills page, or right-clicks it to hide it again.",
+      "user_sees": "A Skills entry in the sidebar that opens the Skills page; its right-click menu can hide it.",
+      "rules": [
+        "Hidden by default.",
+        "The show/hide toggle lives in the Skills settings section, which is cut (D-15-019); the right-click hide stays on the button."
+      ],
+      "acceptance": [
+        "Fresh install → no Skills button in the sidebar.",
+        "Enable it, right-click, hide → the button disappears and the setting is off."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:showSkillsButton",
+        "registry:view-ids:skills"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "17"
+      ]
+    },
+    {
+      "id": "D-15-019",
+      "title": "Skills settings section",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opens Settings, Skills.",
+      "user_sees": "A section that chooses how the Skills page appears, chiefly whether the sidebar Skills button is shown.",
+      "rules": [
+        "Owner cut on 2026-10-05: Skills keeps its own page but loses its settings section."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: Skills settings section removed by the table 1b settings cut; the Skills page itself stays. Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:skills",
+        "registry:settings-keys:showSkillsButton"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-15-020",
+      "title": "Skill row actions and skill details",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses a skill row's actions or opens its details.",
+      "user_sees": "Row actions View details, Reveal file, Copy path and Delete; a details dialog with the AIs that see the skill, its last update date and its path with Copy, Reveal and Delete.",
+      "rules": [
+        "Copy path confirms with a short toast.",
+        "Reveal file opens the system file manager at the skill file.",
+        "Delete from a row or the dialog goes through the same confirmation as bulk delete (D-15-022)."
+      ],
+      "acceptance": [
+        "Click Copy path → the clipboard holds the skill file path and a confirmation toast shows.",
+        "Open details → the dialog lists which AIs can use the skill."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/skills/SkillsPage.test.tsx:139"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-15-021",
+      "title": "Where Kolux finds skills",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the Skills page with skills installed for different AIs in different places.",
+      "user_sees": "Skills from the home folder, the current repo, each AI's own skills folder, the shared skills folder, enabled Claude plugins and Codex plugin caches all appear, each with its name and description.",
+      "rules": [
+        "A skill is a folder with a SKILL.md; its name and description come from the file's front matter, else its first heading and first paragraph.",
+        "AI roots covered: Claude, Codex, Grok, Hermes (honouring its home variable, and the local app-data folder on Windows), the shared agents skills folder, and agents links inside worktrees.",
+        "Only Claude plugins enabled for the project contribute skills, using the plugin version that applies.",
+        "Codex plugin caches are scanned with a bound, and partial coverage is reported rather than hidden.",
+        "Links are followed without loops and with a depth limit.",
+        "WSL distributions are scanned too (see note on WSL).",
+        "Repeat scans are merged and cached; a scan target that stalls becomes a retryable error.",
+        "Refresh forces a fresh scan, ignoring cached and in-progress results.",
+        "An AI home-folder override that is missing or unsafe is ignored.",
+        "On Windows, Hermes skills are found in the local app-data folder and, for older installs, in the home dot-folder; the app-data folder wins when both exist.",
+        "When the workspace folder is the home folder it is scanned both as home and as a repo.",
+        "A root whose scan fails part-way is reported as an error, never as a shortened list, so a slow folder cannot make skills look deleted.",
+        "WSL scanning uses the distribution the selected project lives in; a malformed answer from that scan is an error, not an empty list."
+      ],
+      "acceptance": [
+        "A SKILL.md without front matter → its first heading is the name.",
+        "A link loop inside a skills folder → the scan finishes and lists each skill once.",
+        "A disabled Claude plugin's skills → not listed."
+      ],
+      "compat": "Reads SKILL.md packages from each AI's skills folder and the shared .agents/skills folder.",
+      "decision": "",
+      "evidence": [
+        "src/main/skills/discovery.test.ts:64",
+        "src/main/skills/claude-plugin-skill-sources.test.ts:13",
+        "src/main/skills/skill-discovery-wsl.test.ts:26",
+        "src/shared/skill-metadata.test.ts:4",
+        "src/main/skills/skill-scan-coalescer.test.ts",
+        "src/main/skills/skill-provider-runtime-roots.test.ts",
+        "src/main/skills/skill-provider-runtime-roots.test.ts:69",
+        "src/main/skills/discovery.test.ts",
+        "src/main/skills/skill-root-file-walk.test.ts:128",
+        "src/main/ipc/skills.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "12",
+        "18"
+      ]
+    },
+    {
+      "id": "D-15-022",
+      "title": "Delete skills safely from the Skills page",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Chooses Delete skills, selects skills, and confirms.",
+      "user_sees": "A selection mode with Select all eligible, Clear and Exit selection; a confirmation that summarises what will be removed and what is blocked; then a result per skill.",
+      "rules": [
+        "Bundled and plugin skills cannot be selected; select-all counts only eligible rows.",
+        "Two skills with the same name stay separately selectable; selections that vanish or become ineligible after a rescan are dropped.",
+        "The confirmation counts folders and links removed across roots, says where the content remains when only a link is removed, lists blocked items with reasons, warns that deletion is permanent, and uses a destructive-styled confirm button.",
+        "Blocked reasons: bundled (it would come back), installed by a plugin (remove the plugin), outside Kolux's skill folders, no longer on disk, changed since the list loaded (refresh first).",
+        "Outcomes per skill: deleted, skipped, busy because another skill operation is running, partly removed with hidden staged files left behind, or failed with nothing changed.",
+        "Removing a link never deletes the content it points to.",
+        "Delete shares a lock with skill installs and updates.",
+        "Works for skills inside WSL distributions as well (see note on WSL).",
+        "One delete request holds at least 1 and at most 512 skills.",
+        "A lock left behind because its release failed is reclaimed, so skill operations do not stay blocked.",
+        "Inside WSL, deletes run in the selected project's distribution, refuse paths from another distribution or outside the skill folders, and report a failing guest command as a failure."
+      ],
+      "acceptance": [
+        "Select a home skill and a bundled skill → the confirmation lists the bundled one as blocked; confirming deletes only the home skill.",
+        "Edit a selected skill on disk before confirming → it is reported as changed and left alone.",
+        "Delete a skill that is a link into another folder → the link goes, the target folder stays."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/skills/skill-delete/service.test.ts:73",
+        "src/renderer/src/components/skills/skill-delete-selection.test.ts:27",
+        "src/shared/skill-deletion-eligibility.test.ts:9",
+        "src/shared/skill-delete-contract.ts:22",
+        "src/main/skills/skill-install-lock.test.ts:54",
+        "src/main/skills/skill-wsl-install-filesystem.test.ts:121"
+      ],
+      "round": 0,
+      "related": [
+        "10"
+      ]
+    },
+    {
+      "id": "D-15-023",
+      "title": "An interrupted skill delete is rolled back or finished on restart",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits or crashes Kolux in the middle of deleting skills, then reopens it.",
+      "user_sees": "Skills end up either fully deleted or fully restored; nothing is left half-removed.",
+      "rules": [
+        "Deletes stage each item by renaming it aside, keep a journal, and roll back on failure.",
+        "At startup an unfinished journal is validated and the transaction is recovered.",
+        "Install receipts for deleted skills are removed with them.",
+        "On Windows a rename blocked by another process is retried.",
+        "Staging entries are hidden from the skills list."
+      ],
+      "acceptance": [
+        "Kill the app after staging but before commit → on restart the skills are back in place.",
+        "Lock a skill file on Windows briefly → the delete retries and succeeds."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/skills/skill-delete/recovery.test.ts:127",
+        "src/main/skills/skill-delete/service.test.ts:73"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-15-024",
+      "title": "Nudge when an installed Kolux skill is out of date",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs a Kolux version newer than the Kolux skills installed for their AIs.",
+      "user_sees": "A notice that an installed Kolux skill is out of date with an Update skill(s) button that opens the update dialog.",
+      "rules": [
+        "The nudge does not close on its own.",
+        "Dismissing it remembers the exact skill placement and revision, so it returns only when something new goes stale; it is not repeated within one session.",
+        "It is withdrawn when the skills are fixed, the data goes stale, or the check becomes unavailable.",
+        "Copies inside a project are not part of the dismissal key.",
+        "It waits for settings to load before deciding whether to show.",
+        "The nudge appears only when at least one stale copy can actually be updated."
+      ],
+      "acceptance": [
+        "Install an older orchestration skill, start Kolux → the nudge appears and stays.",
+        "Dismiss it, restart → it does not return until another skill revision goes stale.",
+        "Update the skill from elsewhere → the nudge is withdrawn."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx:117",
+        "src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx:238"
+      ],
+      "round": 0,
+      "related": [
+        "08",
+        "05"
+      ]
+    },
+    {
+      "id": "D-15-025",
+      "title": "Skill freshness pill",
+      "tier": "P2",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Looks at a Kolux skill's setup panel (for example in the orchestration pane).",
+      "user_sees": "A small status pill: update available, review the skill, up to date, installed (before the inventory is loaded), checking, check failed, or a details link.",
+      "rules": [
+        "A locally modified copy shows review, not update.",
+        "The pill opens the update dialog's details."
+      ],
+      "acceptance": [
+        "Stale skill → the pill offers an update.",
+        "Inventory check fails → the pill says the check failed."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx:78"
+      ],
+      "round": 0,
+      "related": [
+        "08"
+      ]
+    },
+    {
+      "id": "D-15-026",
+      "title": "Update stale Kolux skills in the background",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Opens the update dialog from the nudge or pill and presses Update.",
+      "user_sees": "A dialog listing the skills that can be updated, an indeterminate progress bar while it runs in the background, then a result per skill with Show log, Retry for failures, Re-check and Done.",
+      "rules": [
+        "Only official copies tracked by the skills installer's lock file are eligible; a locally modified copy is kept and never removed.",
+        "Line-ending differences (CRLF vs LF) and OS sidecar files do not count as modifications.",
+        "Each copy is shown with a location chip: current, newer, unrecognized, inaccessible, duplicate, external link, broken link, read only, inside a repo, plugin cache.",
+        "Skipped skills show the reason inline plus a ready-to-run reinstall command that names the skill.",
+        "Incomplete plugin-cache coverage is stated, not hidden.",
+        "The update runs without a terminal window and keeps going if the dialog is closed.",
+        "Stop shows a stopping state and kills the whole process tree; there is always a way out of a run that never finishes.",
+        "Failures are attributed by rescanning; a clean rescan counts as success even if the updater exited non-zero.",
+        "Show log displays the updater output verbatim with colour codes removed.",
+        "Skill names containing shell syntax are refused; a second update cannot start while one runs.",
+        "Works when Kolux is installed in a path with spaces and parentheses.",
+        "Skills are grouped as update available or cannot update. A skill whose problem an update cannot fix (an edited or unreadable copy) is still listed so Details can explain it; a copy newer than this build, a copy owned by a plugin, or a finding only inside a project raises no row; for a blocked skill the culprit location is flagged, not the main copy.",
+        "An update is offered only when the updater can really move the skill: if the updater's own record already claims a revision the disk does not have, it would report up to date and change nothing, so that skill is not offered. Unknown cases stay eligible.",
+        "A copy whose content matches what the updater recorded counts as updated even when Kolux does not recognise it as an official release.",
+        "Links, hard links and special files inside a skill never count as matching an official copy.",
+        "If the updater cannot start, the start error is what the user sees.",
+        "When every copy is current the dialog shows an up-to-date state."
+      ],
+      "acceptance": [
+        "Press Update, close the dialog → the update finishes and the status bar reports it.",
+        "Press Stop mid-run → the dialog shows stopping, then stopped, with no orphan processes.",
+        "A modified local copy → listed as skipped with a reason and a reinstall command; its files are untouched."
+      ],
+      "compat": "Runs the community skills CLI non-interactively: npx --yes skills update <names sorted> -y --global.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx:176",
+        "src/main/skills/skill-update-run.test.ts:48",
+        "src/main/skills/skill-freshness-eligibility.test.ts:41",
+        "src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts:20",
+        "src/main/skills/skill-update-registration.test.ts:19",
+        "src/renderer/src/components/skills/skill-freshness-grouping.test.ts:58",
+        "src/main/skills/skill-update-convergence.ts:7",
+        "src/main/skills/skill-update-outcome.test.ts",
+        "src/main/skills/skill-package-identity.test.ts:107",
+        "src/main/skills/skill-update-run.test.ts",
+        "src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx"
+      ],
+      "round": 0,
+      "related": [
+        "08",
+        "20"
+      ]
+    },
+    {
+      "id": "D-15-027",
+      "title": "Status bar shows a running skill update",
+      "tier": "P2",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Starts a skill update and closes the dialog.",
+      "user_sees": "A status-bar segment that reads updating, updated, failed or stopping; clicking it reopens the update details.",
+      "rules": [
+        "The segment appears only while an update is running or has just reported a result.",
+        "A success result clears itself after about 4 seconds, but not while the user is reading it in the update dialog; a failure stays until clicked."
+      ],
+      "acceptance": [
+        "Start an update, close the dialog → the segment shows updating; when done it shows the outcome; clicking reopens the dialog."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/status-bar/StatusBarSurface.tsx:85",
+        "registry:view-ids:SkillUpdateStatusSegment",
+        "src/renderer/src/components/skills/skill-update-run-store.ts:18"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-15-028",
+      "title": "Install a Kolux skill for your AIs from inside Kolux",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "In the place a feature needs a skill (the CLI settings, the orchestration pane or its floating dialog, browser use), clicks Install or Update.",
+      "user_sees": "A setup panel showing whether the skill is installed; Install opens a small terminal with the install command already typed, waiting for the user to press Enter. Copy command and Re-check are also offered.",
+      "rules": [
+        "Status values: installed, not installed, checking, setup failed; a preparing state while the terminal is set up.",
+        "Install targets every detected AI plus the shared skills folder, mapped onto the skills CLI's agent names.",
+        "If the kolux CLI is installed but not on PATH, its installer runs first; skipped when the Windows PATH cannot be read.",
+        "On Windows a WSL or Git Bash default terminal is replaced by PowerShell for setup.",
+        "Copy command confirms with a short message.",
+        "The orchestration pane also shows the freshness pill (D-15-025).",
+        "The same panel also appears in cut features (computer use, Linear, ephemeral VMs, mobile emulator).",
+        "An AI that already reads the shared skills folder gets no copy of its own (Codex at global scope); a custom config folder an AI uses is honoured; two AIs may not claim the same non-shared folder; AIs Kolux cannot place skills for are skipped.",
+        "The copied command stays interactive; only an unattended run adds the yes flag and explicit targets, and an unattended run with no target, or with a target the skills CLI would drop, is refused. Install repeats the skill flag per name; blank update names are rejected."
+      ],
+      "acceptance": [
+        "Click Install for the orchestration skill → a terminal opens with the install command typed and not yet run.",
+        "Press Enter, then Re-check → status shows installed.",
+        "Kolux CLI missing from PATH → the CLI installer runs before the skill command."
+      ],
+      "compat": "npx skills add <Kolux repo URL> --skill <name> --agent <detected agents plus the shared folder> -y [--global].",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/agent-skill-nav-install-status.test.ts:62",
+        "src/renderer/src/lib/agent-skill-cli-prerequisite.test.ts:45",
+        "src/shared/skills-cli-agent-keys.test.ts:91",
+        "src/main/skills/skill-provider-destinations.test.ts:10",
+        "src/shared/agent-feature-install-commands.test.ts:46"
+      ],
+      "round": 0,
+      "related": [
+        "08",
+        "17",
+        "20",
+        "13"
+      ]
+    },
+    {
+      "id": "D-15-029",
+      "title": "Bundled Kolux skills matched to the app version",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Installs or reads one of Kolux's own skills.",
+      "user_sees": "Skills shipped inside Kolux that teach AIs to use Kolux: the kolux CLI guide, orchestration, a security-review guide and a prompt-injection skepticism guide; each has a short guide, a full guide and named reference pages.",
+      "rules": [
+        "Kept skills: kolux-cli, orchestration, koluxsecurity, koluxward.",
+        "Skills for cut features are carded separately (D-15-032).",
+        "Guides always match the installed Kolux version.",
+        "The Linear skill exists under a current name and a legacy name; the app reports which one is installed (cut with Linear)."
+      ],
+      "acceptance": [
+        "kolux skills list → the kept skills appear with one-line descriptions.",
+        "Each kept skill offers a compact guide, a full guide and its listed references."
+      ],
+      "compat": "Skill names: kolux-cli, orchestration, koluxsecurity, koluxward.",
+      "decision": "",
+      "evidence": [
+        "src/cli/bundled-skill-guides.ts:21",
+        "src/cli/bundled-skill-guides.ts:63",
+        "src/cli/bundled-skill-guides.ts:93",
+        "src/cli/bundled-skill-guides.ts:123"
+      ],
+      "round": 0,
+      "related": [
+        "20",
+        "08",
+        "10"
+      ]
+    },
+    {
+      "id": "D-15-030",
+      "title": "kolux skills list and get print the bundled guides",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs kolux skills list, or kolux skills get with a topic.",
+      "user_sees": "A list of bundled skill topics with one-line descriptions, or a guide printed as Markdown: compact by default, full on request, or one named reference.",
+      "rules": [
+        "Both work offline from the guides bundled with the CLI.",
+        "A reference can be named bare or by its path.",
+        "A references flag lists the reference names.",
+        "show is an alias of get.",
+        "Both accept a JSON output flag."
+      ],
+      "acceptance": [
+        "kolux skills get orchestration --full → the full guide prints as Markdown.",
+        "kolux skills get kolux-cli --reference browser → that reference prints.",
+        "kolux skills list --json → machine-readable list."
+      ],
+      "compat": "kolux skills list [--json]; kolux skills get <topic> [--full | --reference <name>] [--references] [--json]; alias kolux skills show.",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/skills.ts:6",
+        "src/cli/specs/skills.ts:17",
+        "registry:cli-manifest:skills list",
+        "registry:cli-manifest:skills get"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-15-031",
+      "title": "kolux skills install and update",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs kolux skills install or kolux skills update from a terminal.",
+      "user_sees": "The bundled skills are installed or refreshed for the user's AIs through the community skills CLI.",
+      "rules": [
+        "Install is global by default; a local flag installs into the project.",
+        "Install targets the detected AIs plus the shared folder; the universal agent value targets only the shared folder; an agent must be named when none is detected.",
+        "Giving neither a skill nor the all flag prints the available names; giving both is an error.",
+        "A dry-run flag prints the command instead of running it; JSON output is refused on a real run.",
+        "Missing npx or Node gives a plain error.",
+        "Update takes the same flags except agent, and only refreshes skills already installed."
+      ],
+      "acceptance": [
+        "kolux skills install --skill orchestration --dry-run → prints the install command, installs nothing.",
+        "kolux skills install --all --skill orchestration → error.",
+        "kolux skills install --json (real run) → refused."
+      ],
+      "compat": "kolux skills install [--skill <name>]... [--all] [--agent <name>[,<name>]] [--local] [--dry-run] [--json]; kolux skills update [--skill <name>]... [--all] [--local] [--dry-run] [--json].",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/skills.ts:38",
+        "src/cli/specs/skills.ts:72",
+        "registry:cli-manifest:skills install",
+        "registry:cli-manifest:skills update",
+        "src/shared/skills-cli-agent-keys.test.ts:91"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-15-032",
+      "title": "Bundled skills for cut features",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Installs the skill for computer use, the iOS or Android emulator, Linear tickets, or per-workspace environment recipes.",
+      "user_sees": "Guides that teach AIs to drive those features.",
+      "rules": [
+        "Covers computer-use, kolux-emulator, kolux-emulator-android, kolux-linear, linear-tickets (legacy name), kolux-per-workspace-env.",
+        "They follow their features: computer use, Linear and the emulator are cut; environment recipes go with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: the features these skills drive are cut (computer use, Linear, emulator, environment recipes). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/cli/bundled-skill-guides.ts:18",
+        "src/cli/bundled-skill-guides.ts:33",
+        "src/cli/bundled-skill-guides.ts:36",
+        "src/cli/bundled-skill-guides.ts:39",
+        "src/cli/bundled-skill-guides.ts:42",
+        "src/cli/bundled-skill-guides.ts:120",
+        "src/renderer/src/lib/agent-skill-nav-install-status.test.ts:62"
+      ],
+      "round": 0,
+      "related": [
+        "13",
+        "11",
+        "18"
+      ]
+    },
+    {
+      "id": "D-15-033",
+      "title": "Skills on remote hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opens the Skills page while connected to a remote host.",
+      "user_sees": "The remote machine's skills are listed and can be deleted there, instead of the local machine's.",
+      "rules": [
+        "Delete is routed to the remote only where the runtime supports it."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: remote hosts are dropped with area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/runtime/runtime-skills-client.test.ts:54"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-15-034",
+      "title": "Install a shared skill bundle with per-skill conflict choices",
+      "tier": "H",
+      "pushed": null,
+      "state": "retired 2026-10-05",
+      "user_does": "Would install a packaged bundle of skills from a file, choosing per skill whether to keep the local copy when names clash.",
+      "user_sees": "Nothing today: the install back end and its contracts remain but no screen or command calls them.",
+      "rules": [
+        "Bundle requests carry a digest, size, the chosen skills, a global or project destination, and a keep-local or replace choice per conflict.",
+        "Leftover of artifact and skill sharing, hidden 2026-09-28 and removed 2026-10-05 (area 21)."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/shared/skill-bundle-install-contract.test.ts:23"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-15-035",
+      "title": "Published Claude artifacts are captured automatically",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live",
+      "user_does": "Lets a Claude Code session publish an HTML page with its Artifact tool.",
+      "user_sees": "The page appears in Kolux's Artifacts library with its title, the project and session it came from, and the date, ready to view offline.",
+      "rules": [
+        "Capture reads the publish result from the session's output or its transcript; replayed or restored output, ordinary prose, and look-alike results from other tools are ignored.",
+        "Entries are de-duplicated by URL; republishing updates the same entry and the latest publish wins.",
+        "The page and its relative assets are stored, never files outside its folder; limits are 10 MB of HTML, 100 assets, 10 MB per asset and 50 MB in total.",
+        "Allow-listed CDN scripts (up to 16, 5 MB each) are downloaded so the page works offline; if a download fails the original tag is kept.",
+        "The title comes from the page's title tag, capped at 200 characters.",
+        "Network-share paths are never opened and are listed as unavailable; WSL or SSH paths that cannot be read locally are listed as remote.",
+        "With no usable title tag the entry is named after the file."
+      ],
+      "acceptance": [
+        "A Claude session publishes a page twice → one library entry, showing the second version.",
+        "A page referencing a file outside its folder → that file is not stored.",
+        "A page on a network share → listed as unavailable and never read."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/artifacts-library/artifact-capture.test.ts:43",
+        "src/main/artifacts-library/artifact-capture.test.ts:241",
+        "src/main/artifacts-library/artifact-library-store.test.ts:29",
+        "src/main/artifacts-library/artifact-html-inspection.test.ts:9",
+        "src/main/artifacts-library/artifact-html-inspection.test.ts:47",
+        "src/main/artifacts-library/artifact-library-store.ts:305"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "10",
+        "18"
+      ]
+    },
+    {
+      "id": "D-15-036",
+      "title": "Artifacts library page and offline viewer",
+      "tier": "P0",
+      "pushed": null,
+      "state": "live",
+      "user_does": "Opens Artifacts from the sidebar, searches, picks one, adds one from a file, or removes one.",
+      "user_sees": "A page listing saved artifacts (newest first) with project or added-manually, session, date and a remote badge where relevant, and a viewer showing the selected page.",
+      "rules": [
+        "The sidebar button is always present.",
+        "Search by title matches every typed word, ignoring case; no matches shows an empty-search message; nothing selected shows a prompt to pick one.",
+        "Add artifact imports a page from a file; failure shows an error toast.",
+        "Remove from library deletes the stored copy.",
+        "The viewer is sandboxed and serves only the stored files; clicked links open in the system browser.",
+        "Viewer states: remote artifact, loading, could not show."
+      ],
+      "acceptance": [
+        "Search with two words → only titles containing both remain.",
+        "Click a link inside a viewed artifact → it opens in the system browser, not inside Kolux.",
+        "Add artifact with an unreadable file → error toast, list unchanged."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/artifacts-library/ArtifactsLibraryPage.tsx:50",
+        "src/renderer/src/components/artifacts-library/ArtifactViewer.test.tsx:49",
+        "src/renderer/src/components/artifacts-library/ArtifactViewer.test.tsx:96",
+        "src/renderer/src/components/sidebar/SidebarNav.tsx:146",
+        "registry:view-ids:artifacts"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-15-037",
+      "title": "Plugins settings: install, enable, consent and remove plugins",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opens Settings, Plugins (experimental, desktop only) and installs a plugin from a local folder or a git URL.",
+      "user_sees": "A list of plugins with consent prompts for what each may do, enable and disable switches, and removal.",
+      "rules": [
+        "In the old app the whole plugin system sat behind an experimental flag that was off by default.",
+        "Git installs pin a ref, accept HTTPS or SSH, and refuse URLs with embedded credentials.",
+        "Consent is fingerprinted; a plugin asks again when what it requests changes.",
+        "Bundled plugins cannot be removed.",
+        "The manifest loader also accepts a legacy upstream-branded manifest filename (identity issue)."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: plugin settings section and plugin runtime removed by the table 1b settings cut. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/plugins/plugin-install.test.ts:436",
+        "src/main/plugins/plugin-enablement.test.ts:62",
+        "src/main/plugins/plugin-manifest-file.test.ts:8",
+        "registry:settings-sections:plugins",
+        "registry:settings-keys:pluginSystemEnabled",
+        "registry:settings-keys:pluginConsents",
+        "registry:settings-keys:disabledPlugins"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-15-038",
+      "title": "Plugin marketplace",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Browses a marketplace of plugins and installs one.",
+      "user_sees": "An official source seeded by default with an Official badge, an offline snapshot, and support for private git marketplaces.",
+      "rules": [
+        "The Official badge is granted only to plugins from the canonical organisation."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: plugin marketplace removed with the plugins settings section. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/plugins/plugin-marketplace-service.test.ts:58"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-15-039",
+      "title": "Plugin runtime: workers, panels, commands and keybindings",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Uses an installed plugin's panel, command or shortcut.",
+      "user_sees": "Plugin panels in the right sidebar, plugin commands with their own keybindings, and plugin code running in background worker processes.",
+      "rules": [
+        "Workers restart with increasing back-off (0.5 s, 2 s, 5 s) and idle workers are reaped.",
+        "Panels are sandboxed and rate-limited.",
+        "Keybinding conflicts are reported and the user can override them."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: plugin runtime removed with the plugins settings section. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/plugins/plugin-worker-manager.test.ts:187",
+        "src/main/plugins/plugin-command-registry.test.ts:39",
+        "registry:view-ids:plugin:<string>"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "17"
+      ]
+    },
+    {
+      "id": "D-15-040",
+      "title": "Plugin content packs: language packs, VM recipes, launch packs",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Installs a plugin that adds a language, a VM recipe or launch content.",
+      "user_sees": "Extra UI languages, VM environment recipes and launch presets supplied by plugins; a developer watch mode reloads local plugins on change.",
+      "rules": [
+        "Plugin loading was budgeted to about 50 ms at the 95th percentile with 20 packs."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: plugin content packs removed with the plugin runtime; VM recipes also go with area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/plugins/plugin-language-pack-registry.test.ts:45",
+        "src/main/plugins/plugin-vm-recipe-registry.test.ts:75",
+        "src/main/plugins/plugin-startup-budget.test.ts:80",
+        "registry:settings-keys:devPluginPaths"
+      ],
+      "round": 0,
+      "related": [
+        "17",
+        "18"
+      ]
+    },
+    {
+      "id": "D-15-041",
+      "title": "Plugin safety: secrets, storage limits, audit log, remote revocation",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Runs plugins that store data or secrets.",
+      "user_sees": "Plugins keep secrets encrypted and data within storage limits, their actions are audited, and a remotely published kill list can revoke a plugin.",
+      "rules": [
+        "A kill list dated too far in the future is rejected."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: plugin safety machinery removed with the plugin runtime. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/plugins/plugin-secrets-store.test.ts:54",
+        "src/main/plugins/plugin-kill-list-service.test.ts:30"
+      ],
+      "round": 0,
+      "related": [
+        "10"
+      ]
+    }
+  ],
+  "notes": [
+    "Artifacts library tests sit in this area's test dump, but the scope table lists Artifacts under 05; carded here as D-15-035/036 (P0, live via the 2026-10-06 HANDOFF entry) with related 05, so check for a duplicate in 05.",
+    "Skills page is reachable only through a sidebar button that is off by default, and its show toggle lives in the cut Skills settings section (D-15-019); without another entry point the kept page becomes unreachable.",
+    "Area 20 names kolux-run as one of the owner's skills, but it is not among the ten bundled skills; the four kept are in D-15-029, the six for cut features in D-15-032.",
+    "WSL is ambiguous: area 18 cuts WSL execution, but area 12 says WSL path handling is local again from 10-06. WSL skill scanning and deletion were left as rules in D-15-021/022 instead of being cut.",
+    "The skill bundle install back end (archive with per-skill keep-local or replace) has contracts and main-process tests, but no screen or IPC caller was found. It looks like a leftover from skill sharing (area 21), so it is carded H in D-15-034.",
+    "The plugin manifest loader still accepts a legacy upstream-branded manifest filename. That is an identity concern (theme 10) if plugins are ever revived.",
+    "Starter kits are theme 6, outside the top five, and no README bullet or HANDOFF entry from 09-22 onward names them, so they are tiered P1, not P0. The kit rules text is shared with the cut custom-agent builder (area 02).",
+    "The Agent skill setup panel is also rendered inside cut settings sections (computer use, Linear, ephemeral VMs, mobile emulator). Where the kept CLI-skill panel lives once the CLI settings section folds is UNKNOWN.",
+    "Critic r1 (2026-10-06): D-15-018 raised P2 -> P1 because the sidebar button is the only way into the Skills page (P1); the rebuild needs a reachable entry even though its show toggle lives in the cut section. Cross-area duplicates to reconcile at firewall: Artifacts (D-15-035/036 vs D-05-012), skills CLI (D-15-030/031 vs D-20-043/044), skill update status (D-15-027 vs D-05-100), Plugins section (D-15-037 vs D-17-052), skill sharing (D-15-034 vs D-21-008). D-15-016 milestones feed the newcomer checklist, which area 16 cards as H half-done (D-16-013)."
+  ]
+}

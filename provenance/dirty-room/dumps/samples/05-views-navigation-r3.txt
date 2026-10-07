@@ -1,0 +1,101 @@
+# 05-views-navigation random sample round 3 (100 of 4043): file	title
+src/renderer/src/components/status-bar/status-bar-provider-visibility.test.ts	keeps configured providers visible when a fetch returns unavailable
+src/renderer/src/components/dashboard/AgentDashboardDrawer.test.tsx	derives no dashboard snapshot while closed
+src/renderer/src/components/right-sidebar/ai-vault-session-filters.test.ts	adds same-repo sibling worktrees on top of the workspace paths
+src/renderer/src/components/cmd-j/worktree-checks-review-index.test.ts	skips a branch-less worktree instead of throwing
+src/renderer/src/components/right-sidebar/useFileExplorerTree.stale-dirs.test.tsx	does not mark the root or a dir the full refresh re-read
+src/main/ai-vault/ai-vault-scan-cancellation.test.ts	rejects immediately when the caller already cancelled
+src/main/ipc/ai-vault-scan-coalescing.test.ts	reports a real scan failure as a host issue rather than cancellation
+src/renderer/src/components/cmd-j/palette-query-tokens.test.ts	counts punctuation-bearing tokens as one top-level token
+src/renderer/src/components/floor/floor-lanes.test.ts	turns stateHistory into consecutive segments, mapping blocked/waiting to needs
+src/renderer/src/components/right-sidebar/source-control-manual-review-url.test.ts	qualifies GitHub fork heads when the push target remote differs from the base repo
+src/renderer/src/components/status-bar/tooltip.test.ts	returns a separate Fable section when Claude reports Fable weekly usage
+src/renderer/src/components/right-sidebar/source-control-file-filter.test.ts	returns original entry groups for empty filters
+src/renderer/src/components/right-sidebar/SourceControl.branch-line-total.test.tsx	renders a total measured against the current fork point
+src/renderer/src/components/right-sidebar/CommitArea.generate.test.tsx	renders a single commit-message AI entry point in the composer
+src/renderer/src/components/right-sidebar/SourceControl.open-file-highlight.test.tsx	does not highlight pending rows for branch compare tabs with the same path
+src/main/ai-vault/session-scanner-values.test.ts	defaults to the home agent dir when nothing is configured
+src/renderer/src/components/cmd-j/palette-filter.test.ts	bulk-adds every matching id without duplicating
+src/renderer/src/components/right-sidebar/SourceControl.branch-line-total.test.tsx	asks for a total when the panel is visible and compare is ready
+src/renderer/src/components/right-sidebar/checks-panel/use-checks-panel-polling.test.tsx	selects the GitLab adapter without calling the GitHub checks provider
+tests/e2e/onboarding.spec.ts	Skip from notifications does not request permission
+src/renderer/src/components/right-sidebar/source-control-discard-confirmation.test.ts	uses discard copy for modified tracked files
+src/main/ports/port-scan-command-client.test.ts	does not join an undefined resourcesPath
+src/renderer/src/components/dashboard/build-dashboard-snapshot.test.ts	scans orchestration runtime once for a dashboard snapshot
+src/renderer/src/lib/keyboard-layout/option-key-location-state.test.ts	ignores non-Option keys
+src/renderer/src/components/right-sidebar/checks-panel-pr-refresh-request.test.ts	uses eligibility before cached provider metadata when no review is linked
+src/renderer/src/components/right-sidebar/FileExplorerToolbar.test.tsx	fires the refresh action from the icon button
+src/renderer/src/components/right-sidebar/ai-vault-scope-state.test.ts	does not restore workspace after the user manually chose project or all
+src/renderer/src/components/right-sidebar/source-control-branch-context-row.test.tsx	keeps the commit count out of the line-total colors
+src/renderer/src/components/status-bar/status-bar-provider-visibility.test.ts	treats minimaxCookieConfigured as the durable signal for MiniMax
+src/renderer/src/components/right-sidebar/CommitArea.chevron-spinner.test.tsx	spins the chevron when a dropdown remote op runs while the primary is plain Commit
+src/renderer/src/components/right-sidebar/ai-vault-session-log-open.test.ts	activates and shows the already-editable toast for an existing writable tab
+src/renderer/src/components/right-sidebar/file-explorer-batch-deletion.test.ts	keeps case-distinct POSIX paths
+src/renderer/src/components/right-sidebar/source-control-dropdown-items.test.ts	keeps explicit push rows available while upstreamStatus is undefined
+src/main/ipc/workspace-ports.test.ts	refuses to stop external ports
+src/renderer/src/store/slices/worktree-nav-history-view-entries.test.ts	keeps same GitHub item details separate when the source host differs
+src/renderer/src/components/right-sidebar/useFileExplorerVisibleRowProjection.test.ts	does not reuse ignored paths across worktree contexts
+src/main/ai-vault/ai-vault-scan-coordinator.test.ts	lets a forced refresh preempt a forced scan that hung past the coalescing window
+src/renderer/src/components/right-sidebar/PortsPanel.test.tsx	keeps separate scan keys for different repos
+src/renderer/src/components/right-sidebar/source-control-hosted-review-creation-eligibility-snapshot.test.ts	never synthesizes intent eligibility for an unsupported remote provider
+src/renderer/src/components/right-sidebar/gitlab-mr-merge-state.test.ts	treats an unrecognised merge reason like an absent one
+src/renderer/src/components/right-sidebar/source-control-tree.test.ts	preserves real branching folders when compacting directory chains
+src/renderer/src/components/right-sidebar/FileExplorerRow.actions.test.tsx	shows a failure toast when OS file copy fails
+src/renderer/src/components/right-sidebar/SourceControl.compare-summary.test.ts	prefers a pinned base over the upstream when the setting is on
+src/renderer/src/components/status-bar/UsageRosterPanel.test.tsx	renders the tightest window inline in compact mode
+src/renderer/src/components/right-sidebar/source-control-commit-eligibility.test.ts	keeps the message field enabled when only the message is missing
+src/main/ipc/ai-vault.test.ts	caps and reports oversized project scopes on the SSH filesystem fallback
+src/renderer/src/components/right-sidebar/source-control-section-order.test.ts	uses the configured order for normal sections
+src/renderer/src/components/status-bar/resource-session-navigation.test.ts	closes the popover first, reveals the owning worktree, and focuses a matching pane
+src/renderer/src/components/right-sidebar/useFileExplorerKeys.test.ts	ignores input targets so text editing does not trigger explorer shortcuts
+src/renderer/src/components/status-bar/mergeSnapshotAndSessions.test.ts	excludes runtime-scoped rows while preserving SSH and unattributed sessions
+src/renderer/src/lib/ai-vault-resume-command.test.ts	repro: queues a host-runtime resume without configured-WSL shell syntax
+src/renderer/src/components/right-sidebar/pr-comments-list-selection.test.tsx	keeps GitHub and GitLab review selections isolated under Strict Mode replay
+src/renderer/src/lib/ai-vault-resume-command.test.ts	copies a real-home Codex command that clears inherited homes in cmd
+src/renderer/src/components/right-sidebar/source-control-manual-review-url.test.ts	builds a GitLab merge request URL for a self-hosted GitLab remote
+src/renderer/src/components/right-sidebar/source-control-huge-repo-warning-dismissals.test.ts	rejects a late probe completion after authoritative removal
+src/renderer/src/store/slices/editor-right-sidebar-state.test.ts	consumes only the matching seed request id
+src/renderer/src/components/right-sidebar/source-control-branch-section-heading.test.tsx	leaves the count unlabelled when the summary has no base ref
+src/main/ai-vault/codex-session-root-dedup.test.ts	collapses cross-volume copies only after session_meta proves the same id
+src/main/ports/local-workspace-port-scanner.test.ts	always probes metadata for a requireMetadata scan, even when the cache is warm
+src/renderer/src/components/right-sidebar/checks-panel/panel-content-rendering.test.tsx	renders a durable unlinked state that can relink before PR data refetches
+src/main/ai-vault/session-scanner-service-client.test.ts	lets a forced refresh reopen the circuit instead of waiting out the window
+src/renderer/src/components/dashboard/use-agent-row-conversation-name.test.ts	gives each pane in one tab its own name
+src/renderer/src/components/right-sidebar/checks-panel-content.test.tsx	places the collapsed add-comment action in the comments header
+src/renderer/src/components/right-sidebar/ai-vault-session-projects.test.ts	uses repo fallback candidates when a setup for the repo has a blank path
+src/renderer/src/components/right-sidebar/checks-panel-async-result-key.test.ts	includes non-default GitHub hosts in PR repo identity
+src/renderer/src/lib/ai-vault-session-drag.test.ts	rejects array-shaped env records
+src/renderer/src/components/right-sidebar/useFileExplorerDragDrop.test.ts	stops at the top instead of scheduling a no-op frame forever
+src/renderer/src/components/right-sidebar/SourceControl.compare-summary.test.ts	keeps a 30 second branch compare fallback refresh
+src/shared/clipboard-image.test.ts	accepts image metadata within configured limits
+src/renderer/src/components/status-bar/status-bar-copy-localization.test.tsx	translates the memory-unavailable and empty-session tooltip lines
+src/renderer/src/components/right-sidebar/git-status-refresh-branch-line-total.test.ts	sends the merge base on an abortable refresh
+src/main/ai-vault/session-scanner-antigravity-parser.test.ts	parses the established transcript contract without leaking metadata wrappers
+src/renderer/src/components/dashboard/build-dashboard-bucket-counts.equivalence.test.ts	returns the previous counts object when the four totals are unchanged
+src/renderer/src/components/status-bar/RuntimeHostStatusRow.test.tsx	renders a long raw error in full inside the submenu
+src/renderer/src/components/status-bar/status-bar-copy-localization.test.tsx	keeps the space-scan row flagged when its copy is no longer English
+src/renderer/src/components/right-sidebar/file-explorer-drag-scroll-marker.test.tsx	does not hijack the wheel when the viewport does not overflow
+src/main/ports/local-workspace-port-scanner.test.ts	uses cwd ancestry and picks the deepest matching worktree
+src/main/ports/advertised-url-watcher.test.ts	caps the pre-bind pending buffer at 32 distinct PTY IDs
+src/renderer/src/components/right-sidebar/CommitArea.test.tsx	omits the details trigger when the raw error matches the summary
+src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.test.ts	relays a valid request and posts the success result back into the panel
+src/renderer/src/components/right-sidebar/file-explorer-keyboard-navigation.test.ts	selects the first row on ArrowDown when nothing is focused
+src/main/ipc/workspace-ports.test.ts	unsubscribes the previous advertised URL listener when handlers are registered again
+src/main/ai-vault/session-scanner-scope.test.ts	surfaces in-scope sessions older than the global recency cap
+src/renderer/src/components/right-sidebar/PluginPanel.test.tsx	treats a malformed plugin tab key as unavailable
+src/renderer/src/components/dashboard/dashboard-card-terminal-input.test.ts	keeps the live SSH PTY's host after the worktree owner changes
+src/renderer/src/components/right-sidebar/checks-panel-review-creation.test.ts	returns null when both inputs are null
+src/main/ipc/ai-vault.test.ts	uses one target-side relay scan when the SSH relay supports it
+src/renderer/src/components/pet/pet-agent-state.test.ts	keeps the last direction without advancing when horizontal travel stays under 4px
+src/renderer/src/components/cmd-j/palette-session-age.test.ts	stays in minutes just under the one-hour boundary
+src/renderer/src/store/slices/worktree-nav-history-view-entries.test.ts	dedupes ${label} against the current ${label} entry
+src/renderer/src/components/agent-grid/AgentGridPage.test.ts	excludes a worktree whose only row has no live pty
+src/renderer/src/components/agents-view/agents-view-session-body.test.ts	honours "Show terminal"
+src/renderer/src/components/right-sidebar/useGitStatusPolling.test.ts	skips remote git status polling while the SSH target is disconnected
+src/renderer/src/components/status-bar/status-bar-provider-visibility.test.ts	requires both a checked Antigravity item and Gemini OAuth as the durable Antigravity signal
+src/renderer/src/components/right-sidebar/source-control-active-open-file-keys.test.ts	matches edit tabs to working-tree rows before staged-only fallback
+src/renderer/src/components/right-sidebar/source-control-hosted-review-push-target.test.ts	treats explicit linked review metadata as open when live state is unavailable
+src/renderer/src/components/right-sidebar/checks-panel-review-creation.test.ts	drops confirmed when the context key does not match
+src/renderer/src/components/right-sidebar/push-target-upstream-refresh-cache.test.ts	retries after a failed push-target refresh invalidates an unchanged automatic poll cache hit
+tests/e2e/status-bar-session-count-management-kill.spec.ts	drops after Manage Sessions kills a foreign daemon session, popover never opened
+src/renderer/src/components/right-sidebar/ai-vault-session-resume.test.ts	enables the active folder workspace action when it is local or SSH-owned

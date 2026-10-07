@@ -1,0 +1,101 @@
+# 20-cli random sample round 1 (100 of 1112): file	title
+src/cli/browser-storage-empty-value.test.ts	passes an empty --value through to browser.storage.local.set
+src/cli/handlers/orchestration-lifecycle-rejection.test.ts	rejects an unrelated failed Dispatch that left its Task blocked
+src/cli/skills.test.ts	resolves a legacy topic alias to the canonical skill name for install
+src/cli/args.test.ts	still parses boolean flags and space-separated values
+src/cli/skills.test.ts	gives alias get --json the canonical name, selection, and Markdown
+src/cli/linear-format.test.ts	prints a stdout truncation marker when a list-issues page is partial
+src/cli/runtime-client-deferral.test.ts	constructs no client for --help
+src/main/cli/wsl-cli-installer.test.ts	repairs the frozen pre-rc4 registration so orchestration send/reply reach native rc4
+src/cli/handlers/computer-action-routing.test.ts	maps hotkey and paste-text command flags to RPC payloads
+src/cli/index.test.ts	reports a pre-command typo when a global flag splits the command path
+src/cli/command-suggestion-budget.test.ts	retains UTF-16 distance semantics at the length boundary
+src/cli/command-suggestion.test.ts	suggests the closest command for a near-miss verb
+src/cli/specs/bundled-guide-flags.test.ts	scans the shipped guides for orchestration examples
+src/cli/index.test.ts	serves `agent-context --json` without contacting the runtime
+src/cli/runtime/status.test.ts	reports the target app as running when a renderer owns the graph there
+src/cli/runtime-client-deferral.test.ts	reuses one client instance across repeated ctx.client reads
+src/cli/host-selector-alternatives.test.ts	reports no ambiguity for a unique name
+src/cli/handlers/orchestration-worker-cli.test.ts	passes the complete supported creation contract and retry receipt
+src/cli/browser-storage-empty-value.test.ts	still rejects an empty --key before RPC dispatch
+src/main/cli/kolux-cli-child-path.test.ts	leaves packaged Linux PATH untouched when no shim could be written
+src/cli/args.test.ts	resolves an aliased path to the canonical spec
+src/cli/handlers/orchestration-timeout.test.ts	keeps an omitted ask timeout out of the payload while using default headroom
+src/cli/format.test.ts	warns limited cursor reads to continue with the next cursor
+src/cli/handlers/orchestration/worker-output.test.ts	renders partial effects, residual resources, and exact recovery commands for unknown starts
+src/cli/index-memory-diagnostics.test.ts	passes committed bytes through --json untouched
+src/cli/handlers/orchestration-caller-identity-cli.test.ts	propagates unexpected caller pane remint failures for coordinator commands
+src/cli/skill-guide-cli-parity.test.ts	extracts a nonempty invocation corpus across guides and references
+src/cli/runtime/orchestration-recovery-command.test.ts	supports the explicit executable-first form
+src/cli/index-serve-command.test.ts	rejects contradictory serve pairing flags
+src/cli/index-vm-recipe-doctor.test.ts	runs vm recipe doctor provision mode and invokes cleanup
+src/main/cli/kolux-cli-child-path.test.ts	leads packaged Linux PATH with the bare-kolux shim dir
+src/cli/host-selector-alternatives.test.ts	still resolves an exact id past a colliding label
+src/cli/handlers/orchestration.test.ts	reports sender resolution failure instead of raw no_active_terminal
+src/cli/args.test.ts	does not consume a command token after an unknown flag
+src/cli/handlers/orchestration-module-boundaries.test.ts	composes handlers in the canonical command order
+src/cli/handlers/linear.test.ts	maps priority writes with Linear API priority numbering
+src/cli/handlers/computer.test.ts	passes get-app-state target and observe flags
+src/cli/browser.test.ts	shows tab profile labels in text mode when requested
+src/cli/args.test.ts	parses emulator reinstall as a boolean flag
+src/cli/args.test.ts	canonicalizes an aliased command path during normalization
+src/cli/orchestration-mutation-recovery.test.ts	reuses the request identity without duplicating an existing retry flag
+src/main/cli/appimage-stable-launcher.test.ts	publishes on a cache filesystem without hard-link support
+src/main/cli/cli-command-privileged-transaction.test.ts	restores a trailing-newline symlink inserted after privileged inspection
+src/cli/handlers/linear.test.ts	dispatches relation rm through the remove handler
+src/cli/handlers/orchestration-module-boundaries.test.ts	allows a dry run without a recipient and returns only its preamble
+src/main/cli/wsl-cli-installer.test.ts	refuses to replace an unmanaged WSL command
+src/cli/handlers/file-absolute-paths.test.ts	rejects the UNC worktree root itself typed as a Linux path
+src/cli/codex-command-classification.test.ts	keeps one-shot Claude commands on the background path
+src/cli/handlers/orchestration-timeout-cli.test.ts	uses the parsed ask timeout for both runtime wait and client timeout
+src/cli/index-worktree-create-linear.test.ts	rejects null Linear issue values on worktree.create before RPC
+src/cli/handlers/automation-destination-fencing.test.ts	omits the destination when the authority registers the target without a generation
+src/cli/handlers/agent-hooks.test.ts	uses the active profile settings instead of stale legacy settings
+src/cli/runtime-client.test.ts	preserves structured runtime failures
+src/cli/handlers/orchestration-gate-cli.test.ts	fails an unbound gate-create with an actionable error and no mutation
+src/cli/handlers/orchestration-caller-identity-cli.test.ts	propagates unexpected env handle validation failures
+src/cli/handlers/orchestration-worker-cli.test.ts	sets an unsuccessful exit code for failed and unknown receipts
+src/cli/handlers/terminal.test.ts	routes --worktree --all to authoritative durable bulk close
+src/cli/runtime/envelope-schema.test.ts	returns false for non-object inputs
+src/main/cli/cli-command-installation-races.test.ts	restores a foreign symlink raced into command removal
+src/main/cli/wsl-cli-registration-registry.test.ts	stops reconciling a registration removed through Settings
+src/main/cli/appimage-stable-launcher.test.ts	observes an endpoint published after the wrapper starts
+src/cli/browser.test.ts	resolves the current tab in a worktree
+src/cli/handlers/file-absolute-paths.test.ts	reproduces the issue positional command without invalid_relative_path
+src/cli/agent-context.test.ts	does not advertise browser page targeting for local discovery
+src/main/cli/cli-installer-windows-path.test.ts	skips the Windows PATH write when removing an absent entry
+src/cli/handlers/orchestration.test.ts	serializes common worker payload fields as JSON
+src/main/cli/cli-installer-windows-path.test.ts	creates a windows wrapper and updates the user PATH
+src/cli/handler-group-manifest.test.ts	reports an unknown command with the joined path
+src/cli/command-suggestion.test.ts	does not suggest hidden compatibility commands
+src/cli/handlers/orchestration.test.ts	sends lifecycle messages from KOLUX_TERMINAL_HANDLE without a liveness probe
+src/cli/handlers/linear.test.ts	prints truncation on human stdout and in JSON without using stderr for JSON
+src/cli/handlers/linear.test.ts	maps create with parent-current and optional body flags
+src/cli/handlers/orchestration.test.ts	forwards multiline message bodies without normalization
+src/cli/browser.test.ts	resolves current worktree only when --page is combined with --worktree current
+src/cli/retry-request-flag.test.ts	rejects a non-UUID --retry-request value
+src/main/cli/cli-privileged-processes.test.ts	preserves the timeout error presented by CLI registration
+src/cli/index-worktree-create-target.test.ts	passes explicit activation through worktree.create
+src/cli/index-device-commands.test.ts	passes emulator gesture points through to the runtime
+src/cli/skills.test.ts	rejects --json for a real (non-dry-run) update
+src/cli/index-worktree-create-parent.test.ts	passes folder workspace environment lineage through worktree.create
+src/cli/handlers/orchestration-task-list-brief.test.ts	passes server-abbreviated rows through untouched
+src/cli/index-automation-target.test.ts	rejects automation create with both repo and workspace targets
+src/cli/index.test.ts	hides removed parent-workspace help and scopes create parent selectors
+src/cli/vocabulary-policy.test.ts	rejects a canonical verb alias under an unrelated command prefix
+src/cli/runtime/orchestration-recovery-command.test.ts	reconstructs worker-retain when raw argv is unavailable
+src/cli/skills.test.ts	spawns a resolved npx path directly when it is not a .cmd shim
+src/cli/index-worktree-selector-resolution.test.ts	normalizes active/current worktree selectors to cwd
+src/cli/handlers/linear.test.ts	requires exact write targets for issue writes
+src/cli/runtime/status.test.ts	does not claim a desktop app for a headless serve on any transport
+src/cli/index.test.ts	distinguishes new worktrees from fresh agent terminals in command help
+src/cli/skills.test.ts	runs npx from a Program Files (x86) install instead of refusing it
+src/cli/handlers/orchestration-timeout-cli.test.ts	rejects ambiguous ask create/resume input before RPC
+src/cli/handlers/orchestration-caller-identity-cli.test.ts	propagates runtime unavailability while reminting the bound coordinator
+src/cli/specs/orchestration.test.ts	does not promise uniformity it cannot deliver
+src/cli/handlers/automation-destination-fencing.test.ts	does not drop the fence when reading SSH registrations fails
+src/cli/command-suggestion.test.ts	only considers commands of the same depth
+src/cli/serve-electron-flag-parity.test.ts	keeps the untranslated allowlist tied to real global flags
+src/cli/vocabulary-policy.test.ts	rejects a canonical verb alias at a different command depth
+src/cli/orchestration-structured-session-no-identity.test.ts	refuses a bare check instead of consuming the mailbox of a sibling pane
+src/main/cli/appimage-extraction-pruning.test.ts	prunes stale generations without touching sibling namespaces

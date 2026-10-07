@@ -1,0 +1,17 @@
+﻿kolux linear team states
+
+Usage: kolux linear team states --team <key|id> [--workspace <id>] [--json]
+
+List Linear team workflow states
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --team
+  --workspace <id>      Connected Linear workspace id
+
+Examples:
+  $ kolux linear team states --team ENG --json
+

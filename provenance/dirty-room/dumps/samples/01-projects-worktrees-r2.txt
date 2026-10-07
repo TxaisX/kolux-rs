@@ -1,0 +1,101 @@
+# 01-projects-worktrees random sample round 2 (100 of 6460): file	title
+src/renderer/src/lib/repo-slug-cache.test.ts	scopes a host-less fork parent to the host the fork itself was cloned from
+src/renderer/src/components/sidebar/worktree-card-send-target-inputs.test.ts	exposes the live maps when the popover targets this worktree
+src/renderer/src/components/sidebar/WorktreeContextMenu.test.ts	routes to board Linear-sync with ALL selected ids when the board wired a callback
+src/renderer/src/components/sidebar/smart-sort.test.ts	falls back to displayName when recency is identical
+src/renderer/src/components/sidebar/SidebarSettingsHelpMenu.test.tsx	renders Milestones with progress when setup is incomplete
+src/renderer/src/components/sidebar/project-header-drop.test.ts	rejects an edge-zone final drop below measured content when the estimate overshoots
+src/renderer/src/components/sidebar/worktree-card-title-display.test.ts	treats blank stored titles as absent
+src/main/worktree-removal-safety.test.ts	rejects a plain .git directory for unregistered cleanup
+src/renderer/src/components/sidebar/smart-attention.test.ts	skips interrupted done rows
+src/renderer/src/components/workspace-cleanup/workspace-cleanup-git-evidence.test.ts	turns on for the %s sort
+src/renderer/src/components/sidebar/worktree-title-derived-agent-rows.test.ts	does not infer Claude Code from a spinner-only non-agent title
+src/renderer/src/components/sidebar/worktree-list/navigation/folder-reveal.test.ts	still returns project-group keys under repo grouping
+src/renderer/src/store/slices/worktrees/teardown/remove-worktree-map-identity.test.ts	keeps the reference of every map that held nothing for the removed worktree
+src/renderer/src/components/sidebar/SidebarHeader.test.tsx	opens agent activity from the bell button
+src/renderer/src/components/sidebar/sidebar-filter-state.test.ts	returns true when only host visibility is narrowed
+src/renderer/src/components/workspace-cleanup/workspace-cleanup-flat-list.test.tsx	offers local removal for a disconnected SSH row without making it selectable
+src/renderer/src/store/slices/ui-hydration-workspace-cleanup-browse.test.ts	defaults an absent source to sync, so an unlabelled broadcast cannot revert either
+src/renderer/src/lib/worktree-palette-task-url-match.test.ts	matches a GitLab MR URL via the linked review URL
+src/renderer/src/components/sidebar/worktree-list-groups-imported-worktrees.test.ts	places collapsed non-repo imported fallbacks after Pinned in pinned repo order
+src/main/worktree-create-preparation.test.ts	deduplicates preparation for the same repo, base, runtime, and workspace root
+src/main/worktree-removal-safety.test.ts	rejects unregistered leftover directories with a .git marker
+src/renderer/src/store/slices/detected-worktree-refresh-leases.test.ts	reports no cancellation start when the invocation throws before send
+src/main/ipc/worktrees-remove-preflight.test.ts	propagates a timed-out removal preflight before watcher teardown
+src/main/ipc/repos-nested-scan.test.ts	prioritizes shallow sibling repositories before truncated SSH archive scans
+src/renderer/src/store/slices/worktrees-create-base-status.test.ts	passes the active folder workspace as parent for in-app worktree creates
+src/main/ipc/worktree-base-directory-watcher.test.ts	never reads head identities for SSH watches
+src/main/ipc/crash-reporting-renderer-error-report-attribution.test.ts	ignores unknown attribution values from a newer or hostile renderer
+src/renderer/src/lib/worktree-activation-agent-startup.test.ts	opens new agent workspace terminals in native chat when configured
+src/main/worktree-name-retirement.test.ts	rejects legacy repeated suffixes that the canonical collision sequence never emits
+src/renderer/src/store/slices/worktrees-fetch-owner-routing.test.ts	falls back to legacy remote worktree.list when detectedList is unavailable
+src/renderer/src/components/sidebar/worktree-list/navigation/use-reveal-requests.test.tsx	clears filters and reveals on the original execution host only after confirmation
+src/shared/cli-workspace-provenance.test.ts	records the caller terminal handle for agent-issued creates
+src/renderer/src/store/repos/repo-add-actions.dialog-contract.test.ts	settles a stale pending request with null before opening a fresh one
+src/renderer/src/components/sidebar/clone-defaults.test.ts	returns root for an absolute root workspaces path
+src/renderer/src/components/sidebar/CommentMarkdown.link-click.test.tsx	lets callers intercept rendered document images
+src/shared/project-catalog-row-normalization.test.ts	repairs null rows without throwing
+src/main/ipc/worktree-push-target-setup.test.ts	removes the remote it just added when the fetch fails
+src/main/ipc/worktree-logic.test.ts	keeps a user label that sanitizes away automatic
+src/main/ipc/worktree-base-directory-watcher.test.ts	does not throttle repeated overflow refreshes the way watcher-error refreshes are throttled
+src/renderer/src/store/slices/worktrees-lineage-state.test.ts	preserves other-host lineage row identity across a cloned same-host refresh
+src/renderer/src/components/sidebar/worktree-list/grouping/build-rows.folder-workspace-lanes.test.ts	gives a folder-only host an explicit empty id array
+src/renderer/src/components/sidebar/worktree-sidebar-drag-autoscroll.test.ts	keeps normal in-range hover handling unchanged
+src/main/worktree-removal-safety.test.ts	rejects unregistered leftover directories that still answer git status
+src/renderer/src/components/sidebar/worktree-list-groups-imported-worktrees.test.ts	suppresses the repo-group imported worktrees card when the repo group is collapsed
+src/main/ipc/workspace-cleanup-broad-scan.test.ts	does not publish a same-id local folder instance on an SSH host
+src/renderer/src/store/slices/workspace-cleanup-scan-progress.test.ts	does not leave cleanup loading stuck when a reopen joins a just-settled scan
+src/renderer/src/components/sidebar/worktree-list-groups-project-host-setups.test.ts	splits same-host checkouts of one project into separate per-setup groups
+src/renderer/src/store/slices/ui-hydration-workspace-preferences.test.ts	does not restore the retired active-only filter from persisted UI state
+src/renderer/src/components/sidebar/worktree-list/grouping/build-rows.test.ts	resolves repo header color from project group headers only
+src/renderer/src/components/sidebar/WorktreeCard.pr-display.test.tsx	does not show cached branch PR details when the worktree has no linked PR
+src/renderer/src/lib/worktree-activation-structured-chat-surface.test.ts	runs a new-tab setup script without seeding a shell
+src/renderer/src/components/sidebar/host-section-folder-workspace-counts.test.ts	counts a collapsed folder-only lane from its header
+src/main/persistence-repo-lifecycle.test.ts	reorderReposForHost rejects stale or duplicate host permutations without mutation
+src/main/ipc/worktree-push-target-refspec-real-git.test.ts	narrows a pre-existing wide-refspec remote and prunes the strays it already fetched
+src/renderer/src/components/sidebar/ProjectGroupDeleteDialog.test.tsx	focuses the delete group action when opened
+src/renderer/src/components/sidebar/ProjectAddedDialog.test.tsx	fetches worktrees and finishes by opening the default checkout for Git repos
+src/main/persistence-repo-lifecycle.test.ts	removeProject deletes the repo and its worktree meta
+src/main/worktree-create-base-prefetch.test.ts	routes the broad remote-fetch fallback through the selected WSL distro
+src/main/ipc/worktree-push-target-refspec-migration.test.ts	skips a remote with no provenance evidence (no metadata entry has remoteCreated: true)
+src/renderer/src/components/sidebar/worktree-meta-updates.test.ts	does not displace a Linear work item when the issue field is clean
+src/renderer/src/store/slices/worktrees-create-base-status.test.ts	does not record a dismissal on close when the feature is already enabled
+src/shared/source-scan/source-tree-scan.test.ts	preserves newlines
+src/renderer/src/lib/worktree-creation-flow-reveal-on-start.test.ts	still hands main the startup command, with the no-focus flag set
+src/renderer/src/store/slices/sparse-presets.test.ts	clears a failed fetch status when retrying presets succeeds
+src/renderer/src/components/sidebar/sidebar-host-options.test.ts	marks a runtime host blocked when its live status fails compat
+src/renderer/src/store/slices/worktrees-workspace-selection-state.test.ts	pruneLastVisitedTimestamps preserves an active workspace key pointing at a different live worktree
+src/renderer/src/components/sidebar/SidebarToolbar.test.tsx	keeps account controls out of the sidebar footer
+src/main/persistence-update-repo.test.ts	repo mutations preserve independent project host setup records
+src/renderer/src/components/sidebar/remote-file-browser-helpers.test.ts	`..` stays (parent nav handled by caller)
+src/main/persistence-folder-workspace-notes.test.ts	never lets an empty or unrelated map entry delete inline notes
+src/renderer/src/lib/worktree-agent-activation-gate.test.ts	adopts a daemon PTY minted for a folder workspace
+src/shared/folder-workspace-execution-host.test.ts	still answers local for a runtime pin, which the type cannot express otherwise
+src/renderer/src/components/sidebar/worktree-header-section-boundaries.test.ts	falls back to the next header when a bucket has no successor
+src/renderer/src/components/sidebar/AddRepoStartSteps.test.tsx	uses native-style project entry cards in server mode
+src/main/ipc/worktrees-existing-branch-checkout.test.ts	suffixes only the path when an existing local branch checkout path already exists
+src/shared/workspace-space-scan-budget.test.ts	closes an async directory iterator when the next entry exceeds the budget
+src/renderer/src/components/worktree-jump-palette-status-inputs.test.ts	keeps the tab set live while active so a closing tab can backfill the recent section
+src/main/ipc/created-worktree-reconciliation.test.ts	reports the whole listing when it contains the created row
+src/renderer/src/components/sidebar/project-header-drag.test.ts	ignores explicit project action wrappers
+src/renderer/src/components/sidebar/worktree-keyboard-cycle.test.ts	cycles over the rendered rows instead of rebuilding a parallel layout
+src/main/ipc/crash-reporting-renderer-error-report-attribution.test.ts	surfaces the caveat in the formatted report text a human reads
+src/renderer/src/components/sidebar/ProjectGroupDeleteDialog.test.tsx	renders compact contained project handling and reports remove intent
+src/renderer/src/components/sidebar/worktree-card-send-target-inputs.test.ts	returns the shared empty constant when the popover does not target this worktree
+src/renderer/src/components/sidebar/ImportedWorktreesVisibilityLine.test.tsx	names the host when the project is checked out on more than one
+src/main/ipc/worktrees-lineage-hydration.test.ts	hydrates detected worktrees with instance-validated legacy lineage after an update
+src/shared/worktree/removal-force-classification.test.ts	reads the verdict Kolux actually recorded
+src/renderer/src/store/worktree-host-collision-index.test.ts	still collapses the createWorktree/fetchWorktrees duplicate on one host
+src/renderer/src/components/sidebar/WorktreeCardDisplayMenuSection.test.tsx	keeps branch-only copy when project groups are unavailable
+src/main/ipc/worktrees/listing/detected-worktree-scan-hygiene-gate.test.ts	runs hygiene once and then never again while nothing changes
+src/main/ipc/repos-picker.test.ts	picks an existing directory without enabling native directory creation
+src/renderer/src/lib/worktree-activation-web-runtime.test.ts	holds the issue command for the first mirrored web runtime tab when none exists yet
+src/renderer/src/components/sidebar/remote-file-browser-helpers.test.ts	exact file match reports not-a-directory instead of prefix-descending
+src/main/ipc/worktrees-local-base-ref-resolution.test.ts	uses a local branch when its missing remote-tracking base cannot refresh
+src/renderer/src/components/sidebar/WorktreeCard.compact-hover.test.tsx	does not duplicate workspace identity when trimmed title equals branch
+src/renderer/src/components/sidebar/worktree-list/viewport/virtual-rows.test.ts	does not pin a Project header whose virtual item is not mounted yet
+src/main/ipc/worktree-symlinks.test.ts	rejects parent-directory traversal
+src/renderer/src/components/sidebar/remote-file-browser-drive-paths.test.ts	accepts drive anchors with either separator, bare colon, and any case
+src/renderer/src/components/sidebar/mobile-sidebar-onboarding-badge.test.ts	does not show the badge on a failed load and recovers on window focus
+src/main/worktree-removal-safety.test.ts	rejects a copied .git file when the admin entry points at another candidate path
+src/renderer/src/components/sidebar/folder-workspace-composer-submit.test.ts	keeps explicit blank linked folder creates free of agent startup and draft paste

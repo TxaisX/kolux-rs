@@ -1,0 +1,16 @@
+﻿kolux orchestration gate-resolve
+
+Usage: kolux orchestration gate-resolve --id <gate_id> --resolution <text> [--from <handle>] [--retry-request <id>] [--json]
+
+Resolve a pending decision gate
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --id <id>             Identifier for a target item or permission
+  --resolution
+  --from
+  --retry-request
+

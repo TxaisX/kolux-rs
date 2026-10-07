@@ -1,0 +1,40 @@
+kind	id	label	component_or_gate	default_on	evidence
+top-level-view	terminal	(no label found; terminal view / Landing when no worktree)	Landing or terminal workspace		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:94
+top-level-view	inbox	UNKNOWN label	InboxPage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:80
+top-level-view	floor	UNKNOWN label	FloorPage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:81
+top-level-view	settings	Settings	Settings		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:82
+top-level-view	tasks	UNKNOWN label (Task sources page)	TaskPage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:86
+top-level-view	activity	UNKNOWN label	ActivityPrototypePage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:88
+top-level-view	automations	UNKNOWN label (Automations)	AutomationsPage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:87
+top-level-view	space	UNKNOWN label	WorkspaceSpacePage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:89
+top-level-view	skills	UNKNOWN label (Skills)	SkillsPage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:84
+top-level-view	mobile	UNKNOWN label (Mobile)	MobilePage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:90
+top-level-view	agent-grid	UNKNOWN label	AgentGridPage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:91
+top-level-view	artifacts	UNKNOWN label (Artifacts)	ArtifactsLibraryPage		src/shared/ui-chrome-types.ts:109-121;src/renderer/src/app-shell/AppWorkspaceShell.tsx:85
+workspace-view	agents	Agents	menu radio; view.cycleWorkspaceView		src/shared/persisted-ui-state-types.ts:32;src/main/menu/workspace-view-menu.ts:38
+workspace-view	board	Board	menu radio (default when unset)		src/shared/persisted-ui-state-types.ts:32;src/main/menu/workspace-view-menu.ts:44
+workspace-view	terminals	Terminals	menu radio		src/shared/persisted-ui-state-types.ts:32;src/main/menu/workspace-view-menu.ts:50
+right-sidebar-panel	explorer	Explorer			src/shared/ui-chrome-types.ts:84-93;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:65
+right-sidebar-panel	vault	Agents			src/shared/ui-chrome-types.ts:84-93;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:71
+right-sidebar-panel	workspaces	Attached worktrees	folderOnly		src/shared/ui-chrome-types.ts:84-93;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:77
+right-sidebar-panel	pr-checks	PR Checks	folderOnly		src/shared/ui-chrome-types.ts:84-93;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:87
+right-sidebar-panel	source-control	Source Control	gitOnly		src/shared/ui-chrome-types.ts:84-93;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:95
+right-sidebar-panel	checks	Checks	gitOnly		src/shared/ui-chrome-types.ts:84-93;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:101
+right-sidebar-panel	ports	Ports	sshOnly		src/shared/ui-chrome-types.ts:84-93;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:108
+right-sidebar-panel	search	(not an activity-bar tab; ActiveRightSidebarTab excludes it; RightSidebarExplorerView files|search)			src/shared/ui-chrome-types.ts:87,95-96
+right-sidebar-panel	plugin:<string>	(plugin-provided panels)	getPluginPanelActivityItems		src/shared/ui-chrome-types.ts:92;src/renderer/src/components/right-sidebar/use-right-sidebar-activity-items.ts:115
+status-bar-segment	claude	Claude Usage	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:43
+status-bar-segment	codex	Codex Usage	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:55
+status-bar-segment	gemini	Gemini Usage	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:67
+status-bar-segment	antigravity	Antigravity Usage (label via translate multi-line)	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:79
+status-bar-segment	kimi	Kimi Usage	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:94
+status-bar-segment	minimax	MiniMax Usage	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:105
+status-bar-segment	grok	Grok Usage	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:116
+status-bar-segment	ssh	Remote Hosts	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:127
+status-bar-segment	resource-usage	Resource Manager	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:137
+status-bar-segment	ports	Ports	toggle in StatusBarVisibilityMenu	yes (DEFAULT_STATUS_BAR_ITEMS)	src/shared/ui-chrome-types.ts:53-63;src/shared/status-bar-defaults.ts:3;src/renderer/src/components/status-bar/StatusBarVisibilityMenu.tsx:147
+status-bar-segment (always-evaluated component, no StatusBarItem id)	CaffeinateStatusSegment	UNKNOWN label	not paired web client		src/renderer/src/components/status-bar/StatusBarSurface.tsx:83
+status-bar-segment (always-evaluated component, no StatusBarItem id)	RemoteServerUpdateStatusSegment	UNKNOWN label			src/renderer/src/components/status-bar/StatusBarSurface.tsx:84
+status-bar-segment (always-evaluated component, no StatusBarItem id)	SkillUpdateStatusSegment	UNKNOWN label			src/renderer/src/components/status-bar/StatusBarSurface.tsx:85
+status-bar-segment (always-evaluated component, no StatusBarItem id)	UpdateStatusSegment	UNKNOWN label			src/renderer/src/components/status-bar/StatusBarSurface.tsx:86
+status-bar-segment (always-evaluated component, no StatusBarItem id)	PetStatusSegment	UNKNOWN label	petEnabled		src/renderer/src/components/status-bar/StatusBarSurface.tsx:88

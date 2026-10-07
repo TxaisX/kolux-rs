@@ -1,0 +1,35 @@
+﻿kolux linear
+
+Usage: kolux linear <command> [options]
+
+Commands:
+  save-issue         Create or update a Linear issue
+  list-issues        List Linear issues with MCP-compatible filters
+  relation add       Add a Linear issue relation
+  relation remove    Remove a Linear issue relation
+  issue              Read Linear issue context for agents
+  search             Search connected Linear workspaces
+  team list          List connected Linear teams
+  team members       List Linear team members
+  team states        List Linear team workflow states
+  team labels        List Linear team labels
+  project list       List connected Linear projects
+  list               List Linear issues for task triage
+  status set         Set a Linear issue status
+  assignee set       Assign a Linear issue
+  assignee clear     Clear a Linear issue assignee
+  priority set       Set a Linear issue priority
+  priority clear     Clear a Linear issue priority
+  estimate set       Set a Linear issue estimate
+  estimate clear     Clear a Linear issue estimate
+  due-date set       Set a Linear issue due date
+  due-date clear     Clear a Linear issue due date
+  label add          Add labels to a Linear issue
+  label remove       Remove labels from a Linear issue
+  label set          Replace labels on a Linear issue
+  comment add        Add a comment to a Linear issue
+  attach             Attach a link to a Linear issue
+  create             Create a Linear issue
+
+Run `kolux linear <command> --help` for command-specific usage.
+

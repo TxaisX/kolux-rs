@@ -1,0 +1,2097 @@
+{
+  "area": "08-orchestration",
+  "prefix": "ORCH",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-08-001",
+      "title": "A coordinator creates a Run and its terminal becomes that Run's home",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "From inside an agent terminal, runs `kolux orchestration run-create --objective <text>`.",
+      "user_sees": "A new Run id comes back and the calling pane is bound to it; later task, mailbox and worker commands from that pane act inside this Run without naming it.",
+      "rules": [
+        "A Run is only a namespace plus a home inbox; creating one never schedules work or places workers.",
+        "Binding needs a pane identity the runtime itself observed; a caller that cannot prove a stable pane is refused rather than bound to a guess.",
+        "The receipt shows the Run, its objective and binding, never internal routing columns.",
+        "Creating a Run from a pane that already had an unbound waiting `check --wait` fences that waiter so it cannot steal the new Run's mail.",
+        "A fresh Run does not reset the caller's nesting depth (see the nesting card).",
+        "`--retry-request <id>` makes the create idempotent: the same request id returns the first result instead of a second Run."
+      ],
+      "acceptance": [
+        "In an agent pane run run-create → JSON has a run id; run-current from the same pane prints that id.",
+        "Run run-create from a plain shell the runtime does not recognise as a pane → refused with a binding error, no Run created.",
+        "Repeat run-create with the same --retry-request → same Run id, Run count unchanged."
+      ],
+      "compat": "kolux orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]",
+      "decision": "",
+      "evidence": [
+        "registry:cli-manifest:orchestration run-create",
+        "src/cli/specs/orchestration.ts:7",
+        "src/main/runtime/rpc/methods/orchestration/runs/runs.test.ts:74",
+        "registry:readme-features:Orchestration"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-08-002",
+      "title": "Switch, inspect and list Runs from the coordinator terminal",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `run-use --id <run>`, `run-current`, `run-list` or `run-show --id <run>`.",
+      "user_sees": "run-use rebinds the pane to another Run; run-current names the bound Run; run-list pages through Runs newest first; run-show prints one Run's detail.",
+      "rules": [
+        "Task changes require an explicit binding; an unbound pane cannot mutate tasks.",
+        "Rebinding with run-use cancels and fences any waiter still parked on the old Run, and scopes later task listing to the new Run.",
+        "run-list takes --limit and an opaque --cursor for the next page.",
+        "A Run carried over from an older install shows as inspect-only until explicitly taken over (see the legacy takeover card)."
+      ],
+      "acceptance": [
+        "Create two Runs, run-use the first → run-current prints the first; task-list shows only its tasks.",
+        "run-list --limit 1 → one Run plus a cursor; passing that cursor returns the next Run."
+      ],
+      "compat": "kolux orchestration run-use --id <run_id> [--from] [--takeover-legacy] [--retry-request]; run-current; run-list [--limit] [--cursor]; run-show --id <run_id>; all accept --json",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:18",
+        "src/cli/specs/orchestration.ts:34",
+        "src/main/runtime/rpc/methods/orchestration/runs/runs.test.ts:74",
+        "registry:cli-manifest:orchestration run-use"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-08-003",
+      "title": "Send a typed message to a Run, a worker, a terminal handle or a group",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration send --subject <s> [--to <recipient>] [--body ...] [--type ...]`.",
+      "user_sees": "A send receipt with the message id(s); the recipient later finds it with check, or gets a pointer typed into its idle pane.",
+      "rules": [
+        "Recipients: `run:<id>` (a Run mailbox), `dispatch:<id>` (a worker), a terminal handle, or a group such as `@all`.",
+        "Message types: status, dispatch, worker_done, merge_ready, escalation, handoff, decision_gate, question, heartbeat.",
+        "Priority levels include normal, high and urgent; high and urgent are flagged in the delivered banner.",
+        "Optional fields: --thread-id, --payload (JSON), --task-id, --dispatch-id, --files-modified, --report-path, --phase.",
+        "worker_done needs --outcome succeeded or failed; worker_done and heartbeat cannot be sent to a group.",
+        "With no --to, a worker inside an active Dispatch sends to its Run mailbox.",
+        "On PowerShell the group token must be quoted, e.g. \"@all\", or the shell eats it.",
+        "A task title can never redirect a message: routing uses only the recipient field.",
+        "--retry-request makes a resend idempotent.",
+        "A recipient handle that could mean the coordinator of more than one Run is refused as ambiguous, and a recipient outside the Run named with --run is refused as a mismatch; Kolux never guesses.",
+        "Mail to a worker whose dispatch has already finished is refused; the error names that Run's mailbox to write to instead, and nothing is stored for the finished worker."
+      ],
+      "acceptance": [
+        "send --to run:<id> --subject hi → receipt with one message id; check on the coordinator returns it.",
+        "send --type worker_done without --outcome → refused, nothing stored.",
+        "send --type heartbeat --to @all → refused."
+      ],
+      "compat": "kolux orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>|@group] [--body --type --priority --thread-id --payload --task-id --dispatch-id --outcome succeeded|failed --files-modified --report-path --phase --retry-request] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:46",
+        "src/main/runtime/rpc/methods/orchestration/messaging/send-receipt-plumbing.test.ts:35",
+        "src/main/runtime/rpc/methods/orchestration/messaging/recipient-routing.test.ts:23",
+        "src/main/runtime/orchestration/groups.test.ts:147",
+        "src/main/runtime/rpc/methods/orchestration/messaging/recipient-routing.test.ts:448",
+        "src/main/runtime/rpc/methods/orchestration/messaging/settled-dispatch-mail.test.ts:61"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-08-004",
+      "title": "Group addresses fan one message out to many agents",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Sends with `--to @all`, `@idle`, `@worktree:<id>` or an agent-name group like `@claude`.",
+      "user_sees": "One copy per matching terminal, all sharing one thread id, so replies collect in one thread.",
+      "rules": [
+        "@all reaches every agent terminal except the sender.",
+        "@idle reaches only agents currently idle.",
+        "@worktree:<id> reaches the agents in one worktree.",
+        "@claude, @codex, @cursor, @droid match by the agent the host actually detected, case-insensitively; pane titles are ignored; an agent whose identity is unknown is left out.",
+        "An unknown group name, or a group that matches nobody, is an error, not a silent no-op.",
+        "ask rejects group addresses; questions go to one recipient.",
+        "A group send receipt lists only the messages it created and their ids, never delivery bookkeeping.",
+        "The sender is left out of every group it sends to, even @idle when the sender itself is idle."
+      ],
+      "acceptance": [
+        "Three agent panes, send --to @all from one → the other two each get a copy with the same thread id.",
+        "Rename a Codex pane's title to 'claude', send --to @claude → that pane is not included.",
+        "send --to @nobody → error naming the unknown group."
+      ],
+      "compat": "Group tokens: @all, @idle, @worktree:<id>, @claude, @codex, @cursor, @droid",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/orchestration/groups.test.ts:30",
+        "src/main/runtime/orchestration/groups.test.ts:54",
+        "src/main/runtime/orchestration/groups.test.ts:68",
+        "src/main/runtime/orchestration/groups.test.ts:102",
+        "src/main/runtime/orchestration/groups.test.ts:207",
+        "src/main/runtime/rpc/methods/orchestration/messaging/send-receipt-plumbing.test.ts",
+        "src/main/runtime/orchestration/groups.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-08-005",
+      "title": "Read the mailbox with check: oldest batch first, replayed until acknowledged",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration check`, optionally with --ack, --peek, --unread, --all, --types, --wait.",
+      "user_sees": "The bound Run's oldest unacknowledged batch of messages, in arrival order, with a delivery id to acknowledge.",
+      "rules": [
+        "Without --ack the same batch is returned again on the next check; --ack <delivery_id> moves the cursor past it.",
+        "--peek reads without affecting delivery; --unread and --all widen what is listed.",
+        "--wait blocks until a matching message arrives or --timeout-ms passes; while blocked it writes a JSON keepalive line to stderr about every 15 seconds.",
+        "--types filters which message types wake a waiting check.",
+        "--format gives a human text rendering for local use only; --json is the machine form.",
+        "--terminal and --run let a caller read another terminal's or Run's mail when it has authority.",
+        "A rebind with run-use fences an old waiter so it cannot consume the new Run's mail."
+      ],
+      "acceptance": [
+        "Send two messages, check → both in order with one delivery id; check again without --ack → same two.",
+        "check --ack <id>, then check → empty.",
+        "check --wait --timeout-ms 40000 with no mail → stderr shows at least two keepalive lines, then a timeout result."
+      ],
+      "compat": "kolux orchestration check [--terminal --run --ack <delivery_id> --unread|--peek|--all --types <csv> --format --wait --timeout-ms] [--json]; stderr keepalive lines `_keepalive` (deprecated alias `_heartbeat`)",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:83",
+        "src/main/runtime/rpc/methods/orchestration/messaging/check.test.ts:9",
+        "src/main/runtime/orchestration-cli-subprocess.test.ts:57",
+        "src/main/runtime/orchestration-mailbox-routing-races.test.ts:31"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-08-006",
+      "title": "Reply to a message and browse the inbox",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `reply --id <msg> --body <text>` or `inbox [--limit] [--full]`.",
+      "user_sees": "reply sends back to the original sender on the same thread; inbox lists recent messages for this terminal, truncated unless --full.",
+      "rules": [
+        "A reply keeps the thread id of the message it answers.",
+        "Every delivered message carries a ready-to-run reply command so agents need not compose it.",
+        "inbox is read-only and does not acknowledge anything."
+      ],
+      "acceptance": [
+        "Worker replies to a coordinator message → coordinator's check shows it on the same thread id.",
+        "inbox --limit 5 → at most five rows; --full shows untruncated bodies."
+      ],
+      "compat": "kolux orchestration reply --id <msg_id> --body <text>; kolux orchestration inbox [--limit --terminal --full] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:118",
+        "src/cli/specs/orchestration.ts:125",
+        "src/main/runtime/rpc/methods/orchestration/messaging/check.test.ts:796"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-007",
+      "title": "Idle agents get a one-line pointer typed into their pane when mail arrives",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Leaves a coordinator or worker sitting idle while another agent sends it mail.",
+      "user_sees": "Kolux types a short line into the idle pane saying how many orchestration messages wait and which check command reads them, and submits it so the agent wakes.",
+      "rules": [
+        "The pointer names the count and the exact check command, including --run when the pane is bound to a Run.",
+        "Mail is held while the agent is busy and the pointer is typed only once it goes idle.",
+        "If the pane already has a live check --wait, nothing is typed; the waiter gets the mail.",
+        "A pane parked cold (asleep) gets one pointer, not one per message.",
+        "Enter is pressed after the pointer, except in Cursor panes where it is left for the user.",
+        "Mail is never pointed into a pane after it rebinds to a different Run.",
+        "Writes are refused into a pane whose terminal has gone away (absence gate) so text never lands in a dead or replaced leaf.",
+        "If the agent reads its mail with check before the pointer goes out, the pending pointer is dropped.",
+        "A repeat arrival notice during the pause before Enter never types the pointer a second time.",
+        "If another writer (such as a chat view of the session) takes the pane during the pause before Enter, the pointer's Enter is withheld; when nothing owns the pane the pointer is written normally.",
+        "For mail sent straight to a worker's own handle outside any dispatch, the pointer tells it to run a plain check of its own mailbox, with no Run named.",
+        "While a chat view is handing the pane back to the terminal, or the chat session is not attached on this machine, the pointer is held for later rather than written into the wrong surface."
+      ],
+      "acceptance": [
+        "Coordinator idle, worker sends to run:<id> → within a few seconds the coordinator pane shows the pointer line and the agent runs check.",
+        "Coordinator mid-turn → no pointer until the turn ends.",
+        "Coordinator blocked in check --wait → no pointer typed; the wait returns the message."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/orchestration-idle-mail-delivery.spec.ts:277",
+        "src/main/runtime/orchestration/formatter.ts:112",
+        "src/main/runtime/orchestration-mailbox-cold-park-idle.test.ts:27",
+        "src/main/runtime/orchestration-mailbox-pty-write-gate.test.ts:43",
+        "src/main/runtime/terminal-send-stale-leaf-liveness.test.ts:468",
+        "src/main/runtime/orchestration-mailbox-notification-consistency.test.ts",
+        "src/main/runtime/kolux-runtime-tests/mobile-creation-and-orchestration-part-03.spec.ts",
+        "src/main/runtime/orchestration-structured-chat-lease.test.ts (withholds delayed pointer Enter when Structured Chat takes the lease)",
+        "src/main/runtime/orchestration/structured-mailbox-pointer-delivery.test.ts:154",
+        "src/main/runtime/orchestration/structured-mailbox-pointer-delivery.test.ts:327",
+        "src/main/runtime/orchestration/structured-session-pointer-delivery.test.ts:125",
+        "src/main/runtime/orchestration/structured-session-pointer-delivery.test.ts:61"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "04"
+      ]
+    },
+    {
+      "id": "D-08-008",
+      "title": "Pending mail survives a restart without replaying keystrokes",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits Kolux (or the daemon dies) while messages wait for an agent, then reopens.",
+      "user_sees": "The waiting messages are still there; the idle agent gets its pointer once after restore; no stray Enter is pressed twice.",
+      "rules": [
+        "Undelivered mail is durable across app and daemon restarts.",
+        "An Enter that may already have been sent before a crash is never replayed.",
+        "Mail for a detached pane is routed to its restored pane, not dropped."
+      ],
+      "acceptance": [
+        "Queue mail for an idle pane, kill the app, relaunch → one pointer appears; check returns the queued messages."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/orchestration-idle-mail-restore.spec.ts:76",
+        "src/main/runtime/orchestration-mailbox-detached-routing.test.ts:28"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-08-009",
+      "title": "Delivered messages arrive as a readable banner with sender, priority and reply hint",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Reads mail with check --format, or watches an agent receive injected mail.",
+      "user_sees": "Each message shows who sent it (name and handle), a HIGH or URGENT tag when set, its type, the subject, the body, any payload, a ready reply command, then a separator line.",
+      "rules": [
+        "Several messages are rendered one after another, each with its own separator.",
+        "Messages carried over from an older install are marked as read-only compatibility or recovery replays.",
+        "A message from an older install's Run that this terminal has not taken over carries a read-only tag and offers no acknowledge or reply hint, even when one was supplied."
+      ],
+      "acceptance": [
+        "send --priority urgent --payload '{\"a\":1}' → banner shows URGENT, the payload line and a reply command with the message id."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/orchestration/formatter.test.ts:2",
+        "src/main/runtime/orchestration/formatter.ts:56",
+        "src/main/runtime/orchestration/formatter.test.ts:127"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-010",
+      "title": "Create tasks with dependencies; they become ready when their deps complete",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration task-create --spec <text> [--deps '[\"t1\"]'] [--task-title] [--display-name] [--parent]`.",
+      "user_sees": "A task id; tasks without deps start ready, tasks with deps start pending and flip to ready once every dep is completed.",
+      "rules": [
+        "--deps is a JSON array of task ids; a malformed value or an unknown dep id is refused.",
+        "Tasks belong to the bound Run (or --run).",
+        "--task-title and --display-name are what lists and escalations show; --parent nests a subtask.",
+        "A spec too large to store safely (multi-megabyte) is refused before any task, dispatch or terminal effect."
+      ],
+      "acceptance": [
+        "Create A, then B --deps '[\"A\"]' → A ready, B pending; mark A completed → B ready.",
+        "task-create --deps '[\"missing\"]' → refused, no task created."
+      ],
+      "compat": "kolux orchestration task-create --spec <text> [--task-title --display-name --deps <json array> --parent <id> --run <id>] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:131",
+        "src/main/runtime/orchestration/db-task-create-readiness.test.ts:12",
+        "src/main/runtime/orchestration/task-deps-flag.test.ts:5",
+        "src/main/runtime/rpc/methods/orchestration/runs/tasks-dispatch.test.ts:28"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-011",
+      "title": "List tasks, filtered and optionally compact",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `task-list [--status] [--ready] [--brief] [--run]`.",
+      "user_sees": "The Run's tasks with status, title and dependencies; --brief squeezes each spec to one short line.",
+      "rules": [
+        "--brief collapses whitespace and cuts each spec at about 160 characters.",
+        "--ready lists only tasks that can be dispatched now.",
+        "An explicitly named Run is readable; with no --run the caller's own bound Run is used.",
+        "Display names fall back to the task title, then an abbreviation of the spec.",
+        "A task that a worker currently holds shows which worker terminal and dispatch hold it; finished dispatches are not shown against the task."
+      ],
+      "acceptance": [
+        "task-list --brief on a task with a 2,000-character spec → one line of about 160 characters."
+      ],
+      "compat": "kolux orchestration task-list [--status --ready --brief --run] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:148",
+        "src/main/runtime/rpc/methods/orchestration/runs/tasks-dispatch.test.ts:157",
+        "src/shared/orchestration-task-display.test.ts:8",
+        "src/shared/orchestration-task-summary.test.ts:4",
+        "src/main/runtime/orchestration/db.test.ts (listTasksWithDispatch joins active dispatch metadata)"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-012",
+      "title": "Update task status, with guards that keep tasks and workers consistent",
+      "tier": "P0",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs `task-update --id <task> --status <state> [--result <text>]`.",
+      "user_sees": "The task moves to the new state; illegal moves are refused with a reason.",
+      "rules": [
+        "States: pending, ready, dispatched, completed, failed, blocked.",
+        "Completing a task frees the worker slot it held.",
+        "A task whose supervised worker is still stopping cannot be marked done underneath it.",
+        "Task and dispatch changes happen together or not at all; concurrent updates cannot leave a task dispatched with no worker or two workers.",
+        "A worker that claims completion after its process already died is refused and the retained terminal is reconciled instead."
+      ],
+      "acceptance": [
+        "task-update --status completed on a dispatched task → task completed, its worker shows settled.",
+        "Two parallel task-updates on one task → exactly one wins, state stays valid."
+      ],
+      "compat": "kolux orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked [--result <text>] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:156",
+        "src/main/runtime/orchestration/db-stopping-worker-task-guard.test.ts:35",
+        "src/main/runtime/orchestration/db-task-dispatch-invariant.test.ts:28",
+        "src/main/runtime/orchestration/db-task-dispatch-lifecycle-guards.test.ts:29",
+        "tests/e2e/orchestration-worker-settlement-release-cli.spec.ts:144"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-013",
+      "title": "Dispatch a task to an existing agent terminal",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration dispatch --task <id> --to <handle> [--inject] [--dry-run] [--return-preamble]`.",
+      "user_sees": "The task is assigned to that terminal; with --inject the task brief is typed into the agent as a prompt, otherwise only the context is recorded.",
+      "rules": [
+        "Without --inject, dispatch is context-only: nothing is typed into the target.",
+        "--dry-run shows what would happen with no effects; --return-preamble returns the brief text.",
+        "Refused: an unrecognised agent, a terminal already busy with a dispatch, a task still pending on deps, and the coordinator's own pane.",
+        "Refusal receipts keep a stable, published message so scripts can match them.",
+        "A context-only dispatch to the caller itself is allowed only within the nesting budget.",
+        "dispatch-show --task prints a task's dispatch context; --preamble adds the brief the worker received.",
+        "A terminal counts as running a recognised agent only once the agent has fully started; a partial startup banner is not enough.",
+        "A pane title alone does not prove an agent: an agent-like title behind a generic wrapper process, or Claude's own agents-management screen, does not count as a running agent."
+      ],
+      "acceptance": [
+        "dispatch --task T --to <idle claude pane> --inject → the pane receives the brief and starts working.",
+        "dispatch to the coordinator's own pane → refused with a reason.",
+        "dispatch --dry-run → plan printed, task still ready."
+      ],
+      "compat": "kolux orchestration dispatch --task <id> --to <handle> [--inject --dry-run --return-preamble] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:165",
+        "src/shared/orchestration-dispatch-refusal-contract.test.ts:39",
+        "src/main/runtime/rpc/methods/orchestration/worker/self-dispatch-nesting-depth.test.ts:6",
+        "src/main/runtime/orchestration/db.test.ts:182",
+        "registry:cli-manifest:orchestration dispatch-show",
+        "dumps/cli/orchestration-dispatch-show-help.txt",
+        "src/main/runtime/kolux-runtime-tests/terminal-handles-and-agent-status-part-03.spec.ts:211",
+        "src/main/runtime/kolux-runtime-tests/terminal-handles-and-agent-status.spec.ts:544",
+        "src/main/runtime/kolux-runtime-tests/terminal-handles-and-agent-status-part-02.spec.ts:49"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-014",
+      "title": "Workers receive a brief that tells them how to report, ask and keep in touch",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Dispatches or starts a worker and reads what it was told (dispatch-show --preamble).",
+      "user_sees": "Before the task text the worker gets the exact command to report done, a heartbeat instruction, how to ask the coordinator a question, and how often to check for follow-ups.",
+      "rules": [
+        "Commands in the brief are bound to that worker's own terminal and each fits on one line that works in any shell.",
+        "The worker is told to send a heartbeat about every five minutes.",
+        "Questions go through Kolux's ask, not the agent's own built-in question tool.",
+        "Agents that return to a prompt stay idle after reporting done; bare-shell workers exit after reporting.",
+        "The task separator comes last, so the task text is the final thing the agent reads.",
+        "The CLI name is `kolux`, `kolux-dev` in dev builds, or the exact path for WSL workers.",
+        "If the worktree is behind its base, a base-drift section warns the worker.",
+        "A section on starting sub-workers appears only when nesting budget remains.",
+        "Its report, heartbeat and question commands carry the worker's dispatch pass (see the dispatch pass card)."
+      ],
+      "acceptance": [
+        "dispatch-show --task T --preamble → contains a worker_done command with this dispatch's id and ends with the task text.",
+        "Start a worker on a worktree two commits behind base → brief contains the base-drift section."
+      ],
+      "compat": "kolux orchestration dispatch-show --task <id> [--preamble] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/orchestration/preamble.test.ts:44",
+        "src/cli/specs/orchestration.ts:193",
+        "src/main/runtime/rpc/methods/orchestration/runs/tasks-dispatch.test.ts:500",
+        "src/main/runtime/orchestration/preamble.test.ts:182"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-015",
+      "title": "Workers report done and send heartbeats",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "A worker runs `send --type worker_done --outcome succeeded|failed` or `--type heartbeat`.",
+      "user_sees": "The coordinator's Run mailbox gets the done report with outcome, files touched and report path; the task status follows; heartbeats keep the worker counted as alive.",
+      "rules": [
+        "A done report must carry an outcome.",
+        "A late heartbeat from a worker whose dispatch already ended is ignored rather than reviving it.",
+        "Heartbeats and done reports are threaded per dispatch.",
+        "Once a completion from the worker itself is accepted, a replayed or foreign report cannot overwrite it, and a caller-supplied marker cannot turn a rejection into success.",
+        "A done report that does not come from the worker's own terminal (for example the coordinator writing one on the worker's behalf) is delivered as a message but does not complete the task or release tasks waiting on it.",
+        "Done reports and heartbeats from a worker started with worker-start must carry its dispatch pass (see the dispatch pass card)."
+      ],
+      "acceptance": [
+        "Worker sends worker_done --outcome succeeded --files-modified a.ts → coordinator check shows it; task-list shows completed.",
+        "Heartbeat arrives after the worker was stopped → no change to the worker state."
+      ],
+      "compat": "send --type worker_done --outcome succeeded|failed [--files-modified --report-path]; send --type heartbeat",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/orchestration/db-heartbeat-straggler-guard.test.ts:23",
+        "src/main/runtime/orchestration/db.test.ts:518",
+        "src/main/runtime/orchestration/preamble.test.ts:44",
+        "src/main/runtime/orchestration/lifecycle-reconciliation.test.ts",
+        "src/main/runtime/rpc/methods/orchestration/messaging/send.test.ts:331",
+        "src/main/runtime/rpc/methods/orchestration/messaging/send.test.ts:393"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-016",
+      "title": "Start a worker agent in its own worktree with one command",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "From a coordinator agent runs `kolux orchestration worker-start --task <id> --agent claude` (or --spec, --tier, --worktree ...).",
+      "user_sees": "A new agent terminal opens as a background tab, in a fresh worktree by default, receives its brief, and the command returns once the worker is ready.",
+      "rules": [
+        "Give either --task (existing) or --spec (creates the task).",
+        "Placement: --worktree current, an existing worktree selector, new-child, or new-top-level; new worktrees are the default and are created agent-first.",
+        "Creation flags (--repo, --base-branch, --name, --display-name, --comment) are refused for current or existing worktrees.",
+        "Setup runs by default for a new worktree; --setup skip|inherit changes that, and current or existing worktrees never rerun setup. Whether the agent starts at once while setup runs beside it, or waits for setup before it gets its task, follows the user's own setting for new agent tabs; there is no flag for it.",
+        "The worker always uses the same agent provider as the coordinator; providers never mix.",
+        "--terminal <handle> reuses an existing Kolux terminal (pass --worktree for that terminal) instead of opening a fresh agent terminal; it cannot combine with --model, --effort or --tier, and the reused terminal must run the coordinator's own agent.",
+        "Exactly one prompt turn is submitted; a swallowed Enter stays queued instead of retyping the brief, and output from an earlier busy turn is not credited to the new prompt.",
+        "Re-entering the workspace keeps the one live inactive worker tab rather than duplicating it.",
+        "A repo with no setup script reports setup as not configured and the start still succeeds.",
+        "--worktree takes the usual worktree selectors (identity, id, name, branch, issue number, path, or current); current means the coordinator's worktree.",
+        "--timeout-ms caps how long the command waits for the worker to become ready.",
+        "The start receipt lists each terminal it touched with its role (worker, setup, user-configured tab), naming the real setup terminal rather than guessing from tab titles.",
+        "--agent names the agent to launch; it must be the coordinator's own agent, otherwise the start is refused."
+      ],
+      "acceptance": [
+        "worker-start --spec 'add a test' --agent claude → exit 0, JSON status ready, a new worktree and background tab exist.",
+        "worker-start --worktree current --base-branch main → refused before any effect.",
+        "Switch away and back to the workspace → still exactly one worker tab."
+      ],
+      "compat": "kolux orchestration worker-start (--task <id>|--spec <text>) [--worktree current|<selector>|new-child|new-top-level] (--agent <a>|--terminal|--tier major|deep|build|light) [--model --effort --name --repo --base-branch --display-name --comment --setup run|skip|inherit --retry-of --timeout-ms] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:5",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-start-prompt-contract.test.ts:171",
+        "tests/e2e/orchestration-worker-terminal-visibility.spec.ts:115",
+        "registry:readme-features:Orchestration",
+        "src/main/runtime/rpc/methods/orchestration/worker/workers-new-worktree.test.ts",
+        "dumps/cli/orchestration-worker-start-help.txt",
+        "registry:cli-manifest:orchestration worker-start",
+        "src/main/runtime/rpc/methods/orchestration/worker/workers-new-worktree.test.ts:344",
+        "dumps/cli/orchestration-worker-start-help.txt:25,40"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "02"
+      ]
+    },
+    {
+      "id": "D-08-017",
+      "title": "A failed worker start says exactly what happened and how to recover",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs worker-start and something goes wrong (setup fails, agent never comes up, timeout).",
+      "user_sees": "Exit code 1 and a receipt naming the stage it reached, setup result, effects already made, leftover resources (terminal, worktree) and the commands to clean up or retry.",
+      "rules": [
+        "Exit 0 only when the worker is ready; failed and outcome_unknown both exit 1.",
+        "A leftover terminal is listed as a residual resource, never silently closed.",
+        "Repeated identical starts while one is in flight are coalesced into one.",
+        "--retry-of <dispatch> needs --task and does not inherit the old placement."
+      ],
+      "acceptance": [
+        "worker-start with a setup script that exits 1 → exit 1, receipt stage=setup, residualResources lists the terminal, recovery lists a stop/release command."
+      ],
+      "compat": "worker-start exit codes 0 (ready) / 1 (failed, outcome_unknown); --retry-of <dispatch_id>",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/orchestration/worker/failed-start-residual-terminal.test.ts:125",
+        "src/main/runtime/rpc/methods/orchestration/worker/context-only-dispatch-retry.test.ts:6",
+        "src/main/runtime/rpc/orchestration-mutation-executor.test.ts:204"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-08-018",
+      "title": "Pick a worker's model by work tier instead of naming a model",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live",
+      "user_does": "Runs worker-start with `--tier major|deep|build|light`.",
+      "user_sees": "The worker launches on the model and effort mapped to that tier for the coordinator's own provider.",
+      "rules": [
+        "Tiers: major (big system changes, plan and final review), deep (planning, review, hard bugs), build (features, refactors), light (mechanical work).",
+        "Shipped Claude defaults: major fable/high, deep opus/high, build sonnet/medium, light haiku (no effort).",
+        "Shipped Codex defaults: major gpt-5.6-sol/high, deep and build gpt-5.6-terra high/medium, light gpt-5.6-luna/low.",
+        "A tier the user never edited follows the shipped default; per-provider overrides live in the orchestrationRouting setting (Settings > Agents > Model routing).",
+        "--tier cannot combine with --model, --effort or --terminal.",
+        "A provider with no route for that tier is refused rather than falling back to another provider.",
+        "If the routing settings cannot be read, the shipped defaults apply instead of failing the start.",
+        "--agent may accompany --tier only when it names the coordinator's own agent."
+      ],
+      "acceptance": [
+        "Claude coordinator, worker-start --spec x --tier light → worker launches with haiku and no effort flag.",
+        "worker-start --tier deep --model opus → refused for combining flags."
+      ],
+      "compat": "--tier major|deep|build|light; settings key orchestrationRouting {<agent>: {<tier>: {model, effort?}}}",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-routing-tier.test.ts:42",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-routing-tier.test.ts:243",
+        "src/shared/orchestration-routing-tiers.ts:36",
+        "src/shared/global-settings-types.ts:402",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-routing-tier.test.ts",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-routing-tier.test.ts (accepts --agent alongside --tier when it matches the coordinator agent)"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "17"
+      ]
+    },
+    {
+      "id": "D-08-019",
+      "title": "Name a worker's model and effort directly",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs worker-start with `--model <m> [--effort <e>]`.",
+      "user_sees": "The worker launches on that model of the coordinator's provider.",
+      "rules": [
+        "--effort needs --model.",
+        "Neither works with --terminal.",
+        "Without --tier or --model the worker inherits the coordinator's provider and its default model; it never switches provider.",
+        "--model accepts Claude, Codex and Cursor model ids."
+      ],
+      "acceptance": [
+        "worker-start --effort high without --model → refused.",
+        "Codex coordinator, worker-start --model sonnet → refused or rejected as not a Codex model; never launches Claude."
+      ],
+      "compat": "--model <name> [--effort <level>]",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-routing-tier.test.ts:184",
+        "src/cli/specs/orchestration-worker-specs.ts:5",
+        "dumps/cli/orchestration-worker-start-help.txt"
+      ],
+      "round": 0,
+      "related": [
+        "02"
+      ]
+    },
+    {
+      "id": "D-08-020",
+      "title": "See a worker's live state, including when it is waiting on a human",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration worker-show --dispatch <id>`.",
+      "user_sees": "Status, terminal, liveness, and an agent-wait field naming any pending prompt (permission, menu, question) with how it was detected.",
+      "rules": [
+        "Agent-wait evidence comes from a hook, the prompt text, or the title.",
+        "An explicit null means Kolux looked and found no pending prompt; an absent field means it could not check.",
+        "During a long tool call the field stays null rather than guessing.",
+        "The observation always agrees with the terminal data it was built from.",
+        "The waiting-on-a-human field clears as soon as the agent is idle or working again.",
+        "Whether a worker's last sign of life is fresh is judged by when Kolux received it, never by a timestamp the reporting side supplied, so a skewed clock cannot make a worker look live or stale."
+      ],
+      "acceptance": [
+        "Worker hits a permission prompt → worker-show reports agentWait with the prompt and source 'hook' or 'prompt-text'.",
+        "Worker mid-tool-call → agentWait is null."
+      ],
+      "compat": "kolux orchestration worker-show --dispatch <id> [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:53",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-interactive-wait.test.ts:38",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-observation.test.ts:68",
+        "src/main/runtime/terminal-interactive-wait-visibility.test.ts (reports no wait once the agent is idle again)",
+        "src/main/runtime/orchestration/db/attempt-outcome-projection.test.ts:360"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-08-021",
+      "title": "Read what a worker has written, from its transcript or its terminal",
+      "tier": "P0",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs `worker-read --dispatch <id> [--source auto|transcript|terminal] [--cursor] [--limit]`.",
+      "user_sees": "The worker's recent conversation turns, or labelled terminal output when no transcript exists, plus a cursor to continue from.",
+      "rules": [
+        "auto prefers the provider's transcript file and falls back to terminal output, labelled as such.",
+        "Transcripts are read for Claude and Codex; Gemini falls back to terminal output; Grok goes through its chat decoder.",
+        "A cursor belongs to the source it came from; if the source changes, the read says so and asks for a fresh read.",
+        "Large reads are bounded; output keeps working after the worker is released because it was archived first.",
+        "Terminal output comes back as plain text: colours and control codes are stripped, accented letters and emoji stay intact.",
+        "Not every worker has a terminal: auto and transcript always work, while asking for terminal output from a worker without one is refused.",
+        "A transcript is used only when it provably belongs to that worker's own session; for WSL workers a transcript reported from a different Linux distribution is ignored.",
+        "Dispatch passes are redacted from every read (see the dispatch pass card)."
+      ],
+      "acceptance": [
+        "Claude worker, worker-read → transcript turns; pass the returned cursor → only newer turns.",
+        "Gemini worker, worker-read --source auto → terminal output labelled as terminal."
+      ],
+      "compat": "kolux orchestration worker-read --dispatch <id> [--source auto|transcript|terminal --cursor --limit] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:63",
+        "src/main/runtime/orchestration/worker-transcript-read.test.ts:24",
+        "tests/e2e/orchestration-worker-transcript-providers.spec.ts:213",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-read-projection.test.ts:7",
+        "src/main/runtime/kolux-runtime-tests/terminal-output-and-worker-recovery.spec.ts:20",
+        "dumps/cli/orchestration-worker-start-help.txt",
+        "src/main/runtime/orchestration/worker-provider-session.test.ts:113",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-output.test.ts:246"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "14"
+      ]
+    },
+    {
+      "id": "D-08-022",
+      "title": "Stop a worker without losing its worktree",
+      "tier": "P0",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration worker-stop --dispatch <id>`.",
+      "user_sees": "The worker's dispatch is fenced and its agent terminal stops; the worktree, setup terminal and any other tabs stay.",
+      "rules": [
+        "Stop never deletes the worktree or closes the setup terminal or user-configured tabs.",
+        "If Kolux lost contact with the terminal, the process is reported unverifiable, not exited.",
+        "A process that exits while its own stop is in flight settles once, cleanly.",
+        "A terminal the user has typed into is not closed (see takeover card)."
+      ],
+      "acceptance": [
+        "worker-stop on a running worker → agent terminal ends, worktree directory still on disk.",
+        "Disconnect the daemon then worker-stop → receipt says unverifiable, not stopped."
+      ],
+      "compat": "kolux orchestration worker-stop --dispatch <id> [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:75",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-stop-liveness-verdict.test.ts:9",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-stop-exit-race.test.ts:27"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-023",
+      "title": "Abandon a worker's dispatch without touching any process or files",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration worker-abandon --dispatch <id>`.",
+      "user_sees": "The dispatch is fenced so the worker can no longer report on it; the terminal keeps running and the pane stays open.",
+      "rules": [
+        "No process is killed and nothing on disk changes.",
+        "Low-level dispatches (sent with dispatch, not worker-start) can be abandoned and stopped without closing their pane."
+      ],
+      "acceptance": [
+        "worker-abandon → worker's later worker_done is refused; its terminal is still alive."
+      ],
+      "compat": "kolux orchestration worker-abandon --dispatch <id> [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:86",
+        "tests/e2e/orchestration-low-level-dispatch-release.spec.ts:11",
+        "src/main/runtime/rpc/methods/orchestration/worker/manual-dispatch-release.test.ts:12"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-024",
+      "title": "Release a finished worker's terminal after archiving its output",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration worker-release --dispatch <id>` once the worker has settled.",
+      "user_sees": "The worker's own agent terminal closes; worker-read still returns its output from the archive.",
+      "rules": [
+        "Only the exact agent terminal the worker owns is closed; setup terminals, reused terminals and terminals a user took over are left alone.",
+        "Output is archived before closing, including for WSL workers.",
+        "Releasing twice is harmless and reports already_released.",
+        "Only an unknown release outcome exits 1; it can be recovered later.",
+        "A retained resource whose process already exited can still be released.",
+        "If Kolux's records show a different owner claiming the very same terminal, release keeps that terminal open (retained) rather than risk closing a terminal that is not the worker's."
+      ],
+      "acceptance": [
+        "Settle a worker, worker-release → its tab closes, worker-read still returns text.",
+        "worker-release again → already_released, exit 0."
+      ],
+      "compat": "kolux orchestration worker-release --dispatch <id> [--json]; result states released|already_released|release_unknown",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:94",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-release.test.ts:5",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-release-archive.test.ts:15",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-release-inventory.test.ts:82"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-025",
+      "title": "Keep a settled worker's terminal open on purpose",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration worker-retain --dispatch <id>`.",
+      "user_sees": "The worker's terminal is marked retained and is not reclaimed; a later worker-release clears the mark and closes it.",
+      "rules": [
+        "Retain is a durable user exception that survives restarts.",
+        "worker-list shows retained terminals separately from reclaimable ones."
+      ],
+      "acceptance": [
+        "worker-retain, restart Kolux → worker-list --terminal-state retained still lists it."
+      ],
+      "compat": "kolux orchestration worker-retain --dispatch <id> [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:108",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-release-inventory.test.ts:25"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-026",
+      "title": "List workers by terminal state to see what can be cleaned up",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs `worker-list [--run] [--terminal-state ...] [--limit 1-100] [--cursor]`.",
+      "user_sees": "Workers with their terminal accounting (active, reclaimable, retained, release pending, release unknown, released), kept separate from task status, plus where the scope came from.",
+      "rules": [
+        "Scope is the --run flag, else the bound Run, else all Runs, and the output says which.",
+        "Pages of 1 to 100; a cursor from another Run is rejected.",
+        "Very old dispatch rows still list, projected into the current shape."
+      ],
+      "acceptance": [
+        "worker-list --terminal-state reclaimable → only settled, unreleased workers.",
+        "worker-list --limit 101 → refused."
+      ],
+      "compat": "kolux orchestration worker-list [--run --terminal-state active|reclaimable|retained|release_pending|release_unknown|released --cursor --limit 1-100] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:120",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-list-pagination.test.ts:18",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-list-run-scope-rpc.test.ts:10"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-027",
+      "title": "When a worker's terminal dies, the coordinator is told",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Nothing; a worker's agent process exits or crashes mid-task.",
+      "user_sees": "An escalation message lands in the Run mailbox naming the task by its title, so the coordinator can retry or reassign.",
+      "rules": [
+        "The escalation is sent once per worker exit.",
+        "Its subject uses the task title, falling back to the id."
+      ],
+      "acceptance": [
+        "Kill a worker's process → coordinator check shows one escalation naming the task title."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/orchestration/lightweight-run-worker-exit-escalation.test.ts:173"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-028",
+      "title": "Decision gates block a task until the coordinator answers",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `gate-create --task <id> --question <text> [--options '[\"a\",\"b\"]']`, later `gate-resolve --id <gate> --resolution <text>`, and `gate-list`.",
+      "user_sees": "The task shows blocked while the gate is pending and becomes ready again once resolved; gate-list shows pending, resolved or timed-out gates.",
+      "rules": [
+        "--options must be a JSON array of strings.",
+        "A gate cannot be created while a supervised worker on that task is active.",
+        "Gates are scoped to the caller's Run; a gate from another Run reads as not found.",
+        "gate-list with an explicit --run can inspect that Run; without it the caller's own Run is used.",
+        "A gate is recorded only if the task can be moved to blocked; otherwise nothing is left behind."
+      ],
+      "acceptance": [
+        "gate-create on a ready task → task blocked; gate-resolve → task ready.",
+        "gate-resolve on a gate id from another Run → 'Gate not found'.",
+        "gate-create --options 'a,b' → refused as not a JSON array."
+      ],
+      "compat": "kolux orchestration gate-create --task --question [--options <json array>]; gate-resolve --id --resolution; gate-list [--task --status pending|resolved|timeout --run] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:251",
+        "src/main/runtime/rpc/methods/orchestration/gates/gates.ts:111",
+        "src/main/runtime/rpc/methods/orchestration/gates/gate-run-authorization.test.ts:41",
+        "src/main/runtime/orchestration/db/decision-gate-lifecycle.test.ts:5",
+        "src/main/runtime/rpc/orchestration-11745-regression-verification.test.ts:410",
+        "src/main/runtime/orchestration/db/decision-gate-lifecycle.test.ts"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-029",
+      "title": "A worker asks the coordinator a question and waits for the answer",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "A worker runs `kolux orchestration ask --question <text> [--options a,b] [--timeout-ms]`.",
+      "user_sees": "The coordinator gets a question message; the worker's command returns the answer when replied to.",
+      "rules": [
+        "If the timeout passes the question stays pending; the worker resumes waiting with `--resume <msg_id>`, not by asking again.",
+        "Options are a comma-separated list.",
+        "Group recipients are refused.",
+        "The default timeout follows a fixed policy suited to agent turns."
+      ],
+      "acceptance": [
+        "ask --question 'which db?' --timeout-ms 1000 with no reply → returns pending with a message id; reply, then ask --resume <id> → answer returned."
+      ],
+      "compat": "kolux orchestration ask (--question <text>|--resume <msg_id>) [--options <csv> --timeout-ms] [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:200",
+        "src/main/runtime/rpc/methods/orchestration/messaging/ask.test.ts:104",
+        "src/shared/orchestration-ask-timeout.test.ts:10",
+        "src/main/runtime/orchestration/orchestration-mutation-question-db.test.ts:76"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-030",
+      "title": "Retrying a command after a timeout never does the work twice",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Passes `--retry-request <id>` on a mutating command, or runs `request-show --request <id>` after a dropped connection.",
+      "user_sees": "A retry with the same request id returns the original result; request-show reports whether that request completed, is still pending, or never arrived.",
+      "rules": [
+        "Receipts are durable across restarts.",
+        "request-show never changes anything.",
+        "Old completed receipts expire and are pruned; if unresolved receipts fill the ledger, new mutations are refused rather than losing track.",
+        "A request that is refused before it takes effect (for example a worker start naming a missing task) leaves no receipt, so retrying it with the same request id runs it fresh."
+      ],
+      "acceptance": [
+        "send --retry-request R twice → one message stored, both calls return the same id.",
+        "request-show --request unknown → absent."
+      ],
+      "compat": "--retry-request <id> on run-create, run-use, send and other mutating commands; kolux orchestration request-show --request <id> [--json] → completed|pending|absent",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:182",
+        "src/main/runtime/rpc/orchestration-mutation-request-show.test.ts:62",
+        "src/main/runtime/rpc/orchestration-mutation-ledger.test.ts:33",
+        "src/main/runtime/orchestration/orchestration-db-retention-pagination.test.ts:38",
+        "src/main/runtime/orchestration/mutation-receipt-capacity.test.ts:45",
+        "src/main/runtime/orchestration/orchestration-worker-dispatch-db.test.ts:183"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-031",
+      "title": "Reset orchestration state by scope",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux orchestration reset --tasks`, `--messages` or `--all`.",
+      "user_sees": "The chosen state is wiped; the rest is kept.",
+      "rules": [
+        "--tasks clears tasks and workers but keeps Runs and messages.",
+        "--messages clears mail but keeps delivery cursors so nothing is redelivered.",
+        "--all clears everything, including archived worker output.",
+        "Exactly one scope flag is required."
+      ],
+      "acceptance": [
+        "reset --tasks → task-list empty, run-list unchanged, inbox unchanged."
+      ],
+      "compat": "kolux orchestration reset (--all|--tasks|--messages) [--json]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:273",
+        "src/main/runtime/orchestration/orchestration-reset-db.test.ts:4",
+        "src/main/runtime/rpc/methods/orchestration/runs/runs.test.ts:255"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-032",
+      "title": "Workers cannot start their own sub-workers beyond a depth cap",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "A worker tries worker-start or dispatch to spawn a further worker.",
+      "user_sees": "At the default cap the attempt is refused with a message telling the worker to finish the task itself.",
+      "rules": [
+        "Default depth cap is 1 (coordinator plus one level of workers).",
+        "The cap was a setting (nestedWorkerMaxDepth) on the orchestration settings page; that page is cut, so the cap becomes a fixed default of 1 with a CLI flag or config value to raise it; accept whole numbers of 1 or more only.",
+        "Raising the cap to 2 lets a worker start one more level.",
+        "Creating a fresh Run from inside a worker does not reset its depth.",
+        "Existing databases gained the depth field by migration without losing rows."
+      ],
+      "acceptance": [
+        "Default settings, worker runs worker-start → refused, message says to do the work itself.",
+        "Cap set to 2 → the same call succeeds; a third level is refused."
+      ],
+      "compat": "settings key nestedWorkerMaxDepth (default 1) → becomes a flag/config default",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:nestedWorkerMaxDepth",
+        "src/shared/nested-worker-depth.test.ts:8",
+        "src/shared/nested-worker-depth.test.ts:39",
+        "src/main/runtime/orchestration/db/dispatch-depth.test.ts:10",
+        "src/main/runtime/rpc/errors.test.ts:219",
+        "src/main/runtime/orchestration/nested-worker-depth-migration.test.ts:15"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-08-033",
+      "title": "One Run cannot see or change another Run's work",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Two coordinators each run their own Run on one machine.",
+      "user_sees": "Each sees only its own tasks, gates and mail; ids from the other Run read as not found.",
+      "rules": [
+        "Probing another Run's ids returns the same not-found as a missing id, so Runs cannot be mapped from outside.",
+        "The --from handle is a label, not proof of identity; authority comes from the pane the runtime observed.",
+        "Explicitly named Runs are readable for inspection; mutation needs the binding."
+      ],
+      "acceptance": [
+        "Coordinator B runs task-update on a task from Run A → not found."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/orchestration/gates/gate-run-authorization.test.ts:41",
+        "src/main/runtime/orchestration/orchestration-run-delivery-db.test.ts:8"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-034",
+      "title": "The orchestration store is private and upgrades in place",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Upgrades Kolux, or another local user looks at the data folder.",
+      "user_sees": "Runs, tasks and mail carry over after an upgrade; the files are readable only by the owning user.",
+      "rules": [
+        "The database and its side files are restricted to the current user.",
+        "Schema migrations run from every earlier version.",
+        "Old question records are migrated so their thread identity is kept."
+      ],
+      "acceptance": [
+        "Open a database from the oldest shipped schema → it migrates and existing tasks list.",
+        "Check file permissions after first launch → only the user has access."
+      ],
+      "compat": "Data the importer must carry: orchestration Runs, tasks, dispatches, messages, gates, receipts",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/orchestration/db/legacy-question-identity.test.ts:31",
+        "src/main/runtime/orchestration/db.test.ts:37"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-08-035",
+      "title": "A task that keeps failing stops being retried",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Dispatches a task that fails repeatedly.",
+      "user_sees": "After three failures the task is held back instead of being handed out again.",
+      "rules": [
+        "The breaker trips after 3 failed dispatches of one task.",
+        "Dispatching to a terminal that already holds a dispatch is refused."
+      ],
+      "acceptance": [
+        "Fail the same task three times → the next dispatch attempt is refused."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/orchestration/db.test.ts:182"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-08-036",
+      "title": "Typing into a worker's terminal takes it over",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Clicks into a worker's tab and types.",
+      "user_sees": "The terminal becomes the user's; later stop or release leave it open.",
+      "rules": [
+        "Ownership transfers on user input, not on focus alone.",
+        "worker-release and worker-stop skip taken-over terminals and say so."
+      ],
+      "acceptance": [
+        "Type into a worker pane, then worker-release → pane stays open, receipt notes user takeover."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-stop-liveness-verdict.test.ts:9",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-release.test.ts:5"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-037",
+      "title": "Coordinators see which workers need attention",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Reads worker-show or worker-read for a fleet of workers.",
+      "user_sees": "Each worker is flagged when it needs input, needs an approval, failed, was interrupted, or has gone quiet too long.",
+      "rules": [
+        "Attention categories: input, approval, failure, interruption, stale.",
+        "Liveness is recomputed when the host gives a fresh verdict, so a dead worker is not shown as healthy.",
+        "A status row recorded for a pane's earlier process is ignored once the pane runs a new process.",
+        "Only the coordinator's own (root) work finishing successfully is flagged, as a root completion that needs no action; a worker finishing successfully raises no attention flag."
+      ],
+      "acceptance": [
+        "Worker silent past the staleness window → flagged stale.",
+        "Worker hits a permission prompt → flagged approval."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/orchestration-fleet-attention.test.ts:4",
+        "src/main/runtime/orchestration/worker-attention-context.test.ts:44",
+        "src/main/runtime/rpc/methods/orchestration/worker/fleet-status-terminal-identity.test.ts",
+        "src/shared/orchestration-fleet-attention.test.ts:38"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-08-038",
+      "title": "Workers in flight come back as inspectable after a restart",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits or crashes Kolux while workers are starting, running or stopping, then reopens.",
+      "user_sees": "Workers whose start or stop was cut off show as unknown with recovery steps; running workers are re-attached, not relaunched.",
+      "rules": [
+        "An interrupted start or stop becomes an unknown outcome, never a silent success.",
+        "Workers are re-adopted after restart without re-sending their brief.",
+        "A worker whose terminal is gone is not replaced by spawning a new one.",
+        "A worker whose process was replaced while settled is accounted as such."
+      ],
+      "acceptance": [
+        "Kill the app during worker-start → after relaunch worker-show reports outcome_unknown with recovery commands.",
+        "Restart with a running worker → same terminal, no second brief typed."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/orchestration-legacy-worker-restart-recovery.spec.ts:414",
+        "tests/e2e/orchestration-legacy-worker-missing-terminal-recovery.spec.ts:199",
+        "src/main/runtime/orchestration/orchestration-legacy-worker-terminal-recovery.test.ts:26",
+        "src/main/runtime/settled-worker-process-replacement.test.ts:64"
+      ],
+      "round": 0,
+      "related": [
+        "19",
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-039",
+      "title": "Finished worker tabs stay put across restarts and do not wake up on their own",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Leaves a finished worker tab open and restarts Kolux, then clicks the tab.",
+      "user_sees": "The tab is still there; a completed background worker is not cold-resumed just because its tab is opened.",
+      "rules": [
+        "Settled worker tabs survive restart whether or not the daemon session is still alive.",
+        "A completed worker gives up its resume right when it settles, before its first activation.",
+        "A settled worker may be woken at most once by policy, never in a loop."
+      ],
+      "acceptance": [
+        "Complete a background worker, restart, click its tab → transcript shown, no new agent turn started."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/settled-worker-tab-survives-restart.spec.ts:109",
+        "tests/e2e/completed-worker-retirement-resume.spec.ts:39"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "19"
+      ]
+    },
+    {
+      "id": "D-08-040",
+      "title": "kolux worktree ps summarises orchestration across worktrees",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs `kolux worktree ps [--limit <n>] [--json]`.",
+      "user_sees": "One compact row per worktree with its agents and orchestration state, plus a scope line saying what was covered.",
+      "rules": [
+        "If a repo scan is slow or fails, the last known worktrees are still listed and marked degraded.",
+        "A failed scan is cached so repeated polling does not relaunch git each time.",
+        "Repeated polls return a full snapshot once, then tiny unchanged answers.",
+        "Remote host columns are dropped with area 18; local only.",
+        "A git failure during the worktree scan is shown as degraded, never as an empty list; a scan that genuinely finds nothing is shown as empty.",
+        "A scan that finds no worktrees is remembered as well, so polling does not rescan each time."
+      ],
+      "acceptance": [
+        "worktree ps --limit 3 → at most three rows and a scope line.",
+        "Corrupt one repo → ps still lists its worktrees from the last snapshot, marked degraded."
+      ],
+      "compat": "kolux worktree ps [--limit <n>] [--json]",
+      "decision": "",
+      "evidence": [
+        "registry:cli-manifest:worktree ps",
+        "src/cli/specs/core.ts:185",
+        "src/main/runtime/worktree-ps-degraded-repo-scan.test.ts:155",
+        "src/main/runtime/runtime-worktree-ps-summaries.test.ts:6",
+        "src/main/runtime/repo-worktree-resolution-scan.test.ts:23",
+        "src/main/runtime/worktree-ps-degraded-repo-scan.test.ts:220"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "20"
+      ]
+    },
+    {
+      "id": "D-08-041",
+      "title": "Launch Claude Agent Teams inside a Kolux terminal",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Picks 'Claude Agent Teams' in the agent picker, or runs `kolux claude-teams [claude args...]` in a Kolux terminal.",
+      "user_sees": "Claude Code starts with Agent Teams on; teammates either run inside the same session or appear as real Kolux panes beside the leader.",
+      "rules": [
+        "Must run inside a Kolux terminal; elsewhere it refuses because it has no pane to anchor to.",
+        "Mode setting claudeAgentTeamsMode: off (default), in-process, or native panes; on Windows and WSL teammates always run in-process.",
+        "The picker only offers it when both the Kolux CLI and claude are installed, and hides it on Windows and WSL.",
+        "Extra arguments pass straight through to claude.",
+        "A keybinding command opens a new Agent Teams tab; it ships unbound."
+      ],
+      "acceptance": [
+        "On macOS/Linux in a Kolux pane, kolux claude-teams → Claude starts with teams enabled.",
+        "On Windows, kolux claude-teams → unsupported message, exit non-zero."
+      ],
+      "compat": "kolux claude-teams [claude args...]; settings key claudeAgentTeamsMode off|in-process|native-panes-shim",
+      "decision": "",
+      "evidence": [
+        "registry:cli-manifest:claude-teams",
+        "registry:agent-catalog:claude-agent-teams",
+        "registry:settings-keys:claudeAgentTeamsMode",
+        "src/cli/handlers/core.ts:62",
+        "src/shared/tui-agent-config.ts:78",
+        "registry:keybindings:tab.newAgent.claude-agent-teams"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "20"
+      ]
+    },
+    {
+      "id": "D-08-042",
+      "title": "Agent Teams teammates open as real side-by-side panes",
+      "tier": "P2",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Runs Agent Teams in native-panes mode and the leader spawns teammates.",
+      "user_sees": "The first teammate opens to the right of the leader; later ones stack downward in that column.",
+      "rules": [
+        "Kolux stands in for tmux so Claude's split commands become Kolux pane splits.",
+        "The leader pane cannot be respawned by a teammate.",
+        "When the leader's terminal exits, the whole team is cleared.",
+        "If no usable absolute claude path can be found, it falls back to in-process teammates.",
+        "A restored Agent Teams terminal comes back in native-pane mode with a fresh environment.",
+        "Kolux itself answers the tmux commands Agent Teams relies on: version checks, sized pane splits, format queries (unknown fields come back empty) and key sending; only direct Claude launch commands are rewritten."
+      ],
+      "acceptance": [
+        "Leader spawns three teammates → one column to the right, three panes stacked."
+      ],
+      "compat": "Environment for the shim: tmux-compatible variables pointing at the Kolux pane",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/claude-agent-teams-shim-env.test.ts:21",
+        "src/shared/claude-agent-teams-tmux-compat.ts:1",
+        "src/main/runtime/kolux-runtime-tests/terminal-creation-and-readiness-part-04.spec.ts",
+        "src/shared/claude-agent-teams-tmux-compat.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-043",
+      "title": "Kolux detects whether each agent has the orchestration skill installed",
+      "tier": "P2",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Looks at which agents know how to use Kolux orchestration.",
+      "user_sees": "Each agent is marked as covered when a global orchestration skill install is found for it.",
+      "rules": [
+        "Shared ~/.agents/skills installs cover the agents that read that path.",
+        "Claude counts from ~/.claude/skills or an enabled plugin; Codex from its plugin cache.",
+        "Repo-scoped installs do not count as coverage.",
+        "The install/update button and coverage list sat on the orchestration settings page, which is cut; the check moves to the skills surface or a CLI.",
+        "Agent-specific home skill folders count too (for example Codex's own skills folder), and Windows-style paths are recognised the same as POSIX ones."
+      ],
+      "acceptance": [
+        "Install the skill only in a repo folder → agent shows not covered."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/orchestration-skill-coverage.test.ts:42",
+        "src/renderer/src/components/settings/OrchestrationPane.tsx:112",
+        "src/renderer/src/lib/orchestration-skill-coverage.test.ts:381"
+      ],
+      "round": 0,
+      "related": [
+        "15"
+      ]
+    },
+    {
+      "id": "D-08-044",
+      "title": "Orchestration settings page",
+      "tier": "D",
+      "pushed": 11,
+      "state": "dropped",
+      "user_does": "Opened Settings > Orchestration.",
+      "user_sees": "A page with the orchestration skill install/update, agent coverage, usage examples, a prompt dialog and the nested worker depth control.",
+      "rules": [
+        "Knobs move out: depth cap becomes a default plus flag (see nesting card); skill install moves to skills; routing already lives under Agents."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: owner cut the orchestration settings page; its knobs become CLI flags or fixed defaults. Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:orchestration",
+        "src/renderer/src/components/settings/OrchestrationPane.tsx:95"
+      ],
+      "round": 0,
+      "related": [
+        "17",
+        "15"
+      ]
+    },
+    {
+      "id": "D-08-045",
+      "title": "Read-only Runs view in the agent dashboard",
+      "tier": "H",
+      "pushed": 3,
+      "state": "hidden",
+      "user_does": "Turns on the experimental agent dashboard and opens its Runs tab.",
+      "user_sees": "A list of Runs and their tasks with refresh and paging, and a read-only detail pane; nothing can be created or routed from it.",
+      "rules": [
+        "Creating and routing work stays in the CLI.",
+        "Hidden while the dashboard flag is off, which is the shipped default."
+      ],
+      "acceptance": [
+        "Flag on, open dashboard Runs → existing Runs listed; refresh picks up a new Run."
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/renderer/src/components/dashboard/DashboardRunsPanel.tsx:32",
+        "src/renderer/src/components/dashboard/DashboardRunsPanel.test.tsx:37",
+        "src/shared/global-settings-types.ts:452",
+        "registry:keybindings:dashboard.toggle",
+        "src/renderer/src/components/sidebar/index.tsx:73",
+        "src/renderer/src/components/sidebar/index.tsx:287"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "21"
+      ]
+    },
+    {
+      "id": "D-08-046",
+      "title": "Retired coordinator-start and coordinator-stop commands",
+      "tier": "H",
+      "pushed": 11,
+      "state": "retired 2026-09-10",
+      "user_does": "Runs `kolux orchestration coordinator-start` (alias `orchestration run`) or `coordinator-stop` (alias `run-stop`).",
+      "user_sees": "Nothing happens; the reply points to the orchestration skill guide for the current workflow.",
+      "rules": [
+        "Both commands perform no effects.",
+        "The recovery action names `skills get orchestration --full`."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "kolux orchestration coordinator-start|run, coordinator-stop|run-stop (retired stubs)",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/cli/specs/orchestration.ts:222",
+        "src/cli/specs/orchestration.ts:241",
+        "src/shared/orchestration-rpc-contract.test.ts:8"
+      ],
+      "round": 0,
+      "related": [
+        "20",
+        "21"
+      ]
+    },
+    {
+      "id": "D-08-047",
+      "title": "Background coordinator loop that dispatched a task graph automatically",
+      "tier": "H",
+      "pushed": 11,
+      "state": "retired 2026-09-10",
+      "user_does": "Only reachable through the internal orchestration.run call; no CLI starts it any more.",
+      "user_sees": "Tasks dispatched in dependency order with a concurrency limit, a failure breaker, a stale-base guard and escalation triage.",
+      "rules": [
+        "One coordinator loop at a time.",
+        "Refuses to dispatch onto a stale base unless the spec allows it.",
+        "Drift probes are coalesced."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/main/runtime/rpc/methods/orchestration/gates/gates.ts:51",
+        "src/main/runtime/orchestration/coordinator.test.ts:111",
+        "src/main/runtime/orchestration/coordinator.test.ts:757",
+        "src/main/runtime/orchestration/coordinator-decision-gates.test.ts:6",
+        "src/shared/orchestration-rpc-contract.ts:45"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-08-048",
+      "title": "Taking over a coordinator Run left by an older Kolux",
+      "tier": "H",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs `run-use --id <legacy run> --takeover-legacy` in the live coordinator terminal.",
+      "user_sees": "The old Run becomes this terminal's Run, keeping its worker assignments and mail targets; before takeover it is inspect-only.",
+      "rules": [
+        "Must run in the live coordinator agent terminal.",
+        "Races between two takeovers resolve to one winner.",
+        "Old-style questions and gates keep working after takeover.",
+        "An adopted Run can be bound without the takeover flag when the runtime already holds authority.",
+        "Recovering a legacy worker reveals its existing tab without stealing focus.",
+        "Before takeover, acknowledging or replying to mail of an older Run is refused with nothing changed: the mail stays unread and no reply is created."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "run-use --takeover-legacy",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/main/runtime/rpc/orchestration-legacy-coordinator-race.test.ts:186",
+        "src/main/runtime/rpc/orchestration-legacy-takeover-current-authority.test.ts:20",
+        "src/main/runtime/rpc/orchestration-legacy-takeover-delivery.test.ts:182",
+        "src/main/runtime/orchestration/orchestration-adopted-run-binding.test.ts:103",
+        "src/main/runtime/kolux-runtime-tests/terminal-output-and-worker-recovery-part-02.spec.ts",
+        "src/main/runtime/rpc/methods/orchestration/runs/migration-behavior.test.ts:78"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-08-049",
+      "title": "Structured chat workers instead of terminal workers",
+      "tier": "H",
+      "pushed": 11,
+      "state": "hidden",
+      "user_does": "With structured native chat as the default, starts a worker.",
+      "user_sees": "The worker opens as a chat tab rather than a terminal; groups, preamble, stop, abandon and release all handle it.",
+      "rules": [
+        "Off by default (experimentalStructuredNativeChat false), so workers start as terminal agents.",
+        "If the host refuses a structured session, a terminal worker starts instead of failing.",
+        "Releasing a structured worker retires its chat tab."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "registry:settings-keys:experimentalStructuredNativeChat",
+        "src/main/runtime/rpc/methods/orchestration-worker-start-mode-selection.test.ts:47",
+        "src/main/runtime/orchestration/structured-worker-group-addressing.test.ts:88",
+        "src/main/runtime/rpc/methods/orchestration-structured-worker-session.test.ts:225"
+      ],
+      "round": 0,
+      "related": [
+        "14"
+      ]
+    },
+    {
+      "id": "D-08-050",
+      "title": "Workers on remote servers",
+      "tier": "D",
+      "pushed": 11,
+      "state": "dropped",
+      "user_does": "Passed `--on <server>` to worker-start or `--include-remote` to worker-list.",
+      "user_sees": "Workers launched and listed on connected remote servers.",
+      "rules": [
+        "Federated start receipts, release ownership and stop capability all belong to area 18.",
+        "The worker-start --on flag and the worker-list --include-remote flag go with this card."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "worker-start --on; worker-list --include-remote",
+      "decision": "default cut: remote hosts (area 18) dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/cli/specs/orchestration-worker-specs.ts:5",
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-stop-capability.test.ts:7",
+        "registry:cli-manifest:orchestration worker-start --on",
+        "registry:cli-manifest:orchestration worker-list --include-remote"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-08-051",
+      "title": "Remote and mobile runtime connections",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Connected a phone or another machine to the runtime over the network.",
+      "user_sees": "Encrypted WebSocket sessions, long-poll fallbacks and mobile tab snapshots.",
+      "rules": [
+        "Bind host, end-to-end encryption, heartbeats and mobile gating all go with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: remote hosts and mobile transport (area 18) dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/runtime/rpc/ws-transport.test.ts:42",
+        "src/main/runtime/graph-sync-mobile-snapshot-gating.test.ts:156"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-08-052",
+      "title": "Linear, Jira and GitLab runtime calls",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Let agents read or write issues in Linear, Jira or GitLab through Kolux.",
+      "user_sees": "Issue lookups and saves from inside Kolux.",
+      "rules": [
+        "Covered by the owner's cut of tracker integrations."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: tracker integrations outside GitHub are cut. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/runtime/rpc/methods/linear-agent-access.test.ts:13"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-08-053",
+      "title": "The background daemon starts once and checks it can run terminals",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Launches Kolux, or a second copy tries to start.",
+      "user_sees": "One runtime daemon serves the app and CLI; a second instance defers to the first; a clear error if the terminal library cannot load.",
+      "rules": [
+        "An instance lock prevents two daemons.",
+        "A native preflight checks the terminal library before serving.",
+        "Headless serve mode is dropped with area 18; the rebuild serves only the local app and CLI."
+      ],
+      "acceptance": [
+        "Start two daemons → second exits, first keeps serving."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/koluxd/koluxd-instance-lock.test.ts:46",
+        "src/main/koluxd/node-pty-precondition.test.ts:66"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-08-054",
+      "title": "The CLI talks to the running app over a local channel",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Runs any kolux command while Kolux is open.",
+      "user_sees": "Commands answer quickly; long waits like check --wait stay connected.",
+      "rules": [
+        "Local socket or pipe transport; long waits use long-polling with keepalives.",
+        "Network transports are dropped with area 18.",
+        "A blocked ask is kept alive with the same keepalives as check --wait, so a long wait for an answer is not cut off."
+      ],
+      "acceptance": [
+        "kolux orchestration run-current with the app open → answer in under a second."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/unix-socket-transport.test.ts:34",
+        "src/main/runtime/runtime-rpc-long-poll-transport.test.ts:35",
+        "src/main/runtime/runtime-rpc-long-poll-transport.test.ts:189"
+      ],
+      "round": 0,
+      "related": [
+        "20",
+        "18"
+      ]
+    },
+    {
+      "id": "D-08-055",
+      "title": "Prompts typed into agents land exactly once",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Dispatches with --inject, starts a worker, or queues several prompts quickly.",
+      "user_sees": "Each prompt is submitted once and in order, even on Windows terminals that need a pause before Enter.",
+      "rules": [
+        "Each submission gets a durable receipt so a retry cannot double-send.",
+        "On Windows a short delay is inserted before Enter so the text is not cut off.",
+        "Sixteen queued prompts go through without duplicate Enter presses.",
+        "Prompts wait until the agent's input box has rendered and gone quiet; a late redraw restarts that wait, and Enter is still pressed only once.",
+        "If the prompt is cancelled while Kolux is checking that the text landed, no further Enter is sent.",
+        "On Windows the pause before Enter grows with the prompt's size instead of a flat long wait, and Enter is never sent while a large paste is still being taken in.",
+        "If another writer takes over the session during the pause between the text and Enter, the Enter is withheld and the send reports it as stale.",
+        "A prompt is never pasted while the agent shows a permission or approval prompt, even one seen only in its output; the send is refused as blocked, and if such a prompt appears mid-paste the Enter is withheld.",
+        "A working report from the agent that predates the send does not count as proof the prompt landed."
+      ],
+      "acceptance": [
+        "Queue 16 prompts to one agent → 16 turns, none merged or repeated."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/agent-prompt-submission-runtime.test.ts:37",
+        "src/main/runtime/agent-prompt-submission-runtime.test.ts (does not send another Enter after cancellation during verification)",
+        "src/main/runtime/agent-prompt-submission-windows-submit-delay.test.ts:126",
+        "src/main/runtime/agent-session-pty-write-enforcement.test.ts:317",
+        "src/main/runtime/agent-prompt-submission-runtime.test.ts:135",
+        "src/main/runtime/agent-prompt-submission-runtime.test.ts:292",
+        "src/main/runtime/agent-prompt-submission-verification.test.ts:203",
+        "src/main/runtime/kolux-runtime-tests/terminal-creation-and-readiness-part-08.spec.ts:93"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-056",
+      "title": "Pending agent prompts are spotted even when no hook reports them",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs an agent that stops on an approval menu, trust screen or question.",
+      "user_sees": "Kolux marks the agent as waiting, including Cursor approval menus that send no hook.",
+      "rules": [
+        "Waits found from screen text are surfaced, not just matched internally.",
+        "The scan cache is cleared when a pane's transcript is pruned.",
+        "A prompt that appears only in restored scrollback does not mark the agent as waiting."
+      ],
+      "acceptance": [
+        "Cursor shows an approval menu → worker-show and pane status both show waiting."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/terminal-interactive-wait-visibility.test.ts:113",
+        "src/main/runtime/terminal-restore-record-seed.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-08-057",
+      "title": "Many clients watch the same terminal without drifting",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Has a terminal open while the CLI and the app both read it.",
+      "user_sees": "Every viewer gets the same output; slow viewers catch up from a snapshot rather than breaking.",
+      "rules": [
+        "Ack overflow recovers with a fresh snapshot.",
+        "Terminal capability queries are answered for the app, including a Windows-specific reply.",
+        "Dark-or-light queries from terminal programs are answered from the terminal palette's brightness, not from the app's light or dark mode.",
+        "For a hidden Grok terminal the terminal-version reply is withheld; its other query replies still go out.",
+        "When a watched terminal ends but Kolux cannot confirm how, watchers are told the outcome is unverifiable, not that it exited."
+      ],
+      "acceptance": [
+        "Pause one subscriber, flood output, resume → it resyncs from a snapshot."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/terminal-multiplex-pty-wait-capacity.test.ts:22",
+        "src/main/runtime/terminal-query-responder.test.ts:115",
+        "src/main/runtime/terminal-query-responder.test.ts",
+        "src/main/runtime/headless-terminal-query-reply-policy.test.ts:7",
+        "src/main/runtime/rpc/terminal-multiplex-end-verdict.test.ts:85"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-058",
+      "title": "Worktree teardown stops its processes first",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Deletes a worktree that still has terminals or workers.",
+      "user_sees": "Its processes are stopped before files go; if a terminal cannot be proven stopped, deletion asks for an explicit waiver.",
+      "rules": [
+        "All processes for the worktree are killed before deletion.",
+        "An unprovable terminal stop blocks destructive teardown unless waived.",
+        "Chat-style sessions running in the worktree are closed too, forcibly if they do not close on their own, so no child process is left orphaned.",
+        "A leftover terminal record the daemon no longer knows, with no live process behind it, does not block removal; such a wedged workspace is removed without force."
+      ],
+      "acceptance": [
+        "Delete a worktree with a running worker → worker stopped, then folder removed."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/worktree-teardown-unstopped-pty.test.ts:41",
+        "src/main/runtime/structured-session-worktree-teardown.test.ts (closes them under force instead of orphaning the child)",
+        "src/main/runtime/worktree-teardown-unstopped-pty.test.ts:84"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-08-059",
+      "title": "Closing terminal surfaces retires them cleanly",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Closes a terminal tab or pane.",
+      "user_sees": "The terminal goes away everywhere it was shown; a reopened handle is a new terminal, not the old one.",
+      "rules": [
+        "Handle continuity is tracked per incarnation."
+      ],
+      "acceptance": [
+        "Close a pane → it disappears from every window and list."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/kolux-runtime-terminal-retirement.test.ts:150"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-08-060",
+      "title": "Session tab inventory the CLI and agents can read",
+      "tier": "P2",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Asks the runtime which session tabs exist.",
+      "user_sees": "An authoritative list of tabs with their agents and placement.",
+      "rules": [
+        "The published inventory is the source of truth for tab lists."
+      ],
+      "acceptance": [
+        "Open three tabs → inventory lists three."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/session-tabs.test.ts:13",
+        "src/main/runtime/session-tabs-inventory-publication.test.ts:22"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "05"
+      ]
+    },
+    {
+      "id": "D-08-061",
+      "title": "Runtime browser commands for agents",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "An agent drives the built-in browser through the runtime.",
+      "user_sees": "Pages open in the right host, screencasts stream, page leases are tracked and released.",
+      "rules": [
+        "Page placement is owned by one host lease at a time."
+      ],
+      "acceptance": [
+        "Agent opens a page → it appears in the Kolux browser and closes when released."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/kolux-runtime-browser.test.ts:57",
+        "src/main/runtime/browser-host-lease-registry.test.ts:15"
+      ],
+      "round": 0,
+      "related": [
+        "13"
+      ]
+    },
+    {
+      "id": "D-08-062",
+      "title": "Runtime file commands for agents",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "An agent or the app reads, renames or lists files through the runtime.",
+      "user_sees": "File operations happen within the worktree's authority.",
+      "rules": [
+        "Rename checks it has authority over both paths.",
+        "Renaming a file to a name that differs only in letter case is allowed."
+      ],
+      "acceptance": [
+        "Rename inside the worktree → succeeds; outside → refused."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/kolux-runtime-files-rename-authority.test.ts:61",
+        "src/main/runtime/kolux-runtime-files-rename-authority.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-08-063",
+      "title": "Runtime git and GitHub calls",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "The app or an agent asks the runtime for git or GitHub data.",
+      "user_sees": "Branch, PR and review data for the right worktree.",
+      "rules": [
+        "Git targets resolve to the worktree's own host."
+      ],
+      "acceptance": [
+        "Ask for the PR of a worktree's branch → the matching PR is returned."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/github.test.ts:11",
+        "src/main/runtime/runtime-git-target-execution-host.test.ts:57"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-08-064",
+      "title": "Runtime calls for past sessions and automations",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "The app lists past agent sessions or automations through the runtime.",
+      "user_sees": "Session lists with titles, and automations scoped to their owner.",
+      "rules": [
+        "Session lists are cached and shared across callers.",
+        "Automation lists check the owner first."
+      ],
+      "acceptance": [
+        "List sessions twice → second answer from cache, same content."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/ai-vault.test.ts:93",
+        "src/main/runtime/kolux-runtime-automations.test.ts:73"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "09"
+      ]
+    },
+    {
+      "id": "D-08-065",
+      "title": "Every orchestration command speaks JSON for scripts and agents",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Adds `--json` to any orchestration command.",
+      "user_sees": "A single structured result (or structured error) instead of human text, suitable for agents to parse.",
+      "rules": [
+        "Errors carry a stable code and message in JSON mode.",
+        "Help is available on every command."
+      ],
+      "acceptance": [
+        "kolux orchestration run-current --json → valid JSON object."
+      ],
+      "compat": "--json on every orchestration subcommand",
+      "decision": "",
+      "evidence": [
+        "registry:cli-manifest:orchestration run-create",
+        "src/shared/orchestration-dispatch-refusal-contract.test.ts:39"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-08-066",
+      "title": "A worker's agent row is labelled by its task, not by the brief",
+      "tier": "P1",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Starts workers from a coordinator, then looks at the agent rows in the Agents view or on the Board.",
+      "user_sees": "Each worker's row reads as its task: the task's display name, else its title, else a one-line preview of the task text. The instructions Kolux wraps around the task never show up as the row's text.",
+      "rules": [
+        "Label order: display name, then task title, then a short single-line preview of the task body.",
+        "A label is used only while it belongs to the task the worker is running now; a label left over from an earlier task in the same terminal is ignored.",
+        "Before the task's details arrive, the preview is taken from the task section of the brief, whether the brief arrived on many lines or folded onto one.",
+        "Text inside a task that imitates the brief's task separator cannot change the label.",
+        "When the brief has no task section, the row shows nothing from the wrapper text rather than its boilerplate.",
+        "Sessions that are not orchestration workers keep showing their own prompt.",
+        "Generated session titles use the same labels, and only for worker briefs."
+      ],
+      "acceptance": [
+        "Start a worker with --display-name \"Fix login\" → its agent row reads Fix login, not the brief.",
+        "Start a worker with only --task-title → the row shows the title; with neither → a one-line preview of the spec.",
+        "Dispatch a second task into the same terminal → the first task's label does not linger.",
+        "Start an ordinary Claude session and type a prompt → the row shows that prompt."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/agent-row-primary-text.test.ts:11",
+        "src/renderer/src/lib/agent-row-primary-text.test.ts:38",
+        "src/renderer/src/lib/agent-row-primary-text.test.ts:186",
+        "src/renderer/src/lib/agent-row-primary-text.test.ts:198",
+        "src/renderer/src/lib/agent-row-primary-text.test.ts:226",
+        "src/renderer/src/lib/agent-row-primary-text.test.ts:248",
+        "src/renderer/src/lib/agent-row-primary-text.ts:48",
+        "triage:00-unmapped-triage.csv getKoluxDispatchTaskId",
+        "triage:00-unmapped-triage.csv isKoluxDispatchPrompt / getAgentRowGeneratedTitleText"
+      ],
+      "round": 1,
+      "related": [
+        "05",
+        "04"
+      ]
+    },
+    {
+      "id": "D-08-067",
+      "title": "Worker report commands carry a secret dispatch pass that output reads hide",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Starts a worker, lets it report back, and reads its output from the coordinator.",
+      "user_sees": "The worker's brief holds ready-made done, heartbeat and question commands that each include a secret pass unique to that dispatch. Reports with the right pass settle the task; when the coordinator reads the worker's terminal or transcript, the pass appears only as a redacted placeholder with a warning that it was hidden.",
+      "rules": [
+        "A fresh pass is issued for every worker dispatch and is tied to that worker's pane and its current process; a pass from another worker, an earlier process in the same pane, or another dispatch is refused.",
+        "A done report or heartbeat with a missing or wrong pass is still delivered as a message, but the task does not change and the reply says the lifecycle update was rejected.",
+        "A question (ask) with a missing or wrong pass is refused before any question is created.",
+        "The refusal text names the flag that supplies the pass, because the reader is usually an agent reading only the error.",
+        "The pass appears only inside the brief's ready-made commands, never as a separate data field.",
+        "Every way of reading worker output hides the pass: live terminal lines, text typed but not yet submitted in the agent's input box, transcripts (prose and tool payloads), the archive kept after release, and chat-style workers.",
+        "Low-level dispatches made with the dispatch command get no pass; they are bound to the pane's process instead, so a replacement process in that pane cannot report for them.",
+        "If a start is marked failed because the prompt seemed stuck, the worker keeps its pass, so a genuine later done report still corrects the record."
+      ],
+      "acceptance": [
+        "Start a worker and read its brief → the done, heartbeat and ask commands all carry the same pass flag.",
+        "Send a done report for that dispatch without the pass → the message arrives, the task stays dispatched, the reply names the missing flag.",
+        "Ask with a wrong pass → refused; no question appears in the coordinator's inbox.",
+        "Type the pass into the worker's input box without pressing Enter, then run worker-read → the output shows a redacted placeholder and a redaction warning, never the pass.",
+        "Release the worker, then run worker-read again → the archived output is still redacted."
+      ],
+      "compat": "The orchestration skill's recipes pass it as --dispatch-capability on send and ask; keep that flag name.",
+      "decision": "",
+      "evidence": [
+        "src/main/runtime/rpc/methods/orchestration/worker/worker-output.test.ts:246",
+        "src/main/runtime/orchestration/db/dispatch-context/dispatch-capability.test.ts:34",
+        "src/main/runtime/orchestration/db/dispatch-context/dispatch-capability.ts:50",
+        "src/main/runtime/orchestration/preamble.test.ts:182",
+        "src/main/runtime/rpc/methods/orchestration/messaging/send.test.ts:228",
+        "src/main/runtime/rpc/methods/orchestration/messaging/send.test.ts:393",
+        "src/main/runtime/rpc/methods/orchestration/messaging/ask-methods.ts:52",
+        "src/main/runtime/orchestration/worker-transcript-payload.test.ts:176",
+        "src/main/runtime/structured-worker-terminal-read.test.ts (redacts dispatch capability tokens the same way the archive path does)",
+        "src/main/runtime/orchestration/worker-start-unobserved-prompt-settlement.test.ts:36",
+        "dumps/cli/orchestration-send-help.txt:23",
+        "dumps/cli/orchestration-ask-help.txt:16"
+      ],
+      "round": 2,
+      "related": [
+        "20"
+      ]
+    }
+  ],
+  "notes": [
+    "Runs view: HANDOFF says it lives in the agent dashboard behind 'Experimental agent dashboard popout' (off by default), but the 2026-10-05 entry retired the dashboard pop-out and kept the drawer (DashboardRunsPanel is imported by AgentDashboardDrawer.tsx:17); whether the drawer is still flag-gated was not confirmed. Tiered H.",
+    "Orchestration settings page is cut: nestedWorkerMaxDepth needs a CLI flag or config name chosen by the rebuild; skill install and coverage move to area 15. Model routing lives under Settings > Agents (area 17) and was kept P0 here.",
+    "Unshipped improvement cards that touch this area: AGENT-3 (check a worker's done claim against its diff), AGENT-7 (control tower), AGENT-9 (Lead seat). No cards written for them.",
+    "Claude Agent Teams launcher is unsupported on Windows/WSL, which is the owner's platform; tiered P1, but could be H if the owner never uses macOS/Linux.",
+    "About half the 6,440 test titles mapped to 08 are runtime plumbing that belongs to other areas (koluxd, RPC transports, browser host, file, git, session tabs, vault, automations, teardown); summarised as D-08-053..064 with related areas, likely overlaps.",
+    "Legacy coordinator takeover and legacy worker recovery exist only for Runs made by the retired coordinator; tiered H default skip, but the importer may still need to carry old Runs.",
+    "Exact wording of the worker-start 'start immediately vs wait for setup' choice and its default could not be pinned down from the dumps.",
+    "check --wait keepalive interval (~15 s) and the ask default timeout come from spec help text, not re-verified in tests; the coordinator-start retirement date (2026-09-10) is the last commit touching that spec, not a HANDOFF entry.",
+    "Critic r1: Runs view gating confirmed — the dashboard drawer that holds it mounts only when the experimental agent dashboard setting is true (src/renderer/src/components/sidebar/index.tsx:73,287); D-08-045 stays H hidden. Area 05 also carded it as D-05-030: duplicate, keep one.",
+    "Critic r1: the start-immediately vs wait-for-setup choice is not a flag; it follows the user's own setting for new agent tabs (worker-start help notes). D-08-016 rule rewritten; its --terminal rule was wrong (it reuses an existing terminal handle, not a bare shell) and was corrected.",
+    "Critic r1: orchestrationRouting has no row in settings-keys.tsv (no static default); view-ids.tsv has no runs row because the Runs view is a panel inside the dashboard drawer.",
+    "Critic r1: D-08-060 (session tab inventory) is consumed mainly by headless/mobile clients (mobile-session-tabs specs); candidate for D with area 18 in a later round.",
+    "Critic r1: D-08-014 keeps a bare-shell rule, but no caller in the old runtime sets the bare-shell worker kind outside the brief builder; low confidence it is reachable.",
+    "Critic r2: new D-08-067 (per-dispatch secret pass on worker report/ask commands, redacted from every output read). D-08-022 pushed 5 -> 9 (keeping the worktree is no-lost-work, not safety). settings-keys row terminalHiddenDeliveryGate matched the gate keyword but is terminal output delivery to hidden panes (area 03); r1 had missed it.",
+    "Critic r3: 0 new cards. Rules added to D-08-003 (ambiguous recipient, mail to a finished dispatch), 007 (direct peer mail pointer, chat handover hold), 009 (legacy read-only banner), 013 (title alone is not an agent), 020 (freshness on receipt time), 024 (conflicting owner keeps terminal), 040 (empty scan cached), 054 (ask keepalive), 055 (permission prompt blocks paste, stale working report, late redraw), 057 (Grok version reply, unverifiable end), 058 (stale record does not block removal). Fixes: pushed 3 -> 11 on D-08-009 (mail banner) and D-08-011 (task list): both are orchestration mechanics, not agent status. Registry coverage widened: cli-manifest linear team members/states/labels, keybindings worktree.navigateUp/Down (keyword gate inside navigate), menu Show Tasks Button, and keyword-matching e2e specs outside area 08. agent-session-* tests (reservations, leases, orphan children, restart handoff) belong to chat sessions (area 14) or are bookkeeping."
+  ]
+}

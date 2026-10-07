@@ -1,0 +1,357 @@
+registry,row_key,verdict,card_id,note
+e2e,default-branch-visibility.spec.ts,MAPPED,PROJ-052,triage 01; default branch stays visible when sleeping workspaces are filtered out
+e2e,electron-home-isolation.spec.ts,NOT-USER-FACING,,triage: test harness isolation of the app home/profile per run; no product behaviour
+e2e,finished-agent-ghost-resume.spec.ts,MAPPED,TERM-106,triage 03
+e2e,folder-setup-shallow-priority.spec.ts,MAPPED,PROJ-012,triage 01
+e2e,folder-setup.spec.ts,MAPPED,PROJ-013,triage 01
+e2e,golden-core-flows.spec.ts,MAPPED,PROJ-001,"triage 01 (new-user half is area 16, also ONB-033 by evidence)"
+e2e,golden-shell-after-agent-exit.spec.ts,MAPPED,TERM-111,triage 03
+e2e,golden-shell-command.spec.ts,MAPPED,TERM-040,triage 03
+e2e,markdown-ordered-list-exit.spec.ts,MAPPED,EDIT-013,triage 12; no titles in dumps; evidence also names EDIT-057; list exit is EDIT-013 list behaviour
+e2e,markdown-prose-reflow.spec.ts,MAPPED,EDIT-019,triage 12; hard-wrapped prose round-trip
+e2e,multi-client-navigation-isolation.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,PROJ-098,dropped-18-inventory #31; triage 18
+e2e,paired-quick-open-large-tree.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,EDIT-051,dropped-18-inventory #12/#31; triage 18
+e2e,pi-ui-prompt-status.spec.ts,MAPPED,STAT-021,triage 04
+e2e,pr11346-selected-runtime-add.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,PROJ-098,dropped-18-inventory #31; triage 18
+e2e,rich-markdown-link-bubble-stacking.spec.ts,MAPPED,EDIT-014,triage 12
+e2e,setup-script-import.spec.ts,MAPPED,PROJ-035,triage 01; import prompt for other tools setup commands (see also PROJ-034)
+e2e,setup-script-prompt-unreadable-kolux-yaml.spec.ts,MAPPED,PROJ-035,triage 01; prompt recovers from unreadable team config (see also PROJ-034)
+e2e,tabs.spec.ts,MAPPED,TERM-040,triage 03; reorder/switch also TERM-050/TERM-054
+e2e,tasks-page.spec.ts,MAPPED,GIT-044,triage 11; GitHub search half GIT-043
+e2e,add-project-default-checkout.spec.ts,MAPPED,PROJ-007,evidence
+e2e,golden-worktree-create-switch.spec.ts,MAPPED,PROJ-020,evidence
+e2e,local-worktree-visibility-runtime-active.spec.ts,MAPPED,PROJ-041,evidence
+e2e,manual-worktree-order-persistence.spec.ts,MAPPED,PROJ-049,evidence
+e2e,markdown-nested-toggle.spec.ts,MAPPED,EDIT-013,evidence
+e2e,paired-external-worktree-discovery.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,PROJ-098,dropped-18-inventory #31
+e2e,paired-web-add-project-unavailable-host.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,PROJ-098,dropped-18-inventory #31
+e2e,project-group-creation-visibility.spec.ts,MAPPED,PROJ-014,evidence
+e2e,project-group-manual-sort.spec.ts,MAPPED,PROJ-016,evidence
+e2e,repo-icon-emoji-picker.spec.ts,MAPPED,PROJ-019,evidence
+e2e,spinner-workspace-perf.spec.ts,NOT-USER-FACING,,CPU benchmark of sidebar working spinners; spinner behaviour itself is STAT-052
+e2e,windows-project-runtime-smoke.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,PROJ-099,dropped-18-inventory #37/#38; Windows plus WSL projects side by side
+e2e,workspace-back-forward-navigation.spec.ts,MAPPED,PROJ-056,evidence
+e2e,workspace-emoji-picker.spec.ts,MAPPED,PROJ-061,evidence
+e2e,worktree-active-delete-scroll-position.spec.ts,MAPPED,PROJ-070,evidence
+e2e,worktree-card-downward-drag.spec.ts,MAPPED,PROJ-049,evidence
+e2e,worktree-jump-palette-filter.spec.ts,MAPPED,PROJ-057,evidence
+e2e,worktree-lifecycle.spec.ts,MAPPED,PROJ-066,evidence
+e2e,worktree-lineage-agent-expansion.spec.ts,MAPPED,PROJ-047,evidence
+e2e,worktree-lineage.spec.ts,MAPPED,PROJ-047,evidence
+e2e,worktree-recent-sort.spec.ts,MAPPED,PROJ-051,evidence
+e2e,worktree-scroll-to-current.spec.ts,MAPPED,PROJ-054,evidence
+e2e,worktree-smart-sort.spec.ts,MAPPED,PROJ-050,evidence
+e2e,worktree-switch-responsiveness.spec.ts,MAPPED,PROJ-066,evidence
+e2e,worktree.spec.ts,MAPPED,PROJ-020,evidence
+e2e,agent-session-live-force-exit-resume.spec.ts,MAPPED,SESS-030,evidence
+e2e,agent-session-log-tail-stability.spec.ts,MAPPED,EDIT-026,evidence
+e2e,agent-session-quit-resume.spec.ts,MAPPED,SESS-030,evidence
+e2e,golden-quit-relaunch-session.spec.ts,MAPPED,SESS-030,evidence
+e2e,new-workspace-create-more.spec.ts,MAPPED,SESS-038,evidence
+e2e,new-workspace-cross-project-dialog.spec.ts,MAPPED,SESS-038,evidence
+e2e,new-workspace-linked-item-project-switch.spec.ts,MAPPED,SESS-038,evidence; Jira half dropped under SESS-046
+e2e,app-menu-paste-ownership.spec.ts,MAPPED,TERM-068,
+e2e,artificial-tui-terminal-load.spec.ts,MAPPED,TERM-115,
+e2e,chinese-ime-chat-input-repro.spec.ts,MAPPED,TERM-083,
+e2e,daemon-generation-legacy-close-safety.spec.ts,MAPPED,TERM-108,
+e2e,daemon-generation-reconnect-safety.spec.ts,MAPPED,TERM-108,
+e2e,daemon-lifecycle-retirement.spec.ts,MAPPED,TERM-108,
+e2e,daemon-live-session-preservation.spec.ts,MAPPED,TERM-108,
+e2e,daemon-slow-health-check-preservation.spec.ts,MAPPED,TERM-108,slow host health check must not kill live sessions; also TERM-105
+e2e,daemon-slow-init-pty-gate.spec.ts,MAPPED,TERM-105,
+e2e,dead-terminal-repro.spec.ts,MAPPED,TERM-115,
+e2e,dead-terminal-stress.spec.ts,MAPPED,TERM-103,
+e2e,editable-context-paste-ownership.spec.ts,MAPPED,TERM-068,
+e2e,editor-tab-selection-restore.spec.ts,MAPPED,PROJ-066,editor selection kept across workspace switches
+e2e,floating-tab-rename-filesystem-alias.spec.ts,MAPPED,EDIT-034,evidence
+e2e,floating-tab-rename.spec.ts,MAPPED,EDIT-032,floating markdown rename keeps tab; also EDIT-034
+e2e,floating-workspace-reopen-webgl-recovery.spec.ts,MAPPED,TERM-103,
+e2e,floating-workspace-shared-glyph-atlas.spec.ts,MAPPED,TERM-103,
+e2e,golden-agent-tui-launch.spec.ts,MAPPED,TERM-041,also SESS-004
+e2e,golden-tab-bar-agent-launch.spec.ts,MAPPED,SESS-004,WSL variant dropped under TERM-129
+e2e,golden-terminal-file-link.spec.ts,MAPPED,TERM-093,
+e2e,issue-12656-terminal-link-tooltip.spec.ts,MAPPED,TERM-092,
+e2e,local-cli-terminal-retention.spec.ts,MAPPED,TERM-125,evidence
+e2e,markdown-table-row-backspace.spec.ts,MAPPED,EDIT-013,evidence
+e2e,paired-cli-terminal-graph-sync-tab-retention.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,plugin-panel-containment.spec.ts,DROP:plugins cut (Table 1b),SKILL-039,
+e2e,pty-snapshot-capability-main-stall.spec.ts,MAPPED,TERM-115,
+e2e,renderer-crash-recovery-terminal-input.spec.ts,MAPPED,APP-042,
+e2e,restart-restore-terminal-input.spec.ts,MAPPED,TERM-105,
+e2e,settings-agent-awake.spec.ts,MAPPED,TERM-122,evidence
+e2e,settings-display-name-ime.spec.ts,MAPPED,SET-033,evidence
+e2e,settings-search-shortcuts-pane.spec.ts,MAPPED,SET-007,evidence
+e2e,tab-close-navigation.spec.ts,MAPPED,TERM-044,evidence
+e2e,tab-create-entry-file-paths.spec.ts,MAPPED,EDIT-036,evidence
+e2e,tab-rename-paste-ownership.spec.ts,MAPPED,TERM-068,"paste lands in the rename field, not the terminal; also TERM-048"
+e2e,tab-rename.spec.ts,MAPPED,TERM-048,
+e2e,terminal-codex-cursor-jitter-repro.spec.ts,MAPPED,TERM-115,"cursor stability under agent redraw; thin, also TERM-101"
+e2e,terminal-codex-hidden-startup-background.spec.ts,MAPPED,TERM-112,thin: agent input background restored when a hidden workspace first shows
+e2e,terminal-codex-home.spec.ts,MAPPED,ACCT-019,selected Codex account reaches the terminal process
+e2e,terminal-codex-local-typing-latency.spec.ts,MAPPED,TERM-115,
+e2e,terminal-cold-activation-deferral.spec.ts,MAPPED,TERM-113,
+e2e,terminal-column-desync-repro.spec.ts,MAPPED,TERM-134,evidence
+e2e,terminal-context-menu-session-id.spec.ts,MAPPED,TERM-036,
+e2e,terminal-cursor-inactive-style.spec.ts,MAPPED,TERM-101,
+e2e,terminal-document-visibility-webgl-recovery.spec.ts,MAPPED,TERM-103,
+e2e,terminal-duplicate-pty-renderer-reveal.spec.ts,MAPPED,TERM-105,
+e2e,terminal-foreground-redraw-freeze.spec.ts,MAPPED,TERM-115,
+e2e,terminal-hangul-wrap-boundary-bytes.spec.ts,MAPPED,TERM-083,
+e2e,terminal-hidden-child-tui-kill-mode-reset.spec.ts,MAPPED,ACCT-060,
+e2e,terminal-hidden-tui-visual-restore.spec.ts,MAPPED,TERM-112,
+e2e,terminal-history-size-typing-latency.spec.ts,MAPPED,TERM-115,
+e2e,terminal-ibus-hangul-native.spec.ts,MAPPED,TERM-083,evidence
+e2e,terminal-image-paste-webgl-recovery.spec.ts,MAPPED,TERM-103,
+e2e,terminal-ime-exact-byte.spec.ts,MAPPED,TERM-083,
+e2e,terminal-inline-tui-reveal-convergence.spec.ts,MAPPED,TERM-132,evidence
+e2e,terminal-korean-composing-chord-order.spec.ts,MAPPED,TERM-083,
+e2e,terminal-korean-endofrow-preedit-cell-span.spec.ts,MAPPED,TERM-083,evidence
+e2e,terminal-korean-midline-preedit-occlusion.spec.ts,MAPPED,TERM-083,
+e2e,terminal-korean-preedit-visibility.spec.ts,MAPPED,TERM-083,
+e2e,terminal-large-paste-responsiveness.spec.ts,MAPPED,TERM-071,
+e2e,terminal-link-click-ownership.spec.ts,MAPPED,TERM-092,
+e2e,terminal-link-hover-after-worktree-return.spec.ts,MAPPED,TERM-092,
+e2e,terminal-long-table-scroll-restore.spec.ts,MAPPED,TERM-104,evidence
+e2e,terminal-macos-2set-korean-native.spec.ts,MAPPED,TERM-083,
+e2e,terminal-macos-system-key-remap.spec.ts,MAPPED,TERM-086,evidence
+e2e,terminal-multi-workspace-typing-latency.spec.ts,MAPPED,TERM-115,
+e2e,terminal-option-composed-ascii.spec.ts,MAPPED,TERM-081,
+e2e,terminal-osc-color-queries.spec.ts,MAPPED,TERM-098,programs asking for colours get the active theme
+e2e,terminal-osc8-cold-park-restore.spec.ts,MAPPED,TERM-092,
+e2e,terminal-output-scheduler.spec.ts,MAPPED,TERM-115,
+e2e,terminal-pane-binding-lifecycle.spec.ts,MAPPED,TERM-017,
+e2e,terminal-pane-close-layout-consistency.spec.ts,MAPPED,TERM-014,
+e2e,terminal-pane-content-retention.spec.ts,MAPPED,TERM-017,
+e2e,terminal-pane-divider-capture-loss.spec.ts,MAPPED,TERM-010,
+e2e,terminal-pane-layout-resize.spec.ts,MAPPED,TERM-010,
+e2e,terminal-pane-split-identity.spec.ts,MAPPED,TERM-006,
+e2e,terminal-pane-title-editing.spec.ts,MAPPED,TERM-027,
+e2e,terminal-pane-title-focus-handoff.spec.ts,MAPPED,TERM-027,
+e2e,terminal-pane-title-strip-placement.spec.ts,MAPPED,TERM-027,
+e2e,terminal-parked-cli-split.spec.ts,MAPPED,CLI-026,evidence
+e2e,terminal-parked-close-retirement.spec.ts,MAPPED,TERM-112,
+e2e,terminal-parked-memory.spec.ts,MAPPED,TERM-112,
+e2e,terminal-paste-ownership.spec.ts,MAPPED,TERM-068,evidence
+e2e,terminal-push-delivery-loss-recovery.spec.ts,MAPPED,TERM-115,
+e2e,terminal-quick-command-pre-bind-recovery.spec.ts,DROP:quick commands cut (Table 1b),TERM-038,
+e2e,terminal-raw-emoji-table-scroll-restore.spec.ts,MAPPED,TERM-104,also TERM-103 default GPU rendering
+e2e,terminal-reattach-mouse-mode-leak.spec.ts,MAPPED,TERM-088,
+e2e,terminal-reattach-tui-mouse-mode.spec.ts,MAPPED,TERM-132,thin: mouse tracking survives restart reattach; also TERM-088
+e2e,terminal-restart-persistence.spec.ts,MAPPED,TERM-105,
+e2e,terminal-retention-budget.spec.ts,MAPPED,TERM-112,
+e2e,terminal-reveal-paused-render-repro.spec.ts,MAPPED,TERM-112,
+e2e,terminal-reveal-stale-pty-resize-repro.spec.ts,MAPPED,TERM-134,evidence
+e2e,terminal-scroll-intent-follow.spec.ts,MAPPED,TERM-090,
+e2e,terminal-send-agent-prompt-submit.spec.ts,MAPPED,TERM-126,
+e2e,terminal-shortcuts.spec.ts,MAPPED,TERM-080,Shift/Ctrl+Enter key encoding per agent and platform
+e2e,terminal-sleep-wake-restore.spec.ts,MAPPED,TERM-114,
+e2e,terminal-split-activation-latency.spec.ts,NOT-USER-FACING,,benchmark recording split activation phase timings
+e2e,terminal-split-pane-paste-ownership.spec.ts,MAPPED,TERM-068,
+e2e,terminal-stuck-occlusion-recovery.spec.ts,MAPPED,TERM-115,
+e2e,terminal-tab-close-restart-persistence.spec.ts,MAPPED,TERM-105,
+e2e,terminal-tab-close-running-confirm-mouse.spec.ts,MAPPED,TERM-045,
+e2e,terminal-tab-close-running-confirm.spec.ts,MAPPED,TERM-045,
+e2e,terminal-tab-switch-sigwinch-restore.spec.ts,MAPPED,TERM-132,
+e2e,terminal-tab-switch-visual-restore.spec.ts,MAPPED,TERM-112,
+e2e,terminal-tui-emoji-table-rendering.spec.ts,MAPPED,TERM-104,
+e2e,terminal-tui-wheel-drain.spec.ts,MAPPED,TERM-089,
+e2e,terminal-typing-latency.spec.ts,MAPPED,TERM-115,
+e2e,terminal-warm-reattach-split-live-output.spec.ts,MAPPED,TERM-105,
+e2e,terminal-webgl-atlas-budget.spec.ts,MAPPED,TERM-103,
+e2e,terminal-wedged-write-pipeline-recovery.spec.ts,MAPPED,TERM-115,
+e2e,terminal-window-wake-stale-grid-repro.spec.ts,MAPPED,TERM-114,
+e2e,terminal-windows-codex-multiline-paste.spec.ts,MAPPED,TERM-069,
+e2e,terminal-windows-path-expansion.spec.ts,MAPPED,TERM-120,
+e2e,terminal-windows-shell-paste-ownership.spec.ts,MAPPED,TERM-068,also TERM-120
+e2e,windows-terminal-env-icons.spec.ts,MAPPED,TERM-043,evidence
+e2e,workspace-session-corrupt-tab-salvage.spec.ts,MAPPED,TERM-106,
+e2e,activity-agent-pane-isolation.spec.ts,MAPPED,STAT-057,evidence
+e2e,agent-descendant-process-kill.spec.ts,MAPPED,STAT-054,evidence
+e2e,droid-notification.spec.ts,MAPPED,STAT-041,evidence
+e2e,grok-hook-session-cleanup.spec.ts,MAPPED,STAT-018,evidence
+e2e,notification-settings.spec.ts,MAPPED,STAT-042,evidence
+e2e,terminal-attention.spec.ts,MAPPED,STAT-058,evidence
+e2e,active-view-restart-restore.spec.ts,MAPPED,VIEW-005,evidence
+e2e,agent-dashboard-status-burst.spec.ts,MAPPED,VIEW-029,evidence
+e2e,ai-vault-session-delete.spec.ts,MAPPED,VIEW-089,evidence
+e2e,onboarding.spec.ts,MAPPED,ONB-001,evidence also VIEW-114
+e2e,paired-cmd-j-host-qualified-tabs.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,VIEW-045,dropped-18-inventory #31
+e2e,pet-status-segment-layout.spec.ts,MAPPED,VIEW-032,evidence
+e2e,pr-comments-sidebar-cards.spec.ts,MAPPED,VIEW-075,evidence
+e2e,right-sidebar-windows-titlebar.spec.ts,MAPPED,VIEW-056,evidence
+e2e,setup-guide-sidebar.spec.ts,MAPPED,ONB-020,evidence
+e2e,sidebar-agent-row-identity.spec.ts,MAPPED,VIEW-051,evidence
+e2e,status-bar-caffeinate.spec.ts,MAPPED,VIEW-097,evidence
+e2e,status-bar-session-count-management-kill.spec.ts,MAPPED,VIEW-099,evidence
+e2e,tab-sidebar-closed-overlap.spec.ts,MAPPED,VIEW-050,evidence
+e2e,terminal-ai-vault-typing-latency.spec.ts,MAPPED,VIEW-083,evidence
+e2e,terminal-hidden-view-parking.spec.ts,MAPPED,VIEW-108,evidence
+e2e,terminal-pinned-viewport-streaming-switch.spec.ts,MAPPED,VIEW-108,evidence
+e2e,terminal-pinned-viewport-worktree-switch.spec.ts,MAPPED,VIEW-108,evidence
+e2e,terminal-streaming-refocus-viewport.spec.ts,MAPPED,VIEW-108,evidence
+e2e,terminal-tui-wheel-reports.spec.ts,MAPPED,TERM-089,wheel reports to mouse-reporting programs
+e2e,terminal-windows-conpty-keyboard-reset.spec.ts,MAPPED,VIEW-109,evidence
+e2e,workspace-board-lane-virtualization.spec.ts,MAPPED,VIEW-027,evidence
+e2e,resource-usage-warm-reattach.spec.ts,MAPPED,USAGE-028,
+e2e,usage-overview.spec.ts,MAPPED,USAGE-012,
+e2e,golden-fresh-profile-terminal.spec.ts,MAPPED,TERM-040,fresh profile opens a live project terminal; also PROJ-001
+e2e,golden-posix-profile-index-fsync.spec.ts,MAPPED,ACCT-038,evidence
+e2e,live-background-terminal-mount-authority.spec.ts,MAPPED,TERM-105,adopts host-owned agent and setup terminals on first mount; also TERM-121
+e2e,renderer-blocked-navigation-graph-authority.spec.ts,MAPPED,APP-015,
+e2e,completed-worker-retirement-resume.spec.ts,MAPPED,ORCH-039,evidence
+e2e,orchestration-idle-mail-delivery.spec.ts,MAPPED,ORCH-007,evidence
+e2e,orchestration-idle-mail-restore.spec.ts,MAPPED,ORCH-008,evidence
+e2e,orchestration-legacy-worker-missing-terminal-recovery.spec.ts,MAPPED,ORCH-038,evidence (fallback): ORCH-038(P1)
+e2e,orchestration-legacy-worker-restart-recovery.spec.ts,MAPPED,ORCH-038,evidence (fallback): ORCH-038(P1)
+e2e,orchestration-low-level-dispatch-release.spec.ts,MAPPED,ORCH-023,evidence (fallback): ORCH-023(P1)
+e2e,orchestration-worker-settlement-release-cli.spec.ts,MAPPED,ORCH-012,evidence (fallback): ORCH-012(P0)
+e2e,orchestration-worker-terminal-visibility.spec.ts,MAPPED,ORCH-016,evidence (fallback): ORCH-016(P0)
+e2e,orchestration-worker-transcript-providers.spec.ts,MAPPED,ORCH-021,evidence (fallback): ORCH-021(P0)
+e2e,settled-worker-tab-survives-restart.spec.ts,MAPPED,ORCH-039,evidence
+e2e,automation-hidden-terminal-first-mount.spec.ts,MAPPED,AUTO-011,evidence
+e2e,automation-prompt-disclosure.spec.ts,MAPPED,AUTO-018,evidence
+e2e,automation-runs-dashboard.spec.ts,MAPPED,AUTO-015,evidence
+e2e,combined-diff-invalidation-freeze-repro.spec.ts,MAPPED,GIT-038,evidence
+e2e,combined-diff-scroll-restore.spec.ts,MAPPED,GIT-038,evidence
+e2e,diff-note-delete.spec.ts,MAPPED,GIT-040,evidence
+e2e,diff-note-edit.spec.ts,MAPPED,GIT-040,evidence
+e2e,diff-note-layout.spec.ts,MAPPED,GIT-040,evidence
+e2e,git-history-tooltip-wrap.spec.ts,MAPPED,GIT-035,evidence
+e2e,git-no-upstream-polling-churn.spec.ts,MAPPED,GIT-007,evidence
+e2e,github-cli-stall-repro.spec.ts,MAPPED,GIT-028,evidence
+e2e,github-created-issue-start-prefill.spec.ts,MAPPED,GIT-049,evidence
+e2e,github-url-smart-input-transition.spec.ts,MAPPED,GIT-059,evidence
+e2e,golden-source-control-commit.spec.ts,MAPPED,GIT-004,evidence
+e2e,golden-source-control-open-diff.spec.ts,MAPPED,GIT-037,evidence
+e2e,korean-ime-terminal-shift-enter-commit.spec.ts,MAPPED,TERM-083,
+e2e,large-diff-freeze-repro.spec.ts,MAPPED,GIT-039,evidence
+e2e,linear-filter-chip-labels.spec.ts,DROP:Linear provider cut (Table 1b),GIT-077,
+e2e,linear-issue-view-persistence.spec.ts,DROP:Linear provider cut (Table 1b),GIT-077,
+e2e,linear-url-workspace-entry.spec.ts,DROP:Linear provider cut (Table 1b),GIT-077,
+e2e,markdown-add-review-note-shortcut.spec.ts,MAPPED,GIT-042,evidence
+e2e,paired-preview-address-bar-convergence.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31; runs only on a paired client; local behaviour is BROW-041
+e2e,repro-7732-gitlab-checks-job-details.spec.ts,DROP:GitLab provider cut (Table 1b),GIT-072,
+e2e,source-control-commit-draft-persistence.spec.ts,MAPPED,GIT-004,evidence
+e2e,source-control-commit-message-ai.spec.ts,MAPPED,GIT-017,evidence (fallback): GIT-017(P1)
+e2e,source-control-create-pr-intent-notice-layout.spec.ts,MAPPED,GIT-022,evidence (fallback): GIT-022(P1)
+e2e,source-control-create-pr-intent-switch.spec.ts,MAPPED,GIT-022,evidence (fallback): GIT-022(P1)
+e2e,source-control-create-pr.spec.ts,MAPPED,GIT-021,evidence (fallback): GIT-021(P1)
+e2e,source-control-discard-confirmation.spec.ts,MAPPED,GIT-003,evidence (fallback): GIT-003(P0)
+e2e,source-control-large-file-count.spec.ts,MAPPED,GIT-012,evidence (fallback): GIT-012(P2)
+e2e,source-control-pr-generation-switch.spec.ts,MAPPED,GIT-017,evidence (fallback): GIT-017(P1)
+e2e,source-control-pr-linked-issue-ai.spec.ts,MAPPED,GIT-024,evidence (fallback): GIT-024(P1)
+e2e,terminal-cjk-ime-committed-text.spec.ts,MAPPED,TERM-083,
+e2e,terminal-hangul-terminating-digit-native.spec.ts,MAPPED,TERM-083,
+e2e,workspace-space-git-status.spec.ts,MAPPED,PROJ-083,
+e2e,file-explorer-watch-refresh.spec.ts,MAPPED,EDIT-035,evidence
+e2e,file-open.spec.ts,MAPPED,EDIT-001,evidence
+e2e,golden-file-open-edit-save.spec.ts,MAPPED,EDIT-001,evidence
+e2e,markdown-explorer-find-focus.spec.ts,MAPPED,EDIT-017,evidence
+e2e,quick-open-file-paths.spec.ts,MAPPED,EDIT-036,evidence
+e2e,settings-search-responsiveness.spec.ts,MAPPED,EDIT-049,evidence
+e2e,browser-address-bar-narrow-toolbar.spec.ts,MAPPED,BROW-006,
+e2e,browser-embedded-owner-routing.spec.ts,MAPPED,BROW-042,evidence
+e2e,browser-fedcm-fallback.spec.ts,MAPPED,BROW-026,
+e2e,browser-guest-attachment-validation.spec.ts,MAPPED,BROW-009,
+e2e,browser-guest-crash-recovery.spec.ts,MAPPED,BROW-009,
+e2e,browser-loading-surface.spec.ts,MAPPED,BROW-011,
+e2e,browser-local-https-certificate-trust.spec.ts,MAPPED,BROW-024,
+e2e,browser-reload-feedback.spec.ts,MAPPED,BROW-005,
+e2e,browser-settings-preview.spec.ts,DROP:browser settings page cut (Table 1b),BROW-054,remote section is BROW-057 (area 18)
+e2e,browser-split-shortcuts.spec.ts,MAPPED,BROW-007,Find routed to the focused browser split
+e2e,browser-tab.spec.ts,MAPPED,BROW-001,also BROW-002
+e2e,client-hosted-browser-tooltip-preview.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,packaged-mixed-version-browser-placement.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-browser-create-navigation-deadline.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-browser-creation-reconciliation-failure.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser-cookie-survival.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser-double-restart.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser-ghost-close.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser-host-strip.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser-quit-survival.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser-restart-survival.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser-title-hold.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-client-hosted-browser.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-instant-browser-tab.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-split-pane-browser-placement.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,runtime-file-browser-windows-drives.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-059,dropped-18-inventory #31/#38
+e2e,native-chat-ask-user-question-card.spec.ts,MAPPED,CHAT-022,evidence
+e2e,native-chat-first-flush-race.spec.ts,MAPPED,CHAT-006,evidence
+e2e,plugin-demo.spec.ts,DROP:plugins cut (Table 1b),SKILL-039,
+e2e,plugin-marketplace-content.spec.ts,DROP:plugins cut (Table 1b),SKILL-040,also SKILL-038
+e2e,plugin-startup-budget.spec.ts,DROP:plugins cut (Table 1b),SKILL-039,
+e2e,feature-wall.spec.ts,MAPPED,ONB-022,evidence
+e2e,worktree-delete-shortcut.spec.ts,MAPPED,PROJ-075,
+e2e,ephemeral-vm-cleanup-retry.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,PROJ-101,dropped-18-inventory #52
+e2e,ephemeral-vm-provisioned-root.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,PROJ-101,dropped-18-inventory #52
+e2e,floating-mobile-emulator-tab.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-064,dropped-18-inventory #49
+e2e,headless-paired-remote-terminal-retention-memory.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31/#34
+e2e,headless-paired-remote-terminal-stall-recovery.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31/#34
+e2e,headless-serve-cli-terminal-retention-parity.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,APP-067,dropped-18-inventory #34
+e2e,headless-serve-desktop-activation.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,APP-067,dropped-18-inventory #35
+e2e,headless-serve-focused-terminal-create.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,APP-067,dropped-18-inventory #34
+e2e,host-parked-pane-remote-viewer.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,local-ssh-browser-routing.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-057,dropped-18-inventory #16
+e2e,mobile-banner.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,,dropped-18-inventory #45 (phone takes over a terminal); no D card records it -> GAP
+e2e,nested-runtime-ssh-lifecycle.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,nested-runtime-ssh-routing.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-browser-ghost-subscriber-rejoin.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-056,dropped-18-inventory #31
+e2e,paired-remote-browser-link-open-routing.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-remote-browser-stream-reconnect.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-remote-html-preview-local-render.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-055,dropped-18-inventory #31
+e2e,paired-remote-pane-layout-retry.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-split-pane-focus.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-split-pane-host-retired-ghost.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-browser-link.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-host-restart-background-sync.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-lossy-initial-snapshot.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-materialization-reconnect.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-parked-reveal-interactivity.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-probe-gap-recovery.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-retention-memory.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-serve-restart-binding.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-stall-recovery.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,paired-remote-terminal-truncated-tail-first-paint.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,pty-input-write-queue-ssh.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,remote-agent-session-focus-authority.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,remote-session-bulk-open-freeze-repro.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31
+e2e,ssh-ai-vault-session-history.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,VIEW-094,dropped-18-inventory #18
+e2e,ssh-client-hosted-browser-drop-reconnect.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-057,dropped-18-inventory #16
+e2e,ssh-codex-display-artifacts-repro.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,ssh-cold-activation-restore.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9; startup reconnect also APP-068
+e2e,ssh-cold-hydration-gap-tab-seeding.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #23
+e2e,ssh-config-host-import.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,SET-049,dropped-18-inventory #3
+e2e,ssh-config-host-picker.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,SET-049,dropped-18-inventory #3
+e2e,ssh-docker-bulk-open-freeze-repro.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,ssh-docker-five-pane-input-under-flood.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,ssh-docker-half-open-link.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #6
+e2e,ssh-docker-quick-open-large-listing.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,EDIT-051,dropped-18-inventory #12
+e2e,ssh-docker-reconnect-pane-restore.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #6
+e2e,ssh-docker-relay-perf.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #7/#9
+e2e,ssh-docker-relay-stall-credential.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #4/#7/#9; no titles in dumps; read from spec header comments
+e2e,ssh-docker-resource-accumulation.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #7/#9
+e2e,ssh-docker-transport-drop-recovery.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #6
+e2e,ssh-docker-watcher-isolation.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #7/#9
+e2e,ssh-egress-indicator-preview.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-057,dropped-18-inventory #16
+e2e,ssh-external-image-preview.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,EDIT-051,dropped-18-inventory #12
+e2e,ssh-host-form-modal.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,SET-049,dropped-18-inventory #1
+e2e,ssh-localhost.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,STAT-060,dropped-18-inventory #17
+e2e,ssh-lost-kill-tab-resurrection.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,ssh-pi-compatible-agent-title.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,STAT-060,dropped-18-inventory #17
+e2e,ssh-port-forward-lifecycle.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,VIEW-079,dropped-18-inventory #15
+e2e,ssh-reconnect-tab-destruction.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #6
+e2e,ssh-restart-tab-accumulation.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,ssh-route-error-card-preview.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-057,dropped-18-inventory #16
+e2e,ssh-routing-optout-demo.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,BROW-057,dropped-18-inventory #16
+e2e,ssh-startup-exec-readiness.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #6
+e2e,ssh-terminal-parking.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,ssh-terminal-window-wake-stale-grid-repro.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-128,dropped-18-inventory #9
+e2e,windows-wsl-terminal-restore.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-129,dropped-18-inventory #37/#38
+e2e,golden-posix-fresh-startup.spec.ts,MAPPED,ONB-008,fresh profile reaches onboarding
+e2e,golden-windows-fresh-startup.spec.ts,MAPPED,APP-002,evidence
+e2e,landing-preflight-runtime-routing.spec.ts,MAPPED,APP-023,evidence
+e2e,macos-press-and-hold-startup.spec.ts,MAPPED,APP-036,evidence
+e2e,paired-startup-exec-readiness.spec.ts,DROP:area 18 remote and hosts dropped 2026-10-05,TERM-130,dropped-18-inventory #31/#34; paired desktop owner and headless serve; evidence named APP-056
+e2e,persisted-session-production-upgrade.spec.ts,MAPPED,APP-048,evidence
+e2e,resource-manager-unbound-session-safety.spec.ts,MAPPED,APP-054,evidence
+e2e,update-install-renderer-checkpoint-recovery.spec.ts,MAPPED,APP-011,evidence

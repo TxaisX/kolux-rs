@@ -1,0 +1,16 @@
+﻿kolux agent hooks on
+
+Usage: kolux agent hooks on [--json]
+
+Enable Kolux-managed agent status hooks
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --page <id>            Stable browser page id from `kolux tab list --json`
+
+Examples:
+  $ kolux agent hooks on
+

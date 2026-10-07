@@ -1,0 +1,12 @@
+theme,commits_all,commits_excluding_mechanical
+"terminal|pane|grid|tab",86,86
+"worktree|isolation",18,18
+"status|hook|notification|inbox|stopped|quiet|plan review|plan-review",30,30
+"account|sign-in|signin|usage|limit|forecast|key vault|keys",37,36
+"protected|security|redact|audit|trust",20,20
+"starter kit|onboarding|business|first run|jargon|connect card",24,24
+"redesign|design|view|board|agents view|look",55,55
+"release|update|updater|ci|ship|install",56,56
+"restore|daemon|reliab|lost|persist",10,10
+"rename|kolux|nightshift|original|scrub|license",73,66
+"orchestrat|automation|run|worker|routing",35,35

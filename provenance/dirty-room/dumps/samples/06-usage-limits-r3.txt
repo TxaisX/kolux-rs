@@ -1,0 +1,101 @@
+# 06-usage-limits random sample round 3 (100 of 740): file	title
+src/main/rate-limits/service-inactive-account-previews.test.ts	does not recache an inactive Codex account that becomes active during fetch-on-open
+src/main/stats/collector-async-save.test.ts	flush() writes synchronously (no timer, immediately on disk)
+src/main/rate-limits/grok-fetcher.test.ts	still reads an omitted percentage as zero when the payload carries only non-zero money fields
+src/main/rate-limits/service-account-target-selection.test.ts	settles without applying a result when the managed home becomes unavailable mid-fetch
+src/main/rate-limits/gemini-usage-fetcher.test.ts	deduplicates buckets
+src/main/rate-limits/service-account-target-selection.test.ts	does not cache host Codex usage under an outgoing WSL account
+src/main/rate-limits/minimax/minimax-request-context.test.ts	omits X-Group-Id when groupId is empty string
+src/shared/usage-launch-warning.test.ts	does not warn below the threshold
+src/main/usage/usage-provider-store-lifecycle.test.ts	skips disabled and fresh matching states
+src/main/rate-limits/gemini-usage-fetcher.fallback.test.ts	reads oauth_creds.json and resolves project via loadCodeAssist
+src/shared/usage-window-forecast.test.ts	only uses the last ~60 minutes of pace when more history exists
+src/main/rate-limits/minimax/minimax-fetcher.test.ts	returns the value for a given cookie name
+src/main/claude-usage/scanner.test.ts	splits the cache-write total by TTL when the breakdown is present
+src/main/rate-limits/gemini-usage-fetcher.test.ts	returns quota via oauth_creds.json
+src/main/rate-limits/claude-fetcher-cli-fallback.test.ts	uses CLI fallback when Keychain is unavailable in automatic mode
+src/main/rate-limits/gemini-bucket-formatting.test.ts	returns null for empty buckets
+src/shared/agent-context-cap.test.ts	respects a window the user already chose
+src/main/rate-limits/codex-fetcher-session-supplement.test.ts	reuses complete zero-credit metadata from a weekly-only usage response
+src/main/ipc/rate-limits.test.ts	keeps the existing rate-limit channels registered
+src/main/rate-limits/minimax/minimax-request-context.test.ts	handles Chromium quoted syntax
+src/main/limit-auto-resume/limit-auto-resume-schedule.test.ts	reads a Claude limit stop from a live hook event
+src/renderer/src/components/stats/UsageTrackingPaneShell.test.tsx	renders ready content and disables refresh while scanning
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	never types into a plain shell left behind after Claude quit, then gives up
+src/shared/usage-window-alert.test.ts	fires nothing below 80%
+src/main/rate-limits/service-refresh-orchestration.test.ts	isolates provider failures so one error does not block others
+src/main/rate-limits/kimi-fetcher-wsl-home.test.ts	points an expired WSL session at the distro to rerun kimi in
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	does not fire when the stop was a different kind of block
+src/main/claude-usage/scanner-scan.test.ts	reclaims fork-copied turns when the owning original file is deleted
+src/main/claude-usage/store.test.ts	prices Sonnet 5 long-context usage at flat rates
+src/main/rate-limits/codex-fetcher-auth-errors.test.ts	stops a PTY probe when Codex renders its sign-in screen
+src/main/rate-limits/service-refresh-orchestration.test.ts	does not queue a follow-up fetch when a mobile subscription replays mid-fetch
+src/renderer/src/components/usage/SessionUsageMeterView.test.tsx	adds the toned percentage beside the ring
+src/main/rate-limits/kimi-fetcher.test.ts	surfaces an error when the usage request fails
+src/main/rate-limits/codex-auth-presence.test.ts	reports unavailable when WSL cannot resolve either the auth file or its home
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	keeps panes apart
+src/main/rate-limits/codex-fetcher-pty-settle.test.ts	never selects a model-scoped weekly row even when it renders first
+src/main/rate-limits/codex-probe-termination.test.ts	waits for the Windows descendant tree kill before releasing the probe
+src/main/rate-limits/codex-fetcher-backend.test.ts	classifies a sole seven-day backend primary window as weekly
+src/shared/usage-window-forecast.test.ts	falls back to whatever history exists when the window is younger than 60 minutes
+src/shared/rate-limit-reset-format.test.ts	prefixes the duration or reports "Resets now"
+src/renderer/src/components/stats/usage-overview-model.test.ts	reports disabled providers as an empty overview
+src/main/rate-limits/claude-fetcher-cli-fallback.test.ts	surfaces Keychain read failures as structured usage metadata when CLI fallback is disabled
+src/main/claude-usage/store.test.ts	does not collapse Opus 4.5 or Sonnet 4.5 usage into Claude 5 pricing
+src/main/claude-usage/claude-model-pricing.test.ts	clamps a 1-hour count that exceeds the reported write total
+src/main/rate-limits/claude-fetcher-cli-fallback.test.ts	marks CLI plan usage shell results as usage unavailable
+src/main/rate-limits/auth-filesystem-operation.test.ts	allows different WSL distros to probe concurrently
+src/main/rate-limits/service-window-activation.test.ts	performs a one-shot active-window fetch when startup focus was missed
+src/main/rate-limits/codex-fetcher.test.ts	does not map a duplicate session-duration window into the weekly slot
+src/main/rate-limits/grok-fetcher.test.ts	returns unavailable when not signed in even if a token-less auth file exists
+src/main/limit-auto-resume/limit-auto-resume-schedule.test.ts	only counts blocked Claude rows stopped on a limit
+src/main/claude-usage/transcript-record-parser-prefilter.test.ts	rejects a non-assistant record that happens to contain the word assistant
+src/renderer/src/components/usage/SessionUsageMeterView.test.tsx	hides the context part without data but keeps plan usage
+src/main/rate-limits/grok-fetcher.test.ts	reads a flat billing payload that carries usage fields but no percent
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	falls back to the session window when only it is exhausted
+src/renderer/src/store/slices/agent-context-usage.test.ts	clears one pane and tolerates an unknown one
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	does not guess when no reset time is known, locally or over SSH
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	still resumes when the last input came before the stop
+src/main/rate-limits/service-refresh-orchestration.test.ts	waits for a queued explicit refresh when another fetch is already in flight
+src/main/codex-usage/store-model-pricing.test.ts	keeps cached input out of the full-price input bucket for GPT-5.5 totals
+src/main/rate-limits/minimax/minimax-fetcher.test.ts	parses the 7-day weekly window alongside the 5-hour session
+src/main/rate-limits/service-refresh-orchestration.test.ts	does not refetch Claude when a Codex account switch is queued during fetchAll
+src/main/limit-auto-resume/limit-auto-resume-startup.test.ts	ignores resume-identity rows and other agents
+src/renderer/src/components/stats/usage-overview-model.test.ts	pads recent usage days with zero-token cells
+src/main/rate-limits/service-account-target-selection.test.ts	reuses a caller-provided idempotency key when consuming a Codex reset credit
+src/shared/usage-percentage-display.test.ts	defaults unknown persisted values to the current used-capacity behavior
+src/main/claude-usage/store.test.ts	does not collapse older Opus 4.1 or base Opus 4 usage into current Opus pricing
+src/main/rate-limits/account-runtime-target-sync.test.ts	refreshes only the provider whose current target differs
+src/main/rate-limits/service-refresh-orchestration.test.ts	refreshes Grok without refreshing other providers
+src/shared/status-bar-usage-mode.test.ts	preserves supported modes
+src/main/claude-usage/claude-model-pricing.test.ts	bills base input at $2/MTok
+src/main/claude-usage/store.test.ts	reports zero-cache-read turns from daily aggregates
+src/main/rate-limits/claude-fetcher-cli-fallback.test.ts	explains auth failures when a live Claude terminal owns managed refresh
+src/main/claude-usage/scanner-scan.test.ts	reuses unchanged transcript projections from the previous scan
+src/main/rate-limits/hidden-pty-cleanup.test.ts	removes registered hidden PTYs after natural exit cleanup
+src/main/rate-limits/codex-fetcher.test.ts	normalizes near-canonical Codex RPC windows to fixed display durations
+src/main/rate-limits/minimax/minimax-fetcher.test.ts	falls back to the lone snapshot when no configured model matches
+src/main/rate-limits/grok-fetcher.test.ts	aborts the billing request when the caller aborts
+src/main/rate-limits/minimax/minimax-fetcher.test.ts	normalizes quoted MiniMax cookie storage syntax
+src/main/rate-limits/claude-oauth-usage-request.test.ts	makes no request and returns an unavailable result in token mode
+src/main/claude-usage/claude-model-pricing.test.ts	bills 5-minute cache writes at 1.25x base input
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	gives up 30 minutes after due when no handle ever resolves
+src/main/rate-limits/service-account-target-selection.test.ts	does not cache host Claude usage under an outgoing WSL account
+src/main/rate-limits/service-window-activation.test.ts	still debounces a focus event within the window after a successful fetch
+src/main/claude-usage/scanner-scan.test.ts	canonicalizes repeated cwd paths once per scan file
+src/main/limit-auto-resume/limit-auto-resume-schedule.test.ts	is per pane and per reset time, bucketed to the minute
+src/shared/usage-launch-warning.test.ts	ignores agent ids that are not tracked usage providers
+src/main/rate-limits/minimax/minimax-request-context.test.ts	returns the value for a known name
+src/main/limit-auto-resume/limit-auto-resume-startup.test.ts	does not use the account windows for a WSL pane
+src/main/rate-limits/service-window-activation.test.ts	counts a stale-driven full fetch as the failing provider retry attempt
+src/renderer/src/components/usage/usage-overview-model.test.ts	includes every rate-limit provider even when nothing is configured
+src/shared/usage-window-forecast-samples.test.ts	records a sample for the active window
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	fires on the next tick after the clock jumps past due, as after sleep
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	schedules panes that were already stopped, and ignores the rest
+src/main/limit-auto-resume/limit-auto-resume-schedule.test.ts	skips resume-identity rows, whose status fields are placeholders
+src/main/rate-limits/service-window-activation.test.ts	keeps a full-fetch retry on the 5-minute cadence for a provider without a dedicated fetch cycle
+src/main/rate-limits/minimax/minimax-request-context.test.ts	returns the overseas .io endpoint by default
+src/shared/usage-window-alert.test.ts	never fires when resetsAt is unknown
+src/main/rate-limits/service-account-target-selection.test.ts	keeps the reset result scoped when the active target changes during its refresh
+src/main/limit-auto-resume/limit-auto-resume-service.test.ts	rechecks the setting at fire time even with no change notification
+src/main/claude-usage/scanner.test.ts	attributes Kolux worktree usage and preserves multi-location session breakdowns

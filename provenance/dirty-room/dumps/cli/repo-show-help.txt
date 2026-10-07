@@ -1,0 +1,13 @@
+﻿kolux repo show
+
+Usage: kolux repo show --repo <selector> [--json]
+
+Show one registered repo
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+

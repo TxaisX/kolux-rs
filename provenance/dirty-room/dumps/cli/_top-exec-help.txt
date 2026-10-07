@@ -1,0 +1,15 @@
+﻿kolux exec
+
+Usage: kolux exec --command "<agent-browser command>" [--worktree <selector>] [--json]
+
+Run any agent-browser command against the active browser tab
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --command <text>       Command to run in the terminal on startup
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --page <id>            Stable browser page id from `kolux tab list --json`
+

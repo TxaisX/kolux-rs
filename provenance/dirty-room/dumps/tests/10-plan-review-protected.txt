@@ -1,0 +1,134 @@
+# 10-plan-review-protected: file	describe	title  (133 titles, 23 files)
+src/main/agent-trust-presets.test.ts	markCursorWorkspaceTrusted	writes ~/.cursor/projects/<slug>/.workspace-trusted with the cwd payload
+src/main/agent-trust-presets.test.ts	markCursorWorkspaceTrusted	is idempotent — re-marking the same workspace does not overwrite trustedAt
+src/main/agent-trust-presets.test.ts	markCopilotFolderTrusted	appends the workspace to trustedFolders in ~/.copilot/config.json
+src/main/agent-trust-presets.test.ts	markCopilotFolderTrusted	preserves existing config keys and dedups already-trusted folders
+src/main/agent-trust-presets.test.ts	markCodexProjectTrusted	queues behind an in-flight Codex trust-config mutation
+src/main/agent-trust-presets.test.ts	markCodexProjectTrusted	trusts the main repository root for a linked worktree without reading commondir
+src/main/agent-trust-presets.test.ts	markCodexProjectTrusted	does not broaden trust through arbitrary or adversarial Git metadata
+src/main/agent-trust-presets.test.ts	markCodexProjectTrusted	writes ~/.codex/config.toml with the project marked trusted
+src/main/agent-trust-presets.test.ts	markCodexProjectTrusted	preserves existing config keys and updates an existing project block
+src/main/claude-trust-preset.test.ts	markClaudeProjectTrusted	writes hasTrustDialogAccepted for the workspace after the collection window elapses
+src/main/claude-trust-preset.test.ts	markClaudeProjectTrusted	never writes a Windows backslash key, which Claude would ignore
+src/main/claude-trust-preset.test.ts	markClaudeProjectTrusted	batches worktrees marked within the same window into a single write, none resolving early
+src/main/claude-trust-preset.test.ts	markClaudeProjectTrusted	resolves without waiting when the workspace is already trusted
+src/main/claude-trust-preset.test.ts	markClaudeProjectTrusted	preserves existing config keys and other projects while marking a new one
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	planPreTrustWorktreePaths	computes the exact path createLocalWorktree would use for the same repo and name
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	planPreTrustWorktreePaths	plans one distinct path per name for a full ${MAX_PRE_TRUST_WORKTREES}-name wave
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	planPreTrustWorktreePaths	rejects an invalid name the same way createLocalWorktree would
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	validatePreTrustWorktreesArgs	accepts a well-formed wave request
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	validatePreTrustWorktreesArgs	rejects more than ${MAX_PRE_TRUST_WORKTREES} names
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	validatePreTrustWorktreesArgs	rejects an unknown agent
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	validatePreTrustWorktreesArgs	rejects a missing repoId
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	validatePreTrustWorktreesArgs	rejects an empty worktreeNames array
+src/main/ipc/agent-trust-pretrust-worktrees.test.ts	validatePreTrustWorktreesArgs	rejects a non-string entry in worktreeNames
+src/main/ipc/agent-trust.test.ts	agentTrust:preTrustWorktrees	writes every planned path in exactly one call for a full 6-name wave
+src/main/ipc/agent-trust.test.ts	agentTrust:preTrustWorktrees	no-ops for a non-claude agent without touching the trust file
+src/main/ipc/agent-trust.test.ts	agentTrust:preTrustWorktrees	rejects a repo it cannot find
+src/main/ipc/agent-trust.test.ts	agentTrust:preTrustWorktrees	rejects a folder repo
+src/main/ipc/agent-trust.test.ts	agentTrust:preTrustWorktrees	rejects a non-local (SSH) repo
+src/main/ipc/agent-trust.test.ts	agentTrust:preTrustWorktrees	rejects more than ${MAX_PRE_TRUST_WORKTREES} worktree names before planning any path
+src/main/persistence-floating-terminal-trust.test.ts	Store	seeds trusted floating workspace directories from legacy explicit cwd values
+src/main/persistence-floating-terminal-trust.test.ts	Store	persists the floating cwd migration marker when a legacy explicit cwd is unavailable
+src/main/persistence-floating-terminal-trust.test.ts	Store	does not seed trusted floating workspace directories after the cwd migration has run
+src/main/persistence-floating-terminal-trust.test.ts	Store	restores migrated blank floating terminal cwd settings to home shorthand
+src/main/persistence-floating-terminal-trust.test.ts	Store	preserves legacy home shorthand as the floating terminal cwd
+src/main/persistence-floating-terminal-trust.test.ts	Store	canonicalizes persisted floating workspace trust paths on load
+src/main/persistence-floating-terminal-trust.test.ts	Store	preserves temporarily unavailable floating workspace trust paths on load
+src/main/persistence-floating-terminal-trust.test.ts	Store	drops blank floating workspace trust paths on load
+src/main/persistence-floating-terminal-trust.test.ts	Store	preserves custom notification sound paths from persisted settings
+src/main/persistence-floating-terminal-trust.test.ts	Store	clamps notification custom sound volume from persisted settings
+src/main/persistence-floating-terminal-trust.test.ts	Store	defaults invalid notification custom sound volume from persisted settings
+src/main/persistence-floating-terminal-trust.test.ts	Store	preserves editorAutoSaveDelayMs when set in persisted data
+src/main/persistence-floating-terminal-trust.test.ts	Store	preserves editorAutoSave when set to true in persisted data
+src/main/persistence-floating-terminal-trust.test.ts	Store	keeps legacy rightSidebarOpenByDefault readable from persisted data
+src/main/persistence-floating-terminal-trust.test.ts	Store	preserves terminalUseSeparateLightTheme when persisted as false
+src/main/persistence-floating-terminal-trust.test.ts	Store	round-trips selected terminal theme names across reload
+src/main/persistence-protected-secret-fail-closed.test.ts	protected persistence when safeStorage fails	honors explicit clears during an outage without later resurrecting ciphertext
+src/main/persistence-protected-secret-fail-closed.test.ts	protected persistence when safeStorage fails	persists clears after a healthy save preserves sealed ciphertext
+src/main/persistence-protected-secret-fail-closed.test.ts	protected persistence when safeStorage fails	evicts ciphertext when decrypted SSH recovery validation rejects the record
+src/main/persistence-protected-secret-fail-closed.test.ts	protected persistence when safeStorage fails	keeps loaded ciphertext sealed through same-instance recovery
+src/main/persistence-protected-secret-fail-closed.test.ts	protected persistence when safeStorage fails	keeps undecryptable ciphertext sealed from consumers and later saves
+src/main/persistence-protected-secret-fail-closed.test.ts	protected persistence when safeStorage fails	accepts validated legacy plaintext for an SSH owner-lease migration
+src/main/persistence-protected-secret-write-race.test.ts	protected-secret async write retention	does not retain ciphertext from a superseded async secret write
+src/main/protected-actions/protected-action-attempts.test.ts	ProtectedActionAttemptLedger	records a waiting attempt and marks it allowed when that tool call finishes
+src/main/protected-actions/protected-action-attempts.test.ts	ProtectedActionAttemptLedger	marks it denied when the turn ends without the tool running
+src/main/protected-actions/protected-action-attempts.test.ts	ProtectedActionAttemptLedger	keeps the newest 50 and clears on request
+src/main/protected-actions/protected-action-attempts.test.ts	ProtectedActionAttemptLedger	stores commands with secrets redacted, never the raw key
+src/main/protected-actions/protected-action-attempts.test.ts	ProtectedActionAttemptLedger	masks Stripe keys but keeps the last four characters
+src/main/protected-actions/protected-action-hook-script.test.ts	installed Claude hook script → protected actions	asks before %s
+src/main/protected-actions/protected-action-hook-script.test.ts	installed Claude hook script → protected actions	lets %s through with neutral JSON
+src/main/protected-actions/protected-action-hook-script.test.ts	installed Claude hook script → protected actions	stops asking once the rule is switched off
+src/main/protected-actions/protected-action-hook-script.test.ts	installed Claude hook script → protected actions	prints neutral JSON for non-tool events and when Kolux env is missing
+src/main/protected-actions/protected-action-relay-script.test.ts	remote Claude hook script → relay → protected actions	lets %s through
+src/main/protected-secret-persistence.test.ts	ProtectedSecretPersistence	surfaces an uninstalled secret store instead of degrading silently
+src/main/protected-secret-persistence.test.ts	ProtectedSecretPersistence	evicts dynamic slots across repeated SSH recovery lifecycles
+src/main/protected-secret-persistence.test.ts	ProtectedSecretPersistence	keeps unavailable ciphertext sealed across recovery until replacement or clear
+src/renderer/src/components/plan-review/plan-review-send.test.ts	approvePlan	writes the Allow byte (1) to the pty
+src/renderer/src/components/plan-review/plan-review-send.test.ts	requestPlanChanges	sends ESC first, then the formatted feedback once the pane leaves the plan prompt
+src/renderer/src/components/plan-review/plan-review-send.test.ts	requestPlanChanges	falls back to sending after the wait ceiling when status never changes
+src/renderer/src/components/plan-review/plan-review-send.test.ts	requestPlanChanges	sends immediately when the pane has already left the plan prompt
+src/renderer/src/components/plan-review/plan-review-send.test.ts	requestPlanChanges	cancel stops the pending send and the underlying chat handle before it fires
+src/renderer/src/components/plan-review/plan-review-send.test.ts	requestPlanChanges	cancel after the send already fired cancels the chat send handle
+src/renderer/src/components/plan-review/plan-review.test.ts	splitPlanSections	splits on blank lines and tracks 1-indexed line ranges
+src/renderer/src/components/plan-review/plan-review.test.ts	splitPlanSections	ignores blank lines inside a fenced code block
+src/renderer/src/components/plan-review/plan-review.test.ts	splitPlanSections	collapses consecutive and leading/trailing blank lines without empty sections
+src/renderer/src/components/plan-review/plan-review.test.ts	splitPlanSections	returns no sections for an empty or all-blank plan
+src/renderer/src/components/plan-review/plan-review.test.ts	formatPlanReviewFeedback	starts with the fixed header
+src/renderer/src/components/plan-review/plan-review.test.ts	formatPlanReviewFeedback	includes each comment as line label + excerpt + body
+src/renderer/src/components/plan-review/plan-review.test.ts	formatPlanReviewFeedback	appends the trimmed general note after comments
+src/renderer/src/components/plan-review/plan-review.test.ts	plan review draft cache	returns an empty draft when nothing was stored
+src/renderer/src/components/plan-review/plan-review.test.ts	plan review draft cache	round-trips a stored draft under the pane+plan-text key
+src/renderer/src/components/plan-review/plan-review.test.ts	plan review draft cache	keys strictly on pane + plan text, joined by NUL
+src/renderer/src/components/plan-review/plan-review.test.ts	plan review draft cache	clears a stored draft
+src/renderer/src/components/plan-review/plan-review.test.ts	plan review draft cache	evicts the oldest entry once the cache exceeds 128 scopes
+src/renderer/src/components/plan-review/PlanReviewButton.test.tsx	PlanReviewButton	renders nothing when the pane has no interactivePrompt
+src/renderer/src/components/plan-review/PlanReviewButton.test.tsx	PlanReviewButton	renders nothing for a non-plan approval (e.g. Bash)
+src/renderer/src/components/plan-review/PlanReviewButton.test.tsx	PlanReviewButton	renders the button and opens the sheet when approval.plan is set
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	PlanReviewSheet	renders the plan split into sections
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	PlanReviewSheet	shows the truncated notice only when plan.truncated is true
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	PlanReviewSheet	disables Request changes with no comments and no note, enables Approve
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	PlanReviewSheet	Approve sends the Allow byte and closes the sheet
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	PlanReviewSheet	adding a comment enables Request changes and persists to the draft cache
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	PlanReviewSheet	Request changes sends the formatted feedback and clears the draft
+src/renderer/src/components/plan-review/PlanReviewSheet.test.tsx	PlanReviewSheet	shows the no-longer-waiting notice and disables actions when the plan no longer matches
+src/renderer/src/components/settings/ProtectedActionsPane.test.tsx	ProtectedActionsPane	toggling a default rule writes disabledDefaultIds
+src/renderer/src/components/settings/ProtectedActionsPane.test.tsx	ProtectedActionsPane	adding a custom rule with an invalid regex shows the error and does not save
+src/renderer/src/components/settings/ProtectedActionsPane.test.tsx	ProtectedActionsPane	project scope toggle writes projectOverrides[repoId].disabledRuleIds
+src/renderer/src/components/settings/ProtectedActionsPane.test.tsx	ProtectedActionsPane	renders attempts with the three outcome labels
+src/renderer/src/lib/kolux-hook-trust.test.ts	hashKoluxHookScript	produces a stable hex digest via crypto.subtle
+src/renderer/src/lib/kolux-hook-trust.test.ts	hashKoluxHookScript	falls back to a deterministic hash when crypto.subtle is unavailable
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	kolux.yaml trust prompt evicted from the modal slot	resolves the pending decision as skip when another modal takes the slot
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	kolux.yaml trust prompt evicted from the modal slot	resolves the pending decision as skip when the slot is closed outright
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	kolux.yaml trust prompt evicted from the modal slot	keeps later trust prompts working after one is evicted
+src/renderer/src/lib/kolux-yaml-trust-prompt-slot-eviction.test.ts	kolux.yaml trust prompt evicted from the modal slot	leaves the answered decision alone when the dialog closes the slot itself
+src/renderer/src/lib/worktree-creation-flow-agent-trust-preflight.test.ts	worktree creation flow agent trust preflight	forwards the repo SSH connection id when pre-marking agent trust
+src/shared/protected-actions-bypass-regressions.test.ts	S1 PowerShell value flags must not be parsed as the inner command	-File value is not the command
+src/shared/protected-actions-bypass-regressions.test.ts	S3 cmd switch forms	unwraps Git Bash doubled-slash cmd //c
+src/shared/protected-actions-bypass-regressions.test.ts	S3 cmd switch forms	recognises switches joined like /s/q
+src/shared/protected-actions-bypass-regressions.test.ts	S3 cmd switch forms	recognises /q/s joined and del /s/q
+src/shared/protected-actions-bypass-regressions.test.ts	S2 wrapper option values are not the command	timeout with a duration suffix
+src/shared/protected-actions-bypass-regressions.test.ts	S4 bare cd / popd	bare cd goes home, so a following relative delete is outside the workspace
+src/shared/protected-actions-bypass-regressions.test.ts	S4 bare cd / popd	popd returns to an unknown directory
+src/shared/protected-actions-bypass-regressions.test.ts	fixes do not over-match	keeps disjoint-atom regexes valid and matching
+src/shared/protected-actions-bypass-regressions.test.ts	fixes do not over-match	accepts ordinary regexes with up to two adjacent repeats
+src/shared/protected-actions-hook-decision.test.ts	evaluateClaudeProtectedAction	asks for a protected Bash command and explains why
+src/shared/protected-actions-hook-decision.test.ts	evaluateClaudeProtectedAction	covers the PowerShell tool and raw-JSON transport bodies
+src/shared/protected-actions-hook-decision.test.ts	evaluateClaudeProtectedAction	uses the worktree path as the workspace, not just the current directory
+src/shared/protected-actions-hook-decision.test.ts	evaluateClaudeProtectedAction	fails open on a hook body it cannot parse
+src/shared/protected-actions-hook-decision.test.ts	evaluateClaudeProtectedAction	passes the project id so per-project rules apply
+src/shared/protected-actions-hook-decision.test.ts	rules file for SSH/WSL relays	carries the global list and per-project lists, and selects by project
+src/shared/protected-actions-hook-decision.test.ts	rules file for SSH/WSL relays	yields no rules for a missing or foreign-version file
+src/shared/protected-actions-hook-decision.test.ts	rules file for SSH/WSL relays	honours the master switch
+src/shared/protected-actions-match.test.ts	matchProtectedCommand defaults	asks for %s
+src/shared/protected-actions-match.test.ts	matchProtectedCommand defaults	lets %s run
+src/shared/protected-actions-match.test.ts	matchProtectedCommand defaults	names the segment that matched in a chain
+src/shared/protected-actions-match.test.ts	matchProtectedCommand defaults	asks for a relative recursive delete when neither cwd nor workspace is known
+src/shared/protected-actions-match.test.ts	matchProtectedCommand defaults	treats the starting directory as the workspace when the workspace is unknown
+src/shared/protected-actions-match.test.ts	matchProtectedCommand defaults	decodes powershell -EncodedCommand
+src/shared/protected-actions-match.test.ts	rule settings	drops a switched-off default rule
+src/shared/protected-actions-match.test.ts	rule settings	applies a project override on top of the global list
+src/shared/protected-actions-match.test.ts	rule settings	matches custom prefix, contains and regex rules
+src/shared/protected-actions-match.test.ts	rule settings	rejects an empty pattern and an invalid regex
+src/shared/protected-actions-match.test.ts	rule settings	still rejects overlapping bracket classes repeated back to back
+src/shared/protected-actions-match.test.ts	rule settings	never runs a backtracking-prone regex that bypassed validation

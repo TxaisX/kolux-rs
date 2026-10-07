@@ -1,0 +1,24 @@
+﻿kolux emulator
+
+Usage: kolux emulator <command> [options]
+
+Commands:
+  list               List available/running emulators (Kolux-managed + raw serve-sim)
+  devices            List all emulator devices/AVDs across iOS and Android
+  attach             Attach/start helper for a device and make it active for the worktree
+  tap                Tap at normalized 0..1 coords (preferred for single taps)
+  type               Type text (US ASCII only)
+  gesture            Send a multi-point gesture sequence
+  button             Hardware button (home, side_button, etc.)
+  rotate             Rotate device
+  exec               Raw passthrough (e.g. kolux emulator exec --command "tap 0.5 0.7" or "ca-debug blended on")
+  kill               Stop helper for device
+  shutdown           Stop helper and shut down the simulator device
+  install            Install an APK onto the target Android device
+  launch             Launch an Android app by package (and optional activity)
+  permissions        Grant/revoke an Android runtime permission, or reset all runtime grants
+  ax                 Dump the accessibility tree (Android uiautomator; iOS serve-sim AX, frames 0..1)
+  logcat             Capture a one-shot logcat dump from the Android device
+
+Run `kolux emulator <command> --help` for command-specific usage.
+

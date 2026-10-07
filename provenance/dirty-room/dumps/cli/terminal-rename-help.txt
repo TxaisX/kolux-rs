@@ -1,0 +1,21 @@
+﻿kolux terminal rename
+
+Usage: kolux terminal rename [--terminal <handle>] [--title <text>] [--json]
+
+Set or clear the title of a terminal tab
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --terminal <handle>  Runtime-issued terminal handle
+  --title <text>         Custom title for the terminal tab (omit to reset)
+
+Notes:
+  Omit --title or pass an empty string to reset to the auto-generated title.
+
+Examples:
+  $ kolux terminal rename --terminal term_abc123 --title "RUNNER"
+  $ kolux terminal rename --terminal term_abc123 --json
+

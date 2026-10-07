@@ -1,0 +1,129 @@
+source,item,verdict,card_id,note
+sample,main/plugins/plugin-panel-sessions.test.ts :: binds an opaque token to its transport owner and panel revision,DROP,D-15-039,plugin panel sessions
+sample,shared/plugins/plugin-consent-request.test.ts :: accepts an explicit opaque fingerprint and rejects contract drift,DROP,D-15-037,plugin consent
+sample,main/plugins/plugin-panel-controller.test.ts :: invalidates an open dev-panel session when its manifest revision changes,DROP,D-15-039,plugin dev panel
+sample,main/skills/skill-scan-coalescer.test.ts :: bypasses cached and in-flight results when refreshing,MAPPED,D-15-021,rule added: Refresh bypasses cache
+sample,"main/starter-kits/starter-kit-sample-materialization.test.ts :: joins the home folder, Kolux samples, and the kit id",MAPPED,D-15-005,
+sample,main/skills/skill-update-convergence.test.ts :: drops a skill whose lock records a revision the disk does not have,MAPPED,D-15-026,rule added: offer only updates the updater can make
+sample,main/skills/skill-delete/recovery.test.ts :: clears the journal when the recorded move was never performed,MAPPED,D-15-023,
+sample,main/skills/skill-provider-runtime-roots.test.ts :: ignores unsafe or missing WSL GROK_HOME values,MAPPED,D-15-021,rule added: unsafe or missing home override ignored
+sample,main/plugins/plugin-service-reconciliation.test.ts :: denies every authority boundary immediately when the feature flag turns off,DROP,D-15-037,plugin flag off
+sample,main/skills/skill-provider-destinations.test.ts :: gives an agent that reads the canonical root no placement of its own,MAPPED,D-15-028,rule added: AI reading the shared folder gets no own copy
+sample,main/starter-kits/starter-kit-results-path-guard.test.ts :: rejects a Windows-style absolute path regardless of the host running the check,MAPPED,D-15-013,
+sample,main/starter-kits/starter-kits-ipc.test.ts :: rejects a remote (SSH-registered) repo path even though it is a registered repo id,MAPPED,D-15-015,
+sample,main/skills/skill-install-lock.test.ts :: reclaims a lock after its release deletion fails,MAPPED,D-15-022,rule added: stale lock reclaimed
+sample,"renderer/src/components/starter-kits/starter-kit-sample-data.test.ts :: copies the sample data, registers it as a project, and returns its workspace",MAPPED,D-15-005,
+sample,main/skills/skill-windows-rename-contention.integration.test.ts :: retries a transient exclusive file lock,MAPPED,D-15-023,
+sample,shared/plugins/plugin-marketplace.test.ts :: marks listings with a deferred contribution category as unsupported,DROP,D-15-038,plugin marketplace
+sample,renderer/src/components/skills/skill-freshness-grouping.test.ts :: keeps a plugin-managed copy of a same-named skill out of the list,MAPPED,D-15-026,rule added: grouping (plugin-owned copy raises no row)
+sample,renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx :: lists a traversal bound without headlining it,MAPPED,D-15-026,"partial plugin-cache coverage stated, not headlined"
+sample,main/starter-kits/starter-kit-results-markdown-sanitize.test.ts :: keeps an ordinary http(s) link,MAPPED,D-15-013,
+sample,shared/plugins/plugin-consent-fingerprint.test.ts :: is stable across capability order and duplicate declarations,DROP,D-15-037,plugin consent fingerprint
+sample,main/artifacts-library/artifact-capture.test.ts :: stores a local artifact from a sample publish signal,MAPPED,D-15-035,
+sample,renderer/src/components/starter-kits/starter-kit-launch.test.ts :: still launches when the pre-relaunch results check fails,MAPPED,D-15-006,
+sample,main/skills/skill-update-run.test.ts :: keeps the spawn error when the failed child also emits close,MAPPED,D-15-026,rule added: start error shown
+sample,main/skills/skill-root-file-walk.test.ts :: rejects rather than returning the entries it had already collected,MAPPED,D-15-021,rule added: partial scan is an error
+sample,renderer/src/components/starter-kits/starter-kit-launch.test.ts :: skips the existing-run check when force is true,MAPPED,D-15-006,Start anyway path
+sample,shared/skill-bundle-install-contract.test.ts :: rejects duplicate selections and decisions for unselected skills,MAPPED,D-15-034,H card; bundle install back end
+sample,"main/artifacts-library/artifact-library-store.test.ts :: copies the page and its relative assets, but not files outside its folder",MAPPED,D-15-035,
+sample,main/plugins/plugin-storage-store.test.ts :: enforces the value cap in UTF-8 bytes rather than JavaScript code units,DROP,D-15-041,plugin storage
+sample,main/plugins/plugin-content-safety.test.ts :: requires declared files to exist and be regular files,DROP,D-15-041,plugin content safety
+sample,"renderer/src/components/skills/skill-freshness-grouping.test.ts :: lists an edited canonical copy, which is what an update would overwrite",MAPPED,D-15-026,rule added: edited copy listed as cannot update
+sample,"main/skills/skill-package-identity.test.ts :: rejects hardlinks, FIFOs, and Unix sockets",MAPPED,D-15-026,rule added: links and special files never match
+sample,shared/plugins/plugin-content-pack-contributions.test.ts :: still requires a worker entry for non-alias commands,DROP,D-15-040,plugin content packs
+sample,renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx :: calls onBlurInput when a field loses focus,MAPPED,D-15-004,
+sample,main/starter-kits/starter-kit-run-history-store.test.ts :: caps each list at the last 50 entries,MAPPED,D-15-014,
+sample,main/plugins/plugin-dev-watcher.test.ts :: contains unsubscribe rejections so dispose cannot fail the host process,DROP,D-15-040,plugin dev watch mode
+sample,shared/plugins/plugin-vm-recipe-artifact.test.ts :: parses bounded lifecycle commands for verbatim consent,DROP,D-15-040,plugin VM recipe
+sample,main/ipc/skills.test.ts :: uses the selected project WSL distro for skill discovery,MAPPED,D-15-021,rule added: WSL scan uses the project distro; WSL straddles 12/18
+sample,renderer/src/components/skills/SkillFreshnessNudge.test.tsx :: keeps a project copy out of the dismissal key it persists,MAPPED,D-15-024,
+sample,main/skills/skill-root-file-walk.test.ts :: does not stat directory links beyond the depth bound but still follows in-bound links,MAPPED,D-15-021,
+sample,shared/plugins/plugin-consent-fingerprint.test.ts :: requires re-consent when instructional content bytes change,DROP,D-15-037,plugin consent
+sample,main/skills/discovery.test.ts :: scans each provider home skill root that npx skills --global writes to,MAPPED,D-15-021,
+sample,main/starter-kits/starter-kit-results-collection.test.ts :: rejects an absolute role write path,MAPPED,D-15-013,
+sample,shared/skill-delete-contract.test.ts :: refuses an empty or oversized batch,MAPPED,D-15-022,rule added: 1 to 512 skills per request
+sample,renderer/src/components/skills/SkillFreshnessNudge.test.tsx :: does not repeat a nudge for an already dismissed exact tuple,MAPPED,D-15-024,
+sample,main/ipc/plugin-marketplaces.test.ts :: refreshes discovery only after a successful install,DROP,D-15-038,plugin marketplace
+sample,renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx :: attributes failures to the names the re-scan says are still outdated,MAPPED,D-15-026,
+sample,renderer/src/components/starter-kits/kit-role-pane-actions.test.ts :: launches one seat on the given agent and persists the new tab + agent onto the record,MAPPED,D-15-011,
+sample,"renderer/src/components/skills/skill-delete-copy.test.ts :: summarizes folders, links, and the roots they sit in",MAPPED,D-15-022,
+sample,renderer/src/components/starter-kits/starter-kit-input-memory.test.ts :: ignores a remembered value for an input the kit no longer declares,MAPPED,D-15-005,
+sample,renderer/src/components/starter-kits/kit-role-pane-actions.test.ts :: returns false without launching when settings are unavailable,MAPPED,D-15-011,rule added: no launch without settings
+sample,renderer/src/components/artifacts-library/ArtifactViewer.test.tsx :: renders the stored copy in a sandboxed document-preview guest,MAPPED,D-15-036,
+sample,main/starter-kits/starter-kits-ipc.test.ts :: returns [] when no run has been recorded,MAPPED,D-15-014,
+sample,main/plugins/plugin-host-process.test.ts :: counts delivered events as in flight until their acknowledgement,DROP,D-15-039,plugin worker host
+sample,main/skills/skill-discovery-wsl.test.ts :: rejects malformed host responses instead of reporting an empty scan,MAPPED,D-15-021,rule added: malformed WSL answer is an error
+sample,shared/plugins/plugin-language-pack-artifact.test.ts :: still refuses install failure copy that reports a trust event,DROP,D-15-040,plugin language pack
+sample,shared/plugins/plugin-language-pack-artifact.test.ts :: still lets language packs translate non-plugin settings copy,DROP,D-15-040,plugin language pack
+sample,main/ipc/plugins.test.ts :: requires a non-empty git ref,DROP,D-15-037,plugin git install
+sample,main/skills/skill-provider-runtime-roots.test.ts :: keeps a pre-LOCALAPPDATA Windows dotfolder install discoverable,MAPPED,D-15-021,rule added: Hermes legacy Windows folder
+sample,renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx :: shows the up-to-date state once every installation is current,MAPPED,D-15-026,rule added: up-to-date state
+sample,main/starter-kits/starter-kit-results-markdown-sanitize.test.ts :: keeps a relative link (used for linking to sibling result files),MAPPED,D-15-013,
+sample,shared/plugins/plugin-panel-message-budget.test.ts :: handles cycles and stops walking once the cap is exceeded,DROP,D-15-039,plugin panel message budget
+sample,shared/starter-kits/starter-kit-catalog.test.ts :: every prompt placeholder resolves to a declared kit input,MAPPED,D-15-001,
+sample,renderer/src/components/skills/SkillsPage.test.tsx :: contains long cross-platform skill paths while preserving the full path,MAPPED,D-15-017,
+sample,main/skills/discovery.test.ts :: scans a home-equal workspace path as both a home and a repo root,MAPPED,D-15-021,rule added: home-equal workspace scanned twice
+sample,main/artifacts-library/artifact-capture.test.ts :: reads the publish from the transcript once the pane moves past the Artifact tool,MAPPED,D-15-035,
+sample,main/skills/skill-update-outcome.test.ts :: treats unrecognized content whose tree sha matches the lock as landed,MAPPED,D-15-026,rule added: content matching the updater record counts as landed
+sample,renderer/src/components/starter-kits/use-starter-kit-available-agents.test.tsx :: returns an empty list when nothing is detected,MAPPED,D-15-003,
+sample,main/skills/skill-update-registration.test.ts :: reads only updateable entries from the external updater lock,MAPPED,D-15-026,
+sample,main/skills/skill-plugin-cache-scan.test.ts :: completes a real-shaped Codex cache without reporting coverage issues,MAPPED,D-15-021,
+sample,"renderer/src/components/starter-kits/use-kit-run-status.test.tsx :: checks for a record on mount and never installs a ""no record yet"" interval",MAPPED,D-15-009,rule added: no polling without a run
+sample,renderer/src/components/skills/skill-delete-selection.test.ts :: drops a selection whose row no longer exists after a rescan,MAPPED,D-15-022,
+sample,main/skills/skill-update-convergence.test.ts :: keeps a skill whose lock names no revision we know,MAPPED,D-15-026,unknown revision stays eligible
+sample,main/artifacts-library/artifact-library-store.test.ts :: vendors allowlisted CDN scripts so the offline viewer can run them,MAPPED,D-15-035,
+sample,main/plugins/plugin-atomic-file-write.test.ts :: rethrows a non-retryable error,DROP,D-15-041,plugin file writes
+sample,main/plugins/plugin-marketplace-service.test.ts :: keeps and labels the last valid snapshot when a refresh is offline,DROP,D-15-038,plugin marketplace snapshot
+sample,main/plugins/plugin-install.test.ts :: verifies copied content and writes a rollback-compatible consent field,DROP,D-15-037,plugin install
+sample,renderer/src/components/starter-kits/use-kit-role-runtime-peeks.test.tsx :: peeks each resolved role pane and reports its status/satisfied/blockedReason,MAPPED,D-15-010,
+sample,"renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx :: flags a value as an Excel file synchronously, without waiting on the existence check",MAPPED,D-15-004,
+sample,main/artifacts-library/artifact-html-inspection.test.ts :: returns null when there is no usable title,MAPPED,D-15-035,rule added: file name when no title
+sample,renderer/src/components/starter-kits/KitRoleRow.test.tsx :: is not clickable when the pane cannot be focused,MAPPED,D-15-010,
+sample,renderer/src/components/skills/SkillFreshnessNudge.test.tsx :: does not nudge for a poisoned name with no eligible update,MAPPED,D-15-024,rule added: nudge only with an eligible update
+sample,shared/starter-kits/starter-kit-catalog.test.ts :: declares a real lucide-react icon,MAPPED,D-15-001,each kit has its own icon
+sample,main/skills/skill-plugin-cache-scan.test.ts :: discovers nested skill packages recursively within declared roots,MAPPED,D-15-021,
+sample,main/plugins/plugin-host-methods.test.ts :: reports who holds the session instead of an accepted-looking result,DROP,D-15-039,plugin host methods
+sample,main/plugins/plugin-kill-list-content-revocation.test.ts :: never publishes killed content after a restart discovers the plugin,DROP,D-15-041,plugin kill list
+sample,main/artifacts-library/artifact-capture.test.ts :: flags UNC and double-slash spellings only,MAPPED,D-15-035,
+sample,renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx :: does not let the status-bar linger retire the result being read here,MAPPED,D-15-027,rule added: success linger and failure persistence
+sample,main/starter-kits/starter-kit-run-record-store.test.ts :: also appends a history entry to the folder and to the global recent list,MAPPED,D-15-014,
+sample,main/plugins/plugin-manifest-file.test.ts :: reads manifest text through the legacy filename fallback,DROP,D-15-037,legacy upstream-branded manifest name
+sample,"main/artifacts-library/artifact-capture.test.ts :: ignores replays, restored rows, and assistant prose",MAPPED,D-15-035,
+sample,main/artifacts-library/artifact-library-store.test.ts :: keeps the original script tag when the download fails,MAPPED,D-15-035,
+sample,main/skills/skill-wsl-install-filesystem.test.ts :: applies and verifies manifest modes through bounded guest argv batches,NOT-USER-FACING,,internal file-mode batching for WSL delete and restore (behaviour in D-15-022/023)
+sample,renderer/src/lib/plugin-command-keybindings.test.ts :: builds a stable dynamic action definition,DROP,D-15-039,plugin keybindings
+sample,renderer/src/components/starter-kits/starter-kit-run-history-actions.test.ts :: activates the worktree whose path matches the folder,MAPPED,D-15-014,
+sample,"main/starter-kits/starter-kit-file-picker.test.ts :: falls back to an ""All files"" filter when no accept extensions are given",MAPPED,D-15-004,
+sample,renderer/src/components/skills/skill-delete-selection.test.ts :: drops a row that became ineligible between scans,MAPPED,D-15-022,
+sample,renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx :: does not call launchStarterKitWithRunGuard while a required input is missing,MAPPED,D-15-004,
+sample,main/plugins/plugin-dev-watcher.test.ts :: does not spin refreshes when a missing path cannot be subscribed,DROP,D-15-040,plugin dev watch mode
+sample,renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx :: opens the freshness review dialog from Details,MAPPED,D-15-025,
+sample,renderer/src/components/starter-kits/starter-kit-sample-inputs.test.ts :: prefills the declared sampleValue for text inputs,MAPPED,D-15-005,
+registry:cli-manifest.tsv,skills list,MAPPED,D-15-030,also D-20-043
+registry:cli-manifest.tsv,skills get (alias show),MAPPED,D-15-030,also D-20-043
+registry:cli-manifest.tsv,skills install,MAPPED,D-15-031,also D-20-044
+registry:cli-manifest.tsv,skills update,MAPPED,D-15-031,also D-20-044
+registry:cli-manifest.tsv,orchestration coordinator-start,OTHER-AREA:08,,"keyword hit only in summary (load the orchestration skill); retired command, D-08-046 / D-20-048"
+registry:cli-manifest.tsv,orchestration coordinator-stop,OTHER-AREA:08,,"keyword hit only in summary; retired command, D-08-046 / D-20-048"
+registry:view-ids.tsv,top-level-view skills,MAPPED,D-15-017,entry point D-15-018
+registry:view-ids.tsv,top-level-view artifacts,MAPPED,D-15-036,duplicate of D-05-012
+registry:view-ids.tsv,right-sidebar-panel plugin:<string>,DROP,D-15-039,plugin panels; also D-05-058
+registry:view-ids.tsv,status-bar-segment SkillUpdateStatusSegment,MAPPED,D-15-027,also D-05-100
+registry:settings-sections.tsv,skills,DROP,D-15-019,"table 1b: page stays, section cut"
+registry:settings-sections.tsv,plugins,DROP,D-15-037,table 1b plugins cut; also D-17-052
+registry:settings-sections.tsv,linear,OTHER-AREA:11,,keyword hit (agent skill); Linear cut; its skill is in D-15-032
+registry:settings-sections.tsv,tasks,OTHER-AREA:11,,keyword hit (Linear skill install); tasks section cut
+registry:settings-keys.tsv,showSkillsButton (default false),MAPPED,D-15-018,keyword match
+registry:settings-keys.tsv,pluginSystemEnabled (default false),DROP,D-15-037,keyword match; also D-21-032
+registry:settings-keys.tsv,disabledPlugins,DROP,D-15-037,keyword match
+registry:settings-keys.tsv,pluginConsents,DROP,D-15-037,keyword match
+registry:settings-keys.tsv,devPluginPaths,DROP,D-15-040,keyword match; also D-21-032
+registry:e2e/spec-names.txt,plugin-demo.spec.ts,DROP,D-15-039,
+registry:e2e/spec-names.txt,plugin-marketplace-content.spec.ts,DROP,D-15-038,
+registry:e2e/spec-names.txt,plugin-startup-budget.spec.ts,DROP,D-15-040,
+registry:e2e/spec-names.txt,plugin-panel-containment.spec.ts (filed under 03),DROP,D-15-039,
+registry:e2e/spec-names.txt,ssh-codex-display-artifacts-repro.spec.ts (filed under 18),OTHER-AREA:18,,"rendering artifacts over SSH, not the Artifacts library"
+handoff,line 10: 2026-10-06 audit fix wave ... Artifacts library inside Kolux,MAPPED,D-15-036,capture in D-15-035; state live; also D-05-012
+handoff,line 15: 2026-10-05 originality cleanup ... cloud-only features removed,OTHER-AREA:21,,skill sharing removal is D-21-008; leftover back end is D-15-034 (H)
+handoff,line 9: 2026-10-06 close-out ... WSL paths local again,OTHER-AREA:12,,keeps WSL skill scan and delete rules in D-15-021/022 alive
+triage,agent feature skill commands (src/shared/agent-feature-install-commands.test.ts),MAPPED,D-15-028,"rule added: copied command interactive, unattended run needs targets"

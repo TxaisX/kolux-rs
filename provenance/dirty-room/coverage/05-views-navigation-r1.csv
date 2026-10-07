@@ -1,0 +1,293 @@
+source,item,verdict,card_id,note
+sample,src/renderer/src/app-shell/app-command-handlers-workspace-delete.test.ts :: does not claim the chord without a hovered workspace,MAPPED,D-05-048,
+sample,src/renderer/src/lib/ime-composition-keyboard-event.test.ts :: is true while the IME is composing,MAPPED,D-05-109,
+sample,src/renderer/src/components/status-bar/codex-restart-status-summary.test.ts :: stops offering sessions whose restart was already requested,MAPPED,D-05-101,
+sample,src/renderer/src/components/right-sidebar/checks-panel-empty-state.test.ts :: needs_push with confirmed readiness offers Push & Create,MAPPED,D-05-074,rule added
+sample,src/renderer/src/components/right-sidebar/handoff/handoff-autosave.test.ts :: flush on an idle buffer is a no-op,MAPPED,D-05-095,
+sample,src/main/ai-vault/session-scanner-parse-cache.test.ts :: incrementally parses appended lines and matches a cold parse exactly,MAPPED,D-05-092,
+sample,src/main/ai-vault/session-scanner-values.test.ts :: prefers the sessions-root overrides verbatim over the agent dir,MAPPED,D-05-091,rule added
+sample,src/main/ai-vault/session-delete.test.ts :: rejects a directory instead of trashing it,MAPPED,D-05-089,
+sample,src/renderer/src/components/right-sidebar/ai-vault-scan-issue-state.test.ts :: surfaces scope truncation without counting it as a skipped transcript,MAPPED,D-05-090,
+sample,src/renderer/src/store/slices/editor-markdown-view-state.test.ts :: drops markdown view mode for a replaced preview tab,MAPPED,D-05-113,
+sample,src/renderer/src/components/right-sidebar/right-sidebar-titlebar-drag-regions.test.ts :: keeps a shared no-drag class for interactive header controls,MAPPED,D-05-056,
+sample,src/renderer/src/components/right-sidebar/plugin-panel-bridge-host.test.ts :: answers a malformed bridge request with invalid_request instead of relaying it,DROP,D-05-058,plugin panels cut
+sample,src/renderer/src/components/status-bar/resource-session-bindings.test.ts :: ignores stale layout-only PTYs after their tab is gone,MAPPED,D-05-098,rule added
+sample,src/renderer/src/app-shell/AppWorkspaceShell.top-bar.test.tsx :: search hint opens the existing worktree palette; the bell opens the Inbox,MAPPED,D-05-003,
+sample,src/renderer/src/components/right-sidebar/use-installed-plugin-route-reconciliation.test.tsx :: preserves an installed route while the global plugin feature is disabled,DROP,D-05-058,plugin panels cut
+sample,src/renderer/src/components/right-sidebar/SourceControl.preview-open.test.tsx :: keeps the commit-area Stage All primary for changed submodule gitlinks,MAPPED,D-05-064,rule added
+sample,src/renderer/src/components/right-sidebar/ai-vault-original-pane.test.ts :: does not prompt-match when multiple panes are plausible,MAPPED,D-05-088,
+sample,src/renderer/src/components/right-sidebar/source-control-primary-action.create-pr-intent.test.ts :: routes patch-equivalent divergence through Create PR intent while keeping Force Push in the commit area,MAPPED,D-05-065,rule added
+sample,src/renderer/src/components/right-sidebar/runSourceControlAgentActionStart.test.ts :: accepts an onStart launch and never aborts it,MAPPED,D-05-069,
+sample,src/renderer/src/components/right-sidebar/SourceControl.compare-summary.test.ts :: keeps non-zero summary copy compact,MAPPED,D-05-068,
+sample,src/renderer/src/components/agents-view/agents-view-session-body.test.ts :: lets live identity outrank launch metadata,MAPPED,D-05-019,rule added
+sample,src/renderer/src/components/floor/floor-range.test.ts :: clamps timestamps outside the range instead of returning out-of-bounds percentages,MAPPED,D-05-013,
+sample,src/renderer/src/components/cmd-j/palette-results.test.ts :: keeps a provisioned runtime copy under one project key alongside a same-host checkout,DROP,D-05-045,"provisioned remote copy, area 18"
+sample,src/renderer/src/components/right-sidebar/file-explorer-operation-generation.test.ts :: fails closed when nested SSH ownership has no authoritative generation,DROP,D-12-051,"SSH file ownership, area 18"
+sample,src/renderer/src/components/right-sidebar/git-status-push-signal-refresh.test.ts :: subscribes to nothing while disabled,NOT-USER-FACING,,refresh wiring while disabled
+sample,src/renderer/src/components/right-sidebar/source-control-discard-confirmation.test.ts :: uses delete copy for untracked files,MAPPED,D-05-067,
+sample,tests/e2e/pr-comments-sidebar-cards.spec.ts :: keeps open card content aligned while the row menu is open,MAPPED,D-05-075,
+sample,src/renderer/src/hooks/useIpcEvents-agent-dashboard-shortcut.test.ts :: stays inert while the Agent Dashboard experiment is off,MAPPED,D-05-029,
+sample,src/main/ipc/notifications-permission-onboarding.test.ts :: falls back to delivery probes when the readout is unavailable,MAPPED,D-05-111,
+sample,src/renderer/src/components/right-sidebar/parent-pr-checks-rows.test.ts :: does not let older linked PR cache override a newer hosted-review miss,MAPPED,D-05-076,
+sample,src/renderer/src/hooks/useSidebarResize.test.ts :: renders closed sidebars at zero width and open sidebars with extra width,MAPPED,D-05-050,
+sample,"src/renderer/src/components/right-sidebar/checks-panel-content.test.tsx :: reports a completed check with no conclusion as unresolved, not pending",MAPPED,D-05-073,rule added
+sample,src/renderer/src/components/right-sidebar/source-control-header-toolbar-identity.test.tsx :: renders detached HEAD with Create PR when compare base is present,MAPPED,D-05-065,rule added
+sample,src/renderer/src/app-shell/AppWorkspaceShell.top-bar.test.tsx :: spans the window: the bar is a sibling above the sidebar row and carries the left controls,MAPPED,D-05-003,
+sample,src/renderer/src/components/right-sidebar/source-control-dropdown-items.test.ts :: does not offer Publish Branch when HEAD is detached,MAPPED,D-05-065,rule added
+sample,src/renderer/src/app-shell/window-visibility-actions-selector.test.ts :: does not rerender a subscriber for unrelated store writes,MAPPED,D-05-115,render efficiency
+sample,src/renderer/src/components/status-bar/usage-roster-formatting.test.ts :: capitalizes a single-word plan,MAPPED,D-05-102,
+sample,src/renderer/src/components/right-sidebar/useFileExplorerRowDrag.test.ts :: returns empty array for an empty string,MAPPED,D-05-060,
+sample,tests/e2e/terminal-ai-vault-typing-latency.spec.ts :: alternates control typing and forced Vault refresh typing,MAPPED,D-05-083,
+sample,src/shared/clipboard-text.test.ts :: rejects oversized async clipboard reads and writes with metadata-only errors,MAPPED,D-05-110,
+sample,src/renderer/src/components/right-sidebar/active-checks-status.test.ts :: hides the matching suppressed GitHub PR status,MAPPED,D-05-073,rule added
+sample,src/renderer/src/components/right-sidebar/active-checks-status.test.ts :: uses GitLab MR pipeline status when the active branch has no GitHub PR cache entry,DROP,D-05-077,GitLab cut
+sample,src/renderer/src/components/cmd-j/palette-live-status.test.tsx :: goes inert while the palette is closed,MAPPED,D-05-040,
+sample,src/renderer/src/components/dashboard/useLiveDashboardSnapshot.test.ts :: carries repo icons through to the drawer,MAPPED,D-05-029,rule added
+sample,src/main/ai-vault/session-scanner-kimi-index-cache.test.ts :: deduplicates concurrent reads of the same file identity,MAPPED,D-05-092,
+sample,src/renderer/src/components/right-sidebar/file-explorer-row-projection.test.ts :: finds the first child row only when the folder is expanded,MAPPED,D-05-059,
+sample,src/renderer/src/components/right-sidebar/use-source-control-branch-compare.test.tsx :: chains another trailing run when a call lands during the trailing run,NOT-USER-FACING,,refresh queue internals
+sample,src/main/ai-vault/session-scanner-codex-fast-path.test.ts :: matches the one-shot parser without JSON-parsing proven irrelevant large records,MAPPED,D-05-091,
+sample,src/renderer/src/components/right-sidebar/checks-entry-refresh.test.ts :: skips when cached null PR result is within the grace window,MAPPED,D-05-073,rule added
+sample,src/main/ports/advertised-url-watcher.test.ts :: reassembles a URL split across two chunks,MAPPED,D-05-078,
+sample,src/main/ai-vault/session-parse-cache-persistence.test.ts :: sweeps orphaned temp files from a prior crashed save on load,MAPPED,D-05-092,
+sample,src/renderer/src/components/right-sidebar/fork-push-target-label.test.ts :: handles a URL without a .git suffix,MAPPED,D-05-066,rule added; straddles D-01-094
+sample,src/renderer/src/components/dashboard/build-dashboard-snapshot-folder-workspace.test.ts :: keeps done structured sessions visible when their tab exists only in unified tabs,MAPPED,D-05-029,
+sample,tests/e2e/sidebar-agent-row-identity.spec.ts :: sidebar keeps a Cursor pane visible and a Gemini pane out of Claude Code hands,MAPPED,D-05-051,
+sample,src/renderer/src/components/right-sidebar/use-plugin-panel-theme-revision.test.tsx :: bumps when the root theme class changes,DROP,D-05-058,plugin panels cut
+sample,src/renderer/src/lib/keyboard-layout/option-as-alt-probe.test.ts :: survives a rejected getLayoutMap without clobbering last-known value,MAPPED,D-05-109,
+sample,src/renderer/src/components/dashboard/DashboardAgentRow.test.tsx :: scopes the timestamp and dismiss hover swap to the row-owned group,MAPPED,D-05-029,
+sample,src/renderer/src/components/right-sidebar/right-sidebar-effective-tab.test.ts :: treats empty visible items as an invariant failure,NOT-USER-FACING,,internal invariant check
+sample,src/renderer/src/components/right-sidebar/useFileExplorerVisibleRowProjection.test.ts :: queries git ignored paths only for dotfile-visible rows,MAPPED,D-05-059,
+sample,src/renderer/src/components/board/board-card-status.test.ts :: Working shows the age and the current step in plain words,MAPPED,D-05-023,rule added
+sample,src/renderer/src/components/right-sidebar/useFileExplorerWatch.test.ts :: rejects sibling UNC shares whose path merely shares a prefix,MAPPED,D-05-059,rule added
+sample,src/renderer/src/components/right-sidebar/useFileExplorerWatch.test.ts :: uses the explicit runtime owner when another host is focused,DROP,D-12-051,"remote host ownership, area 18"
+sample,src/renderer/src/components/status-bar/UsageRosterPanel.test.tsx :: uses the same compact selection for Claude subscription windows,MAPPED,D-05-102,
+sample,src/renderer/src/components/right-sidebar/ai-vault-original-pane.test.ts :: finds a preserved sleeping pane from a matching session record,MAPPED,D-05-088,
+sample,"src/renderer/src/components/status-bar/workspace-space-manager-source-boundary.test.ts :: preserves normal, force, and open-workspace action routing",MAPPED,D-05-014,
+sample,src/renderer/src/components/cmd-j/palette-host-badge.test.ts :: maps repos with no executionHostId/connectionId to local,DROP,D-05-045,"host badges, area 18"
+sample,src/renderer/src/lib/cmd-j-section-leadership.test.ts :: prefers recently active item when match rank ties,MAPPED,D-05-038,
+sample,src/renderer/src/components/right-sidebar/ai-vault-session-projects.test.ts :: attributes non-ASCII cwds across unicode normalization forms,MAPPED,D-05-081,rule added
+sample,src/renderer/src/components/right-sidebar/ai-vault-session-filters.test.ts :: adds same-repo sibling worktrees on top of the workspace paths,MAPPED,D-05-080,rule added
+sample,src/renderer/src/components/agents-view/agents-view-session-body.test.ts :: falls back to the terminal for plain terminals and unsupported agents,MAPPED,D-05-019,
+sample,src/renderer/src/store/slices/cmd-j-create-actions.test.ts :: keeps desktop terminal creation local when a local worktree overrides a runtime repo owner,DROP,D-05-045,"remote repo owner, area 18"
+sample,src/renderer/src/components/right-sidebar/ai-vault-session-filters.test.ts :: returns no sessions for oversized pasted queries before reading session fields,MAPPED,D-05-081,rule added
+sample,src/main/ai-vault/session-scanner-index-cache-wsl-stall.test.ts :: still degrades a missing optional JSON file to null,MAPPED,D-05-092,
+sample,src/renderer/src/components/right-sidebar/source-control-dropdown-items.test.ts :: keeps explicit push rows available when the linked PR is already merged,MAPPED,D-05-065,rule added
+sample,src/main/ports/port-scan-command-execution.test.ts :: arms the watchdog only after process creation returns,MAPPED,D-05-078,
+sample,src/renderer/src/components/right-sidebar/useFileExplorerHandlers.test.ts :: selects filtered folders without mutating persisted expansion,MAPPED,D-05-059,rule added
+sample,src/renderer/src/components/right-sidebar/source-control-branch-context-row.test.tsx :: labels the remainder Non-generated when the host omitted the test field,MAPPED,D-05-068,rule added
+sample,src/main/ai-vault/session-scanner-worker-client.test.ts :: bounds queued calls while one request is active,MAPPED,D-05-092,
+sample,"src/renderer/src/app-shell/app-command-handlers-workspace-view.test.ts :: does nothing for a profile without the top bar, so the chord cannot strand it",MAPPED,D-05-002,
+sample,src/renderer/src/components/right-sidebar/checks-list-expanded-details.test.tsx :: uses the sidebar sticky surface by default in the hosted checks panel,MAPPED,D-05-073,
+sample,src/renderer/src/components/right-sidebar/source-control-manual-review-url.test.ts :: uses the pushed upstream branch name when the local branch tracks a differently named branch on the base remote,MAPPED,D-05-070,
+sample,src/renderer/src/components/right-sidebar/ai-vault-host-scope.test.ts :: defaults runtime worktrees to their runtime execution host,DROP,D-05-094,"remote session history, area 18"
+sample,src/renderer/src/components/right-sidebar/use-source-control-branch-compare.test.tsx :: runs sequential refreshes immediately once the chain has drained,NOT-USER-FACING,,refresh queue internals
+sample,src/renderer/src/components/right-sidebar/SourceControlAgentActionDialog.test.tsx :: hides the dialog and auto-starts once when the saved global launch recipe matches,MAPPED,D-05-069,rule added
+sample,src/renderer/src/components/right-sidebar/file-explorer-paths.test.ts :: matches Windows UNC paths case-insensitively with segment boundaries,MAPPED,D-05-059,rule added
+sample,src/renderer/src/components/status-bar/tooltip.test.ts :: uses structured Claude failure kinds before raw auth regexes,MAPPED,D-05-102,
+sample,src/main/ai-vault/session-scanner-parse-cache.test.ts :: returns the identical cached session for an unchanged file,MAPPED,D-05-092,
+sample,src/renderer/src/components/cmd-j/worktree-checks-review-index.test.ts :: records matching GitHub suppression so Cmd+J cannot fall back to stale PR evidence,MAPPED,D-05-043,rule added
+sample,src/renderer/src/components/right-sidebar/CommitArea.test.tsx :: hides push failure AI actions when Source Control AI actions are hidden,MAPPED,D-05-066,rule added
+sample,src/renderer/src/components/right-sidebar/SourceControl.compare-summary.test.ts :: keeps the branch compare while upstream status is still loading,MAPPED,D-05-068,rule added
+sample,src/renderer/src/components/status-bar/use-resource-session-inventory.test.tsx :: refreshes for background spawns without depending on mounted pane state,MAPPED,D-05-098,rule added
+sample,src/renderer/src/lib/cmd-j-host-qualified-candidate-ownership.test.ts :: keeps hidden same-id hosts in the legacy ownership ambiguity set,DROP,D-05-045,"host ownership, area 18"
+sample,"src/renderer/src/components/right-sidebar/file-explorer-batch-deletion.test.ts :: reads directory membership once per selected node, including file-only selections",MAPPED,D-05-060,
+sample,src/renderer/src/components/right-sidebar/source-control-primary-action.create-pr-intent.test.ts :: returns Create MR intent with provider copy for a GitLab dirty branch,DROP,D-05-077,GitLab cut
+sample,tests/e2e/pr-comments-sidebar-cards.spec.ts :: queues an open thread for the agent from the visible row action and menu fallback,MAPPED,D-05-075,
+sample,src/renderer/src/components/right-sidebar/right-sidebar-titlebar-drag-regions.render.test.tsx :: keeps remembered folder PR Checks visible when the global route falls back to Explorer,MAPPED,D-05-057,
+sample,src/renderer/src/lib/ai-vault-tab-title-sync.test.ts :: retains a recovered sleeping title after its lifecycle record disappears,MAPPED,D-05-093,
+sample,src/main/ai-vault/session-delete.test.ts :: returns a failure result when trashItem throws a non-ENOENT error,MAPPED,D-05-089,
+sample,src/renderer/src/components/right-sidebar/checks-panel/use-checks-panel-check-and-review-actions.test.tsx :: unlinks the displayed MR through its provider slot,DROP,D-05-077,GitLab cut
+sample,src/main/ports/advertised-url-watcher.test.ts :: rejects finalized lines missing any character required by an HTTP URL,MAPPED,D-05-078,
+registry:view-ids.tsv,terminal,MAPPED,D-05-001,
+registry:view-ids.tsv,inbox,OTHER-AREA:04,,Inbox list (D-04-050); entry via top-bar bell
+registry:view-ids.tsv,floor,MAPPED,D-05-013,
+registry:view-ids.tsv,settings,OTHER-AREA:17,,Settings page
+registry:view-ids.tsv,tasks,MAPPED,D-05-010,
+registry:view-ids.tsv,activity,MAPPED,D-05-033,
+registry:view-ids.tsv,automations,MAPPED,D-05-011,
+registry:view-ids.tsv,space,MAPPED,D-05-014,
+registry:view-ids.tsv,skills,MAPPED,D-05-011,
+registry:view-ids.tsv,mobile,DROP,D-05-035,"mobile, area 18"
+registry:view-ids.tsv,agent-grid,MAPPED,D-05-034,
+registry:view-ids.tsv,artifacts,MAPPED,D-05-012,
+registry:view-ids.tsv,agents,MAPPED,D-05-015,
+registry:view-ids.tsv,board,MAPPED,D-05-023,
+registry:view-ids.tsv,terminals,MAPPED,D-05-001,
+registry:view-ids.tsv,explorer,MAPPED,D-05-059,
+registry:view-ids.tsv,vault,MAPPED,D-05-080,
+registry:view-ids.tsv,workspaces,MAPPED,D-05-076,
+registry:view-ids.tsv,pr-checks,MAPPED,D-05-076,
+registry:view-ids.tsv,source-control,MAPPED,D-05-062,
+registry:view-ids.tsv,checks,MAPPED,D-05-073,
+registry:view-ids.tsv,ports,DROP,D-05-079,"remote ports tab, area 18"
+registry:view-ids.tsv,search,MAPPED,D-05-061,
+registry:view-ids.tsv,plugin:<string>,DROP,D-05-058,plugin panels cut
+registry:view-ids.tsv,claude,MAPPED,D-05-102,retired usage chip
+registry:view-ids.tsv,codex,MAPPED,D-05-102,retired usage chip
+registry:view-ids.tsv,gemini,MAPPED,D-05-102,retired usage chip
+registry:view-ids.tsv,antigravity,MAPPED,D-05-102,retired usage chip
+registry:view-ids.tsv,kimi,MAPPED,D-05-102,retired usage chip
+registry:view-ids.tsv,minimax,MAPPED,D-05-102,retired usage chip
+registry:view-ids.tsv,grok,MAPPED,D-05-102,retired usage chip
+registry:view-ids.tsv,ssh,DROP,D-05-103,"SSH status, area 18"
+registry:view-ids.tsv,resource-usage,MAPPED,D-05-098,
+registry:view-ids.tsv,ports,MAPPED,D-05-078,
+registry:view-ids.tsv,CaffeinateStatusSegment,MAPPED,D-05-097,
+registry:view-ids.tsv,RemoteServerUpdateStatusSegment,DROP,D-05-103,"remote server update, area 18"
+registry:view-ids.tsv,SkillUpdateStatusSegment,MAPPED,D-05-100,
+registry:view-ids.tsv,UpdateStatusSegment,MAPPED,D-05-100,
+registry:view-ids.tsv,PetStatusSegment,MAPPED,D-05-032,
+registry:keybindings.tsv,worktree.quickOpen,OTHER-AREA:12,,go to file
+registry:keybindings.tsv,worktree.palette,MAPPED,D-05-037,
+registry:keybindings.tsv,worktree.navigateUp,MAPPED,D-05-046,
+registry:keybindings.tsv,worktree.navigateDown,MAPPED,D-05-046,
+registry:keybindings.tsv,workspace.create,OTHER-AREA:01,,create workspace
+registry:keybindings.tsv,workspace.rename,OTHER-AREA:01,,rename workspace
+registry:keybindings.tsv,workspace.delete,MAPPED,D-05-048,
+registry:keybindings.tsv,workspace.openBoard,OTHER-AREA:01,,workspace board sheet (D-01-085)
+registry:keybindings.tsv,dashboard.toggle,MAPPED,D-05-029,
+registry:keybindings.tsv,workspace.selectByIndex,MAPPED,D-05-046,
+registry:keybindings.tsv,view.tasks,MAPPED,D-05-010,
+registry:keybindings.tsv,sidebar.left.toggle,MAPPED,D-05-050,
+registry:keybindings.tsv,sidebar.right.toggle,MAPPED,D-05-056,
+registry:keybindings.tsv,sidebar.explorer.toggle,MAPPED,D-05-057,
+registry:keybindings.tsv,sidebar.search.toggle,MAPPED,D-05-057,
+registry:keybindings.tsv,sidebar.sourceControl.toggle,MAPPED,D-05-057,
+registry:keybindings.tsv,sidebar.checks.toggle,MAPPED,D-05-057,
+registry:keybindings.tsv,sidebar.ports.toggle,DROP,D-05-079,"remote ports tab, area 18"
+registry:keybindings.tsv,sidebar.sleepingWorkspaces.toggle,MAPPED,D-05-053,
+registry:keybindings.tsv,sidebar.focusWorktreeList,MAPPED,D-05-050,
+registry:keybindings.tsv,floatingTerminal.toggle,OTHER-AREA:03,,floating terminal
+registry:keybindings.tsv,floatingWorkspace.maximize,OTHER-AREA:03,,floating workspace
+registry:keybindings.tsv,view.inbox,MAPPED,D-05-009,
+registry:keybindings.tsv,view.floor,MAPPED,D-05-013,
+registry:keybindings.tsv,view.code,MAPPED,D-05-009,
+registry:keybindings.tsv,floatingWorkspace.minimize,OTHER-AREA:03,,floating workspace
+registry:keybindings.tsv,worktree.history.back,MAPPED,D-05-046,
+registry:keybindings.tsv,worktree.history.forward,MAPPED,D-05-046,
+registry:keybindings.tsv,tab.rename,MAPPED,D-05-048,
+registry:keybindings.tsv,sourceControl.sendReviewNotes,MAPPED,D-05-072,
+registry:keybindings.tsv,fileExplorer.undo,MAPPED,D-05-060,
+registry:keybindings.tsv,fileExplorer.redo,MAPPED,D-05-060,
+registry:keybindings.tsv,fileExplorer.copyPath,MAPPED,D-05-060,
+registry:keybindings.tsv,fileExplorer.copyRelativePath,MAPPED,D-05-060,
+registry:keybindings.tsv,fileExplorer.delete,MAPPED,D-05-060,
+registry:keybindings.tsv,view.cycleWorkspaceView,MAPPED,D-05-002,
+registry:keybindings.tsv,sessions.add,MAPPED,D-05-036,
+registry:keybindings.tsv,sessions.remove,MAPPED,D-05-036,
+registry:keybindings.tsv,terminals.focusNextNeedsYou,MAPPED,D-05-047,
+registry:menu-items.tsv,View menu: Reload,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Force Reload,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Toggle Developer Tools,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Reset Size,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Zoom In,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Zoom Out,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Open Worktree Palette,MAPPED,D-05-037,
+registry:menu-items.tsv,View menu: Workspace View,MAPPED,D-05-002,
+registry:menu-items.tsv,View menu: Agents,MAPPED,D-05-002,
+registry:menu-items.tsv,View menu: Board,MAPPED,D-05-002,
+registry:menu-items.tsv,View menu: Terminals,MAPPED,D-05-002,
+registry:menu-items.tsv,View menu: Cycle Workspace View,MAPPED,D-05-002,
+registry:menu-items.tsv,View menu: Toggle Full Screen,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Appearance,MAPPED,D-05-106,
+registry:menu-items.tsv,View menu: Toggle Left Sidebar,MAPPED,D-05-050,
+registry:menu-items.tsv,View menu: Toggle Right Sidebar,MAPPED,D-05-056,
+registry:menu-items.tsv,View menu: Show Status Bar,MAPPED,D-05-096,
+registry:menu-items.tsv,View menu: Show Tasks Button,MAPPED,D-05-010,
+registry:menu-items.tsv,View menu: Show Automations Button,MAPPED,D-05-011,
+registry:menu-items.tsv,View menu: Show Kolux Mobile Button,DROP,D-05-035,"mobile, area 18"
+registry:menu-items.tsv,View menu: Show Titlebar App Name,MAPPED,D-05-106,
+registry:settings-keys.tsv,leftSidebarAppearanceMode,MAPPED,D-05-052,
+registry:settings-keys.tsv,leftSidebarTintColor,MAPPED,D-05-052,
+registry:settings-keys.tsv,leftSidebarTintOpacity,MAPPED,D-05-052,
+registry:settings-keys.tsv,terminalLinkActionPopoverEnabled,MAPPED,D-05-105,duplicates D-03-094
+registry:settings-keys.tsv,rightSidebarOpenByDefault,MAPPED,D-05-056,
+registry:settings-keys.tsv,showGitIgnoredFiles,OTHER-AREA:12,,show ignored files (D-12-035)
+registry:settings-keys.tsv,sourceControlViewMode,MAPPED,D-05-062,
+registry:settings-keys.tsv,sourceControlGroupOrder,MAPPED,D-05-062,
+registry:settings-keys.tsv,sourceControlCompareAgainstUpstream,MAPPED,D-05-068,also D-11-011
+registry:settings-keys.tsv,showTitlebarAppName,MAPPED,D-05-106,
+registry:settings-keys.tsv,showTasksButton,MAPPED,D-05-010,
+registry:settings-keys.tsv,showAutomationsButton,MAPPED,D-05-011,
+registry:settings-keys.tsv,showSkillsButton,MAPPED,D-05-011,
+registry:settings-keys.tsv,showMobileButton,DROP,D-05-035,"mobile, area 18"
+registry:settings-keys.tsv,showPinnedWorktreesInGroups,OTHER-AREA:01,,pinned worktrees in groups (D-01-046)
+registry:settings-keys.tsv,terminalHiddenViewParking,MAPPED,D-05-108,
+registry:settings-keys.tsv,terminalSshViewParking,DROP,D-03-128,"SSH view parking, area 18"
+registry:settings-keys.tsv,defaultTaskViewPreset,MAPPED,D-05-010,
+registry:settings-keys.tsv,defaultTaskSource,MAPPED,D-05-010,
+registry:settings-keys.tsv,visibleTaskProviders,MAPPED,D-05-010,
+registry:settings-keys.tsv,visibleTaskProvidersDefaultedForJira,DROP,D-11-076,Jira provider cut
+registry:settings-keys.tsv,keepComputerAwakeWhileAgentsRun,MAPPED,D-05-097,
+registry:settings-keys.tsv,experimentalPet,MAPPED,D-05-032,
+registry:settings-keys.tsv,experimentalActivity,MAPPED,D-05-033,
+registry:settings-keys.tsv,experimentalActivityDefaultedOffForAllUsers,MAPPED,D-05-033,
+registry:settings-keys.tsv,experimentalNewWorktreeCardStyle,OTHER-AREA:01,,worktree card style (D-01-090)
+registry:settings-keys.tsv,compactWorktreeCards,OTHER-AREA:01,,compact worktree cards (D-01-062)
+registry:settings-keys.tsv,sourceControlAi,MAPPED,D-05-070,also D-11-019
+registry:spec-names.txt,active-view-restart-restore.spec.ts,MAPPED,D-05-005,
+registry:spec-names.txt,agent-dashboard-status-burst.spec.ts,MAPPED,D-05-029,
+registry:spec-names.txt,ai-vault-session-delete.spec.ts,MAPPED,D-05-089,
+registry:spec-names.txt,onboarding.spec.ts,MAPPED,D-05-114,
+registry:spec-names.txt,paired-cmd-j-host-qualified-tabs.spec.ts,DROP,D-05-045,"paired host, area 18"
+registry:spec-names.txt,pet-status-segment-layout.spec.ts,MAPPED,D-05-032,
+registry:spec-names.txt,pr-comments-sidebar-cards.spec.ts,MAPPED,D-05-075,
+registry:spec-names.txt,right-sidebar-windows-titlebar.spec.ts,MAPPED,D-05-056,
+registry:spec-names.txt,setup-guide-sidebar.spec.ts,MAPPED,D-05-114,
+registry:spec-names.txt,sidebar-agent-row-identity.spec.ts,MAPPED,D-05-051,
+registry:spec-names.txt,status-bar-caffeinate.spec.ts,MAPPED,D-05-097,
+registry:spec-names.txt,status-bar-session-count-management-kill.spec.ts,MAPPED,D-05-099,
+registry:spec-names.txt,tab-sidebar-closed-overlap.spec.ts,MAPPED,D-05-050,
+registry:spec-names.txt,terminal-ai-vault-typing-latency.spec.ts,MAPPED,D-05-083,
+registry:spec-names.txt,terminal-hidden-view-parking.spec.ts,MAPPED,D-05-108,
+registry:spec-names.txt,terminal-pinned-viewport-streaming-switch.spec.ts,MAPPED,D-05-108,
+registry:spec-names.txt,terminal-pinned-viewport-worktree-switch.spec.ts,MAPPED,D-05-108,
+registry:spec-names.txt,terminal-streaming-refocus-viewport.spec.ts,MAPPED,D-05-108,
+registry:spec-names.txt,terminal-tui-wheel-reports.spec.ts,MAPPED,D-05-108,
+registry:spec-names.txt,terminal-windows-conpty-keyboard-reset.spec.ts,MAPPED,D-05-109,
+registry:spec-names.txt,workspace-board-lane-virtualization.spec.ts,MAPPED,D-05-027,"card fixed: sidebar workspace board, related 01"
+registry:spec-names.txt,tasks-page.spec.ts,OTHER-AREA:11,,tasks page (D-11-043); from unmapped list
+readme,What it does: Everything in one window (README.md:25),MAPPED,D-05-001,
+readme,What it does: Live status (README.md:21),OTHER-AREA:04,,D-04-001
+handoff,"line 9: 2026-10-06 close-out, agents-view Thought rows and clean-look polish",OTHER-AREA:04,,Thought rows (D-04-053)
+handoff,"line 10: 2026-10-06 audit fix wave, Artifacts library inside Kolux",MAPPED,D-05-012,
+handoff,"line 12: 2026-10-05 status-bar usage chips removed, usage in pane headers and top right",MAPPED,D-05-102,"also D-05-008, D-05-036"
+handoff,"line 13: 2026-10-05 clean look, sidebar session card and weekly pill",MAPPED,D-05-051,also D-05-008
+handoff,"line 14: 2026-10-05 terminal-grid pane footer removed, Board keeps its buttons",MAPPED,D-05-028,also D-05-025
+handoff,"line 15: 2026-10-05 originality cleanup, update nudge removed",OTHER-AREA:21,,D-05-100 keeps the progress segment
+handoff,"line 16: 2026-10-05 message bar removed, Swarm footer keeps status and answers",MAPPED,D-05-028,also D-05-019
+handoff,"line 17: 2026-10-05 redesign landed, full-width top bar, no classic sidebar",MAPPED,D-05-003,also D-05-004
+handoff,"line 22: 2026-10-05 session usage meter on cards, tabs and Agents view",OTHER-AREA:06,,usage meter
+handoff,line 23: 2026-10-05 dashboard pop-out and Agent Map retired,MAPPED,D-05-031,
+handoff,line 36: 2026-09-22 quieter left sidebar,MAPPED,D-05-034,Agent Grid retired then; also D-21-002
+handoff,line 44: sidebar agent rows are dead code,NOT-USER-FACING,,"dead code (D-21-038, D-01-091)"
+handoff,"line 65: orchestration control split, dashboard read-only runs",MAPPED,D-05-030,
+handoff,line 70: agent dashboard off by default,MAPPED,D-05-029,
+handoff,line 87: live check of the new UI still outstanding,NOT-USER-FACING,,verification to-do
+triage,ConfirmationDialogProvider (src/renderer/src/components/confirmation-dialog.test.tsx),NEW,D-05-116,confirmation prompts
+triage,hover-reveal action button touch visibility (src/renderer/src/components/hover-reveal-touch-action-visibility.test.ts),NEW,D-05-117,touch visibility
+triage,SelectedTextCopyMenu (src/renderer/src/components/SelectedTextCopyMenu.test.tsx),MAPPED,D-05-033,copy menu in Activity hover card
+triage,getAgentRowPrimaryText (src/renderer/src/lib/agent-row-primary-text.test.ts),MAPPED,D-05-015,rule added
+triage,palette field quality allocation (src/renderer/src/lib/palette-match/match-field-allocation.test.ts),MAPPED,D-05-038,palette match rules added
+triage,palette quality restrictions remain local to each match (src/renderer/src/lib/palette-match/match-field-allocation.test.ts),MAPPED,D-05-038,palette match rules added
+triage,container field matching (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,duplicate evidence unit ids (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,evidence limits (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,identifier fields (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,normalization and ranges (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,palette query preparation (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,structured label matching (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,typo distance (src/renderer/src/lib/palette-match/palette-match-core.test.ts),MAPPED,D-05-038,palette match rules added
+triage,palette matcher performance budget (src/renderer/src/lib/palette-match/palette-match-performance.test.ts),MAPPED,D-05-038,palette match rules added
+triage,palette activity preparation (src/renderer/src/lib/palette-match/palette-ranking.test.ts),MAPPED,D-05-038,palette match rules added
+triage,palette entity comparator (src/renderer/src/lib/palette-match/palette-ranking.test.ts),MAPPED,D-05-038,palette match rules added
+triage,running agent send targets (src/renderer/src/lib/running-agent-targets.test.ts),OTHER-AREA:04,,answer targets for live panes (D-04-050)
+triage,resolveLeftTitlebarChromeLayout (src/renderer/src/lib/titlebar-left-chrome.test.ts),MAPPED,D-05-003,
+triage,hasVisibleOverlay (src/renderer/src/lib/visible-overlay.test.ts),MAPPED,D-05-009,rule added
+triage,UI modal slot dismissal (src/renderer/src/store/slices/ui-modal-slot-dismissal.test.ts),NOT-USER-FACING,,modal slot plumbing
+triage,createUISlice page navigation history (src/renderer/src/store/slices/ui-page-navigation.test.ts),MAPPED,D-05-046,
+triage,createUISlice space navigation (src/renderer/src/store/slices/ui-page-navigation.test.ts),MAPPED,D-05-014,
+triage,getAgentRowConversationName (src/shared/agent-row-conversation-name.test.ts),MAPPED,D-05-015,row naming
+triage,grok-session-paths (src/shared/grok-session-paths.test.ts),MAPPED,D-05-091,
+triage,isKnownHarnessInjectedUserTurnText (src/shared/harness-injected-user-turns.test.ts),MAPPED,D-05-084,rule added

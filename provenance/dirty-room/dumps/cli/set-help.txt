@@ -1,0 +1,13 @@
+﻿kolux set
+
+Usage: kolux set <command> [options]
+
+Commands:
+  device             Emulate a device
+  offline            Toggle offline mode
+  headers            Set extra HTTP headers
+  credentials        Set HTTP auth credentials
+  media              Set color scheme and reduced motion preferences
+
+Run `kolux set <command> --help` for command-specific usage.
+

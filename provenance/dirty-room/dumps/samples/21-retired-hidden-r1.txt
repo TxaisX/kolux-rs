@@ -1,0 +1,101 @@
+# 21-retired-hidden random sample round 1 (100 of 158): file	title
+src/renderer/src/components/dashboard-popout/agent-map-time-filter.test.ts	keeps every card when the ranges are untouched
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	cancels an async paste when the preview loses focus
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	claims the app-menu paste event and pastes while the preview owns focus
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	labels one subagent accessibly and never renders a workspace-status dot
+src/renderer/src/components/dashboard-popout/preview-terminal-snapshot-replay.test.ts	writes scrollback, frame, escape tail, then replay, in that order
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	swallows a pane-scoped chord instead of leaking its control byte to the agent
+src/renderer/src/components/dashboard-popout/agent-map-node-metadata.test.ts	keeps an unread finish loud
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	copies the terminal selection on the copy chord and blocks xterm handling
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	encodes the release from the keyup state when Shift is released first
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	rerenders when the repo icon changes
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	pastes on plain Ctrl+V on Windows, where no Edit-menu accelerator ever fires
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	closes a bracketed large paste when focus changes between chunks
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	leaves app-menu selection actions unclaimed for text controls inside the preview
+src/renderer/src/components/dashboard-popout/preview-terminal-options.test.ts	mirrors the ConPTY backend and kitty withhold a local Windows pane resolves
+src/renderer/src/components/dashboard-popout/preview-terminal-options.test.ts	carries the user terminal appearance a pane would apply
+src/renderer/src/components/dashboard-popout/terminal-preview-unavailable-message.test.ts	reports an unobservable remote preview instead of asserting the pane exited
+src/renderer/src/components/dashboard-popout/preview-terminal-snapshot-replay.test.ts	keeps proven flags across a replacement snapshot whose ANSI carries no kitty bytes
+src/renderer/src/components/dashboard-popout/preview-terminal-shortcuts.test.ts	leaves ordinary typing to xterm
+src/renderer/src/components/dashboard-popout/preview-terminal-options.test.ts	keeps the advertised default when the card carries no host profile
+src/renderer/src/components/dashboard-popout/agent-map-filter.test.ts	files both unseen and acknowledged completions under done, never idle
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	encodes the commit from the flags proven before any live output
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	hides the agent map from dashboard chrome
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	routes each card its own repo icon
+src/renderer/src/components/dashboard-popout/preview-grid-claim.test.ts	coalesces a continuous resize burst into one settled fit request
+src/renderer/src/components/dashboard-popout/preview-terminal-right-click-paste.test.ts	falls through to the native menu when the setting is off
+src/renderer/src/components/dashboard-popout/preview-terminal-shortcuts.test.ts	withholds the Ctrl+arrow translation on a local ConPTY pty, where PSReadLine binds it
+src/renderer/src/components/dashboard-popout/preview-terminal-options.test.ts	honors the user contrast override, clamped to xterm range
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	opens the terminal from the footer while keeping subagent disclosure isolated
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	does not claim a remote pane closed when no snapshot can exist for it
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	does not let a redelivered kitty push outlive the TUI pop
+src/renderer/src/components/dashboard-popout/agent-map-filter.test.ts	applies state and host filters independently
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	focuses search with Ctrl+K without taking focus from response fields
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	installs the macOS IME native-text forwarder and lets its claims bypass chord handling
+src/renderer/src/components/dashboard-popout/preview-terminal-options.test.ts	falls back to pane defaults with no settings hydrated
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	shows the question glyph once when a summary is available
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	shows the repo as an icon labelled with its name instead of inline text
+src/renderer/src/components/dashboard-popout/preview-terminal-options.test.ts	enables macOptionIsMeta only for the resolved full Option-as-Alt
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	keeps the terminal dialog open across bucket moves and card removal
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	disposes the IME bridge once when the PTY disappears
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	updates the relative age when the UI language changes
+src/renderer/src/components/dashboard-popout/agent-map-time-filter.test.ts	falls back to the state change when no hook update has landed
+src/renderer/src/components/dashboard-popout/AgentTerminalDialog.test.tsx	labels unseen completions done
+src/renderer/src/components/dashboard-popout/agent-map-node-metadata.test.ts	leaves every non-done state on the shared display state
+src/renderer/src/components/dashboard-popout/agent-map-time-filter.test.ts	does not classify unknown timestamps as ancient
+src/renderer/src/components/dashboard-popout/preview-terminal-shortcuts.test.ts	follows the terminal shortcut policy for the tab.close pane-close alias
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	owns the release even though xterm holds no kitty state
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	selects all terminal text on Cmd+A and blocks xterm handling
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	synthesizes nothing on blur or disposal
+src/renderer/src/components/dashboard-popout/agent-map-time-filter.test.ts	excludes a card quieter than the window and keeps one inside it
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	leaves right-click to the native menu when the setting is off
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	connects a replacement pty after the previous pty was gone
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	heads the card with the worktree when no name resolves, without repeating it
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	offers project filters without agent-state map filters
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	scrolls the viewport on the macOS scrollback chord
+src/renderer/src/components/dashboard-popout/agent-board-filtering.test.ts	searches visible names, messages, review numbers, and subagent names
+src/renderer/src/components/dashboard-popout/DashboardHostBadge.test.tsx	names a saved SSH host in its focusable tooltip
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	disposes a stale terminal when resync confirms the pty is gone
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	pastes on terminal-style right-click when the setting is on
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	does not start the clock when no card renders a relative timestamp
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	does not render an invented age when the start time is unknown
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	routes signaled user input while a live write parses and drops parser replies
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	leaves a copy action with no terminal selection unclaimed
+src/renderer/src/components/dashboard-popout/preview-terminal-shortcuts.test.ts	leaves Option chords to xterm while the TUI has kitty mode negotiated
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	emits nothing when the input source swallowed the press
+src/renderer/src/components/dashboard-popout/preview-terminal-snapshot-replay.test.ts	carries nothing across a flagless snapshot when the mirror never proved state
+src/renderer/src/components/dashboard-popout/agent-map-node-metadata.test.ts	does not reuse an earlier finish timestamp for a question with unknown timing
+src/renderer/src/components/dashboard-popout/agent-board-filtering.test.ts	combines filter categories while treating values within a category as alternatives
+src/renderer/src/components/dashboard-popout/preview-terminal-snapshot-replay.test.ts	replaces an earlier 8 when a replacement snapshot proves 0
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	localizes the new board status and filter controls
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	skips structured-clone rerenders until visible card data or its age changes
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	heads the card with the conversation name and drops the worktree to the footer
+src/renderer/src/components/dashboard-popout/AgentTerminalDialog.test.tsx	labels acknowledged completions idle without review or pin controls
+src/renderer/src/components/dashboard-popout/agent-map-node-metadata.test.ts	does not flare status changes from before this session
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	stops claiming app-menu clipboard events once unmounted
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	leaves the app-menu paste event unclaimed when focus is outside the preview
+src/renderer/src/components/dashboard-popout/agent-map-filter.test.ts	treats a missing hostKind as local
+src/renderer/src/components/dashboard-popout/preview-terminal-snapshot-replay.test.ts	restores onto the screen the snapshot scan selected
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	claims app-menu selection actions while the preview owns focus
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.clipboard-routes.test.tsx	encodes a leading newline for a remote Windows Codex preview without submitting
+src/renderer/src/components/dashboard-popout/AgentTerminalDialog.test.tsx	passes null when the card carries no profile, so the preview routes by client OS
+src/renderer/src/components/dashboard-popout/agent-map-node-metadata.test.ts	never flares a state that is not a question or unread finish
+src/renderer/src/components/dashboard-popout/preview-terminal-snapshot-replay.test.ts	carries live-proven flags across a resync snapshot that proves nothing
+src/renderer/src/components/dashboard-popout/AgentTerminalDialog.test.tsx	still reports a closed pane for a local card with no live pty
+src/renderer/src/components/dashboard-popout/preview-terminal-shortcuts.test.ts	maps the macOS line-kill and word-navigation chords
+src/renderer/src/components/dashboard-popout/preview-terminal-right-click-paste.test.ts	falls through before the terminal exists and stops listening once disposed
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	disposes the IME bridge on unmount
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	leaves an unmodified Backspace to xterm
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	orders cards in a column by most recent bucket entry first
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	claims a grid sized to the dialog box and never re-requests an unchanged target
+src/renderer/src/components/dashboard-popout/agent-board-filtering.test.ts	supports the synthesized no-review filter and immutable toggles
+src/renderer/src/components/dashboard-popout/AgentKanbanCard.test.tsx	shows the saved SSH host beside the repository metadata
+src/renderer/src/components/dashboard-popout/agent-map-node-metadata.test.ts	splits a finish by whether it has been acknowledged
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	sends the word-kill byte on Ctrl+Backspace and blocks xterm handling
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	suppresses the owed release when event types are no longer negotiated at keyup
+src/renderer/src/components/dashboard-popout/AgentKanbanBoard.test.tsx	shows the idle column only when enabled
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	hands the forwarder the live mirror seeded from the snapshot flags
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	emits one release for a held key across auto-repeat
+src/renderer/src/components/dashboard-popout/AgentTerminalPreview.test.tsx	keeps the existing terminal visible while a resync snapshot is captured
+src/renderer/src/components/dashboard-popout/preview-terminal-ime-bridge-kitty-bytes.test.ts	reads the mutable getter exactly once, at commit time
+src/renderer/src/components/dashboard-popout/agent-map-node-metadata.test.ts	treats an acknowledged finish as quiet so label declutter is unchanged

@@ -1,0 +1,180 @@
+# 20-cli: count	describe title  (179 unique)
+19	kolux cli worktree awareness
+4	CliInstaller
+3	orchestration timeout flag validation
+2	formatComputerAction
+2	orchestration task-list brief output
+1	buildAgentContext
+1	agent-context over the live registry
+1	parseArgs
+1	command aliases
+1	supportsBrowserPageFlag
+1	validateCommandAndFlags
+1	formatAutomationShow reports the host the authority projects
+1	formatAutomationList reports each row host
+1	automation owner conflicts read as CLI outcomes
+1	formatBase64PayloadByteCount
+1	kolux cli cookie set and set credentials preserve an empty value
+1	kolux cli storage set preserves an empty value
+1	kolux cli browser page targeting
+1	kolux cli browser profile management
+1	kolux cli browser tab profiles
+1	kolux cli browser cookies
+1	kolux cli browser waits and viewport flags
+1	CLI command-name parity between COMMAND_SPECS and the launch redirect
+1	CLI version
+1	shouldUseRendererBackedCodexTerminal
+1	shouldUseRendererBackedInteractiveTerminal
+1	suggestion distance work
+1	levenshtein
+1	suggestCommands
+1	unknownCommandData
+1	formatLogcat
+1	parseHostFlag
+1	resolveHostFlagEnvironmentId
+1	hostFilterMatchesHostId
+1	ambiguous environment names
+1	assertEnvironmentSelectorResolvable
+1	CLI flags
+1	worktree selector recovery
+1	CLI error recovery
+1	formatCliError
+1	formatWorktreeList
+1	formatAutomationShow
+1	formatTerminalList
+1	formatTerminalRead
+1	printResult computer screenshots
+1	handler group manifest
+1	duplicate command keys
+1	dispatch errors
+1	account CLI handlers
+1	agent hooks CLI handler
+1	CLI automation writes fence the host they land on
+1	CLI automation mutations carry the owner they read
+1	kolux computer action CLI routing
+1	kolux computer action CLI validation
+1	kolux computer get-app-state formatting
+1	kolux computer observation CLI handlers
+1	kolux claude-teams CLI handler
+1	kolux emulator CLI handlers
+1	absolute file CLI paths
+1	WSL UNC worktree roots
+1	kolux file CLI handlers
+1	terminateInteractiveLoginProcess
+1	kolux linear CLI handlers
+1	orchestration worker-list Run scope (CLI handler)
+1	worker-start plain formatting
+1	worker-read plain formatting
+1	formatWorkerRead
+1	orchestration dispatch coordinator handle
+1	orchestration task-create caller handle
+1	orchestration check identity
+1	orchestration gate commands carry caller identity
+1	legacy orchestration CLI inspection
+1	orchestration CLI migration recovery
+1	extracted orchestration flag parsing
+1	extracted orchestration worker formatting
+1	extracted orchestration dispatch handlers
+1	orchestration request-show
+1	lightweight Run CLI handlers
+1	orchestration reset CLI handler
+1	orchestration task-create CLI mapping
+1	packaged Windows legacy ask protocol
+1	orchestration worker-start CLI contract
+1	orchestration worker-show interactive wait output
+1	orchestration send structured payload flags
+1	terminal close CLI
+1	terminal send CLI
+1	findSshTargetByName
+1	findEnvironmentByName
+1	crossKindNextSteps
+1	resolveSshHostTargetId
+1	listSshTargets
+1	ambiguous names never resolve silently
+1	runtime-selector flags on locally pinned CLI commands
+1	omittedHostIds selector annotation
+1	worktree listings report their host coverage
+1	kolux terminal list host scope
+1	COMMAND_SPECS collision check
+1	command aliases dispatch to the canonical handler
+1	unknown command surfaces a suggestion
+1	unknown help command surfaces a suggestion
+1	kolux root help
+1	linear-format
+1	CLI imports of main-process modules
+1	orchestration dispatch refusals through the CLI error boundary
+1	orchestration mutation recovery
+1	a structured worker running orchestration commands as itself
+1	a structured chat session with no orchestration identity
+1	quote-stripped JSON flag detection
+1	registry parity (live tree)
+1	findRegistryParityGaps (fixtures)
+1	--retry-request and --wait-submit value damage
+1	RuntimeClient orchestration recovery identity
+1	RuntimeClient timeout policy
+1	RuntimeRpcEnvelopeSchema
+1	isKeepaliveFrame
+1	CLI runtime environments
+1	serveKoluxApp
+1	launchKoluxApp
+1	orchestration recovery command identity
+1	serveSignalExitError
+1	superviseForegroundServe signal exits
+1	CLI runtime status
+1	projectRemoteAppStatus
+1	CLI runtime response framing
+1	runtime transport timeout validation
+1	runtime transport
+1	RuntimeRpcFailureError compatibility redaction
+1	CLI WebSocket transport error identity
+1	CLI remote WebSocket transport
+1	RuntimeClient module-graph deferral
+1	RuntimeClient
+1	serve flag parity between the CLI spec and the Electron argv rewrite
+1	quoteCliCommandArgument
+1	skill guides only name commands and flags the CLI defines
+1	kolux skills get --reference
+1	kolux skills CLI
+1	account command specs
+1	bundled skill guides
+1	computer command specs
+1	orchestration send command spec
+1	orchestration worker-start command spec
+1	orchestration check command spec
+1	skill command specs
+1	formatTerminalRead draft separation
+1	formatTerminalFocus
+1	formatTerminalClose
+1	formatTerminalSend
+1	formatTerminalList host identity
+1	formatTerminalList scope declaration
+1	kolux terminal read --screen
+1	vocabulary policy (live tree)
+1	findVocabularyViolations (fixtures)
+1	formatWorktreeOverlap
+1	normalizeWorktreeSelectorForCaller in a WSL shell
+1	appimage extracted root
+1	AppImage extraction pruning
+1	removeExtractedAppImagePayload reentrancy
+1	removeExtractedAppImagePayload
+1	withAppImageRegistrationLock
+1	AppImage stable launcher
+1	CLI command filesystem races
+1	AppImage CLI ownership
+1	AppImage CLI removal
+1	Windows CLI PATH process boundary
+1	macOS CLI privileged process boundary
+1	runKeyedSerializedOperation
+1	prependKoluxCliDirToChildPath
+1	legacy AppImage CLI wrapper
+1	installLinuxBareKoluxDispatcher
+1	ensureLinuxTerminalKoluxCliShimDir
+1	native CLI PowerShell argv boundary
+1	packaged CLI assets
+1	packaged Windows CLI launcher asset
+1	WindowsUserPathRegistryReader
+1	WslCliInstaller
+1	WSL CLI PowerShell boundary
+1	runSerializedWslCliRegistrationOperation
+1	reconcileManagedWslCliRegistrations
+1	WSL CLI registration registry

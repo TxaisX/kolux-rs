@@ -1,0 +1,21 @@
+﻿kolux linear relation add
+
+Usage: kolux linear relation add [<id>] [--current] --related <issue> --type blocks|blocked-by|related|duplicate-of [--workspace <id>] [--json]
+
+Add a Linear issue relation
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --current              Use the current Kolux worktree linked Linear issue
+  --related
+  --type
+  --workspace <id>      Connected Linear workspace id
+  --id <id>             Identifier for a target item or permission
+
+Examples:
+  $ kolux linear relation add ENG-1 --related ENG-2 --type blocks --json
+  $ kolux linear relation add --current --related ENG-2 --type blocked-by --json
+

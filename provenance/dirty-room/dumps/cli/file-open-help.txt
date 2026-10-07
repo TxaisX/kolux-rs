@@ -1,0 +1,21 @@
+﻿kolux file open
+
+Usage: kolux file open <path> [--worktree <selector>] [--json]
+
+Open a workspace file in the Kolux editor
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --path <path>          Path argument for the command
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+
+Notes:
+  The path may be relative to the selected worktree or an absolute path inside that worktree. When --worktree is omitted, local CLI calls infer the current Kolux worktree from cwd.
+
+Examples:
+  $ kolux file open src/App.tsx
+  $ kolux file open --path docs/readme.md --worktree active
+

@@ -1,0 +1,23 @@
+﻿kolux account add
+
+Usage: kolux account add [--agent claude|codex] [--json]
+
+Add a managed Claude or Codex account by signing in on this Kolux host
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --agent <id>           Account provider: claude or codex (default claude)
+
+Notes:
+  Runs the agent login (`claude login` / `codex login`) in this terminal, then registers the account with the local Kolux runtime.
+  Codex uses device authorization so the browser can complete sign-in from a different machine.
+  Sign in with the account you want to add (e.g. use a private/incognito browser window for a second account).
+  --agent defaults to claude. Requires the Kolux runtime to be running on this machine.
+
+Examples:
+  $ kolux account add
+  $ kolux account add --agent codex
+

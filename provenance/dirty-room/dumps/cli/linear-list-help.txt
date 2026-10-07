@@ -1,0 +1,19 @@
+﻿kolux linear list
+
+Usage: kolux linear list [--filter assigned|created|all|completed|open] [--team <key|id>] [--limit <n>] [--workspace <id>|all] [--json]
+
+List Linear issues for task triage
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --filter
+  --team
+  --limit <n>            Maximum number of rows to return
+  --workspace <id>      Connected Linear workspace id
+
+Examples:
+  $ kolux linear list --filter assigned --limit 10 --json
+

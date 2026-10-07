@@ -1,0 +1,16 @@
+﻿kolux agent hooks off
+
+Usage: kolux agent hooks off [--json]
+
+Disable Kolux-managed agent status hooks and remove local hook entries
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --page <id>            Stable browser page id from `kolux tab list --json`
+
+Examples:
+  $ kolux agent hooks off
+

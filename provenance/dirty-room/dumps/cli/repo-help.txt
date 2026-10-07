@@ -1,0 +1,13 @@
+﻿kolux repo
+
+Usage: kolux repo <command> [options]
+
+Commands:
+  list               List repos registered in Kolux
+  add                Add a project to Kolux by filesystem path
+  show               Show one registered repo
+  set-base-ref       Set the repo's default base ref for future worktrees
+  search-refs        Search branch/tag refs within a repo
+
+Run `kolux repo <command> --help` for command-specific usage.
+

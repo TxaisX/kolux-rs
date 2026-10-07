@@ -1,0 +1,1449 @@
+{
+  "area": "02-sessions-launching",
+  "prefix": "SESS",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-02-001",
+      "title": "Only agents actually installed on this computer are offered",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Installs one or more agent command-line programs, then opens any place that starts a session.",
+      "user_sees": "Only agents whose program is really present on the machine can be started; the rest of the roughly 35-agent catalogue stays out of the way or shows as not installed.",
+      "rules": [
+        "An agent counts as installed only when a runnable program is found, never because a folder or plain file carries its name.",
+        "When the app is opened from the desktop with a trimmed search path, it first loads the user's shell search path and also checks each agent's usual install folder.",
+        "An agent found by two routes is listed once.",
+        "A failed lookup means not installed, never installed.",
+        "Checking reads the search path directly and does not start a helper lookup process per agent.",
+        "Mistral Vibe is found through its short command name; an older duplicate entry for it is folded in.",
+        "Catalogue covers Claude Code, Codex, Grok, Gemini CLI, Aider, Goose, Amp, Kilo, Kiro, Crush, Auggie, Cline, Copilot, Cursor, Droid, Kimi, Qwen Code, Devin and others.",
+        "Agents installed under a Node version manager are found under its default version, falling back to the newest installed version, and also when the program lives outside that version.",
+        "On Windows, agents installed as command-script shims are started through the command shell so they launch like any other program."
+      ],
+      "acceptance": [
+        "With only Claude Code and Codex installed, open the plus menu → exactly those two agents are listed.",
+        "Start the app from the Start menu while an agent lives only in its default install folder → that agent is still listed.",
+        "Place a non-runnable file named like an agent on the search path → it is not listed."
+      ],
+      "compat": "Each agent keeps a stable id that settings, saved shapes and the per-agent shortcut ids refer to.",
+      "decision": "",
+      "evidence": [
+        "src/main/ipc/preflight-agent-detection.test.ts:98",
+        "src/main/ipc/preflight-agent-detection-no-subprocess.test.ts:75",
+        "README.md:14",
+        "registry:agent-catalog:claude",
+        "src/shared/nvm-default-alias.test.ts:50",
+        "src/shared/agent-cli-install-dir-fallback.test.ts",
+        "src/main/win32-utils.test.ts:63",
+        "src/main/ipc/command-path-resolver.test.ts"
+      ],
+      "round": 0,
+      "related": ["16", "17"]
+    },
+    {
+      "id": "D-02-002",
+      "title": "Refresh agents picks up a new install without reopening",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Installs an agent while the launch screen is open, then clicks \"Refresh agents\".",
+      "user_sees": "The new agent appears in place; a seat whose agent vanished is cleared rather than swapped for another.",
+      "rules": [
+        "One refresh runs one check, not two.",
+        "While the first check is still running, nothing is shown as not installed.",
+        "A check that failed is shown differently from a check that found nothing, and launching is blocked until it succeeds.",
+        "A seat whose chosen agent disappears is emptied, never filled with a different agent."
+      ],
+      "acceptance": [
+        "Install Gemini CLI with the launch screen open, click Refresh agents → Gemini CLI becomes choosable.",
+        "Uninstall the agent picked in seat 2, refresh → seat 2 is empty and launch is disabled until it is filled."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/agent-launch-refresh.test.tsx:97",
+        "src/renderer/src/components/launch-agents/LaunchAgentGrid.tsx:32"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-02-003",
+      "title": "Switch individual agents off so they leave the launch menus",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Uses \"Hide agents\" in the agent list or the Agents settings to turn some installed agents off.",
+      "user_sees": "Turned-off agents no longer appear in the plus menu, picker pane, dropdowns or launch seats; turning them back on restores them.",
+      "rules": [
+        "Disabled and not-installed agents are both left out of choice lists.",
+        "If every installed agent is off, the plus menu says no agents are enabled and points to agent settings.",
+        "The default agent cannot be one that is off."
+      ],
+      "acceptance": [
+        "Turn Codex off → Codex is gone from the plus menu and the picker pane.",
+        "Turn every agent off → the plus menu shows an empty-state line and an agent settings item."
+      ],
+      "compat": "Setting carried by the importer: the list of agents the user turned off.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/agent/FeaturedAgentList.tsx:56",
+        "src/renderer/src/components/agent/FeaturedAgentList.test.tsx:22",
+        "registry:settings-keys:disabledTuiAgents",
+        "src/renderer/src/components/agent-picker/agent-picker-options.test.ts:4"
+      ],
+      "round": 0,
+      "related": ["17"]
+    },
+    {
+      "id": "D-02-004",
+      "title": "Plus menu starts an installed agent in a new pane in one click",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Clicks the plus button in the tab bar and picks an agent.",
+      "user_sees": "A new pane splits into the grid and the agent starts in it; the default agent sits first and shows its shortcut.",
+      "rules": [
+        "Only detected and enabled agents are listed, default first, then catalogue order.",
+        "Every launch gets its own pane; nothing reuses a busy pane.",
+        "A menu item opens agent settings.",
+        "For agents opened as chat (flag off by default) a pending starting line shows until ready."
+      ],
+      "acceptance": [
+        "Click plus → Claude Code → a new pane appears with Claude Code running in it.",
+        "Set Codex as default → it moves to the top of the plus menu with the shortcut hint."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/tab-bar/QuickLaunchButton.tsx:202",
+        "README.md:17"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-02-005",
+      "title": "Clear feedback when an agent fails to start",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Starts an agent whose command cannot be built or whose process never appears.",
+      "user_sees": "An error toast names the agent that could not be started; if no terminal process shows up within about five seconds a warning toast says so.",
+      "rules": [
+        "A launch command that cannot be assembled is reported at once, naming the agent.",
+        "The five-second watchdog fires only when no process exists, not when the agent is merely slow to draw.",
+        "Empty states: no agents detected, or none enabled, each with a route to agent settings."
+      ],
+      "acceptance": [
+        "Point an agent's command override at a missing program and launch it → a toast reports the failure within about five seconds.",
+        "Uninstall every agent → the plus menu shows the no-agents line instead of an empty list."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/tab-bar/QuickLaunchButton.tsx:151",
+        "src/renderer/src/components/tab-bar/QuickLaunchButton.tsx:168"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-02-006",
+      "title": "Create menu offers terminals per shell, an agent chooser, browser and markdown",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens the tab bar's create menu.",
+      "user_sees": "Items for a new terminal in each installed shell, \"Choose agent...\" which opens the picker pane, a browser tab, a new markdown file and opening an existing markdown file.",
+      "rules": [
+        "Choose agent opens an empty chooser pane rather than starting anything.",
+        "The mobile emulator item is gone with area 18 (see the D card)."
+      ],
+      "acceptance": [
+        "Open the create menu → Choose agent → a new pane appears asking what should run there, with nothing started."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/tab-bar/tab-bar-static-create-menu.tsx:117"
+      ],
+      "round": 0,
+      "related": ["03", "12", "13"]
+    },
+    {
+      "id": "D-02-007",
+      "title": "Empty pane asks what should run here",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live",
+      "user_does": "Adds a pane, or picks Choose agent, and lands on an unstarted pane.",
+      "user_sees": "A chooser with the session number, one set of choices for an AI, a plain terminal or (cut) custom agents, then a separate model row; Start stays disabled until both are chosen.",
+      "rules": [
+        "An AI needs an explicit model before Start enables; the model row says to choose one until then.",
+        "A plain terminal needs no model.",
+        "A pick that drops out of detection is cleared, not replaced.",
+        "The chooser can be closed, except when it is the only pane in the grid.",
+        "AI choices and model choices behave as two separate radio groups for keyboard and screen readers."
+      ],
+      "acceptance": [
+        "Open a chooser pane, pick Claude Code without a model → Start is disabled; pick a model → Start enables.",
+        "Pick Terminal → Start enables immediately.",
+        "With a single chooser pane in the grid → no close button."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/agent-picker/AgentPickerPane.tsx:27",
+        "src/renderer/src/components/agent-picker/AgentPickerPane.test.tsx:48",
+        "src/renderer/src/components/agent-picker/SessionAgentModelPicker.test.tsx:76",
+        "src/renderer/src/components/agent-picker/session-ai-choice.test.ts:13",
+        "HANDOFF-HISTORY.md:1009 (recorded verification: agent picker end to end, launch dialog lineup)"
+      ],
+      "round": 0,
+      "related": ["03"]
+    },
+    {
+      "id": "D-02-008",
+      "title": "Changing the session count adds chooser panes or closes them",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live",
+      "user_does": "Uses the add-session or remove-session shortcut (the stepper control was removed on 2026-10-05).",
+      "user_sees": "Adding creates unstarted chooser panes; removing closes unstarted panes silently and asks before closing a running session.",
+      "rules": [
+        "Panes per grid stay between 1 and 12.",
+        "Unstarted chooser panes close without a prompt.",
+        "Closing a started session asks for confirmation, at most once per step.",
+        "Both shortcuts ship unbound."
+      ],
+      "acceptance": [
+        "Bind the add-session shortcut and press it twice → two new chooser panes appear.",
+        "With one running session and one chooser, remove a session → the chooser closes without a prompt; remove again → a confirmation appears."
+      ],
+      "compat": "Keybinding ids sessions.add and sessions.remove, unbound by default.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/pane-layout/pane-count-plan.ts:5",
+        "src/renderer/src/components/agent-picker/use-unstarted-pane-chrome.test.ts:32",
+        "src/shared/keybindings/definitions-workspace-view.test.ts:18",
+        "registry:keybindings:sessions.add"
+      ],
+      "round": 0,
+      "related": ["03", "05"]
+    },
+    {
+      "id": "D-02-009",
+      "title": "Agent dropdown opens on the featured three with search for the rest",
+      "tier": "P1",
+      "pushed": 7,
+      "state": "live-unverified",
+      "user_does": "Opens an agent dropdown and types or clicks \"Show more agents\".",
+      "user_sees": "Claude Code, Codex and Grok first; the others behind a show-more toggle; typing finds any agent, including collapsed ones; a blank terminal row and \"Manage agents\" sit at the bottom.",
+      "rules": [
+        "If none of the three featured agents is installed, everything is shown uncollapsed.",
+        "The list collapses again on the next open.",
+        "Search matches the display name before any alias, then initials, then command names.",
+        "Typing terminal or shell finds the blank terminal row.",
+        "Over-long search text is ignored rather than slowing the list.",
+        "Agent icons are bundled with the app; no icon is fetched from the internet."
+      ],
+      "acceptance": [
+        "Open the dropdown → only Claude Code, Codex and Grok show; type aid → Aider appears.",
+        "Type shell → the blank terminal row is offered."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/agent/AgentCombobox.test.tsx:199",
+        "src/renderer/src/lib/agent-picker-search.test.ts:26",
+        "src/renderer/src/components/agent/AgentCombobox.test.tsx:13"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-02-010",
+      "title": "Pick a default agent",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Set as default\" on an agent row, or picks a default in Agents settings.",
+      "user_sees": "The row then reads as the current default; that agent leads the plus menu and is what the new-agent shortcut starts.",
+      "rules": [
+        "No default is set out of the box; lists then follow catalogue order.",
+        "A default that is uninstalled or turned off is not offered."
+      ],
+      "acceptance": [
+        "Set Grok as default → Grok row shows current default; the new-agent shortcut opens Grok."
+      ],
+      "compat": "Setting carried by the importer: default agent (empty by default).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/agent/AgentCombobox.tsx:40",
+        "registry:settings-keys:defaultTuiAgent"
+      ],
+      "round": 0,
+      "related": ["17"]
+    },
+    {
+      "id": "D-02-011",
+      "title": "Keyboard shortcuts start a new agent tab or terminal",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Presses the new-agent, per-agent, new-terminal or new-workspace shortcut.",
+      "user_sees": "The default agent, a specific agent, a terminal, or the new workspace composer opens.",
+      "rules": [
+        "New agent tab with the default agent: bound only on Mac out of the box, unbound on Windows and Linux.",
+        "Each catalogue agent has its own new-tab command, all unbound by default.",
+        "New terminal is Mod+T; create workspace is Mod+N or Mod+Shift+N."
+      ],
+      "acceptance": [
+        "On Mac press Cmd+Alt+T → the default agent opens in a new tab.",
+        "On Windows the shortcut editor lists the new-agent command with no binding."
+      ],
+      "compat": "Keybinding ids tab.newAgent, tab.newAgent.<agent id>, tab.newTerminal, workspace.create.",
+      "decision": "",
+      "evidence": [
+        "src/shared/keybindings/definitions-core-2.ts:103",
+        "registry:keybindings:tab.newAgent",
+        "registry:keybindings:workspace.create"
+      ],
+      "round": 0,
+      "related": ["17"]
+    },
+    {
+      "id": "D-02-012",
+      "title": "Launch a shape: Solo, Pair, Workbench or Swarm with roles",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Picks a shape when launching several sessions at once.",
+      "user_sees": "Solo gives one builder; Pair a builder and a reviewer; Workbench a scout, builder and reviewer; Swarm a scout, two builders, a tester and a reviewer; Custom has no roles. Each seat shows its role and gets the role's brief ahead of the shared task.",
+      "rules": [
+        "Roles are builder, reviewer, scout and tester, each with a short brief.",
+        "More seats than roles cycle through the roles again.",
+        "Lowering the count below the shape's role count switches to Custom; raising it keeps the shape.",
+        "A seat's prompt is its role brief followed by the shared task; with no task it gets the brief alone.",
+        "The lineup is shown for review before anything starts."
+      ],
+      "acceptance": [
+        "Pick Swarm → five seats labelled scout, builder, builder, tester, reviewer.",
+        "Pick Workbench then set the count to 2 → shape reads Custom.",
+        "Launch Pair with a task → each session's first prompt starts with its role brief then the task."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/launch-agent-roles.ts:70",
+        "src/renderer/src/components/launch-agents/launch-agent-roles.test.ts:4",
+        "src/renderer/src/components/launch-agents/launch-agent-roles.test.ts:41",
+        "README.md:19"
+      ],
+      "round": 0,
+      "related": ["08", "15"]
+    },
+    {
+      "id": "D-02-013",
+      "title": "Choose how many sessions to launch",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Picks a session count before launching.",
+      "user_sees": "Quick count buttons plus a free number entry; seats grow or shrink to match.",
+      "rules": [
+        "Classic dialog: quick counts 1 to 12 and a \"More…\" entry, minimum 1.",
+        "New session page: quick counts 1, 2, 3, 4, 6 and 8.",
+        "Growing adds empty seats; it never copies another seat's agent.",
+        "Shrinking drops seats from the end."
+      ],
+      "acceptance": [
+        "Set count 3 → three empty seats; set 2 → the third seat is gone, the first two unchanged.",
+        "Type 15 in the free entry → fifteen seats appear."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/LaunchSeatCountPicker.tsx:7",
+        "src/renderer/src/components/launch-agents/NewSessionSeatCountRow.tsx:7",
+        "src/renderer/src/components/launch-agents/new-session-seat-state.test.ts:5"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-02-014",
+      "title": "Choose a separate copy per agent or one shared folder",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Chooses between \"Separate copy for each AI\" and \"Same folder for all\" before launching.",
+      "user_sees": "With two or more seats in a git project the separate-copy option is preselected; choosing the shared folder shows a warning that several agents will edit one folder, with a \"Give each its own copy\" fix.",
+      "rules": [
+        "Default: own copy per seat for 2+ seats in a git project; shared for one seat or a non-git folder.",
+        "In a non-git folder the separate-copy option is disabled and a note explains why.",
+        "Plain terminal seats always open in the current folder whatever the choice."
+      ],
+      "acceptance": [
+        "Launch screen with 3 seats in a git project → separate copy is selected.",
+        "Switch to same folder → warning with a fix button appears; click it → separate copy is selected again.",
+        "Open the launch screen on a non-git folder → separate copy is disabled with a note."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/LaunchIsolationToggle.tsx:18",
+        "src/renderer/src/components/launch-agents/LaunchIsolationToggle.test.tsx:11",
+        "src/renderer/src/components/launch-agents/launch-agents-requests.test.ts:14"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-02-015",
+      "title": "Every seat needs an AI and model the user picked; nothing is guessed",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live",
+      "user_does": "Fills each seat in the lineup, optionally using \"Same for all\".",
+      "user_sees": "Seats start empty; a caption says Kolux never picks for you; launch stays disabled until every seat is complete; Same for all copies the first finished seat to the rest.",
+      "rules": [
+        "Changing a seat's agent resets its model to that agent's own default choice list.",
+        "Same for all is disabled until at least one seat is complete.",
+        "Picks that are no longer available are cleared, never substituted.",
+        "A seat may be a plain terminal instead of an AI.",
+        "A plain terminal seat skips the model step entirely."
+      ],
+      "acceptance": [
+        "Open the launch screen with 3 seats → all empty, launch disabled.",
+        "Complete seat 1, click Same for all → seats 2 and 3 match seat 1 and launch enables."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/new-session-seat-state.test.ts:6",
+        "src/renderer/src/components/launch-agents/LaunchAgentsLineup.test.tsx:80",
+        "src/renderer/src/components/launch-agents/LaunchAgentsLineup.test.tsx:164",
+        "HANDOFF-HISTORY.md:1009 (recorded verification: agent picker end to end, launch dialog lineup)"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-02-016",
+      "title": "Per-seat effort, fast mode and role label in the lineup",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Adjusts a seat's options in the lineup.",
+      "user_sees": "An effort selector and a fast-mode checkbox appear when the chosen model offers them; the role label sits on the seat; seats without a model choice read as default model.",
+      "rules": [
+        "Options appear only for models that declare them.",
+        "Each seat keeps its own model, effort and options."
+      ],
+      "acceptance": [
+        "Pick Claude Code with a model that has effort levels → effort selector appears on that seat only."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/LaunchAgentsLineup.test.tsx:80"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-02-017",
+      "title": "Featured agent cards show what is missing and how to get it",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Looks at the agent grid on the launch screen.",
+      "user_sees": "Claude Code, Codex and Grok cards first, the rest collapsed; a featured agent that is not installed is greyed out with a link to set it up in AI connections; each agent can link to its documentation.",
+      "rules": [
+        "No agent is labelled not installed while detection is still running.",
+        "With no agents at all, an empty state says no AI programs were found yet.",
+        "The set-up link opens Settings at AI connections.",
+        "Keyboard: the agent cards and the plain-terminal choice form one choice group with a single tab stop; once a choice outside the cards is made, the cards drop out of the tab order."
+      ],
+      "acceptance": [
+        "Without Grok installed → the Grok card is disabled with a set-up link; click it → AI connections settings open."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/LaunchAgentGrid.test.tsx:93",
+        "src/renderer/src/lib/agent-catalog-links.test.ts:4",
+        "src/renderer/src/components/launch-agents/LaunchAgentGrid.test.tsx:216"
+      ],
+      "round": 0,
+      "related": ["07", "16"]
+    },
+    {
+      "id": "D-02-018",
+      "title": "New session page fills the workspace instead of a dialog",
+      "tier": "P0",
+      "pushed": 7,
+      "state": "live-unverified",
+      "user_does": "Starts a new session on the new look (or the clean grid chrome).",
+      "user_sees": "A full-page sheet titled New session with the project and path, sections for saved teams, how many, what runs in each, a link to add more agents, and the files choice; the footer names the first unfinished seat and has Cancel and a launch button with its shortcut hint.",
+      "rules": [
+        "Shown on the new look; the older look keeps the dialog.",
+        "Count and isolation start from the project's last launch; seats still start empty.",
+        "Ctrl+Enter on Windows and Linux, Cmd+Enter on Mac, launches only when every seat is complete.",
+        "Escape closes the page.",
+        "The add-agents link opens AI connections settings."
+      ],
+      "acceptance": [
+        "Open New session → full-page sheet appears in the workspace area.",
+        "With one empty seat press Ctrl+Enter → nothing launches and the footer names that seat.",
+        "Press Escape → the page closes."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/NewSessionPage.test.tsx:69",
+        "src/renderer/src/components/launch-agents/NewSessionPage.tsx:56",
+        "src/renderer/src/components/launch-agents/new-session-launch-shortcut.test.ts:7",
+        "src/shared/workspace-chrome-cohort.ts:9"
+      ],
+      "round": 0,
+      "related": ["05"]
+    },
+    {
+      "id": "D-02-019",
+      "title": "Classic launch dialog with starter kits and an Advanced section",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Opens the launch dialog on the older look.",
+      "user_sees": "A starter-kit row with a see-all link to the kit gallery, an optional prompt for every session, and Advanced (shape, count, isolation) folded away once a kit is picked; the footer counts sessions and says when a seat still needs an AI.",
+      "rules": [
+        "With no kit picked, the advanced controls show inline.",
+        "Launch stays disabled until every seat has an AI."
+      ],
+      "acceptance": [
+        "Pick a kit → Advanced collapses; clear the kit → shape, count and isolation are visible."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/LaunchAgentsDialog.tsx:137",
+        "src/renderer/src/components/launch-agents/LaunchAgentsDialog.test.tsx:52"
+      ],
+      "round": 0,
+      "related": ["15", "16"]
+    },
+    {
+      "id": "D-02-020",
+      "title": "Save a lineup as a shape or team and reuse it",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Save as team\" (new page) or save-as-shape (dialog), names it, and later picks it.",
+      "user_sees": "The saved lineup appears beside the built-in shapes; it can be renamed or deleted from its menu, and a delete can be undone from the toast.",
+      "rules": [
+        "Saving is disabled until every seat has an AI.",
+        "A save keeps each seat's agent, model, options and role.",
+        "Restoring never swaps in a different AI; a seat whose agent is unavailable comes back empty.",
+        "Clashing names get an increasing number, ignoring case.",
+        "Limits: 40 saved shapes, 60-character names, 12 seats, 4000-character prompt.",
+        "Renaming to a blank name is ignored and only the renamed shape changes."
+      ],
+      "acceptance": [
+        "Save a Pair lineup as Review crew → it appears in the shape list; pick it → both seats refill.",
+        "Delete it → toast with Undo; Undo → it is back."
+      ],
+      "compat": "Importer carries saved shapes: name, seats (agent, model, options, role), isolation and optional prompt.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/NewSessionSavedTeams.tsx:74",
+        "src/renderer/src/components/launch-agents/LaunchShapePicker.test.tsx:9",
+        "src/renderer/src/components/launch-agents/launch-agent-shape-library.test.ts:9",
+        "src/shared/launch-agent-saved-shapes.test.ts:10",
+        "registry:settings-keys:launchAgentSavedShapes",
+        "src/renderer/src/components/launch-agents/launch-agent-shape-library.test.ts:202"
+      ],
+      "round": 0,
+      "related": ["15"]
+    },
+    {
+      "id": "D-02-021",
+      "title": "Use last lineup restores the project's previous launch on request",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Use last lineup\" on the launch screen.",
+      "user_sees": "The button names the remembered agents; clicking it restores the shape, isolation and each seat's agent and model.",
+      "rules": [
+        "Remembered per project, only after at least one agent seat actually launched.",
+        "Never applied automatically.",
+        "Options and the prompt are not remembered.",
+        "Hidden when none of the remembered agents is still available."
+      ],
+      "acceptance": [
+        "Launch Codex + Claude Code in project A, reopen the launch screen → button lists both; click → both seats filled.",
+        "Open the launch screen in project B → no button."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/launch-agent-last-lineup.test.ts:48",
+        "src/renderer/src/components/launch-agents/UseLastLineupButton.tsx:18",
+        "src/renderer/src/store/slices/ui/ui-slice-surface-actions.ts:102"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-02-022",
+      "title": "Usage warning before launching near a limit",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Opens the launch screen while a provider's usage is at or above 80% of its window.",
+      "user_sees": "A non-blocking warning line per affected provider, naming the agent for one seat or counting seats for several, with an approximate reset time when known.",
+      "rules": [
+        "Uses the session window first, then weekly, then monthly.",
+        "Never blocks launching.",
+        "No warning line appears while every affected window is below 80 % used."
+      ],
+      "acceptance": [
+        "With Claude at 85% of its session window, open the launch screen with 3 Claude seats → one warning line counting 3 sessions with a reset time.",
+        "Pick an agent whose session window is at 40 % → no warning line shows."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/usage-launch-warning-copy.test.ts:19",
+        "src/shared/usage-launch-warning.ts:10",
+        "src/shared/usage-window-alert.ts:12",
+        "src/renderer/src/components/launch-agents/LaunchAgentsDialog.test.tsx:111"
+      ],
+      "round": 0,
+      "related": ["06", "07"]
+    },
+    {
+      "id": "D-02-023",
+      "title": "Each launched agent gets its own worktree with a creature name",
+      "tier": "P0",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Launches several agent seats with separate copies.",
+      "user_sees": "Each agent opens in its own new worktree with a generated creature-style name; worktrees are created in the background so the screen does not freeze.",
+      "rules": [
+        "Names never reuse an existing or retired worktree name.",
+        "Each seat carries its own model, effort and options and always starts as a terminal session.",
+        "No cap on seat count beyond the count picker."
+      ],
+      "acceptance": [
+        "Launch 3 Codex seats with separate copies → 3 new worktrees with distinct names, one agent in each."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/launch-agents-requests.ts:31",
+        "src/renderer/src/components/launch-agents/launch-agents-requests.test.ts:8",
+        "README.md:12"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-02-024",
+      "title": "Launched sessions land one per pane with their seat titles",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Clicks launch on a multi-seat lineup.",
+      "user_sees": "A toast says how many sessions are starting; each opens in its own pane and the grid re-tiles; a seat's job title becomes its tab title, otherwise tabs read Terminal N.",
+      "rules": [
+        "A seat title outranks titles the agent writes later.",
+        "A pane whose session fails to start is removed, not left empty.",
+        "Kit launches absorb a single untouched idle tab instead of leaving it behind; other launches never do.",
+        "Without a project folder an error toast explains; if nothing started, a toast says so.",
+        "The lineup is remembered only if at least one agent seat started.",
+        "An untouched tab means a freshly opened shell tab that was never renamed, has no agent bound and is not part-way through choosing an agent."
+      ],
+      "acceptance": [
+        "Launch 4 seats → 4 panes in a re-tiled grid, each tab titled by its seat.",
+        "Force one seat to fail → 3 panes, no blank pane."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/launch-agents-into-workspace.test.ts:29",
+        "src/renderer/src/components/launch-agents/launch-agents-pristine-tab.test.ts:71",
+        "src/renderer/src/components/launch-agents/launch-agents-dialog-launch.ts:90",
+        "src/renderer/src/components/launch-agents/launch-agents-pristine-tab.test.ts:72",
+        "src/renderer/src/components/launch-agents/launch-agents-pristine-tab.test.ts:101"
+      ],
+      "round": 0,
+      "related": ["03", "15"]
+    },
+    {
+      "id": "D-02-025",
+      "title": "Parallel agents receive a rules brief and keep a handoff note",
+      "tier": "P0",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Launches a shape with two or more seats.",
+      "user_sees": "Each agent's first prompt carries the task, then a short rules block: it is one of several agents, must stay in its own worktree, must keep a handoff note updated after every change, and must check library usage against current docs before reporting done.",
+      "rules": [
+        "The rules block is hidden when the prompt is shown back to the user.",
+        "The handoff note is created before the first change.",
+        "Single-seat launches do not get the block."
+      ],
+      "acceptance": [
+        "Launch Pair with a task → each agent creates its handoff note before editing; the visible prompt shows only the task."
+      ],
+      "compat": "Handoff note: one markdown file per worktree inside the project's hidden Kolux folder, named after the worktree.",
+      "decision": "",
+      "evidence": [
+        "src/shared/launch-agent-brief.ts:7",
+        "src/shared/launch-agent-brief.test.ts:8"
+      ],
+      "round": 0,
+      "related": ["08", "12"]
+    },
+    {
+      "id": "D-02-026",
+      "title": "Setup scripts and hook trust are settled before agents start",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Launches agents in a project that defines a setup script or repo hooks.",
+      "user_sees": "A trust confirmation for the project's setup before it runs; the setup runs in a new tab by default; a project set to ask per workspace cannot be bulk-launched and says so.",
+      "rules": [
+        "Setup default: run in a new tab.",
+        "Bulk launch refuses projects that ask about setup per workspace, with an error toast."
+      ],
+      "acceptance": [
+        "Launch two seats in a project with an untrusted setup script → a trust prompt appears before any agent starts."
+      ],
+      "compat": "Setting carried by the importer: setup script launch mode (new tab by default).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/launch-agents/launch-agents-dialog-launch.ts:90",
+        "registry:settings-keys:setupScriptLaunchMode"
+      ],
+      "round": 0,
+      "related": ["01", "10"]
+    },
+    {
+      "id": "D-02-027",
+      "title": "Agents start with their own skip-permission mode by default",
+      "tier": "P0",
+      "pushed": 5,
+      "state": "live",
+      "user_does": "Starts any supported agent without custom arguments.",
+      "user_sees": "Each agent runs in its non-interactive approval mode: Claude Code in auto permission mode (since 2026-10-05), Codex with approvals and sandbox bypassed, Gemini CLI in yolo mode, Aider always saying yes, Goose in auto mode.",
+      "rules": [
+        "User-set default arguments replace the built-in ones.",
+        "An argument an agent does not support is stripped (Kilo).",
+        "Goose's mode is set through its environment rather than a flag."
+      ],
+      "acceptance": [
+        "Start Claude Code from the plus menu → its process runs with auto permission mode.",
+        "Set custom default args for Codex → those args are used instead."
+      ],
+      "compat": "Agent CLI flags as typed: Claude Code --permission-mode auto; Codex --dangerously-bypass-approvals-and-sandbox; Gemini CLI --yolo; Aider --yes-always; Goose GOOSE_MODE=auto.",
+      "decision": "",
+      "evidence": [
+        "src/shared/tui-agent-permissions.ts:7",
+        "src/shared/tui-agent-permissions.ts:10",
+        "src/shared/tui-agent-launch-defaults.ts:14"
+      ],
+      "round": 0,
+      "related": ["10"]
+    },
+    {
+      "id": "D-02-028",
+      "title": "Per-agent command, default arguments and environment",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Overrides an agent's command, its default arguments, or adds environment variables in Agents settings.",
+      "user_sees": "Every later launch of that agent uses the override.",
+      "rules": [
+        "Overrides apply per agent and are empty by default.",
+        "Default arguments replace the built-in permission flags for that agent."
+      ],
+      "acceptance": [
+        "Set Aider's command to a wrapper script → the next Aider launch runs the wrapper."
+      ],
+      "compat": "Settings carried by the importer: per-agent command override, default arguments, default environment.",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:agentCmdOverrides",
+        "registry:settings-keys:agentDefaultArgs",
+        "registry:settings-keys:agentDefaultEnv"
+      ],
+      "round": 0,
+      "related": ["17"]
+    },
+    {
+      "id": "D-02-029",
+      "title": "Model lists per agent, with live discovery for some",
+      "tier": "P1",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Opens the model choices for Claude Code, Codex, Gemini CLI, Cursor or Grok.",
+      "user_sees": "A model list with readable labels; Claude Code, Grok and Cursor ask the installed program for its current models; effort levels show where a model has them.",
+      "rules": [
+        "Claude Code with no explicit pick defaults to its top model at high effort, unless the user's arguments already set a model or effort.",
+        "Grok's discovered list replaces the built-in one; Grok gets the model flag then effort, up to extra-high.",
+        "Labels are derived from model ids when no friendly name exists.",
+        "An agent with no model ever picked starts with no model flag.",
+        "A discovered model is left out only when the agent explicitly marks it disabled; start-up noise, mixed line endings and duplicate entries in its listing are ignored.",
+        "A listing that does not have the expected shape yields no discovered models, never a partial or guessed list.",
+        "An untouched effort choice stays at the model's own default (high for Grok) and never escalates by itself; an explicit model pick always wins over a built-in default model."
+      ],
+      "acceptance": [
+        "Install a Grok version with a new model → the new model appears in Grok's list without an app update."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-session-option-catalog.test.ts:9",
+        "src/shared/agent-session-option-catalog-grok.test.ts:22",
+        "src/shared/claude-model-list-probe.test.ts:52",
+        "src/shared/grok-model-list-probe.test.ts:17",
+        "src/shared/agent-model-probe-spec.test.ts:6",
+        "src/shared/model-id-label.test.ts:4",
+        "src/shared/claude-model-list-probe.test.ts:125",
+        "src/shared/claude-model-list-probe.test.ts:66",
+        "src/shared/grok-model-list-probe.test.ts:100",
+        "src/shared/agent-session-option-catalog-grok.ts:34",
+        "src/shared/agent-session-option-catalog.test.ts:195"
+      ],
+      "round": 0,
+      "related": ["06"]
+    },
+    {
+      "id": "D-02-030",
+      "title": "Agent sessions come back after quitting or a crash",
+      "tier": "P0",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits Kolux (or it is force-closed) with agents running, then reopens the worktree.",
+      "user_sees": "Each sleeping session resumes in its pane with its conversation, using the agent's own resume command; the tab list matches the panes.",
+      "rules": [
+        "Resume works for agents that support it, including Claude Code, Codex, Devin, Copilot, Kimi and others.",
+        "A resume is not replayed twice, and resuming does not steal focus from where the user is.",
+        "Claude Code's resume never opens its interactive session picker by mistake.",
+        "Windows shells get correctly quoted resume commands.",
+        "Tabs are reconciled with the restored sessions so none are duplicated or lost."
+      ],
+      "acceptance": [
+        "Run Claude Code, quit, reopen → the same conversation continues in the same pane.",
+        "Force-kill the app mid-session, reopen → the session resumes.",
+        "On Windows with a path containing spaces → resume still starts."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/resume-sleeping-agent-session.test.ts:84",
+        "src/shared/agent-resume-launch-command.test.ts:40",
+        "src/renderer/src/lib/sleeping-agent-session-launch-windows-quoting.test.ts:94",
+        "src/renderer/src/lib/agent-resume-launch-target.test.ts:40",
+        "tests/e2e/agent-session-quit-resume.spec.ts:67",
+        "tests/e2e/agent-session-live-force-exit-resume.spec.ts:152",
+        "tests/e2e/golden-quit-relaunch-session.spec.ts:29",
+        "src/renderer/src/store/slices/tabs-model-reconciliation.test.ts:22"
+      ],
+      "round": 0,
+      "related": ["03", "19"]
+    },
+    {
+      "id": "D-02-031",
+      "title": "Continue a conversation in a different agent",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Chooses to continue the current session in another agent.",
+      "user_sees": "A dialog to pick the target agent; the new session starts with a transcript of the old conversation as context.",
+      "rules": [
+        "The dialog preselects the source agent if still available, else the saved default, else the first available agent.",
+        "The new session opens in the same workspace and folder.",
+        "If the chosen agent is unavailable nothing launches.",
+        "A failed prompt hand-over is reported separately from a failed launch.",
+        "The handed-over context is a trimmed transcript, not the raw log."
+      ],
+      "acceptance": [
+        "From a Claude Code session choose continue in Codex → Codex opens with the prior conversation as context."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/agent-session-continuation/AgentSessionContinuationDialog.test.tsx:64",
+        "src/renderer/src/lib/launch-agent-session-continuation.test.ts:34",
+        "src/renderer/src/lib/agent-session-fork-context.test.ts:8"
+      ],
+      "round": 0,
+      "related": ["04"]
+    },
+    {
+      "id": "D-02-032",
+      "title": "The starting prompt reaches the agent once, or the user is told",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Launches an agent with a prompt.",
+      "user_sees": "The prompt is typed in once the agent's input is ready; if it cannot be delivered a toast says it was not sent.",
+      "rules": [
+        "Delivery waits for the agent's input to be ready.",
+        "The same prompt is never delivered twice.",
+        "Each agent receives the starting prompt its own way: on the command line, through a prompt flag, through its own startup query (Hermes), or typed in after it starts.",
+        "A typed prompt arrives as one pasted block so its line breaks stay part of the prompt, and is submitted separately; on Windows the wait before submitting grows with prompt length.",
+        "For agents run behind an interpreter wrapper, the prompt is typed only once the real agent process is running, never into the bare shell."
+      ],
+      "acceptance": [
+        "Launch with a prompt into a slow-starting agent → the prompt appears once after the input is ready."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/agent-launch-prompt-delivery.test.ts:29",
+        "src/renderer/src/lib/agent-draft-readiness.test.ts:29",
+        "registry:agent-catalog:promptInjectionMode",
+        "src/shared/agent-prompt-injection.test.ts:18",
+        "src/renderer/src/lib/agent-followup-delivery.test.ts:36",
+        "src/renderer/src/lib/agent-ready-wait.test.ts"
+      ],
+      "round": 0,
+      "related": ["04"]
+    },
+    {
+      "id": "D-02-033",
+      "title": "Start an agent to fix failing checks",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Clicks the fix action next to failing pull request checks.",
+      "user_sees": "An agent session starts in that worktree with the failing checks as its task.",
+      "rules": [
+        "Nothing launches, and an error is shown, when the worktree is gone, no agent is enabled, or saved arguments are invalid.",
+        "A launch that throws does not steal terminal focus."
+      ],
+      "acceptance": [
+        "On a worktree with a failing check, click fix → a new agent pane starts with the failure details."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/fix-checks-agent-launch.test.ts:117"
+      ],
+      "round": 0,
+      "related": ["11"]
+    },
+    {
+      "id": "D-02-034",
+      "title": "Start an agent straight from an issue",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Starts work on a GitHub issue or pull request from its row.",
+      "user_sees": "A worktree is created for the item and an agent starts in it with the item as its first prompt.",
+      "rules": [
+        "A pull request item checks out the PR's branch and uses its short number in the workspace name; a PR-shaped issue link stays an issue.",
+        "Invalid per-launch arguments are refused before any workspace is created.",
+        "A saved agent that is turned off is never launched.",
+        "Non-GitHub trackers are cut (see the D card)."
+      ],
+      "acceptance": [
+        "Start work on an issue → new worktree, agent running with the issue as its prompt."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/launch-work-item-direct.test.ts:133"
+      ],
+      "round": 0,
+      "related": ["01", "11"]
+    },
+    {
+      "id": "D-02-035",
+      "title": "New workspace composer: choose the project",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Opens the new workspace composer and picks a project.",
+      "user_sees": "A searchable project list with Recent and Projects sections, an \"Add project\" entry, and matched letters highlighted.",
+      "rules": [
+        "Recent projects rank first, then by match quality.",
+        "Projects with the same name show enough of their path to tell them apart; long details are shortened in the middle.",
+        "Enter picks the highlighted project; Escape closes the list without closing the composer."
+      ],
+      "acceptance": [
+        "Two projects named api → both show with different path hints.",
+        "Type part of a name → matching letters are highlighted and the best match is first."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/new-workspace/ProjectCombobox.test.tsx:111",
+        "src/renderer/src/components/new-workspace/project-combobox-matching.test.ts:18",
+        "src/renderer/src/components/new-workspace/use-recent-project-ids.test.ts:20",
+        "src/renderer/src/lib/new-workspace-project-options.test.ts:73"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-02-036",
+      "title": "Workspace name field can start from a branch or GitHub item",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Types a name, or picks an existing branch or a GitHub issue or pull request, in the name field.",
+      "user_sees": "Suggestions from branches and GitHub; picking one fills the name; emoji shortcodes expand; a name that slugifies to nothing becomes workspace.",
+      "rules": [
+        "Pasting a GitHub link resolves to that item.",
+        "Enter while an input method is composing text does not submit.",
+        "Shift+Enter in the note adds a line instead of submitting.",
+        "Overlong source queries are refused.",
+        "GitHub items are searched in the chosen project's own repository without asking the user which repository."
+      ],
+      "acceptance": [
+        "Type an existing branch name → it is offered; pick it → the workspace uses that branch.",
+        "Paste a GitHub issue link → the issue is shown and its title seeds the name."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/new-workspace/smart-workspace-source-results.test.ts:26",
+        "src/renderer/src/components/new-workspace/SmartWorkspaceNameField.ime-enter.test.tsx:213",
+        "src/renderer/src/lib/new-workspace.test.ts:101",
+        "src/renderer/src/components/new-workspace/SmartWorkspaceNameField-source-boundaries.test.ts:92"
+      ],
+      "round": 0,
+      "related": ["01", "11"]
+    },
+    {
+      "id": "D-02-037",
+      "title": "Composer parent worktree and advanced options",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Picks a parent worktree and opens Advanced in the composer.",
+      "user_sees": "A parent picker that reads \"No parent\" until set; Advanced holds the branch name, reusing an existing branch, the setup policy and whether to wait for setup; an optional note field sizes to its text.",
+      "rules": [
+        "No parent is the default.",
+        "Reuse branch checks out an existing branch instead of creating one.",
+        "The branch name field under Advanced appears only for git projects.",
+        "Pressing Enter in the parent picker with an empty search clears the parent back to none."
+      ],
+      "acceptance": [
+        "Open the composer → parent reads No parent; open Advanced → branch name, reuse and setup options are visible."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/new-workspace/ComposerParentWorktreePicker.test.tsx:250",
+        "src/renderer/src/components/NewWorkspaceComposerCard.test.tsx:334",
+        "src/renderer/src/components/NewWorkspaceComposerCard.test.tsx:542",
+        "src/renderer/src/components/new-workspace/ComposerParentWorktreePicker.test.tsx:458"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-02-038",
+      "title": "Create workspace, Create more, and their guards",
+      "tier": "P1",
+      "pushed": 2,
+      "state": "live-unverified",
+      "user_does": "Clicks \"Create workspace\", or ticks \"Create more\" to make several in a row.",
+      "user_sees": "Create is disabled until the form is valid; with Create more the composer stays open and clears the linked GitHub item for the next one; focus lands on the right field when it opens.",
+      "rules": [
+        "Enter submits only from fields where that makes sense.",
+        "Switching project keeps a tracker link that is not tied to a repo but clears a repo-scoped GitHub item.",
+        "Long project names stay inside the cross-project dialog.",
+        "A failed worktree creation is retried by policy, and cancelling a submit leaves no half-made workspace."
+      ],
+      "acceptance": [
+        "Tick Create more, create one → composer stays open with the linked item cleared.",
+        "Link a GitHub issue then switch project → the link is cleared."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/new-workspace-create-gates.test.ts:20",
+        "tests/e2e/new-workspace-create-more.spec.ts:9",
+        "tests/e2e/new-workspace-linked-item-project-switch.spec.ts:129",
+        "tests/e2e/new-workspace-cross-project-dialog.spec.ts:27",
+        "src/renderer/src/lib/new-workspace-enter-guard.test.ts:28",
+        "src/renderer/src/lib/workspace-composer-initial-focus.test.ts:6"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-02-039",
+      "title": "Open a worktree in an external editor",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Chooses to open the current worktree in VS Code, a JetBrains IDE, NeoVim or another editor.",
+      "user_sees": "The editor opens on that folder.",
+      "rules": [
+        "JetBrains launchers are found next to their install.",
+        "Windows command-line editors are started through the shell correctly.",
+        "NeoVim opens in a console window.",
+        "The Remote-SSH variant is cut (see the D card)."
+      ],
+      "acceptance": [
+        "Open in VS Code → VS Code opens on the worktree folder."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/main/external-editor-launch.test.ts:13"
+      ],
+      "round": 0,
+      "related": ["12"]
+    },
+    {
+      "id": "D-02-040",
+      "title": "Working spinners and titles credit the agent that was launched",
+      "tier": "P2",
+      "pushed": 3,
+      "state": "live-unverified",
+      "user_does": "Runs an agent and watches the worktree dot and tab title.",
+      "user_sees": "The worktree's busy dot and the tab title are attributed to the agent that was launched there, read from the terminal title the agent sets.",
+      "rules": [
+        "Title patterns are recognised for MiMo, Pi-style agents and Cursor.",
+        "Attribution only claims the named agent when the dot and the row agree."
+      ],
+      "acceptance": [
+        "Launch Cursor's agent → its tab and the worktree dot show Cursor as working."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/worktree-status-spinner-launch-agent.test.ts:36",
+        "src/shared/agent-detection.test.ts:25"
+      ],
+      "round": 0,
+      "related": ["04"]
+    },
+    {
+      "id": "D-02-041",
+      "title": "Opening agents as native chat instead of a terminal",
+      "tier": "H",
+      "pushed": 3,
+      "state": "hidden",
+      "user_does": "With the open-agents-in-chat flag on, starts Claude Code or Codex.",
+      "user_sees": "The session opens as a chat view rather than a raw terminal; if the chat runtime refuses, it falls back to a terminal.",
+      "rules": [
+        "Flag is off by default, so every launch path goes to the terminal.",
+        "Explicit chat requests and the adoption guard only matter with the flag on."
+      ],
+      "acceptance": [
+        "n/a while hidden"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/renderer/src/lib/agent-launch-routing.test.ts:29",
+        "src/renderer/src/lib/structured-agent-session-launch.test.ts:124",
+        "src/renderer/src/lib/structured-agent-session-launch-refusal-fallback.test.ts:108",
+        "registry:settings-keys:openAgentTabsInChatByDefault"
+      ],
+      "round": 0,
+      "related": ["14"]
+    },
+    {
+      "id": "D-02-042",
+      "title": "Claude Agent Teams launch option",
+      "tier": "H",
+      "pushed": 11,
+      "state": "hidden",
+      "user_does": "Turns on Agent Teams mode and launches Claude Code.",
+      "user_sees": "Claude Code starts as a team lead able to spawn teammates.",
+      "rules": [
+        "Mode is off by default.",
+        "Offered only when both the kolux command and Claude Code are installed; never on native Windows or WSL.",
+        "The kolux shim alone does not count."
+      ],
+      "acceptance": [
+        "n/a while hidden"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/main/ipc/preflight-agent-detection.test.ts:170",
+        "registry:settings-keys:claudeAgentTeamsMode",
+        "registry:agent-catalog:claude-agent-teams"
+      ],
+      "round": 0,
+      "related": ["08"]
+    },
+    {
+      "id": "D-02-043",
+      "title": "OpenCode removed from the catalogue",
+      "tier": "H",
+      "pushed": null,
+      "state": "retired 2026-09-23",
+      "user_does": "Had OpenCode chosen as an agent before the removal.",
+      "user_sees": "Old OpenCode picks are normalised away instead of breaking a launch.",
+      "rules": [
+        "A stored pick of the retired agent is migrated, not launched."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/shared/tui-agent-selection.ts:92"
+      ],
+      "round": 0,
+      "related": ["21"]
+    },
+    {
+      "id": "D-02-044",
+      "title": "Third-party agent logos in pickers",
+      "tier": "X",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Looks at any agent list.",
+      "user_sees": "Each agent row and card carries that vendor's logo.",
+      "rules": [
+        "Logos are vendor trademarks bundled with the app; the rebuild needs its own or licensed marks."
+      ],
+      "acceptance": [
+        "Every catalogue agent shows an icon that ships with the app."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/lib/agent-catalog.tsx:2",
+        "registry:agent-catalog:claude"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-02-045",
+      "title": "Custom agent builder and custom agents as launch seats",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Builds a named agent from a template with its own instructions and picks it as a seat under Your agents.",
+      "user_sees": "The custom agent starts on its base AI with its instructions prefixed and a results folder rule.",
+      "rules": [
+        "Limits were 100 agents, 60-character names, 4000-character instructions.",
+        "Each custom agent had a change scope (ask on every change, results folder only, any file); only any-file kept the agent's skip-permission mode."
+      ],
+      "acceptance": [
+        "n/a — cut"
+      ],
+      "compat": "",
+      "decision": "default cut: your-agents settings section cut in table 1b; the department-agents plan wants a successor. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/shared/custom-agents.ts:47",
+        "src/shared/custom-agents.test.ts:13",
+        "src/renderer/src/components/custom-agents/custom-agent-validation.test.ts:11",
+        "registry:settings-keys:customAgents",
+        "src/renderer/src/lib/resolve-pending-agent-choice-saved-agent-scope.test.ts:113"
+      ],
+      "round": 0,
+      "related": ["17"]
+    },
+    {
+      "id": "D-02-046",
+      "title": "GitLab, Linear and Jira sources in the workspace composer",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Seeds a new workspace from a GitLab issue, a Linear issue or a Jira ticket.",
+      "user_sees": "The item resolves in the name field and links to the workspace.",
+      "rules": [
+        "GitHub sources stay (see the name field card)."
+      ],
+      "acceptance": [
+        "n/a — cut"
+      ],
+      "compat": "",
+      "decision": "default cut: non-GitHub providers cut with the linear and integrations sections. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/components/new-workspace/smart-workspace-source-results.test.ts:511",
+        "src/renderer/src/components/new-workspace/use-jira-url-source.test.tsx:94"
+      ],
+      "round": 0,
+      "related": ["01", "11"]
+    },
+    {
+      "id": "D-02-047",
+      "title": "Remote run targets, project location on a host and Remote-SSH editor",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Picks an SSH host or VM as the run target, sets or clones the project location on it, or opens a remote worktree in VS Code Remote-SSH.",
+      "user_sees": "Agents launch on the remote host with their startup prompt delivered there.",
+      "rules": [
+        "All part of area 18."
+      ],
+      "acceptance": [
+        "n/a — cut"
+      ],
+      "compat": "",
+      "decision": "default cut: area 18 remote hosts dropped entirely. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/components/new-workspace/RunTargetCombobox.tsx:52",
+        "src/renderer/src/components/new-workspace/SetProjectLocationDialog.test.tsx:86",
+        "src/renderer/src/lib/launch-agent-background-session-remote.test.ts:70",
+        "src/main/external-editor-launch.test.ts:14"
+      ],
+      "round": 0,
+      "related": ["18"]
+    },
+    {
+      "id": "D-02-048",
+      "title": "Running agents inside WSL",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Sets an agent to run in a WSL distro.",
+      "user_sees": "Kolux detects the agent inside the distro and launches it there.",
+      "rules": [
+        "Part of area 18."
+      ],
+      "acceptance": [
+        "n/a — cut"
+      ],
+      "compat": "",
+      "decision": "default cut: WSL execution dropped with area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/components/agent/AgentSettingsDialog.test.tsx:90"
+      ],
+      "round": 0,
+      "related": ["18"]
+    },
+    {
+      "id": "D-02-049",
+      "title": "Mobile emulator tab and simulator launch coordination",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Picks a new mobile emulator from the create menu.",
+      "user_sees": "An iOS or Android emulator pane opens, with launches coordinated so two do not collide.",
+      "rules": [
+        "Part of area 18."
+      ],
+      "acceptance": [
+        "n/a — cut"
+      ],
+      "compat": "",
+      "decision": "default cut: emulator pane dropped with area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/components/tab-bar/tab-bar-static-create-menu.tsx:6",
+        "src/renderer/src/lib/simulator-launch-coordination.test.ts:18"
+      ],
+      "round": 0,
+      "related": ["18", "03"]
+    },
+    {
+      "id": "D-02-050",
+      "title": "Sparse checkout when setting up a launched worktree",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Launches into a project configured for sparse checkout.",
+      "user_sees": "The new worktree contains only the configured folders.",
+      "rules": [
+        "Per-repo sparse checkout is a cut repo setting."
+      ],
+      "acceptance": [
+        "n/a — cut"
+      ],
+      "compat": "",
+      "decision": "default cut: sparse checkout cut with the per-repo settings. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/main/ipc/worktrees-setup-launch-sparse-checkout.test.ts:96"
+      ],
+      "round": 0,
+      "related": ["01"]
+    },
+    {
+      "id": "D-02-051",
+      "title": "Each catalogue agent's program, start line and opening-prompt route",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Starts any catalogue agent from any launch route, with or without an opening prompt.",
+      "user_sees": "That agent's own program opens in the pane on its interactive screen, the prompt arrives by the route that agent accepts, and the pane is credited to the agent while its program is in front.",
+      "rules": [
+        "One program name per agent decides that it is installed and also marks it as running in the foreground: Claude Code claude · OpenClaude openclaude · Codex codex · Autohand Code autohand · Ante ante · Trae traecli · MiMo Code mimo · Pi pi · OMP omp · Prime Agent prime-agent · Gemini CLI gemini · Antigravity agy · Aider aider · Goose goose · Amp amp · Kilo Code kilo · Kiro kiro-cli · Crush crush · Auggie auggie · Cline cline · Codebuff codebuff · Command Code command-code · Continue cn · Cursor cursor-agent · Droid droid · Kimi kimi · Mistral Vibe vibe · Qwen Code qwen · Rovo Dev rovo · Hermes hermes · OpenClaw openclaw · GitHub Copilot copilot · Grok grok · Devin devin.",
+        "Second names that count too: kimi-code for Kimi (the name its launcher turns into) and mistral-vibe for Mistral Vibe (older installs).",
+        "Why some names differ from the agent: Trae is looked up as traecli because an unrelated open-source tool ships a program with a near-identical name; Continue as cn because the plain word is a shell keyword; Command Code by its full name because its short alias clashes with the Windows command shell.",
+        "Claude Agent Teams (hidden, SESS-042) counts as installed only when a kolux command (release, development or Linux-renamed) and claude are both present; it starts through `kolux claude-teams`; its foreground program is claude, yet a running claude is always credited to Claude Code itself.",
+        "Foreground matching ignores letter case, the folder part and Windows program endings; it also accepts the first word of the agent's start line, Codex and Grok builds whose names begin with the agent's name and a dash, and agents run through a script interpreter, recognised by their own entry script.",
+        "Fixed start arguments: Kiro starts with its chat subcommand and `--tui`, landing directly on its chat screen; Command Code starts with `--trust` so its first-run folder question cannot swallow the prompt; Hermes starts with `--tui`, its full-screen interface rather than its plain line mode; every other agent starts as the bare program, plus the user's default arguments and per-seat model choices (SESS-028, SESS-029).",
+        "Prompt as a trailing argument: Claude Code, OpenClaude, Codex, Trae, Pi, OMP, Prime Agent, Command Code, Cursor, Droid and Grok; for Trae, Prime Agent and Grok an end-of-options double dash goes before the prompt, so a prompt beginning with a dash or reading like one of their subcommands is still taken as the task; Codex's start line is sent only once the pane's shell is ready.",
+        "Prompt behind `--prompt`: MiMo Code. Prompt behind `--prompt-interactive`, submitted while the session stays open: Gemini CLI and Antigravity.",
+        "GitHub Copilot gets its interactive switch (the one-letter form of `--interactive`) followed by the prompt, because its plain prompt option quits once the task is done and would end the pane's session.",
+        "Hermes with a prompt is started through its chat subcommand with `--query` and `--tui`; Hermes itself waits for its input box and submits once; the prompt is handed over so that tools Hermes later runs never see it; the user's own Hermes arguments are kept, but any query or interface-mode arguments the user set give way to Kolux's; if the start line plus the prompt would pass about 24,000 characters, the launch is refused and reported (SESS-005).",
+        "Prompt typed in once the agent is ready (SESS-032): Autohand Code, Ante, Aider, Goose, Amp, Kilo Code, Kiro, Crush, Auggie, Cline, Codebuff, Continue, Kimi, Mistral Vibe, Qwen Code, Rovo Dev, OpenClaw, Devin and Claude Agent Teams; Ante and Devin take this route on purpose, since Ante's own prompt option runs once and quits and Devin's start-up prompt submits instantly.",
+        "A blank or spaces-only prompt counts as none: the agent starts on its plain start line with nothing added."
+      ],
+      "acceptance": [
+        "Install Antigravity, Continue and Cursor only under agy, cn and cursor-agent → all three are offered; a program called plain kiro does not make Kiro count.",
+        "Launch Grok with a prompt that begins with a double dash → Grok works on it as the task instead of reading it as an option.",
+        "Launch GitHub Copilot with a prompt → it works the prompt and the session stays open in the pane.",
+        "Launch Gemini CLI with a prompt → the prompt is submitted at start and the session stays interactive.",
+        "Launch Aider with a prompt → Aider starts bare and the prompt is typed in once, after it is ready.",
+        "Launch Kiro → it opens directly on its chat screen.",
+        "Launch Hermes with and without a prompt → both open its full-screen interface; with a prompt, Hermes submits it exactly once.",
+        "Run Kimi so its process shows as kimi-code → the pane is still credited to Kimi."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:agent-catalog:all 35 rows (detect, launch, expected-process and prompt-mode columns)",
+        "src/shared/tui-agent-config.ts:69",
+        "src/shared/tui-agent-config.ts:78",
+        "src/shared/tui-agent-config.ts:117",
+        "src/shared/tui-agent-config.ts:182",
+        "src/shared/tui-agent-config.ts:206",
+        "src/shared/tui-agent-config.ts:213",
+        "src/shared/tui-agent-config.ts:253",
+        "src/shared/tui-agent-config.ts:264",
+        "src/shared/tui-agent-config.ts:283",
+        "src/shared/tui-agent-startup.ts:102",
+        "src/shared/tui-agent-startup.ts:116",
+        "src/shared/tui-agent-startup.ts:128",
+        "src/shared/tui-agent-startup.ts:154",
+        "src/shared/tui-agent-startup.ts:166",
+        "src/shared/tui-agent-startup.ts:178",
+        "src/shared/hermes-startup-query.ts:132",
+        "src/shared/hermes-startup-query.ts:202",
+        "src/shared/agent-process-recognition.ts:61",
+        "src/shared/agent-process-recognition.ts:83",
+        "src/shared/tui-agent-config.test.ts:21",
+        "src/shared/tui-agent-startup-hermes.test.ts:75",
+        "src/shared/agent-process-recognition.test.ts:181"
+      ],
+      "round": 4,
+      "related": ["04", "03"]
+    }
+  ],
+  "notes": [
+    "The new session page's add-agents link still names OpenCode, which was removed on 2026-09-23; stale copy.",
+    "Two different quick-count sets exist: 1-12 plus free entry in the classic dialog versus 1,2,3,4,6,8 on the new session page; the rebuild should pick one.",
+    "The new workspace composer (D-02-035 to 038) and per-seat worktrees overlap area 01; resume and tab reconciliation (D-02-030) overlap 03 and 19.",
+    "Native chat launch routing plus its session journal, lease, ledger, cross-version wire and log-tail tests (several hundred titles) are carded once as H (D-02-041) and belong to area 14.",
+    "Last lineup, usage warning and shapes/roles (ACCT-6, ACCT-4, AGENT-6) have code and tests but no shipped marker, so state is live-unverified.",
+    "The new-agent shortcut has no default binding on Windows or Linux, only on Mac; the add/remove session shortcuts ship unbound.",
+    "Uncarded internal or out-of-area titles: app relaunch (area 19), file-watcher child process launch, e2e launch-argument helper, Windows delayed command runner.",
+    "Spinner and title attribution (D-02-040) overlaps area 04 agent status.",
+    "Critic r1: state of D-02-007 and D-02-015 raised to live from the undated HANDOFF-HISTORY verification record (agent picker end to end, launch dialog lineup); that record predates the empty-seat rule, so the rebuild should still verify those rules.",
+    "Critic r1: Grok, Claude and other mid-session model/effort changes (slash commands typed into a running session) exist only on the native chat path; recorded as area 14.",
+    "Critic r1: a per-worktree permission-mode store (yolo or manual) exists with no UI that sets it; only the cut custom-agent change scope reads it."
+  ]
+}

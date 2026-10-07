@@ -1,0 +1,101 @@
+# 14-native-chat random sample round 2 (100 of 2486): file	title
+src/renderer/src/components/native-chat/NativeChatAutocompleteMenus.test.tsx	uses command-only empty copy for a picker without skill support
+src/main/native-chat/session-file-resolver.test.ts	falls back to the id glob when the hook transcriptPath does not exist
+src/main/ipc/native-chat.test.ts	returns an error for an unknown session without throwing
+src/renderer/src/components/native-chat/native-chat-tool-fold.test.ts	keeps a hidden interruption as an attribution boundary
+src/shared/native-chat-tool-activity.test.ts	names a previewless tool on its own
+src/renderer/src/components/native-chat/NativeChatComposer.test.tsx	adopts an IME deletion delivered only by compositionend
+src/renderer/src/components/native-chat/native-chat-dismiss-key.test.ts	distinguishes prompts whose later questions or options changed
+src/main/native-chat/session-file-resolver.test.ts	rejects a latest marker descended from a parent-tool-use cursor sidechain
+src/renderer/src/components/native-chat/native-chat-pty-session-options.test.ts	renders the version-neutral seed picker before any host catalog arrives
+src/renderer/src/components/native-chat/native-chat-pty-session-options.test.ts	restores launch-backed values through the tab-to-PTY cache handoff
+src/renderer/src/components/native-chat/NativeChatComposer.test.tsx	shows the model already selected in the Claude TUI when chat opens
+src/main/native-chat/transcript-line-decoders.grok.test.ts	decodes user text and strips <user_query> wrappers
+src/shared/native-chat-agent-support.test.ts	does not step other or unknown agents
+src/shared/native-chat-edit-normalize.test.ts	reads a move header as a rename
+src/main/native-chat/transcript-turn-lifecycle.test.ts	uses Claude terminal stop_reasons and excludes tool-result user rows
+src/renderer/src/components/native-chat/native-chat-typing-indicator.test.ts	stays hidden when the turn is not working, command row or not
+src/renderer/src/components/native-chat/native-chat-pty-session-options.test.ts	stays native and clears stale truth when the switch cannot be verified
+src/renderer/src/components/native-chat/NativeChatToolRun.test.tsx	separates two regions of a file so the gutter jump is accounted for
+src/main/native-chat/structured-agent-session-history-adoption.test.ts	ignores an identical id held under the other provider
+src/renderer/src/components/native-chat/NativeChatToolRun.test.tsx	agrees between the header and the row it names for an unmodelled tool
+src/renderer/src/components/native-chat/native-chat-launch-draft-resolution.test.ts	resolves when the executing host clock trails the renderer within the slack
+src/renderer/src/components/native-chat/structured-agent-session-read-transport.test.ts	ignores callbacks from a subscription superseded by reconnect
+src/main/native-chat/agent-session-wire/agent-session-history-forward-read-budget.test.ts	reports a sequence gap when the next page reaches it
+src/renderer/src/components/native-chat/use-native-chat-launch-draft-adoption.test.tsx	leaves an unadopted seed alone when a non-owning pane resolves it
+src/main/native-chat/transcript-line-decoders-claude-image-companion.test.ts	folds a multi-image companion into the prompt as image refs
+src/main/native-chat/agent-session-journal/journal-row-schema.test.ts	rejects a submission row without its fingerprint, handle, or message body
+src/shared/native-chat-edit-normalize.test.ts	lets the call name the file when a preamble precedes the only header
+src/renderer/src/components/native-chat/NativeChatInteractiveCard.test.tsx	prefers live status over the transcript when both carry a prompt
+src/main/native-chat/transcript-turn-lifecycle.test.ts	exposes a lifecycle decoder only for transcript formats with explicit boundaries
+src/renderer/src/components/native-chat/NativeChatMessageList.test.tsx	falls back to the plain-text twin when the block it stands in for cannot draw
+src/shared/native-chat-image-transcript-markers.test.ts	leaves tabs, newlines and carriage returns to the whitespace collapse
+src/renderer/src/components/native-chat/native-chat-interactive-prompt.test.ts	multi-question single-select: option numbers auto-advance, one final submit Enter
+src/main/native-chat/agent-session-wire/structured-agent-session-holds.test.ts	fails a write-capable hold when resume proves no provider child
+src/renderer/src/components/native-chat/NativeChatComposer.test.tsx	keeps %s slash composer sends pasted
+src/renderer/src/components/native-chat/NativeChatToolRun.test.tsx	offers no empty body for a delete, which names the file and nothing else
+src/renderer/src/components/native-chat/native-chat-send-eligibility.test.ts	allows sends when the desktop drives the pty
+src/renderer/src/components/native-chat/native-chat-preassembled-session-parity.test.ts	re-dedupes unchanged mixed-source histories after the first pass reorders them
+src/renderer/src/components/native-chat/NativeChatInteractiveCard.test.tsx	stays dismissed after answering while the transcript call is still pending
+src/main/native-chat/structured-agent-session-history-adoption.test.ts	finds nothing when no session holds the conversation
+src/renderer/src/components/native-chat/native-chat-typing-redirect.test.ts	focuses the pane for non-interactive clicks
+src/renderer/src/components/native-chat/NativeChatComposer.test.tsx	associates a delayed submit with its optimistic cache entry
+src/renderer/src/components/native-chat/NativeChatMessageRow.test.tsx	appends time to the existing agent controls and inherits their reveal
+src/main/native-chat/transcript-line-decoders.omp.test.ts	marks a cancelled run, which carries no exitCode at all
+src/main/native-chat/wsl-transcript-fs-access.test.ts	swallows close failures so teardown never rejects
+src/renderer/src/components/native-chat/use-native-chat-composer-keydown.test.tsx	dispatches command Enter but completes command Tab
+src/renderer/src/components/native-chat/native-chat-tool-fold.test.ts	folds through a harness noise boundary but not a real user turn
+src/main/native-chat/agent-session-wire/agent-session-delta-coalescer.test.ts	emits nothing after dispose, and leaves no timer behind
+src/main/native-chat/transcript-line-decoders.omp.test.ts	renders a bash execution cell as a tool turn
+src/renderer/src/components/native-chat/native-chat-tool-fold.test.ts	keeps the roster out of the tool array so mobile draws no empty tool run
+src/main/native-chat/transcript-watch-wsl-stall.test.ts	keeps watching and emits exactly one retryable snapshot, then the real one
+src/main/native-chat/host-readable-transcript-path.test.ts	rejects UNC, relative, and drive-letter forms
+src/renderer/src/components/native-chat/native-chat-pagination.test.ts	reports done when the read returned fewer than requested (head reached)
+src/renderer/src/components/native-chat/use-native-chat-live-session.test.ts	seeds ready from readSession when the subscription never delivers a frame
+src/renderer/src/components/native-chat/native-chat-pending-occurrence.test.ts	consumes a leading run with or without one separator per boundary
+src/renderer/src/components/native-chat/native-chat-pending.test.ts	persists slash command markers for the same pane conversation
+src/renderer/src/components/native-chat/use-native-chat-composer-catalog.test.tsx	Enter completes a known pre-init skill while still dispatching a built-in command
+src/renderer/src/components/native-chat/StructuredAgentSessionPaneOverlayLayer.test.tsx	keeps the base z-layer overridable by the working-chat stylesheet rule
+src/renderer/src/runtime/local-structured-session-reveal-visibility.test.ts	still fences a delayed frame from an epoch that was already superseded
+src/renderer/src/components/native-chat/claude-terminal-session-options.test.ts	recovers a custom model when xterm joins the descriptor to the header
+src/renderer/src/components/native-chat/claude-terminal-session-options.test.ts	ignores text without Claude header chrome
+src/shared/native-chat-edit-normalize.test.ts	numbers an added file from 1
+src/main/native-chat/agent-session-journal/journal-corruption-repair.test.ts	rejects the whole surviving range rather than declaring it contiguous
+src/shared/native-chat-edit-normalize.test.ts	does not read a command tool result as a file edit
+src/shared/native-chat-slash-commands.test.ts	prefix-matches case-insensitively
+src/main/native-chat/transcript-watch-liveness.test.ts	drains within the max wait while matching events remain sustained
+src/main/native-chat/agent-session-wire/agent-session-journal-recovery.test.ts	uses the provider handle, never the Kolux session id
+src/main/native-chat/transcript-reader-codex-history-mode.test.ts	reads canonical paginated messages without exposing model-only response copies
+src/renderer/src/components/native-chat/native-chat-message-list-projection.test.ts	retains settled folded runs while exposing changed tools, metadata, and attribution boundaries
+src/renderer/src/components/native-chat/native-chat-composer-state.test.ts	keeps Codex commands under slash and skills under dollar
+src/renderer/src/components/native-chat/use-native-chat-live-session.test.ts	seeds from readSession alongside the subscription for the initial runtime load
+src/main/native-chat/agent-session-journal/journal-corruption-repair.test.ts	keeps asking for provider history until the epoch has content of its own
+src/shared/native-chat-image-transcript-markers.test.ts	folds and strips markers in later text blocks
+src/shared/native-chat-tool-icon.test.ts	reads an MCP tool by its prefix, since the row is named after the tool
+src/shared/native-chat-session-option-commands.test.ts	returns the bare toggle command for flip-only options
+src/renderer/src/components/native-chat/use-native-chat-session-options.test.ts	re-resolves the reported model against models discovered after the read
+src/renderer/src/components/native-chat/native-chat-runtime-owner.test.ts	returns null for an ssh-connection worktree (Model A stays local)
+src/main/native-chat/wsl-transcript-fs-gate.test.ts	quarantines an expired route while keeping healthy routes usable
+src/shared/native-chat-edit-normalize.test.ts	splits a multi-file patch into one card per file
+src/renderer/src/components/native-chat/native-chat-composer-composition.test.tsx	keeps the browser value through a same-draft streaming rerender
+src/main/native-chat/wsl-transcript-fs-access.test.ts	forwards the caller signal so the local stream honours cancellation
+src/main/native-chat/agent-session-wire/structured-agent-session-wedged-profile-migration.test.ts	exits a TUI reservation that crashed before its identity was committed
+src/shared/native-chat-agent-profiles.test.ts	does not grant custom or unverified agents a skill grammar
+src/renderer/src/components/native-chat/native-chat-runtime-send-launch-draft.test.ts	submits the image send before a queued message starts
+src/main/native-chat/agent-session-journal/journal-legacy-import.test.ts	is idempotent: a second import reproduces the same timeline in a new epoch
+src/main/native-chat/agent-session-journal/journal-handle-ownership.test.ts	leaves no handle behind after fifty repeated loads
+src/renderer/src/components/native-chat/native-chat-attachment-upload.test.ts	resolves a local repo worktree to local
+src/renderer/src/components/native-chat/native-chat-diff.test.ts	returns null for non-edit tools
+src/main/native-chat/agent-session-journal/journal-cursor.test.ts	rejects sequence 0 once the journal has compacted past it
+src/shared/native-chat-command-envelope.test.ts	ignores ordinary prompts and non-leading envelope tags
+src/main/native-chat/structured-agent-session-create-support.test.ts	supports Claude under a selected host account
+src/shared/native-chat-image-transcript-markers.test.ts	leaves assistant messages untouched
+src/renderer/src/components/native-chat/native-chat-incremental-assembler.test.ts	keeps equal-timestamp image companions ahead of prompts for normalization
+src/renderer/src/components/native-chat/use-native-chat-composer-attachments.test.tsx	drops queued paths after any disabled transition
+src/shared/native-chat-tool-activity.test.ts	drops the tool name for a shell command with a preview
+src/shared/native-chat-tool-summary.test.ts	survives circular references
+src/shared/native-chat-turn-status.test.ts	is true on the first real text, tool call, or tool result
+src/renderer/src/components/native-chat/StructuredAgentSessionStatusBridge.test.tsx	projects the host status feed without opening a transcript reader
+src/renderer/src/components/native-chat/NativeChatMessageList.test.tsx	keeps prose beside a roster block and drops only the twin
+src/renderer/src/components/native-chat/native-chat-tab-agent-entry.test.ts	returns the entry whose paneKey carries the tab id prefix
+src/main/native-chat/agent-session-wire/structured-agent-session-restart-reconcile.test.ts	reruns after an external store refresh introduces unreconciled leases

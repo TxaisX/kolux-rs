@@ -1,0 +1,101 @@
+# 09-automations random sample round 2 (100 of 1213): file	title
+src/renderer/src/components/automations/automation-authority-identity.test.ts	answers for a runtime from that runtime’s repos only, and never authoritatively
+src/renderer/src/components/automations/AutomationHostFilterNotice.test.tsx	offers Update server for a legacy-unscoped contract
+src/renderer/src/components/automations/automation-host-catalog.test.ts	marks a tombstoned target removed and keeps its last known label
+src/renderer/src/components/automations/automation-host-filter-resolution.test.ts	retains the display selection through a same-id re-pair
+src/renderer/src/components/automations/automation-host-filter-resolution.test.ts	retains a Runtime Self selection until the saved runtime catalog settles
+src/renderer/src/components/automations/AutomationSchedulePicker.test.ts	provides an i18n key for every selectable cadence
+src/renderer/src/components/automations/automation-host-scheduler.test.ts	clears the marker of a target it has no way to address
+src/shared/automation-owner-key.test.ts	drops incarnations when projecting an owner to a stable ref
+src/renderer/src/components/automations/automation-host-status-descriptors.test.ts	offers Reconnect, not a server update, for a target with no verified registration
+src/renderer/src/components/automations/automation-run-open-target.test.ts	keeps an existing split layout when the run leaf is still present
+src/renderer/src/components/automations/automation-host-recovery.test.ts	re-asks a desktop Self host, which has no transport to dial
+src/main/automations/automation-ssh-readoption-migration.test.ts	leaves automations on other targets alone
+src/renderer/src/components/automations/external-automation-scope-gating.test.ts	retains probe owners only for hosts that are actually listed
+src/renderer/src/components/automations/AutomationRunHistory.test.tsx	navigates runs with ArrowDown and ArrowUp and opens on Enter
+src/renderer/src/components/automations/AutomationsPage.refresh-selection.test.tsx	does not re-list through the active runtime just because one is selected
+src/renderer/src/components/automations/AutomationsDetailPane.test.tsx	does nothing on ArrowLeft when already on overview
+src/renderer/src/components/automations/automation-scoped-list-client.test.ts	cannot be handed an owner precondition — the fence is not a parameter
+src/shared/automation-list-scope.test.ts	requires the SSH generation to match, not just the target id
+src/renderer/src/components/automations/AutomationPromptDisclosure.test.tsx	preserves expansion and focus across unrelated automation updates
+src/renderer/src/components/automations/automation-scoped-list-client.test.ts	rejects a legacy-shaped payload instead of committing it as one host
+src/renderer/src/hooks/automation-dispatch-unverifiable-loss.test.ts	records no result, so the run keeps its non-final dispatched status
+src/shared/automation-owner-key.test.ts	round-trips every catalog ref shape
+src/main/persistence-automations.test.ts	records feature interactions when automations are created or manually queued
+src/main/automations/precheck-runner.test.ts	marks a local precheck as timed out
+src/renderer/src/hooks/useAutomationDispatchEvents.test.ts	finalizes a fresh non-reuse terminal only after completed result persistence
+src/renderer/src/components/automations/automation-list-search.test.ts	filters by active query without re-resolving bounds
+src/renderer/src/components/automations/automation-host-orphan-entry.test.ts	leaves the count unreported rather than parsing it as zero
+src/renderer/src/components/automations/automation-host-cache.test.ts	notifies subscribers when entries change
+src/renderer/src/components/automations/hermes-cron-output-parse.test.ts	normalizes CRLF section bodies without retaining carriage returns
+src/renderer/src/components/automations/automation-host-scheduler.test.ts	retries a transient failure with jittered backoff and stops at the attempt cap
+src/renderer/src/components/automations/automation-host-diagnostics.test.ts	counts a commit the fence threw away, and still counts the rows it cost
+src/renderer/src/components/automations/automation-list-view.test.ts	narrows rows to any of the selected hosts and drops pre-catalog rows
+src/main/persistence-automations.test.ts	round-trips an event trigger through create, update and reload
+src/renderer/src/hooks/automations-changed-event-attribution.test.ts	carries the environment and selector of a runtime-published change
+src/renderer/src/components/automations/automation-host-cache-controller.test.ts	skips removed entries and unreachable authorities but keeps the selected host
+src/renderer/src/runtime/sync-runtime-graph-automation-leaf.test.ts	publishes an unmounted automation tab leaf when its PTY is still live (eager buffer present)
+src/renderer/src/components/automations/automation-host-catalog-source.test.ts	assumes scoped support until the capability set is actually known
+src/renderer/src/components/automations/AutomationsPage.external-scope.test.tsx	probes no SSH host when the selection is the local desktop
+src/renderer/src/components/automations/automation-editor-prompt-options.test.ts	enables wrap and the shared find widget without code-editor chrome
+src/renderer/src/components/automations/AutomationsPage.notice-recovery.test.tsx	sends the create dialog Update server to where that destination host is versioned
+src/renderer/src/components/automations/automation-host-filter-resolution.test.ts	never claims removal while the owning authority is offline
+src/main/automations/automation-workspace-host-attribution.test.ts	refuses the desktop dispatch and records why
+src/renderer/src/components/automations/automation-host-filter-resolution.test.ts	retains a desktop SSH selection until the target list hydrates
+src/main/automations/external-manager.test.ts	runs local Hermes lifecycle actions through the CLI
+src/renderer/src/components/automations/AutomationsPage.test.tsx	lists external managers per captured owner rather than probing the machine
+src/renderer/src/components/automations/automation-run-output-snapshot.test.ts	creates a saved snapshot from agent transcript text
+src/shared/automation-list-scope.test.ts	qualifies a local record whose project resolves without a connection as self
+src/renderer/src/components/automations/AutomationPromptDisclosure.test.tsx	offers disclosure after a narrow resize makes the prompt overflow
+src/renderer/src/components/automations/automation-scoped-list-client.test.ts	stays view-only against a host without owner fencing
+src/main/automations/automation-run-writer.test.ts	resolves the host from the written run, which is all a dispatch result names
+src/renderer/src/components/automations/AutomationsPageBreadcrumb.test.tsx	links a run detail page back through Runs and Automations
+src/renderer/src/components/automations/automation-create-destination.test.ts	names the authorities a server update would repair, once each
+src/renderer/src/components/automations/automation-run-open-target.test.ts	does not open when the current tab layout is unavailable
+src/renderer/src/components/automations/automation-host-cache-health.test.ts	marks a host whose unscoped list failed, so it never reads as empty
+src/main/headless-automation-dispatcher-source-boundary.test.ts	creates new-per-run workspaces from the resolved run target repo
+src/renderer/src/lib/automation-terminal-ownership.test.ts	closes the exact fresh desktop tab once after the PTY exit binding is cleared
+src/main/automations/external-manager.test.ts	rejects job IDs that could be parsed as CLI options
+src/renderer/src/components/automations/automation-list-keyboard-navigation.test.ts	returns null when the list is empty
+src/renderer/src/runtime/sync-runtime-graph-automation-leaf.test.ts	does not publish an unmounted tab whose saved PTY is no longer live (no eager buffer)
+src/renderer/src/components/automations/AutomationHostBadges.test.tsx	renders nothing when both axes rest healthy and the contract is scoped
+src/renderer/src/components/automations/AutomationListEmptyView.test.tsx	renders nothing while rows exist
+src/renderer/src/components/automations/automation-list-empty-state.test.ts	keeps each empty string exclusive to its own condition
+src/renderer/src/components/automations/AutomationHostFilterNotice.test.tsx	re-announces when the failed count changes
+src/renderer/src/components/automations/automation-list-row-identity.test.ts	resolves colliding projects and worktrees inside each row authority
+src/renderer/src/components/automations/automation-scoped-list-client.test.ts	creates an event-triggered automation once the host confirms support
+src/main/ipc/automations-external-scope.test.ts	keeps one cache across requests, so a repeat read costs no second probe
+src/renderer/src/components/automations/automation-host-filter-resolution.test.ts	settles an orphan selection only on an authoritative orphan count
+src/renderer/src/components/automations/AutomationHostFilterNotice.test.tsx	keeps the polite region mounted while there is nothing to announce
+src/main/automations/automation-dispatch-host-fence.test.ts	dispatches while the registration the record captured is still the live one
+src/renderer/src/components/automations/automation-run-view-state.test.ts	keeps skipped or missing-workspace runs as metadata-only history
+src/main/automations/external-automation-probe-scheduler.test.ts	cancels queued and in-flight probes whose scope is no longer selected
+src/renderer/src/components/automations/automation-run-history-keyboard-navigation.test.ts	ignores modified or composing keys
+src/renderer/src/components/automations/use-external-automation-scope-retention.test.tsx	retains nothing once the page unmounts
+src/renderer/src/components/automations/automation-setup-decision.test.ts	omits setup decision when no setup source is visible
+src/renderer/src/components/automations/AutomationsPage.cross-authority-actions.test.tsx	runs the selected desktop row on the desktop, not on the runtime holding the same id
+src/renderer/src/components/automations/external-automation-scope-keys.test.ts	separates host incarnations, so a re-added target does not adopt old keys
+src/main/automations/automation-owner-fencing.test.ts	refuses an update, delete, and dispatch fenced on a stale generation
+src/main/automations/automation-event-sources.test.ts	fires review_checks_failed on a pending-to-failure transition
+src/main/automations/service-precheck.test.ts	runs prechecks for event-triggered runs, not only scheduled ones
+src/main/automations/automation-run-terminal-surface.test.ts	answers from an adopted PTY bound to the pane, with no leaves at all
+src/renderer/src/components/automations/automation-run-history-keyboard-navigation.test.ts	defaults to index 0 on ArrowDown when nothing was selected
+src/renderer/src/components/automations/AutomationsPage.create-destination.test.tsx	refuses the save when nothing names the record’s host
+src/shared/automation-legacy-list-partition.test.ts	does not read a bare local value as self when the project is hosted over SSH
+src/main/automations/automation-event-run.test.ts	does not match a scheduled automation (no eventTrigger)
+src/renderer/src/components/automations/AutomationsPage.test.tsx	refreshes after a mutation so the list reflects the write
+src/shared/automation-owner-precondition.test.ts	rejects a self precondition against an SSH record
+src/renderer/src/components/automations/AutomationsPage.test.tsx	lists an ambiguous-workspace row in the orphan bucket and keeps History on it
+src/renderer/src/components/automations/automation-host-catalog.test.ts	treats absence as removal only once the target list hydrated
+src/renderer/src/components/automations/AutomationsPage.create-destination.test.tsx	reports a kept original as two live copies, never as a completed move
+src/renderer/src/components/automations/automation-scoped-list-client.test.ts	propagates an unreachable authority instead of calling it incompatible
+src/renderer/src/components/automations/automation-list-search.test.ts	normalizes query casing and whitespace
+src/renderer/src/components/automations/AutomationsPage.refresh-selection.test.tsx	does not re-run the whole refresh when the settings identity changes
+src/main/automations/external-manager-scoped.test.ts	rejects a runtime authority before any probe
+src/main/persistence-automations.test.ts	persists setup decisions only for new-per-run automations
+src/renderer/src/components/automations/CreateFromPicker.test.tsx	keeps an explicit local repo on the local client even when a runtime is focused
+src/renderer/src/components/automations/automation-host-diagnostics.test.ts	counts one hit when the same host appears twice in one refresh
+src/renderer/src/components/automations/AutomationDetail.test.tsx	shows a paused record as a plain pause
+src/main/automations/automation-owner-fencing.test.ts	keeps delete available on an orphan but refuses to dispatch it
+src/shared/automation-legacy-list-partition.test.ts	orphans unknown types, missing SSH ids, and unresolvable projects
+src/shared/automation-list-scope.test.ts	projects and scopes in one collection traversal

@@ -1,0 +1,2077 @@
+﻿# CLI version 0.15.2; group -> command -> flags as printed in each help (Options lines)
+diagnostics
+  memory
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+account
+  add
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --agent <id>           Account provider: claude or codex (default claude)
+    --agent defaults to claude. Requires the Kolux runtime to be running on this machine.
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+skills
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  get
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --topic
+    --full                 Print the full guide with bundled references
+    --reference <name>     Print one bundled reference by name
+    --references           List the bundled reference names for a topic
+  install
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --skill <name>         Bundled skill to act on; repeat for several
+    --all
+    --agent <names>        Comma-separated install targets; default is detected agents
+    --local                Target the current project instead of the global install
+    --dry-run
+  update
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --skill <name>         Bundled skill to act on; repeat for several
+    --all
+    --local                Target the current project instead of the global install
+    --dry-run
+host
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --environment and --pairing-code are rejected rather than ignored: paired servers come from this machineΓÇÖs pairing store, so a routed answer would describe two machines at once.
+environment
+  add
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --name <name>          Name for the new worktree or automation
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  rm
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+vm
+  recipe doctor
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --recipe-id
+    --repo-path
+    --provision
+    --connect
+    --page <id>            Stable browser page id from `kolux tab list --json`
+automations
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+  create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --name <name>          Name for the new worktree or automation
+    --prompt <text>        Prompt text for agent-backed commands
+    --provider <agent>     Agent id such as codex, claude, or gemini
+    --precheck
+    --precheck-timeout
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+    --workspace <selector> Existing worktree selector for automation runs
+    --project
+    --host
+    --project-host-setup
+    --source-context <json|null> Explicit TaskSourceContext for automation task/provider data
+    --workspace-mode <mode> existing or new-per-run
+    --base-branch <ref>    Base branch/ref to create the worktree from
+    --trigger <schedule>   Automation schedule preset, cron, or RRULE
+    --schedule <schedule>  Alias for --trigger
+    --time <HH:MM>        Time used with daily/weekdays/weekly presets
+    --day <0-6>           Day used with weekly preset, Sunday=0
+    --timezone <tz>       IANA timezone for the automation
+    --enabled              Enable the automation
+    --disabled             Disable the automation
+    --missed-run-grace-minutes <n> Missed-run grace window
+    --reuse-session        Reuse the previous live session for existing-workspace runs
+    --fresh-session        Disable session reuse for future runs
+    --host runtime:<environment-id> targets that paired Kolux server; use the id from `kolux environment list`, not the environment name.
+  edit
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+    --name <name>          Name for the new worktree or automation
+    --prompt <text>        Prompt text for agent-backed commands
+    --provider <agent>     Agent id such as codex, claude, or gemini
+    --precheck
+    --precheck-timeout
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+    --workspace <selector> Existing worktree selector for automation runs
+    --project
+    --host
+    --project-host-setup
+    --source-context <json|null> Explicit TaskSourceContext for automation task/provider data
+    --workspace-mode <mode> existing or new-per-run
+    --base-branch <ref>    Base branch/ref to create the worktree from
+    --trigger <schedule>   Automation schedule preset, cron, or RRULE
+    --schedule <schedule>  Alias for --trigger
+    --time <HH:MM>        Time used with daily/weekdays/weekly presets
+    --day <0-6>           Day used with weekly preset, Sunday=0
+    --timezone <tz>       IANA timezone for the automation
+    --enabled              Enable the automation
+    --disabled             Disable the automation
+    --missed-run-grace-minutes <n> Missed-run grace window
+    --reuse-session        Reuse the previous live session for existing-workspace runs
+    --fresh-session        Disable session reuse for future runs
+  remove
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+  run
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+  runs
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+project
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  setups
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --project
+    --host
+    --host runtime:<environment-id> runs the command on that paired Kolux server instead of filtering this runtime; unknown environment ids are rejected rather than answered with an empty list.
+  setup-existing-folder
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --project
+    --host
+    --path <path>          Path argument for the command
+    --kind
+    --display-name <name>  Override the Kolux display name
+    --host runtime:<environment-id> targets that paired Kolux server; use the id from `kolux environment list`, not the environment name.
+  setup-clone
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --project
+    --host
+    --url <url>            URL to navigate to
+    --destination
+    --display-name <name>  Override the Kolux display name
+    --host runtime:<environment-id> targets that paired Kolux server; use the id from `kolux environment list`, not the environment name.
+  setup-create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --project
+    --host
+    --setup-id
+    --path <path>          Path argument for the command
+    --kind
+    --display-name <name>  Override the Kolux display name
+    --worktree-base-path
+    --git-username
+    --state
+    --method
+    --host runtime:<environment-id> targets that paired Kolux server; use the id from `kolux environment list`, not the environment name.
+  setup-update
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --setup run|skip|inherit Setup policy for repo-defined setup hooks
+    --display-name <name>  Override the Kolux display name
+    --path <path>          Path argument for the command
+    --worktree-base-path
+    --git-username
+    --kind
+    --state
+    --method
+  setup-delete
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --setup run|skip|inherit Setup policy for repo-defined setup hooks
+repo
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  add
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --path <path>          Path argument for the command
+  show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+  set-base-ref
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+    --ref <ref>            Base ref to persist for the repo
+  search-refs
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+    --query <text>        Search text for matching refs
+    --limit <n>            Maximum number of rows to return
+worktree
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+    --limit <n>            Maximum number of rows to return
+  show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  current
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+    --project
+    --host
+    --project-host-setup
+    --name <name>          Name for the new worktree or automation
+    --agent <id>          Launch a known TUI agent in the first terminal
+    --prompt <text>        Prompt text for agent-backed commands
+    --base-branch <ref>    Base branch/ref to create the worktree from
+    --issue <number|null>  Linked GitHub issue number
+    --linear-issue <id|url|null> Linked Linear issue identifier or URL; null clears on set
+    --comment <text>       Comment stored in Kolux metadata
+    --setup run|skip|inherit Setup policy for repo-defined setup hooks
+    --parent-worktree <selector> Parent selector such as identity:<identity>, active/current, id:<repo-id>::<path>, branch:<branch>, issue:<number>, path:<path>, folder:<id>, or worktree:<worktreeId>
+    --no-parent            Force no parent lineage for unrelated work
+    --run-hooks
+    --activate             Reveal the new worktree in the Kolux app
+    --host runtime:<environment-id> creates on that paired Kolux server; use the id from `kolux environment list`, not the environment name.
+    --no-parent only affects Kolux lineage; omit --base-branch to use the repo default base, or pass the default base ref explicitly for independent top-level work.
+  set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --display-name <name>  Override the Kolux display name
+    --issue <number|null>  Linked GitHub issue number
+    --linear-issue <id|url|null> Linked Linear issue identifier or URL; null clears on set
+    --comment <text>       Comment stored in Kolux metadata
+    --workspace-status <id> Board status id (defaults: todo, in-progress, in-review, completed)
+    --parent-worktree <selector> Parent worktree selector such as identity:<identity>, id:<repo-id>::<path>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --no-parent            Force no parent lineage for unrelated work
+  rm
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --force                Force worktree removal when supported; does not force branch deletion
+    --run-hooks
+  ps
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --limit <n>            Maximum number of rows to return
+  changes
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  overlap
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+file
+  open
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --path <path>          Path argument for the command
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  diff
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --path <path>          Path argument for the command
+    --staged               Open staged source-control changes
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  open-changed
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --mode <mode>          Mode such as edit, diff, or both
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+terminal
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --limit <n>            Maximum number of rows to return
+    --include-visual-layouts Include tab and pane topology in JSON output
+  show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+  read
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+    --cursor <n>           Line cursor from a previous read (returns only new output)
+    --limit <n>            Maximum number of rows to return
+    --screen
+    --screen and --cursor are mutually exclusive: a screen read is the current frame and has no history to page.
+  send
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+    --text <text>          Text payload to send or type
+    --enter                Append Enter after sending text
+    --interrupt            Send as an interrupt-style input when supported
+    --wait-submit
+    --retry-request
+    --wait-submit only observes the accepted prompt for the requested duration; timeout returns the queued/input-accepted receipt and never resends.
+  wait
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+    --for exit|tui-idle    Wait condition to satisfy
+    --timeout-ms <ms>     Maximum wait time before timing out
+  create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --command <text>       Command to run in the terminal on startup
+    --title <text>         Custom title for the terminal tab (omit to reset)
+    --focus                Reveal the created terminal session in Kolux
+  rename
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+    --title <text>         Custom title for the terminal tab (omit to reset)
+  split
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+    --direction <dir>      Direction: up|down|left|right for scroll, horizontal|vertical for split
+    --command <text>       Command to run in the terminal on startup
+  switch
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+  focus
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+  close
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+    --tab                  Close the whole tab and wait for durable persistence
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --all
+orchestration
+  run-create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --objective
+    --from
+    --retry-request
+    --retry-request is only for exact recovery after an unknown mutation result.
+  run-use
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+    --from
+    --takeover-legacy
+    --retry-request
+    --takeover-legacy must run in the live coordinator agent terminal it binds; it preserves existing worker assignments.
+  run-current
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --from
+  run-list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --limit <n>            Maximum number of rows to return
+    --cursor <n>           Line cursor from a previous read (returns only new output)
+  run-show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+  send
+  check
+    --ack: acknowledge the prior whole batch before checking/waiting.
+    --peek: return only unread messages without marking them read.
+    --all: return every message for the handle; does not mark read.
+    --wait: block until a matching message arrives or --timeout-ms expires.
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --terminal <handle>  Runtime-issued terminal handle
+    --run
+    --ack
+    --unread
+    --peek
+    --all
+    --types
+    --format <png|jpeg>    Screenshot image format
+    --wait
+    --timeout-ms <ms>     Maximum wait time before timing out
+    --retry-request
+    --types is the wake condition for --wait; a returned Delivery is always the whole FIFO batch, so it is never filtered by type. Only --peek and --all filter their rows.
+    --format renders the returned rows as local text only; it never writes to another terminal.
+  ask
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --to
+    --run
+    --question
+    --resume
+    --dispatch-capability
+    --options
+    --timeout-ms <ms>     Maximum wait time before timing out
+    --from
+    --retry-request
+  reply
+  inbox
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --limit <n>            Maximum number of rows to return
+    --terminal <handle>  Runtime-issued terminal handle
+    --full                 Include all supported V1 issue context within caps
+  task-create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --spec
+    --task-title <text>  Concise title for the orchestration task
+    --display-name <text> UI label shown for dispatched worker rows
+    --deps
+    --parent
+    --run
+    --from
+    --retry-request
+  task-list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --status
+    --ready
+    --brief
+    --run
+    --from
+    --brief collapses whitespace and caps each spec at 160 characters.
+  task-update
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+    --status
+    --result
+    --run
+    --from
+    --retry-request
+  dispatch
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --task
+    --to
+    --from
+    --run
+    --inject
+    --dry-run
+    --return-preamble
+    --retry-request
+  dispatch-show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --task
+    --preamble
+    --from
+  worker-start
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --task
+    --spec
+    --task-title <text>    Concise title for an orchestration task
+    --deps
+    --parent
+    --on
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --name <name>          Name for the new worktree or automation
+    --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+    --base-branch <ref>    Base branch/ref to create the worktree from
+    --display-name <name>  Override the Kolux display name
+    --comment <text>       Comment stored in Kolux metadata
+    --setup run|skip|inherit Setup policy for repo-defined setup hooks
+    --agent <id>          Launch a known TUI agent in the first terminal
+    --model <id>          Provider model id for a new agent launch
+    --effort <level>      Reasoning effort for the selected model
+    --terminal <handle>  Runtime-issued terminal handle
+    --tier
+    --retry-of
+    --timeout-ms <ms>     Maximum wait time before timing out
+    --run
+    --from
+    --retry-request
+    --model supports Claude, Codex, and Cursor opaque provider model ids; --effort requires --model. Neither can combine with --terminal.
+    --tier classifies the task (major/deep/build/light) and resolves model and effort from Settings > Agents > Model routing for the coordinator's own agent; it cannot combine with --model, --effort, or --terminal. --agent may still be passed alongside --tier, but only to name the same agent as the coordinator (or to supply one when the coordinator's agent is unknown) ΓÇö it never picks a different provider.
+    --on selects only the worker server; the Run and this command remain on the current Kolux server.
+    --retry-of needs --task naming the failed Task (--spec creates a new one) and does not inherit placement; repeat the intended --on/worktree and --agent/terminal choices.
+  worker-show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --dispatch
+  worker-read
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --dispatch
+    --source
+    --cursor <cursor>      Opaque cursor returned by a previous worker-read page
+    --limit <n>            Maximum number of rows to return
+  worker-stop
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --dispatch
+    --retry-request
+  worker-abandon
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --dispatch
+    --retry-request
+  worker-release
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --dispatch
+    --retry-request
+  worker-retain
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --dispatch
+    --retry-request
+  worker-list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --run
+    --terminal-state <state> Terminal accounting filter: active, reclaimable, retained, release_pending, release_unknown, or released
+    --include-remote      Include connected-server worker observations
+    --cursor <cursor>      Opaque page cursor copied from page.nextCursor
+    --limit <n>            Maximum number of rows to return
+  coordinator-start
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --spec
+    --from
+    --poll-interval-ms
+    --max-concurrent
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  coordinator-stop
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  gate-create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --task
+    --question
+    --options
+    --from
+    --retry-request
+  gate-resolve
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+    --resolution
+    --from
+    --retry-request
+  gate-list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --task
+    --status
+    --run
+    --from
+    --run inspects a named Run without binding; otherwise gates are scoped to the caller.
+  reset
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --all
+    --tasks
+    --messages
+    --retry-request
+  request-show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --request
+computer
+  capabilities
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  permissions
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --id <id>             Identifier for a target item or permission
+  list-apps
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  list-windows
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --app <app>            App name, bundle ID, or pid:N
+  get-app-state
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+  click
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --element-index <n>   Element index from get-app-state
+    --x
+    --y
+    --click-count
+    --mouse-button <btn>   Mouse button: left, right, or middle
+    --modifiers <chord>  Modifier keys held only for this click
+  perform-secondary-action
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --element-index <n>   Element index from get-app-state
+    --action <name>       Secondary accessibility action name
+  scroll
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --element-index <n>   Element index from get-app-state
+    --x
+    --y
+    --direction <dir>      Direction: up|down|left|right for scroll, horizontal|vertical for split
+    --pages <n>           Number of scroll pages
+  drag
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --from-element-index <n> Source element index from get-app-state
+    --to-element-index <n> Destination element index from get-app-state
+    --from-x <x>           Source window-local x coordinate
+    --from-y <y>           Source window-local y coordinate
+    --to-x <x>             Destination window-local x coordinate
+    --to-y <y>             Destination window-local y coordinate
+  type-text
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --text <text>          Text payload to send or type
+    --text-stdin          Read text payload from stdin
+  press-key
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --key <key>            Single key, e.g. Return, Escape, Tab, Left, or PageUp
+  hotkey
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --key <key-combo>      Modifier chord with one key, e.g. CmdOrCtrl+A
+  paste-text
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --text <text>          Text payload to send or type
+    --text-stdin          Read text payload from stdin
+  set-value
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --session <id>        Snapshot namespace for a related computer-use workflow
+    --app <app>            App name, bundle ID, or pid:N
+    --window-id <id>      Target a window id from list-windows
+    --window-index <n>   Target a window index from list-windows
+    --restore-window     Bring the target app/window forward before the operation
+    --no-screenshot       Skip screenshot capture after the operation
+    --element-index <n>   Element index from get-app-state
+    --value <text>         Value to fill or select
+    --value-stdin         Read set-value payload from stdin
+emulator
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  attach
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --focus                Reveal the created terminal session in Kolux
+    --device
+  tap
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --x
+    --y
+  type
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --text <text>          Text payload to send or type
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  gesture
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --points
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  button
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --name <name>          Name for the new worktree or automation
+  rotate
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --orientation
+  exec
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --command <text>       Command to run in the terminal on startup
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  kill
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  devices
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  shutdown
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  install
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --path <path>          Path argument for the command
+    --reinstall
+  launch
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --package
+    --activity             Include issue field-change history
+  permissions
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --op
+    --package
+    --permission
+  ax
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  logcat
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --device
+    --emulator
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --lines
+tab
+  create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --url <url>            URL to navigate to
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --profile <id>        Browser profile id
+  list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --show-profile        Include tab profile in text output
+  show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  current
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  profile list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+  profile create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --label
+    --scope
+    --no-ua-spoof         Keep Electron's native user agent
+  profile delete
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --profile <id>        Browser profile id
+  profile set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --profile <id>        Browser profile id
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  profile show
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  profile use-default
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  profile clone
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --profile <id>        Browser profile id
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  switch
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --index <n>            Tab index to switch to
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --focus                Reveal the created terminal session in Kolux
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  close
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --index <n>            Tab index to switch to
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+mouse
+  move
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --x
+    --y
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  down
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --button
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  up
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --button
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  wheel
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --dy
+    --dx
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+set
+  device
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --name <name>          Name for the new worktree or automation
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  offline
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --state
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  headers
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --headers
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  credentials
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --user
+    --pass
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  media
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --color-scheme
+    --reduced-motion
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+clipboard
+  read
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  write
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --text <text>          Text payload to send or type
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+dialog
+  accept
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --text <text>          Text payload to send or type
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  dismiss
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+storage
+  local get
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --key <key>            Key argument for this command
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  local set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --key <key>            Key argument for this command
+    --value <text>         Value to fill or select
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  local clear
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  session get
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --key <key>            Key argument for this command
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  session set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --key <key>            Key argument for this command
+    --value <text>         Value to fill or select
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+  session clear
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) open
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+(top-level) serve
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --port
+    --pairing-address
+    --mobile-pairing
+    --no-pairing
+    --project-root
+    --recipe-json
+    --page <id>            Stable browser page id from `kolux tab list --json`
+    --pairing-address changes only the client-advertised address; use a reachable LAN, Tailscale, SSH-forward, or reverse-proxy endpoint.
+(top-level) status
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+(top-level) agent-context
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+(top-level) linear
+(top-level) snapshot
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) goto
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --url <url>            URL to navigate to
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) click
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) fill
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --value <text>         Value to fill or select
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) type
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --input <text>         Text to type at current focus
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) select
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --value <text>         Value to fill or select
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) hover
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) keypress
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --key <key>            Key argument for this command
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) scroll
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --direction <dir>      Direction: up|down|left|right for scroll, horizontal|vertical for split
+    --amount <pixels>      Scroll distance in pixels
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) back
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) reload
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) screenshot
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --format <png|jpeg>    Screenshot image format
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) eval
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --expression <js>     JavaScript expression to evaluate
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) wait
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --selector
+    --timeout
+    --text <text>          Text payload to send or type
+    --url <url>            URL to navigate to
+    --load
+    --fn
+    --state
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) check
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) uncheck
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) focus
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) clear
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) drag
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --from
+    --to
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) upload
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --files
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) dblclick
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) forward
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) scrollintoview
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) get
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --what
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) is
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --what
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) inserttext
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --text <text>          Text payload to send or type
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) find
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --locator
+    --value <text>         Value to fill or select
+    --action <name>       Secondary accessibility action name
+    --text <text>          Text payload to send or type
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) download
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --selector
+    --path <path>          Path argument for the command
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) highlight
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --selector
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+(top-level) exec
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --command <text>       Command to run in the terminal on startup
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+
+# SUPPLEMENTARY: commands declared in src/cli/specs but absent from root --help; help captured by direct call
+claude-teams
+terminal stop
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+open-url
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --url <url>            URL to navigate to
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+select-all
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --element <ref>        Element ref from snapshot (e.g. e3)
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+pdf
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+full-screenshot
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --format <png|jpeg>    Screenshot image format
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+cookie get
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --url <url>            URL to navigate to
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+cookie set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --name <name>          Name for the new worktree or automation
+    --value <text>         Value to fill or select
+    --domain
+    --path <path>          Path argument for the command
+    --secure
+    --httpOnly
+    --sameSite
+    --expires
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+cookie delete
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --name <name>          Name for the new worktree or automation
+    --domain
+    --url <url>            URL to navigate to
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+viewport
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --width
+    --height
+    --scale
+    --mobile
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+geolocation
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --latitude
+    --longitude
+    --accuracy
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+intercept enable
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --patterns
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+intercept disable
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+intercept list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+capture start
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+capture stop
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+console
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --limit <n>            Maximum number of rows to return
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+network
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --limit <n>            Maximum number of rows to return
+    --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+    --page <id>            Stable browser page id from `kolux tab list --json`
+agent hooks prepare-codex
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+agent hooks status
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+agent hooks off
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+agent hooks on
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --page <id>            Stable browser page id from `kolux tab list --json`
+linear save-issue
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --team
+    --title <text>         Custom title for the terminal tab (omit to reset)
+    --description
+    --body <text>         Linear comment or issue body
+    --body-file <path|->  Read Linear body from a file or stdin
+    --state
+    --assignee
+    --priority
+    --estimate
+    --due-date
+    --label
+    --project
+    --parent-id
+    --write-id <uuid>     Retry id from linear_write_unconfirmed
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear list-issues
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --team
+    --cycle
+    --label
+    --limit <n>            Max issues to return; omit to return every match
+    --query <text>        Search text for matching refs
+    --state
+    --cursor <cursor>      Opaque cursor from a previous list-issues page; issued cursors bind the workspace, raw Linear cursors need --workspace
+    --order-by
+    --project
+    --release
+    --assignee
+    --delegate
+    --parent-id
+    --priority <0-4>       0=none, 1=urgent, 2=high, 3=medium, 4=low
+    --created-at
+    --updated-at
+    --include-archived
+    --workspace <id|all>  Connected Linear workspace id, or all
+    --priority is 0=none, 1=urgent, 2=high, 3=medium, 4=low. JSON includes priorityLabel on each issue.
+linear relation add
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --related
+    --type
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear relation remove
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --related
+    --type
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear issue
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --comments             Include threaded Linear comments
+    --children             Include recursive child issues
+    --depth <n>            Child issue depth for --children/--full
+    --attachments          Include attachment metadata and URLs
+    --relations            Include blocking, related, and duplicate links
+    --activity             Include issue field-change history
+    --full                 Include all supported V1 issue context within caps
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Linear issue key, id, or URL
+linear search
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --limit <n>            Maximum number of rows to return
+    --workspace <id|all>  Connected Linear workspace id, or all
+    --query <text>        Text to search across Linear issues
+linear team list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --workspace <id>      Connected Linear workspace id
+linear team members
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --team
+    --workspace <id>      Connected Linear workspace id
+linear team states
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --team
+    --workspace <id>      Connected Linear workspace id
+linear team labels
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --team
+    --workspace <id>      Connected Linear workspace id
+linear project list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --query <text>        Search text for matching refs
+    --limit <n>            Maximum number of rows to return
+    --workspace <id>      Connected Linear workspace id
+linear list
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --filter
+    --team
+    --limit <n>            Maximum number of rows to return
+    --workspace <id>      Connected Linear workspace id
+linear status set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --to <state>          Exact Linear workflow state name
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear assignee set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --me
+    --to-id
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear assignee clear
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear priority set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --to <state>          Exact Linear workflow state name
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear priority clear
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear estimate set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --to <state>          Exact Linear workflow state name
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear estimate clear
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear due-date set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --to <state>          Exact Linear workflow state name
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear due-date clear
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear label add
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --label
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear label remove
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --label
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear label set
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --label
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear comment add
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --body <text>         Linear comment or issue body
+    --body-file <path|->  Read Linear body from a file or stdin
+    --reply-to <id>       Comment id to reply to
+    --write-id <uuid>     Retry id from linear_write_unconfirmed
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear attach
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --current              Use the current Kolux worktree linked Linear issue
+    --url <url>           Absolute http(s) link to attach
+    --title <text>        Attachment title
+    --write-id <uuid>     Retry id from linear_write_unconfirmed
+    --workspace <id>      Connected Linear workspace id
+    --id <id>             Identifier for a target item or permission
+linear create
+    --help                 Show this help message
+    --json                 Emit machine-readable JSON
+    --pairing-code
+    --environment
+    --title <text>        New Linear issue title
+    --body <text>         Linear comment or issue body
+    --body-file <path|->  Read Linear body from a file or stdin
+    --team <key>          Linear team key
+    --project
+    --state
+    --assignee
+    --priority
+    --estimate
+    --due-date
+    --label
+    --parent <id>         Parent Linear issue key, id, or URL
+    --parent-current      Use the current linked issue as parent
+    --write-id <uuid>     Retry id from linear_write_unconfirmed
+    --workspace <id>      Connected Linear workspace id

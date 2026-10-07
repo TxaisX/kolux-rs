@@ -1,0 +1,14 @@
+﻿kolux storage
+
+Usage: kolux storage <command> [options]
+
+Commands:
+  local get          Get a localStorage value by key
+  local set          Set a localStorage value
+  local clear        Clear all localStorage
+  session get        Get a sessionStorage value by key
+  session set        Set a sessionStorage value
+  session clear      Clear all sessionStorage
+
+Run `kolux storage <command> --help` for command-specific usage.
+

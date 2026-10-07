@@ -1,0 +1,21 @@
+﻿kolux computer paste-text
+
+Usage: kolux computer paste-text --app <app> (--text <text> | --text-stdin) [--window-id <id> | --window-index <n>] [--restore-window] [--no-screenshot] [--json]
+
+Paste exact text at the current app focus
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --session <id>        Snapshot namespace for a related computer-use workflow
+  --app <app>            App name, bundle ID, or pid:N
+  --window-id <id>      Target a window id from list-windows
+  --window-index <n>   Target a window index from list-windows
+  --restore-window     Bring the target app/window forward before the operation
+  --no-screenshot       Skip screenshot capture after the operation
+  --text <text>          Text payload to send or type
+  --text-stdin          Read text payload from stdin
+

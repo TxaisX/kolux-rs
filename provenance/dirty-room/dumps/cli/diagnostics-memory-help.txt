@@ -1,0 +1,18 @@
+﻿kolux diagnostics memory
+
+Usage: kolux diagnostics memory [--json]
+
+Collect a memory snapshot for Kolux and managed terminals
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+
+Notes:
+  Runs the same host process sweep used by the Resource Usage popover, so call it when you need a point-in-time diagnostic rather than a cheap heartbeat.
+
+Examples:
+  $ kolux diagnostics memory --json
+

@@ -1,0 +1,14 @@
+﻿kolux repo set-base-ref
+
+Usage: kolux repo set-base-ref --repo <selector> --ref <ref> [--json]
+
+Set the repo's default base ref for future worktrees
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --repo <selector>      Repo selector such as id:<id>, name:<name>, or path:<path>
+  --ref <ref>            Base ref to persist for the repo
+

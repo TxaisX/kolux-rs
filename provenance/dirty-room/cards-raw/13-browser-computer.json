@@ -1,0 +1,2301 @@
+{
+  "area": "13-browser-computer",
+  "prefix": "BROW",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-13-001",
+      "title": "Open a new browser tab beside terminals",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+Shift+B (or uses the new-tab control) in a worktree.",
+      "user_sees": "A browser tab called New Tab opens in the focused split and becomes active; the address bar already has focus with its text selected, so typing goes straight in.",
+      "rules": [
+        "A blank new tab starts on the blank page (home page is a fixed default once the browser settings page is gone).",
+        "The tab opens in the split that has focus, not always the first one.",
+        "A page can never close its own tab: a script asking the window to close is ignored and tab switching keeps working.",
+        "Tabs opened from links inherit the session profile of the page that opened them."
+      ],
+      "acceptance": [
+        "Press Mod+Shift+B → a New Tab appears active and typed text lands in the address bar.",
+        "Load a page that tries to close its own window → the tab stays and other tabs still switch normally."
+      ],
+      "compat": "keybinding tab.newBrowser (Mod+Shift+B on every platform)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3141",
+        "dumps/tests/13-browser-computer.txt:3142",
+        "dumps/tests/13-browser-computer.txt:3150",
+        "dumps/tests/13-browser-computer.txt:3149",
+        "dumps/tests/13-browser-computer.txt:1968",
+        "dumps/tests/13-browser-computer.txt:1769",
+        "dumps/tests/13-browser-computer.txt:2554",
+        "registry:keybindings:tab.newBrowser",
+        "registry:readme-features:README.md:25"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-13-002",
+      "title": "Browser pages keep their state when you switch away and back",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Switches from a browser tab to a terminal, another browser tab or another worktree, then returns.",
+      "user_sees": "The page is exactly as it was: scroll position, half-filled forms, sign-in and history are intact and nothing reloads.",
+      "rules": [
+        "Inactive browser panes keep their place on screen so returning repaints without a reload.",
+        "Many restored tabs (hundreds) load on demand, not all at once at startup.",
+        "Visiting dozens of worktrees leaves no hidden pane parked forever; the hidden-worktree budget decides what is unloaded."
+      ],
+      "acceptance": [
+        "Type into a form, switch to a terminal tab and back → typed text still there.",
+        "Switch to another worktree and back → page not reloaded."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3143",
+        "dumps/tests/13-browser-computer.txt:3144",
+        "dumps/tests/13-browser-computer.txt:3151",
+        "dumps/tests/13-browser-computer.txt:1923",
+        "dumps/tests/13-browser-computer.txt:1925",
+        "dumps/tests/13-browser-computer.txt:1926"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "03"
+      ]
+    },
+    {
+      "id": "D-13-003",
+      "title": "Address bar opens a site or runs a web search",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Types or pastes into the address bar and presses Enter, or presses Mod+L to jump to it.",
+      "user_sees": "Domain-like text loads that site; words and phrases run a search; local dev addresses load over plain http; a pasted absolute file path opens that local file.",
+      "rules": [
+        "Bare words and multi-word input search on the chosen engine: Google, DuckDuckGo, Bing or Kagi.",
+        "Kagi can use a private session link; malformed links are refused and the secret part is never shown in the bar.",
+        "Search text with Unicode, emoji or reserved characters is encoded correctly for every engine.",
+        "Addresses with schemes other than web, file or blank are refused with an invalid-address message and the page stays put.",
+        "Empty input opens the blank page rather than showing an error.",
+        "Local files may be shown inside the pane but are never handed to the system to open externally.",
+        "Pasted paths containing spaces or reserved characters become valid file addresses.",
+        "Mod+L focuses the address bar even when focus is inside the page, and only in the focused split.",
+        "A private search session link is kept out of everything the window itself can read; the window only learns whether one is set."
+      ],
+      "acceptance": [
+        "Type 'rust ownership' + Enter → search results on the configured engine.",
+        "Type 'example.com' → loads the https site; type 'localhost:3000' → loads over http.",
+        "Type a javascript: address → invalid-address message, page unchanged."
+      ],
+      "compat": "keybinding browser.focusAddressBar (Mod+L); search engine values google, duckduckgo, bing, kagi",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2294",
+        "dumps/tests/13-browser-computer.txt:2295",
+        "dumps/tests/13-browser-computer.txt:2296",
+        "dumps/tests/13-browser-computer.txt:2297",
+        "dumps/tests/13-browser-computer.txt:2298",
+        "dumps/tests/13-browser-computer.txt:3079",
+        "dumps/tests/13-browser-computer.txt:3086",
+        "dumps/tests/13-browser-computer.txt:3089",
+        "dumps/tests/13-browser-computer.txt:3090",
+        "dumps/tests/13-browser-computer.txt:3093",
+        "dumps/tests/13-browser-computer.txt:3095",
+        "dumps/tests/13-browser-computer.txt:3097",
+        "dumps/tests/13-browser-computer.txt:3099",
+        "dumps/tests/13-browser-computer.txt:3100",
+        "dumps/tests/13-browser-computer.txt:1969",
+        "src/shared/persisted-ui-state-types.ts:183",
+        "registry:keybindings:browser.focusAddressBar",
+        "src/main/ipc/ui.test.ts",
+        "src/main/ipc/ui-renderer-safe.test.ts"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-13-004",
+      "title": "Address bar suggests pages from browsing history",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Starts typing in the address bar.",
+      "user_sees": "A dropdown appears: a search action first for plain queries, then previously visited pages and previewed documents, best match first.",
+      "rules": [
+        "A match at the start of the site name beats a match inside it, which beats a title match, which beats a match elsewhere in the address.",
+        "Frequently and recently visited pages rank higher; the visit bonus is capped and recency never counts against a page.",
+        "Escape, leaving the bar or clicking into the page closes the list and keeps what was typed.",
+        "A dismissed list stays dismissed, and a typed edit survives the page being swapped underneath.",
+        "Matching stays fast on a large history."
+      ],
+      "acceptance": [
+        "Visit github.com several times, type 'git' → github.com listed right under the search action.",
+        "Press Escape → list closes, typed text remains."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1845",
+        "dumps/tests/13-browser-computer.txt:1859",
+        "dumps/tests/13-browser-computer.txt:1886",
+        "dumps/tests/13-browser-computer.txt:1889",
+        "dumps/tests/13-browser-computer.txt:1905",
+        "dumps/tests/13-browser-computer.txt:2598",
+        "dumps/tests/13-browser-computer.txt:2601"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-005",
+      "title": "Back, forward, reload and stop controls",
+      "tier": "P0",
+      "pushed": 1,
+      "state": "live-unverified",
+      "user_does": "Uses the toolbar arrows and the reload button, or the matching shortcuts.",
+      "user_sees": "Back and forward are greyed out when there is nowhere to go; while a page loads the reload button becomes Stop with a spinner, then turns back into Reload.",
+      "rules": [
+        "Stopping an in-flight load works only from the toolbar button; the shortcut and menu reload instead.",
+        "On a failed page, reload from any trigger retries the load; a page that crashed goes through crash recovery instead.",
+        "If a failed page is already reloading, the button offers Stop rather than Retry.",
+        "The button's label always names what pressing it will do.",
+        "Hard reload bypasses the cache."
+      ],
+      "acceptance": [
+        "Open a slow page → button shows Stop with a spinner; click it → loading stops; after a normal finish → Reload.",
+        "Fresh tab → back and forward both disabled."
+      ],
+      "compat": "keybindings browser.back (Mac Mod+[, others Alt+Left), browser.forward (Mac Mod+], others Alt+Right), browser.reload (Mod+R), browser.hardReload (Mod+Shift+R)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3135",
+        "dumps/tests/13-browser-computer.txt:1878",
+        "dumps/tests/13-browser-computer.txt:2327",
+        "dumps/tests/13-browser-computer.txt:2328",
+        "dumps/tests/13-browser-computer.txt:2329",
+        "dumps/tests/13-browser-computer.txt:2331",
+        "dumps/tests/13-browser-computer.txt:2332",
+        "registry:keybindings:browser.back",
+        "registry:keybindings:browser.forward",
+        "registry:keybindings:browser.reload",
+        "registry:keybindings:browser.hardReload"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-006",
+      "title": "Address bar collapses in a narrow pane",
+      "tier": "P2",
+      "pushed": 7,
+      "state": "live-unverified",
+      "user_does": "Shrinks a browser pane until the toolbar no longer fits.",
+      "user_sees": "The address bar collapses to a compact control; clicking it expands it over the toolbar while it has focus, and it collapses again on blur.",
+      "rules": [
+        "Expansion is an overlay; the navigation buttons do not reflow underneath."
+      ],
+      "acceptance": [
+        "Narrow the pane below the toolbar minimum → address bar compact; click → full-width overlay; click away → compact again."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3123",
+        "dumps/tests/13-browser-computer.txt:1840",
+        "dumps/tests/13-browser-computer.txt:1844"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-13-007",
+      "title": "Find in page",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+F in a browser tab, types, then Enter or Shift+Enter.",
+      "user_sees": "A find bar with matches highlighted; Enter moves to the next match, Shift+Enter to the previous.",
+      "rules": [
+        "Changing the text starts a new search; Enter pressed before typing settles searches the new text.",
+        "With two browser splits, Find opens only in the focused split's page, even after splits are reordered.",
+        "Mod+F pressed while focus is inside the page still opens Kolux's find bar.",
+        "The find bar keeps working if the page is swapped out under the same tab.",
+        "If the record of which split has focus is missing or stale, Find still opens in the browser page that received the shortcut."
+      ],
+      "acceptance": [
+        "Two browser splits, focus the right one, press Mod+F → find bar appears only on the right."
+      ],
+      "compat": "keybinding browser.find (Mod+F)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3137",
+        "dumps/tests/13-browser-computer.txt:3140",
+        "dumps/tests/13-browser-computer.txt:1909",
+        "dumps/tests/13-browser-computer.txt:1912",
+        "dumps/tests/13-browser-computer.txt:1913",
+        "dumps/tests/13-browser-computer.txt:1914",
+        "dumps/tests/13-browser-computer.txt:1763",
+        "dumps/tests/13-browser-computer.txt:1930",
+        "registry:keybindings:browser.find",
+        "tests/e2e/browser-split-shortcuts.spec.ts:318",
+        "tests/e2e/browser-split-shortcuts.spec.ts:345"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-008",
+      "title": "Failed page loads show a recovery overlay",
+      "tier": "P0",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Navigates to a site that cannot load (server down, bad certificate, unknown host).",
+      "user_sees": "An overlay explains the failure in plain words and offers Retry, plus a switch-to-HTTPS offer or Open Externally where they make sense.",
+      "rules": [
+        "Switching to HTTPS is offered only for an eligible failed http address and changes nothing else in the address.",
+        "Certificate failures get certificate-specific wording while verification stays strict.",
+        "Local-server advice appears only for localhost failures, never for public sites.",
+        "Open Externally is hidden when no external handler exists or the address is not reachable from this computer.",
+        "All buttons disable at once while an action runs; connecting feedback is delayed so quick retries do not flicker.",
+        "Chromium's own error page is detected (checked about four times a second, paused while hidden) and replaced by the overlay.",
+        "Crash-recovery failures show without network troubleshooting text."
+      ],
+      "acceptance": [
+        "Open http://localhost:9 with nothing listening → overlay with localhost advice and Retry; start a server, Retry → page loads.",
+        "Open a public site with a broken certificate → certificate wording, no local-server advice."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2303",
+        "dumps/tests/13-browser-computer.txt:2304",
+        "dumps/tests/13-browser-computer.txt:2306",
+        "dumps/tests/13-browser-computer.txt:2307",
+        "dumps/tests/13-browser-computer.txt:2308",
+        "dumps/tests/13-browser-computer.txt:2309",
+        "dumps/tests/13-browser-computer.txt:2311",
+        "dumps/tests/13-browser-computer.txt:2337",
+        "dumps/tests/13-browser-computer.txt:2342",
+        "dumps/tests/13-browser-computer.txt:3082",
+        "dumps/tests/13-browser-computer.txt:3084",
+        "dumps/tests/13-browser-computer.txt:2318"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-009",
+      "title": "Crashed browser pages recover in place",
+      "tier": "P0",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Keeps working while a page's renderer crashes or disappears.",
+      "user_sees": "The tab reloads itself in place, or is rebuilt when that is not possible; if recovery fails, an error stays visible until the user retries from the toolbar.",
+      "rules": [
+        "Recovery retries are bounded; a hung rebuild is retried directly.",
+        "A page still attaching is waited for rather than replaced.",
+        "Minimised or hidden pages stay painted instead of going blank.",
+        "Only the page that belongs to the tab may attach to it; a mismatched page is refused."
+      ],
+      "acceptance": [
+        "Kill a tab's renderer → the tab returns to its page without user action.",
+        "Force recovery to fail → error shown; toolbar retry → page back."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3127",
+        "dumps/tests/13-browser-computer.txt:3132",
+        "dumps/tests/13-browser-computer.txt:3126",
+        "dumps/tests/13-browser-computer.txt:2192",
+        "dumps/tests/13-browser-computer.txt:2194",
+        "dumps/tests/13-browser-computer.txt:2196",
+        "dumps/tests/13-browser-computer.txt:2198",
+        "dumps/tests/13-browser-computer.txt:2149",
+        "dumps/tests/13-browser-computer.txt:2330"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-010",
+      "title": "Pages are rechecked after the computer wakes",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Puts the computer to sleep with browser tabs open, then wakes it.",
+      "user_sees": "Tabs come back working; a page lost during sleep is rebuilt instead of left blank.",
+      "rules": [
+        "One wake signal is shared by all pages; one page failing does not stop the others being checked."
+      ],
+      "acceptance": [
+        "Sleep with three tabs open, wake → all three show content within a few seconds."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2263",
+        "dumps/tests/13-browser-computer.txt:2264",
+        "dumps/tests/13-browser-computer.txt:2197"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-13-011",
+      "title": "Loading pages match the app theme",
+      "tier": "P2",
+      "pushed": 7,
+      "state": "live-unverified",
+      "user_does": "Opens a page while using a dark theme.",
+      "user_sees": "The pane shows a theme-coloured surface while the page loads instead of a white flash.",
+      "rules": [],
+      "acceptance": [
+        "Dark theme, open a slow site → no white flash before content appears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3133"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-13-012",
+      "title": "Each browser tab keeps its own zoom",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses the zoom shortcuts or Ctrl+scroll (Cmd+scroll on Mac) over a page; Mod+0 to reset.",
+      "user_sees": "The page zooms in Chromium-style steps; the percentage shows briefly while zooming; Mod+0 returns to 100%.",
+      "rules": [
+        "A tab keeps its level through reload, hard reload and navigation to another site.",
+        "Tabs are independent: reloading one never adopts another tab's zoom.",
+        "Command+scroll zooms only on Mac.",
+        "Zoom shortcuts work while focus is inside the page and follow customised key bindings.",
+        "Levels snap to supported steps and clamp at the limits.",
+        "New tabs start at the default level (fixed once the settings page is gone).",
+        "Ctrl+scroll zooms on every platform; Ctrl with Alt or Shift scrolls normally instead.",
+        "A tab unloaded by the memory budget comes back at its own zoom level; only a real close forgets it."
+      ],
+      "acceptance": [
+        "Zoom tab A to 150%, reload → still 150%; tab B still 100%.",
+        "Press Mod+0 → back to 100%."
+      ],
+      "compat": "keybindings zoom.in (Mod+=), zoom.out (Mod+-), zoom.reset (Mod+0)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3145",
+        "dumps/tests/13-browser-computer.txt:3146",
+        "dumps/tests/13-browser-computer.txt:3147",
+        "dumps/tests/13-browser-computer.txt:2240",
+        "dumps/tests/13-browser-computer.txt:2255",
+        "dumps/tests/13-browser-computer.txt:2260",
+        "dumps/tests/13-browser-computer.txt:2262",
+        "dumps/tests/13-browser-computer.txt:595",
+        "dumps/tests/13-browser-computer.txt:597",
+        "dumps/tests/13-browser-computer.txt:609",
+        "src/shared/persisted-ui-state-types.ts:185",
+        "registry:keybindings:zoom.reset",
+        "src/main/browser/browser-guest-shortcut-forwarding.test.ts:326",
+        "src/renderer/src/store/slices/browser-webview-cleanup.test.ts :: re-remembers explicit zoom past the destroy-path forget (eviction is not a close)"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-13-013",
+      "title": "Downloads save to the Downloads folder without overwriting",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks a download link in a page.",
+      "user_sees": "The file saves into the system Downloads folder with progress, then a notice that it finished.",
+      "rules": [
+        "File names are made safe; empty or unsafe names fall back to a generic name.",
+        "An existing file is never overwritten: numbered suffixes are added the way browsers do.",
+        "Two downloads with the same name at the same moment get different names.",
+        "Windows reserved device names are rewritten on Windows only; name clashes ignore case on Windows and Mac.",
+        "After a bounded number of clashes the download fails rather than looping.",
+        "Closing the tab cancels its running downloads.",
+        "Progress shows received and total size when both are known.",
+        "A page still writing a download is never unloaded by the memory budget."
+      ],
+      "acceptance": [
+        "Download the same file twice → second copy gets a numbered suffix, first intact.",
+        "Close the tab mid-download → download cancelled."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:558",
+        "dumps/tests/13-browser-computer.txt:560",
+        "dumps/tests/13-browser-computer.txt:561",
+        "dumps/tests/13-browser-computer.txt:563",
+        "dumps/tests/13-browser-computer.txt:565",
+        "dumps/tests/13-browser-computer.txt:652",
+        "dumps/tests/13-browser-computer.txt:655",
+        "dumps/tests/13-browser-computer.txt:2301",
+        "dumps/tests/13-browser-computer.txt:2321",
+        "dumps/tests/13-browser-computer.txt:2144",
+        "dumps/tests/13-browser-computer.txt:2317"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-014",
+      "title": "New-tab links open as Kolux browser tabs",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks a link meant for a new window, middle-clicks a link, or Mod-clicks it.",
+      "user_sees": "The link opens as another Kolux browser tab; middle and Mod clicks open it in the background, Shift+middle and Mod+Shift bring it to the front, as in Chrome.",
+      "rules": [
+        "Ordinary links stay in the current tab; Shift-click and Alt-click keep the default behaviour.",
+        "Download links and links with no address are left alone.",
+        "The same routing works inside embedded frames.",
+        "Clicks faked by page scripts are ignored; a page that cancels its own click is respected.",
+        "The modifier key follows this computer's platform even when a phone is being emulated.",
+        "New tabs inherit the opener's session profile."
+      ],
+      "acceptance": [
+        "Mod-click a link → new tab opens behind the current one.",
+        "Shift+middle-click a link → new tab opens in front."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3148",
+        "dumps/tests/13-browser-computer.txt:133",
+        "dumps/tests/13-browser-computer.txt:134",
+        "dumps/tests/13-browser-computer.txt:135",
+        "dumps/tests/13-browser-computer.txt:136",
+        "dumps/tests/13-browser-computer.txt:138",
+        "dumps/tests/13-browser-computer.txt:139",
+        "dumps/tests/13-browser-computer.txt:142",
+        "dumps/tests/13-browser-computer.txt:145",
+        "dumps/tests/13-browser-computer.txt:744",
+        "dumps/tests/13-browser-computer.txt:2555"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-015",
+      "title": "Popups open in a small window that shows only the site origin",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Uses a site that opens a popup, such as an OAuth sign-in or payment window.",
+      "user_sees": "A separate small window opens with a strip at the top showing only the site's origin; the window title shows the page title.",
+      "rules": [
+        "Only the origin is shown, never the path or query.",
+        "Long origins are trimmed from the start so the real domain stays visible.",
+        "Plain http to a remote host is marked insecure; http to this computer counts as secure.",
+        "The strip updates as the popup navigates.",
+        "The popup keeps its link to the opener so sign-in can complete back in the tab.",
+        "Unsafe popup addresses are blocked; before a page is fully registered, safe popups open in the system browser.",
+        "Popups carry the page's security policies, and closing either side closes both."
+      ],
+      "acceptance": [
+        "Start a 'Continue with GitHub' sign-in → small window shows the GitHub origin, completes, closes, and the tab is signed in."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:739",
+        "dumps/tests/13-browser-computer.txt:741",
+        "dumps/tests/13-browser-computer.txt:746",
+        "dumps/tests/13-browser-computer.txt:747",
+        "dumps/tests/13-browser-computer.txt:748",
+        "dumps/tests/13-browser-computer.txt:1498",
+        "dumps/tests/13-browser-computer.txt:1499",
+        "dumps/tests/13-browser-computer.txt:1500",
+        "dumps/tests/13-browser-computer.txt:1503",
+        "dumps/tests/13-browser-computer.txt:1507",
+        "dumps/tests/13-browser-computer.txt:1512",
+        "dumps/tests/13-browser-computer.txt:1513"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-016",
+      "title": "Runaway pages cannot flood you with new tabs",
+      "tier": "P2",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Clicks something on a page that tries to open windows in a loop.",
+      "user_sees": "Only a handful of tabs open; normal link opening keeps working afterwards.",
+      "rules": [
+        "The allowance is a sliding window shared across the whole popup family, so a slow steady flood cannot beat it either.",
+        "The allowance refills after the window passes."
+      ],
+      "acceptance": [
+        "A page opens 100 windows from one click → a few tabs open, the rest are absorbed; a minute later links open normally."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:833",
+        "dumps/tests/13-browser-computer.txt:834",
+        "dumps/tests/13-browser-computer.txt:835",
+        "dumps/tests/13-browser-computer.txt:743"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-017",
+      "title": "Right-click menu inside pages",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Right-clicks inside a page, on text or on a link.",
+      "user_sees": "Kolux's own menu: back and forward, Copy when text is selected, and for links 'Open Link In Kolux Browser', 'Open Link In Default Browser' and 'Copy Link Address'; 'Open Page In Default Browser' for the page itself.",
+      "rules": [
+        "The menu opens at the pointer and flips to stay inside the pane near edges.",
+        "Left or middle click elsewhere dismisses it; right click does not."
+      ],
+      "acceptance": [
+        "Right-click a link near the bottom-right corner → menu opens flipped inside the pane with the link entries; left-click elsewhere closes it."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:584",
+        "dumps/tests/13-browser-computer.txt:586",
+        "dumps/tests/13-browser-computer.txt:590",
+        "dumps/tests/13-browser-computer.txt:591",
+        "dumps/tests/13-browser-computer.txt:592",
+        "dumps/tests/13-browser-computer.txt:749",
+        "dumps/tests/13-browser-computer.txt:1938",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-page-context-menu.tsx:198",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-page-context-menu.tsx:227",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-page-context-menu.tsx:294"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-018",
+      "title": "App shortcuts keep working while focus is inside a page",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Kolux shortcuts while typing or clicking inside a web page.",
+      "user_sees": "Tab switching (including Ctrl+Tab), zoom, back and forward, Find, close tab, double-tap shortcuts and worktree delete all still work; the page does not swallow them.",
+      "rules": [
+        "Shortcuts act on the split that owns the page.",
+        "Customised bindings are honoured; repeated delete chords are absorbed, not repeated.",
+        "Pages in a floating window send close and index chords to that window.",
+        "Double-tap detection resets when the page loses focus."
+      ],
+      "acceptance": [
+        "Click into a page's text field, press Ctrl+Tab → switches to the previous recent tab.",
+        "With focus in the page, press Mod+F → Kolux's find bar opens."
+      ],
+      "compat": "keybinding tab.previousRecent (Ctrl+Tab)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:600",
+        "dumps/tests/13-browser-computer.txt:601",
+        "dumps/tests/13-browser-computer.txt:602",
+        "dumps/tests/13-browser-computer.txt:603",
+        "dumps/tests/13-browser-computer.txt:606",
+        "dumps/tests/13-browser-computer.txt:607",
+        "dumps/tests/13-browser-computer.txt:613",
+        "dumps/tests/13-browser-computer.txt:615",
+        "dumps/tests/13-browser-computer.txt:616",
+        "dumps/tests/13-browser-computer.txt:3138",
+        "registry:keybindings:tab.previousRecent"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "17"
+      ]
+    },
+    {
+      "id": "D-13-019",
+      "title": "Close and reopen browser tabs",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Presses Mod+W on a browser tab, then Mod+Shift+T.",
+      "user_sees": "The active browser page closes; reopen brings back the same page.",
+      "rules": [
+        "When a browser tab holds several pages, only the requested page closes.",
+        "Closing the only tab returns to the landing view while the worktree stays selected.",
+        "Only real closes go onto the reopen stack; internal clean-ups do not.",
+        "An unknown page id is refused rather than reported as closed.",
+        "Close Tab pressed while focus is inside a page closes that page's own tab; if the page no longer belongs to any tab nothing is closed, never whichever tab happens to be active."
+      ],
+      "acceptance": [
+        "Close a browser tab with Mod+W, press Mod+Shift+T → it returns at the same address."
+      ],
+      "compat": "keybindings tab.close (Mod+W), tab.reopenClosed (Mod+Shift+T)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2581",
+        "dumps/tests/13-browser-computer.txt:2582",
+        "dumps/tests/13-browser-computer.txt:2583",
+        "dumps/tests/13-browser-computer.txt:2898",
+        "dumps/tests/13-browser-computer.txt:2902",
+        "registry:keybindings:tab.close",
+        "registry:keybindings:tab.reopenClosed",
+        "src/renderer/src/hooks/useIpcEvents-close-routing-active-browser-tab.test.ts:228",
+        "src/renderer/src/hooks/useIpcEvents-close-routing-active-browser-tab.test.ts:242"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-13-020",
+      "title": "Browser tabs come back after restart",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits Kolux with browser tabs open and starts it again.",
+      "user_sees": "The browser tabs return with their addresses and back/forward history; only the selected page loads straight away.",
+      "rules": [
+        "Saved history per page is capped.",
+        "If the saved active tab is missing, the first valid browser tab is chosen.",
+        "Tabs belonging to deleted worktrees are dropped; leftover state from older builds is cleaned up.",
+        "Browser tabs in floating workspaces are restored too."
+      ],
+      "acceptance": [
+        "Open three tabs, navigate twice in one, quit and relaunch → three tabs back; Back on that tab returns to its earlier page."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3003",
+        "dumps/tests/13-browser-computer.txt:3005",
+        "dumps/tests/13-browser-computer.txt:3006",
+        "dumps/tests/13-browser-computer.txt:3009",
+        "dumps/tests/13-browser-computer.txt:2717",
+        "dumps/tests/13-browser-computer.txt:3120"
+      ],
+      "round": 0,
+      "related": [
+        "19",
+        "01"
+      ]
+    },
+    {
+      "id": "D-13-021",
+      "title": "Hidden worktrees release browser memory",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Works across many worktrees that each have browser pages open.",
+      "user_sees": "Pages in the least recently used hidden worktrees are unloaded beyond a budget; returning reloads only the selected page.",
+      "rules": [
+        "The active worktree is never unloaded or counted.",
+        "Only worktrees that actually hold live pages count toward the budget.",
+        "A page an agent is driving, or one still writing a download, is spared.",
+        "Revisiting a worktree moves it to the front of the order.",
+        "Document previews count toward the same budget.",
+        "The budget is on by default."
+      ],
+      "acceptance": [
+        "Open pages in ten worktrees and visit each → the oldest hidden ones are unloaded; return to one → its selected page reloads.",
+        "An agent-driven page in a hidden worktree is never unloaded."
+      ],
+      "compat": "setting browserGuestWorktreeRetentionBudget (default on)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2166",
+        "dumps/tests/13-browser-computer.txt:2167",
+        "dumps/tests/13-browser-computer.txt:2168",
+        "dumps/tests/13-browser-computer.txt:2169",
+        "dumps/tests/13-browser-computer.txt:2178",
+        "dumps/tests/13-browser-computer.txt:2139",
+        "dumps/tests/13-browser-computer.txt:2142",
+        "dumps/tests/13-browser-computer.txt:2144",
+        "dumps/tests/13-browser-computer.txt:1932",
+        "dumps/tests/13-browser-computer.txt:2513",
+        "registry:settings-keys:browserGuestWorktreeRetentionBudget"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-13-022",
+      "title": "Jump palette finds open browser pages",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the jump palette and types part of a page title or site name.",
+      "user_sees": "Open browser pages listed with their icon and address without the protocol; choosing one switches to that worktree, split and tab.",
+      "rules": [
+        "Page titles are searched before worktree details.",
+        "A multi-word query must match every word across title and site.",
+        "With an empty query the order is stable and starts with the current context.",
+        "A page that has since closed is reported as gone instead of opening something else.",
+        "The split that owns the page gets focus."
+      ],
+      "acceptance": [
+        "Two worktrees each with a docs page; type 'docs react' → only the page matching both words; Enter → that worktree and split are focused."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2649",
+        "dumps/tests/13-browser-computer.txt:2651",
+        "dumps/tests/13-browser-computer.txt:2652",
+        "dumps/tests/13-browser-computer.txt:2653",
+        "dumps/tests/13-browser-computer.txt:2654",
+        "dumps/tests/13-browser-computer.txt:2655",
+        "dumps/tests/13-browser-computer.txt:2621",
+        "dumps/tests/13-browser-computer.txt:2628",
+        "dumps/tests/13-browser-computer.txt:2632",
+        "dumps/tests/13-browser-computer.txt:1971"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-13-023",
+      "title": "Tabs show the site icon and page title",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Browses between pages and sites.",
+      "user_sees": "The tab shows the site's icon and the page title, with a spinner while loading; blank tabs are named New Tab.",
+      "rules": [
+        "The icon stays across navigation within one site and is replaced when the site changes.",
+        "An icon that failed to load is retried after a same-site reload."
+      ],
+      "acceptance": [
+        "Navigate within one site → icon stays; go to another site → icon changes."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1772",
+        "dumps/tests/13-browser-computer.txt:2186",
+        "dumps/tests/13-browser-computer.txt:2108",
+        "dumps/tests/13-browser-computer.txt:2955"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-13-024",
+      "title": "Trust a self-signed certificate for a local dev server",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Opens a local dev server that uses a self-signed HTTPS certificate and approves it from the failure overlay.",
+      "user_sees": "After approving, that exact local address loads; everything else still gets strict checks.",
+      "rules": [
+        "Approval is offered only for this computer's own addresses, never for public hosts.",
+        "Approval covers the exact host and port; other ports and other tabs are not trusted.",
+        "Approval is offered only while a matching certificate challenge is live; restored errors after restart cannot be approved.",
+        "Only Kolux itself, not the page, can send the approval.",
+        "If an approved local address later presents a different bad certificate, it is refused again until approved anew."
+      ],
+      "acceptance": [
+        "Approve https://localhost:8443 → it loads; https://localhost:9443 still shows the certificate failure."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3134",
+        "dumps/tests/13-browser-computer.txt:122",
+        "dumps/tests/13-browser-computer.txt:125",
+        "dumps/tests/13-browser-computer.txt:2305",
+        "dumps/tests/13-browser-computer.txt:2310",
+        "dumps/tests/13-browser-computer.txt:2312",
+        "dumps/tests/13-browser-computer.txt:3081",
+        "dumps/tests/13-browser-computer.txt:3083",
+        "dumps/tests/13-browser-computer.txt:1728",
+        "src/main/browser/browser-certificate-trust-controller.test.ts :: fails closed when an accepted endpoint presents a replacement bad certificate"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-025",
+      "title": "Google sign-in works inside the pane",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Signs in to Google, or uses a site's sign-in-with-Google, inside a browser tab.",
+      "user_sees": "Sign-in completes instead of being refused as an embedded browser.",
+      "rules": [
+        "Only on Google and YouTube sign-in hosts does the pane present itself as desktop Firefox for this platform, without client hints.",
+        "Google app subdomains and lookalike hosts keep the normal identity.",
+        "The identity switch survives redirects, and an active viewport preset is kept afterwards.",
+        "A profile can opt out (native mode); the option explains the trade-off, and popups follow their profile's mode."
+      ],
+      "acceptance": [
+        "Sign in to Google in a tab → succeeds without an unsupported-browser block.",
+        "Switch the profile to native mode → the stock identity is used on the sign-in host."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:574",
+        "dumps/tests/13-browser-computer.txt:575",
+        "dumps/tests/13-browser-computer.txt:576",
+        "dumps/tests/13-browser-computer.txt:577",
+        "dumps/tests/13-browser-computer.txt:636",
+        "dumps/tests/13-browser-computer.txt:637",
+        "dumps/tests/13-browser-computer.txt:639",
+        "dumps/tests/13-browser-computer.txt:640",
+        "dumps/tests/13-browser-computer.txt:1076",
+        "dumps/tests/13-browser-computer.txt:1078",
+        "dumps/tests/13-browser-computer.txt:2547"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-026",
+      "title": "Sites fall back to popup sign-in",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Signs in on a site that would use the browser's built-in identity prompt.",
+      "user_sees": "The site's ordinary popup or redirect sign-in appears instead of a prompt that cannot work in the pane.",
+      "rules": [
+        "The built-in identity prompt feature is turned off for browser pages."
+      ],
+      "acceptance": [
+        "Visit a site that offers the built-in prompt → its popup sign-in flow appears and works."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3125"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-027",
+      "title": "Browser session profiles keep logins separate",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens the toolbar menu and picks a profile, or chooses 'New Profile…'.",
+      "user_sees": "Each profile has its own cookies and storage; a check mark shows the tab's profile; imported profiles show their source browser's name; choosing one switches the tab.",
+      "rules": [
+        "A default profile always exists and cannot be deleted.",
+        "Each new profile gets its own isolated store; a failed creation is rolled back.",
+        "A new profile is not handed out until the proxy (if any) has been applied to it.",
+        "Deleting a profile keeps security rules in force for pages still open in it.",
+        "Tabs opened from links inherit the opener's profile."
+      ],
+      "acceptance": [
+        "Create profile 'Work', sign in to a site; switch the tab to the default profile → signed out there; switch back → signed in."
+      ],
+      "compat": "profile scopes isolated and imported; persisted profile list (label, source browser)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1043",
+        "dumps/tests/13-browser-computer.txt:1046",
+        "dumps/tests/13-browser-computer.txt:1047",
+        "dumps/tests/13-browser-computer.txt:1048",
+        "dumps/tests/13-browser-computer.txt:1061",
+        "dumps/tests/13-browser-computer.txt:1062",
+        "dumps/tests/13-browser-computer.txt:1064",
+        "dumps/tests/13-browser-computer.txt:1065",
+        "dumps/tests/13-browser-computer.txt:2553",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-toolbar-menu-dropdown.tsx:84",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-toolbar-menu-dropdown.tsx:104"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-028",
+      "title": "Import cookies from installed browsers or a file",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Toolbar menu → 'Import Cookies' → 'From <browser>' (picking a browser profile when there are several) or 'From File…'.",
+      "user_sees": "Logins from that browser land in the tab's current profile; a toast reports success, skipped cookies or warnings.",
+      "rules": [
+        "Installed browsers are looked for only when the import menu opens.",
+        "Sources: Chrome, Edge, Brave, Chromium, Helium, Firefox on all platforms; Comet on Mac and Windows; Arc and Safari on Mac only.",
+        "File import takes a JSON list of cookies; non-JSON, non-list or empty files are refused, invalid entries skipped, and an all-skipped file is reported.",
+        "For each imported site, existing cookies for that site are replaced; unrelated sites are untouched.",
+        "Any failure rolls back so no existing cookie is lost.",
+        "Cookies locked by Windows app-bound encryption are reported as unreadable, not as an empty success.",
+        "When the store is busy the import is staged and applied at next start.",
+        "The menu entry is disabled while an import into this profile is running.",
+        "A chosen source profile must sit inside that browser's own data folder; a selection pointing anywhere else is refused."
+      ],
+      "acceptance": [
+        "Import from Chrome → toast with a count; a site signed in there opens signed in.",
+        "Import a file with one malformed entry → the rest import and the toast mentions skipped cookies."
+      ],
+      "compat": "cookie import file: JSON array of cookie objects (name, value, domain; optional path, secure, httpOnly, sameSite, expiry); exact field names to confirm",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:509",
+        "dumps/tests/13-browser-computer.txt:510",
+        "dumps/tests/13-browser-computer.txt:511",
+        "dumps/tests/13-browser-computer.txt:512",
+        "dumps/tests/13-browser-computer.txt:515",
+        "dumps/tests/13-browser-computer.txt:520",
+        "dumps/tests/13-browser-computer.txt:447",
+        "dumps/tests/13-browser-computer.txt:452",
+        "dumps/tests/13-browser-computer.txt:484",
+        "dumps/tests/13-browser-computer.txt:497",
+        "dumps/tests/13-browser-computer.txt:504",
+        "dumps/tests/13-browser-computer.txt:3042",
+        "dumps/tests/13-browser-computer.txt:3044",
+        "dumps/tests/13-browser-computer.txt:1079",
+        "dumps/tests/13-browser-computer.txt:2584",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-toolbar-menu-dropdown.tsx:111",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-toolbar-menu-dropdown.tsx:173",
+        "src/main/browser/browser-cookie-import.comet.test.ts :: rejects explicit Comet profile selections that escape the browser root"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-029",
+      "title": "Cookie import never carries Google sign-ins",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Imports cookies from a browser that is signed in to Google.",
+      "user_sees": "A footer in the import menu says Google cookies are excluded; after import, other sites are signed in but Google needs signing in directly in the pane.",
+      "rules": [
+        "The whole google.com family is excluded; lookalike hosts are not; YouTube is still imported.",
+        "Google cookies already in the pane are never removed by an import.",
+        "No decryption key is requested just for Google rows.",
+        "The toast gives Google-specific guidance only when Google rows were really skipped."
+      ],
+      "acceptance": [
+        "Import from a browser signed in to Google and GitHub → GitHub signed in, Google not, and an existing Google sign-in in the pane is untouched."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:416",
+        "dumps/tests/13-browser-computer.txt:417",
+        "dumps/tests/13-browser-computer.txt:420",
+        "dumps/tests/13-browser-computer.txt:454",
+        "dumps/tests/13-browser-computer.txt:455",
+        "dumps/tests/13-browser-computer.txt:456",
+        "dumps/tests/13-browser-computer.txt:1770",
+        "dumps/tests/13-browser-computer.txt:2589",
+        "dumps/tests/13-browser-computer.txt:2592"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-030",
+      "title": "Import-logins hint in the browser toolbar",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens a browser tab before importing any cookies.",
+      "user_sees": "A small hint button suggests importing logins and names the browsers found; dismissing it hides it for good.",
+      "rules": [
+        "The hint waits until saved preferences have loaded so it never flashes.",
+        "Long browser lists are summarised with a trailing count; before detection it lists supported sources."
+      ],
+      "acceptance": [
+        "Fresh install, open a browser tab → hint visible; dismiss → it does not return after restart."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1875",
+        "dumps/tests/13-browser-computer.txt:1876",
+        "dumps/tests/13-browser-computer.txt:1877",
+        "dumps/tests/13-browser-computer.txt:1862",
+        "dumps/tests/13-browser-computer.txt:1863"
+      ],
+      "round": 0,
+      "related": [
+        "16"
+      ]
+    },
+    {
+      "id": "D-13-031",
+      "title": "Passkey account picker",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Signs in with a passkey on a site where several accounts are available.",
+      "user_sees": "A Kolux dialog lists the accounts by name to choose from.",
+      "rules": [
+        "Only the page that asked can answer, and only with an offered account.",
+        "The prompt is cancelled when the tab closes, the page dies or it times out.",
+        "Internal credential ids are never shown.",
+        "Deleting one profile does not cancel another profile's pending prompt."
+      ],
+      "acceptance": [
+        "Passkey login with two accounts → dialog shows both names; pick one → signed in.",
+        "Close the tab while the dialog is open → prompt cancelled cleanly."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1098",
+        "dumps/tests/13-browser-computer.txt:1099",
+        "dumps/tests/13-browser-computer.txt:1100",
+        "dumps/tests/13-browser-computer.txt:1102",
+        "dumps/tests/13-browser-computer.txt:1103",
+        "dumps/tests/13-browser-computer.txt:2548",
+        "dumps/tests/13-browser-computer.txt:1073"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-032",
+      "title": "Site permission requests in the pane",
+      "tier": "P2",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Uses a site that asks for pointer lock, storage access, camera or microphone.",
+      "user_sees": "Pointer lock and storage access are granted automatically; camera and microphone go through the system privacy prompt on Mac; denied requests show a notice naming the permission in plain words.",
+      "rules": [
+        "Unknown permissions fall back to their raw name in the notice.",
+        "Permission and download requests that arrive before the page is registered are queued, not lost."
+      ],
+      "acceptance": [
+        "A site requests the camera and it is denied → a notice says camera access was denied."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1070",
+        "dumps/tests/13-browser-computer.txt:1071",
+        "dumps/tests/13-browser-computer.txt:1072",
+        "dumps/tests/13-browser-computer.txt:2313",
+        "dumps/tests/13-browser-computer.txt:2314",
+        "dumps/tests/13-browser-computer.txt:2315",
+        "dumps/tests/13-browser-computer.txt:651"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-033",
+      "title": "Browser traffic follows the configured HTTP proxy",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Sets an HTTP proxy address and optional bypass list.",
+      "user_sees": "Every browser profile's traffic goes through the proxy, bypassed hosts go direct, and proxy credentials are never shown.",
+      "rules": [
+        "Applies to every profile, including ones created later.",
+        "If applying fails for a profile, that profile stays blocked rather than going direct.",
+        "Changes reach all profiles at once; a newer setting always wins over one still being applied."
+      ],
+      "acceptance": [
+        "Set a proxy, open a site → request appears in the proxy log; a bypassed host does not."
+      ],
+      "compat": "settings httpProxyUrl (default empty), httpProxyBypassRules (default empty)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1017",
+        "dumps/tests/13-browser-computer.txt:1018",
+        "dumps/tests/13-browser-computer.txt:1019",
+        "dumps/tests/13-browser-computer.txt:1020",
+        "dumps/tests/13-browser-computer.txt:1022",
+        "dumps/tests/13-browser-computer.txt:1047",
+        "registry:settings-keys:httpProxyUrl",
+        "registry:settings-keys:httpProxyBypassRules"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-13-034",
+      "title": "Viewport size presets for phone, tablet and laptop",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Toolbar menu → 'Viewport Size' → picks a preset, or Default.",
+      "user_sees": "The page renders at that device size with phone identity and touch for phone sizes; Default returns to the pane's own size.",
+      "rules": [
+        "Presets: Mobile S 320×568, Mobile M 375×667, Mobile L 425×812, Tablet, Laptop, Laptop L.",
+        "The preset survives navigation and redirects, including trips through sign-in hosts.",
+        "Presets bigger than the pane can be panned with the scroll wheel.",
+        "A preset that only partly applied is reported."
+      ],
+      "acceptance": [
+        "Pick Mobile M → page reflows to 375 wide with the mobile layout; navigate elsewhere → still mobile; pick Default → full pane width."
+      ],
+      "compat": "preset ids mobile-s, mobile-m, mobile-l, tablet, laptop, laptop-l",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:751",
+        "dumps/tests/13-browser-computer.txt:752",
+        "dumps/tests/13-browser-computer.txt:757",
+        "dumps/tests/13-browser-computer.txt:760",
+        "dumps/tests/13-browser-computer.txt:769",
+        "dumps/tests/13-browser-computer.txt:2218",
+        "src/shared/browser-viewport-presets.ts:15",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-toolbar-menu-dropdown.tsx:186"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-035",
+      "title": "Grab a page element to hand to the AI",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks 'Grab page element' (or presses Mod+C with nothing selected), hovers and clicks an element.",
+      "user_sees": "Elements highlight on hover; clicking captures one and opens a sheet with a cropped screenshot, the element's details and nearby context, offering 'Copy Screenshot' and 'Attach to AI'.",
+      "rules": [
+        "Mod+C starts a grab only when the page is not copying selected text.",
+        "Escape, navigating away or closing the tab cancels the grab.",
+        "A screenshot over the size budget is left out rather than failing the grab.",
+        "Only the tab's own page can be grabbed."
+      ],
+      "acceptance": [
+        "Start a grab, click a button → sheet shows its screenshot and text; 'Attach to AI' adds it to the agent's input.",
+        "Press Escape mid-grab → highlight overlay disappears."
+      ],
+      "compat": "keybinding browser.grabElement (Mod+C)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:657",
+        "dumps/tests/13-browser-computer.txt:658",
+        "dumps/tests/13-browser-computer.txt:665",
+        "dumps/tests/13-browser-computer.txt:666",
+        "dumps/tests/13-browser-computer.txt:693",
+        "dumps/tests/13-browser-computer.txt:694",
+        "dumps/tests/13-browser-computer.txt:1789",
+        "dumps/tests/13-browser-computer.txt:1829",
+        "dumps/tests/13-browser-computer.txt:1336",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-chrome-toolbar.tsx:104",
+        "src/renderer/src/components/browser-pane/annotate/GrabConfirmationSheet.tsx:285",
+        "src/renderer/src/components/browser-pane/annotate/GrabConfirmationSheet.tsx:293",
+        "registry:keybindings:browser.grabElement"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "03"
+      ]
+    },
+    {
+      "id": "D-13-036",
+      "title": "Grabbed page details are scrubbed of secrets",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Grabs or annotates an element on a page that holds tokens or keys.",
+      "user_sees": "What reaches the AI has secret-looking values redacted, query strings removed from addresses and unsafe link schemes dropped.",
+      "rules": [
+        "Only a curated safe list of attributes plus accessibility attributes is kept.",
+        "A curated set of 16 computed styles is included.",
+        "Secret patterns are precise, so ordinary words are not over-redacted.",
+        "Structurally invalid captures are discarded."
+      ],
+      "acceptance": [
+        "Grab an input whose attributes contain a token and whose link carries ?key= → payload shows a redaction marker and the address without its query."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:580",
+        "dumps/tests/13-browser-computer.txt:581",
+        "dumps/tests/13-browser-computer.txt:660",
+        "dumps/tests/13-browser-computer.txt:3046",
+        "dumps/tests/13-browser-computer.txt:3049",
+        "dumps/tests/13-browser-computer.txt:3050",
+        "dumps/tests/13-browser-computer.txt:3051",
+        "dumps/tests/13-browser-computer.txt:3053"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-037",
+      "title": "Annotate page elements and send the notes to an agent",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Clicks 'Annotate page element', picks elements, writes a comment and an intent for each, then sends them from the send menu.",
+      "user_sees": "A tray of pending notes that can be edited or removed; the send menu lists the same agent sessions as review notes; the agent receives one markdown summary with selectors, source hints, component tree, styles and each comment.",
+      "rules": [
+        "Saving trims the comment; Cancel or Escape returns to the read view unchanged.",
+        "Notes are capped per page and cleared when the page address changes.",
+        "Page text cannot break the markdown: code fences are lengthened, newlines collapsed, long text bounded without splitting characters.",
+        "No notes means nothing is sent.",
+        "Escape pressed inside a note being edited ends only that edit; element picking stays on."
+      ],
+      "acceptance": [
+        "Annotate two elements, send to a running session → it receives one markdown block listing both with their comments."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:630",
+        "dumps/tests/13-browser-computer.txt:1776",
+        "dumps/tests/13-browser-computer.txt:1777",
+        "dumps/tests/13-browser-computer.txt:1778",
+        "dumps/tests/13-browser-computer.txt:1780",
+        "dumps/tests/13-browser-computer.txt:1782",
+        "dumps/tests/13-browser-computer.txt:1783",
+        "dumps/tests/13-browser-computer.txt:1784",
+        "dumps/tests/13-browser-computer.txt:1786",
+        "dumps/tests/13-browser-computer.txt:1787",
+        "dumps/tests/13-browser-computer.txt:1788",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-chrome-toolbar.tsx:139",
+        "src/renderer/src/components/browser-pane/annotate/useGrabMode.test.ts :: keeps grab mode active when Escape comes from inside an annotation-edit row"
+      ],
+      "round": 0,
+      "related": [
+        "11",
+        "02"
+      ]
+    },
+    {
+      "id": "D-13-038",
+      "title": "Draw on a page screenshot",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks 'Draw on screenshot' and marks up the page with Pen, Highlighter, Arrow, Rectangle, Ellipse or Text, choosing colour, thickness and font size.",
+      "user_sees": "Shapes drawn over a frozen copy of the page, with undo and redo; the result becomes one screenshot to attach or copy.",
+      "rules": [
+        "Rectangles and ellipses work from any drag direction.",
+        "The final image stays within a pixel budget; scale is clamped between 1 and 4.",
+        "A one-time hint appears the first time drawing is available, closes if the pane is hidden, and never returns once dismissed.",
+        "When the composed image is over budget it is retried at smaller sizes, largest first, and stays a PNG."
+      ],
+      "acceptance": [
+        "Draw an arrow and a text label, undo → label gone; redo → back; finish → one image with page, arrow and label."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1795",
+        "dumps/tests/13-browser-computer.txt:1802",
+        "dumps/tests/13-browser-computer.txt:1807",
+        "dumps/tests/13-browser-computer.txt:1817",
+        "dumps/tests/13-browser-computer.txt:1825",
+        "dumps/tests/13-browser-computer.txt:1827",
+        "dumps/tests/13-browser-computer.txt:1828",
+        "src/renderer/src/components/browser-pane/annotate/MarkupDrawButton.tsx:33",
+        "src/renderer/src/components/browser-pane/annotate/MarkupToolbar.tsx:36",
+        "src/renderer/src/components/browser-pane/annotate/markup-screenshot-compose.test.ts :: tries full size first, then shrinks (PNG only, descending)"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-039",
+      "title": "Preview worktree HTML documents in a browser tab",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens an HTML document from the worktree as a preview.",
+      "user_sees": "The rendered document in a browser tab named after the document's title (or file name), with a chip showing its folder and file in place of an address.",
+      "rules": [
+        "The internal preview address is never shown.",
+        "The chip can copy the full path as the owning machine spells it, open the source as an editor tab with the right language, or hand the file to the system's default app.",
+        "Back and forward start disabled and then track navigation inside the document.",
+        "Previews count toward the hidden-worktree budget and load only when shown.",
+        "Mouse clicks pass through to Kolux while a drag is in progress."
+      ],
+      "acceptance": [
+        "Preview index.html → tab named after its title, chip shows folder/index.html; open source → editor tab with HTML highlighting."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2472",
+        "dumps/tests/13-browser-computer.txt:2475",
+        "dumps/tests/13-browser-computer.txt:2483",
+        "dumps/tests/13-browser-computer.txt:2513",
+        "dumps/tests/13-browser-computer.txt:2514",
+        "dumps/tests/13-browser-computer.txt:2515",
+        "dumps/tests/13-browser-computer.txt:2516",
+        "dumps/tests/13-browser-computer.txt:2519",
+        "dumps/tests/13-browser-computer.txt:2523",
+        "dumps/tests/13-browser-computer.txt:2524",
+        "dumps/tests/13-browser-computer.txt:2526",
+        "dumps/tests/13-browser-computer.txt:2951",
+        "dumps/tests/13-browser-computer.txt:2953",
+        "src/renderer/src/components/browser-pane/workspace-doc/HtmlDocPreview.tsx:225"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-13-040",
+      "title": "Document previews are sandboxed to their folder",
+      "tier": "P1",
+      "pushed": 5,
+      "state": "live-unverified",
+      "user_does": "Previews a document that references nearby files, links out, or tries to download.",
+      "user_sees": "The preview reads only its own file until the user allows its folder; external links ask for confirmation showing the exact destination; downloads are refused with a notice; failures such as an oversized file or a blocked asset are explained.",
+      "rules": [
+        "Folder access stays strictly inside the workspace; parent traversal, absolute escapes, backslash and NUL tricks are refused.",
+        "Navigation outside the granted folder, file addresses, popups and scripted window opens are all blocked; only a real click on an external link is offered, once.",
+        "Embedded frames may load only in-folder assets.",
+        "The download notice is said once per burst, per preview.",
+        "Every permission request from a preview is denied.",
+        "Agent tools may drive a preview only after it has rendered, and never with another page's identity."
+      ],
+      "acceptance": [
+        "Preview an HTML file using ../shared/style.css → unstyled until the folder is allowed.",
+        "Click an external link → confirmation shows the URL; cancel → nothing opens."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1250",
+        "dumps/tests/13-browser-computer.txt:1251",
+        "dumps/tests/13-browser-computer.txt:1252",
+        "dumps/tests/13-browser-computer.txt:1253",
+        "dumps/tests/13-browser-computer.txt:1269",
+        "dumps/tests/13-browser-computer.txt:1273",
+        "dumps/tests/13-browser-computer.txt:1274",
+        "dumps/tests/13-browser-computer.txt:1276",
+        "dumps/tests/13-browser-computer.txt:1278",
+        "dumps/tests/13-browser-computer.txt:1280",
+        "dumps/tests/13-browser-computer.txt:2488",
+        "dumps/tests/13-browser-computer.txt:2489",
+        "dumps/tests/13-browser-computer.txt:1217",
+        "dumps/tests/13-browser-computer.txt:1218",
+        "dumps/tests/13-browser-computer.txt:2492",
+        "dumps/tests/13-browser-computer.txt:1008",
+        "dumps/tests/13-browser-computer.txt:1705",
+        "dumps/tests/13-browser-computer.txt:1716"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-13-041",
+      "title": "Turn a document preview into a web page and back",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks the document chip, types a web address and presses Enter; later presses Back.",
+      "user_sees": "The same tab becomes an ordinary web page at that address; Back returns to the document preview.",
+      "rules": [
+        "Escape returns to the chip without converting.",
+        "One level of return is remembered.",
+        "Pointing a preview at a different document swaps it; the same document does nothing.",
+        "After Back returns to the preview, Forward crosses to the web page again."
+      ],
+      "acceptance": [
+        "Edit the chip to example.com, Enter → web page loads in that tab; Back → preview returns."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2520",
+        "dumps/tests/13-browser-computer.txt:2521",
+        "dumps/tests/13-browser-computer.txt:2911",
+        "dumps/tests/13-browser-computer.txt:2913",
+        "dumps/tests/13-browser-computer.txt:2917",
+        "dumps/tests/13-browser-computer.txt:2918",
+        "dumps/tests/13-browser-computer.txt:2618",
+        "src/renderer/src/store/slices/browser-page-conversion.test.ts :: the return leg swaps convertedFrom for convertedTo, so Forward can re-cross"
+      ],
+      "round": 0,
+      "related": [
+        "12"
+      ]
+    },
+    {
+      "id": "D-13-042",
+      "title": "Agents drive the worktree's visible browser tab",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Lets an agent in a worktree run kolux browser commands.",
+      "user_sees": "The agent's clicks, typing and navigation happen in the worktree's active browser tab where the user can watch; a page being driven stays painted even when hidden.",
+      "rules": [
+        "Commands target the active browser tab of the worktree; switching tabs moves the target.",
+        "With no browser tab the command fails with a clear message.",
+        "A stale helper can never take commands away from the real tab.",
+        "Waits and commands have timeouts; repeated timeouts reset the helper session.",
+        "Taking screenshots does not steal focus from what the user is doing.",
+        "Device emulation set by the agent is preserved across commands.",
+        "A raw pass-through command runs any helper command against the tab.",
+        "When the tab's underlying page is replaced, the helper session is rebuilt against the new page before the next command."
+      ],
+      "acceptance": [
+        "In a worktree with a browser tab, run kolux goto --url https://example.com → the visible tab navigates.",
+        "Same command in a worktree with no browser tab → clear error, nothing opens."
+      ],
+      "compat": "kolux exec --command <helper command>; every browser command takes --worktree <selector> and --json",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2",
+        "dumps/tests/13-browser-computer.txt:8",
+        "dumps/tests/13-browser-computer.txt:20",
+        "dumps/tests/13-browser-computer.txt:22",
+        "dumps/tests/13-browser-computer.txt:69",
+        "dumps/tests/13-browser-computer.txt:119",
+        "dumps/tests/13-browser-computer.txt:1730",
+        "dumps/tests/13-browser-computer.txt:1931",
+        "dumps/tests/13-browser-computer.txt:1933",
+        "dumps/tests/13-browser-computer.txt:3124",
+        "src/cli/specs/browser-basic.ts:243",
+        "registry:cli-manifest:exec",
+        "src/main/browser/agent-browser-bridge-session-lifecycle.test.ts :: destroys session on process swap and re-inits with --cdp",
+        "tests/e2e/browser-embedded-owner-routing.spec.ts:163"
+      ],
+      "round": 0,
+      "related": [
+        "20",
+        "08"
+      ]
+    },
+    {
+      "id": "D-13-043",
+      "title": "Leftover browser helper processes are cleaned up",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Quits or crashes Kolux while agents have been driving browser tabs.",
+      "user_sees": "No orphaned automation helpers pile up: helpers from a previous run are closed at start, and all are stopped at quit.",
+      "rules": [
+        "Only helpers with Kolux's own naming are touched; ones this run owns are left alone at start.",
+        "A hung or failed listing never blocks start-up; one failed close does not stop the rest.",
+        "Helper idle timeouts are longer than command timeouts so commands are never cut short.",
+        "An environment switch can turn the start-up sweep off; only an explicit on value disables it, anything else still sweeps."
+      ],
+      "acceptance": [
+        "Kill Kolux while an agent drives a tab, relaunch → no stale helper process remains."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:105",
+        "dumps/tests/13-browser-computer.txt:106",
+        "dumps/tests/13-browser-computer.txt:107",
+        "dumps/tests/13-browser-computer.txt:109",
+        "dumps/tests/13-browser-computer.txt:110",
+        "dumps/tests/13-browser-computer.txt:116",
+        "dumps/tests/13-browser-computer.txt:1754",
+        "src/main/browser/agent-browser-orphan-sweep.test.ts:179"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-13-044",
+      "title": "CLI: list, switch, create and close browser tabs",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Runs kolux tab commands from a terminal.",
+      "user_sees": "Lists the worktree's browser tabs (optionally with profiles), shows one by page id, shows the current one, switches by index or page id (optionally focusing it), creates a tab at an address and profile, or closes one by index.",
+      "rules": [
+        "A newly created tab is reported only once it has registered."
+      ],
+      "acceptance": [
+        "kolux tab create --url https://example.com --json → returns a page id; kolux tab list shows it."
+      ],
+      "compat": "kolux tab list [--show-profile]; tab show --page <id>; tab current; tab switch (--index <n> | --page <id>) [--focus]; tab create [--url <url>] [--profile <id>]; tab close [--index <n>]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/browser-basic.ts:162",
+        "src/cli/specs/browser-basic.ts:168",
+        "src/cli/specs/browser-basic.ts:174",
+        "src/cli/specs/browser-basic.ts:180",
+        "src/cli/specs/browser-basic.ts:187",
+        "src/cli/specs/browser-basic.ts:237",
+        "registry:cli-manifest:tab create",
+        "dumps/tests/13-browser-computer.txt:1720"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-045",
+      "title": "CLI: manage browser session profiles",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Runs kolux tab profile commands.",
+      "user_sees": "Lists profiles; creates one with a label, scope and optional native identity; deletes one; moves a tab to a profile, back to the default, or clones a tab into another profile; shows a tab's profile.",
+      "rules": [
+        "Delete is marked destructive; the default profile cannot be deleted."
+      ],
+      "acceptance": [
+        "kolux tab profile create --label Work → listed by tab profile list; deleting the default profile is refused."
+      ],
+      "compat": "kolux tab profile list | create --label <name> [--scope isolated|imported] [--no-ua-spoof] | delete | set (--page <id> | --worktree <sel>) --profile <id> | show | use-default --page <id> | clone --profile <id> [--page <id>]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/browser-basic.ts:193",
+        "src/cli/specs/browser-basic.ts:199",
+        "src/cli/specs/browser-basic.ts:206",
+        "src/cli/specs/browser-basic.ts:213",
+        "src/cli/specs/browser-basic.ts:219",
+        "src/cli/specs/browser-basic.ts:225",
+        "src/cli/specs/browser-basic.ts:231",
+        "dumps/tests/13-browser-computer.txt:1717",
+        "dumps/tests/13-browser-computer.txt:1064"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-046",
+      "title": "CLI: navigate, wait, snapshot and capture pages",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs kolux goto, back, forward, reload, wait, eval, scroll, snapshot, screenshot, full-screenshot or pdf.",
+      "user_sees": "The active tab navigates or waits for a condition; snapshot returns the page's accessibility tree with element references for later commands; screenshots and PDFs are saved.",
+      "rules": [
+        "wait accepts a selector, text, URL pattern, load state, script condition or visibility state, with a timeout.",
+        "A load that a download interrupts resolves with the unchanged page instead of failing.",
+        "screenshot takes an image format; full-screenshot captures the whole page.",
+        "goto, back, forward and reload act on the active tab; eval runs a script expression in the page and returns its result; pdf saves the page as a PDF."
+      ],
+      "acceptance": [
+        "kolux snapshot → references such as e12; kolux click with that reference clicks the element."
+      ],
+      "compat": "kolux goto --url; back; forward; reload; wait [--selector] [--timeout] [--text] [--url] [--load] [--fn] [--state hidden|visible]; eval; scroll [--direction] [--amount]; snapshot; screenshot [--format]; full-screenshot; pdf",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/browser-basic.ts:12",
+        "src/cli/specs/browser-basic.ts:18",
+        "src/cli/specs/browser-basic.ts:48",
+        "src/cli/specs/browser-basic.ts:55",
+        "src/cli/specs/browser-basic.ts:79",
+        "src/cli/specs/browser-basic.ts:132",
+        "src/cli/specs/browser-basic.ts:138",
+        "src/cli/specs/browser-advanced.ts:108",
+        "dumps/tests/13-browser-computer.txt:38",
+        "dumps/tests/13-browser-computer.txt:1524",
+        "dumps/tests/13-browser-computer.txt:1129",
+        "dumps/tests/13-browser-computer.txt:1145",
+        "registry:cli-manifest:goto",
+        "registry:cli-manifest:forward",
+        "registry:cli-manifest:eval",
+        "registry:cli-manifest:pdf"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-047",
+      "title": "CLI: interact with page elements",
+      "tier": "P1",
+      "pushed": 11,
+      "state": "live-unverified",
+      "user_does": "Runs kolux click, fill, type, select, hover, drag, upload, find, get, is, mouse and similar commands.",
+      "user_sees": "The command acts on the referenced element in the visible tab and returns the result as text or JSON.",
+      "rules": [
+        "Text insertion focuses the right field first, including inside embedded frames.",
+        "find locates by meaning (role, text, label) and performs an action on the match.",
+        "get reads text, html, value, url, title, count or box; is checks visible, enabled or checked.",
+        "upload attaches local files to a file input; download saves by clicking a target to a path; highlight outlines an element.",
+        "Element commands by reference: click, dblclick, fill, type, select, check, uncheck, focus, clear, select-all, hover, drag, scrollintoview and keypress; scroll moves the viewport by direction and amount; mouse move, down, up and wheel act at coordinates.",
+        "Long inserted text is delivered in bounded pieces, in order."
+      ],
+      "acceptance": [
+        "kolux fill on an input, then kolux get --what value → returns the filled text."
+      ],
+      "compat": "kolux click, dblclick, fill, type, inserttext, select, check, uncheck, focus, clear, select-all, keypress, hover, drag [--from --to], scrollintoview, upload --element --files, download --selector --path, highlight --selector, find --locator --value --action [--text], get --what, is, mouse move|down|up|wheel [--dy --dx]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/browser-basic.ts:24",
+        "src/cli/specs/browser-basic.ts:30",
+        "src/cli/specs/browser-basic.ts:150",
+        "src/cli/specs/browser-basic.ts:156",
+        "src/cli/specs/browser-advanced.ts:120",
+        "src/cli/specs/browser-advanced.ts:126",
+        "src/cli/specs/browser-advanced.ts:158",
+        "src/cli/specs/browser-advanced.ts:165",
+        "src/cli/specs/browser-advanced.ts:270",
+        "src/cli/specs/browser-advanced.ts:277",
+        "dumps/tests/13-browser-computer.txt:27",
+        "dumps/tests/13-browser-computer.txt:1086",
+        "dumps/tests/13-browser-computer.txt:1155",
+        "registry:cli-manifest:mouse move",
+        "registry:cli-manifest:scroll",
+        "registry:cli-manifest:dblclick",
+        "src/main/browser/browser-text-insertion.test.ts :: sends bounded CDP insertText chunks in order"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-048",
+      "title": "CLI: read and change cookies and web storage",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Runs kolux cookie or storage commands.",
+      "user_sees": "Reads, sets or deletes cookies for the tab, and reads, sets or clears its local or session storage.",
+      "rules": [
+        "Deleting cookies and clearing storage are marked destructive."
+      ],
+      "acceptance": [
+        "kolux cookie set a cookie, then cookie get → it is listed; storage local clear → storage local get returns nothing."
+      ],
+      "compat": "kolux cookie get [--url] | set --name --value [--domain --path --secure --httpOnly --sameSite --expires] | delete; storage local|session get | set | clear",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/browser-advanced.ts:7",
+        "src/cli/specs/browser-advanced.ts:13",
+        "src/cli/specs/browser-advanced.ts:31",
+        "src/cli/specs/browser-advanced.ts:231",
+        "src/cli/specs/browser-advanced.ts:243",
+        "src/cli/specs/browser-advanced.ts:250",
+        "src/cli/specs/browser-advanced.ts:262",
+        "registry:cli-manifest:cookie set"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-049",
+      "title": "CLI: intercept requests and read console and network logs",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Runs kolux intercept, capture, console or network.",
+      "user_sees": "Requests matching patterns are paused; captured console messages and network requests are listed, with a limit.",
+      "rules": [
+        "Interception set-up is cleared when a swapped tab closes."
+      ],
+      "acceptance": [
+        "kolux capture start, load a page, kolux network → requests listed; capture stop ends recording."
+      ],
+      "compat": "kolux intercept enable [--patterns <glob,...>] | disable | list; capture start | stop; console [--limit]; network [--limit]",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/browser-advanced.ts:56",
+        "src/cli/specs/browser-advanced.ts:62",
+        "src/cli/specs/browser-advanced.ts:68",
+        "src/cli/specs/browser-advanced.ts:77",
+        "src/cli/specs/browser-advanced.ts:89",
+        "src/cli/specs/browser-advanced.ts:95",
+        "dumps/tests/13-browser-computer.txt:60"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-050",
+      "title": "CLI: emulate devices and answer dialogs and the clipboard",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Runs kolux viewport, geolocation, set, clipboard or dialog commands.",
+      "user_sees": "The tab's viewport, device, location, offline state, extra headers, HTTP credentials or colour-scheme and motion preferences change; page dialogs are accepted (with text) or dismissed; the clipboard is read or written.",
+      "rules": [
+        "Oversized clipboard writes are refused before anything runs.",
+        "Mobile viewport emulation persists across later commands."
+      ],
+      "acceptance": [
+        "kolux set offline, then goto a site → offline failure; kolux dialog accept --text hi answers a prompt with 'hi'."
+      ],
+      "compat": "kolux viewport [--width --height --scale --mobile]; geolocation; set device | offline | headers | credentials --user --pass | media [--color-scheme --reduced-motion]; clipboard read | write; dialog accept [--text] | dismiss",
+      "decision": "",
+      "evidence": [
+        "src/cli/specs/browser-advanced.ts:40",
+        "src/cli/specs/browser-advanced.ts:48",
+        "src/cli/specs/browser-advanced.ts:173",
+        "src/cli/specs/browser-advanced.ts:191",
+        "src/cli/specs/browser-advanced.ts:197",
+        "src/cli/specs/browser-advanced.ts:205",
+        "src/cli/specs/browser-advanced.ts:218",
+        "src/cli/specs/browser-advanced.ts:224",
+        "dumps/tests/13-browser-computer.txt:86",
+        "dumps/tests/13-browser-computer.txt:20"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-051",
+      "title": "The agent page-control endpoint is locked to Kolux's own tools",
+      "tier": "P0",
+      "pushed": 5,
+      "state": "live",
+      "user_does": "Nothing; agents use the endpoint Kolux hands them.",
+      "user_sees": "Websites and other machines cannot reach the page-control endpoint that agents use to drive browser tabs.",
+      "rules": [
+        "The endpoint answers only under a secret path; the bare host and port are refused.",
+        "Requests whose Host is not this computer are refused, blocking DNS rebinding.",
+        "Any request that comes from a web page (it carries an Origin) is refused, even under the secret path.",
+        "Discovery information is served only under the secret path."
+      ],
+      "acceptance": [
+        "From a web page, try to connect to the endpoint → refused.",
+        "Connect to the bare port → refused; the address Kolux hands the agent → works."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1166",
+        "dumps/tests/13-browser-computer.txt:1167",
+        "dumps/tests/13-browser-computer.txt:1168",
+        "dumps/tests/13-browser-computer.txt:1169",
+        "dumps/tests/13-browser-computer.txt:1170",
+        "dumps/tests/13-browser-computer.txt:1171",
+        "dumps/records/handoff-recent-work.md:9"
+      ],
+      "round": 0,
+      "related": [
+        "10"
+      ]
+    },
+    {
+      "id": "D-13-052",
+      "title": "Drags pass across browser pages",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Drags a tab, split or file across a browser pane.",
+      "user_sees": "The drag keeps working over the page; drop targets appear and the drop lands, rather than the page swallowing it.",
+      "rules": [
+        "A page that appears mid-drag also lets the drag through."
+      ],
+      "acceptance": [
+        "Drag a terminal tab over a browser pane to split → drop target shows and the split is created."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2274",
+        "dumps/tests/13-browser-computer.txt:2516",
+        "dumps/tests/13-browser-computer.txt:2517"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-13-053",
+      "title": "Keep the computer awake while agents run",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Picks On, Off or Auto for keeping the computer awake (in Agents settings).",
+      "user_sees": "Auto stops the computer sleeping while agents are running, On keeps it awake always, Off never interferes; a status-bar item shows when it is active.",
+      "rules": [
+        "An older on/off setting that was on becomes Auto.",
+        "An explicit choice is kept unless an older build changed the old setting afterwards.",
+        "Saving also writes a compatible old-style value so older builds roughly match."
+      ],
+      "acceptance": [
+        "Set Auto, start an agent and leave the machine idle past its sleep time → stays awake; when agents finish → normal sleep resumes."
+      ],
+      "compat": "settings computerAwakeMode (on | off | auto), keepComputerAwakeWhileAgentsRun (legacy boolean, default false)",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3104",
+        "dumps/tests/13-browser-computer.txt:3105",
+        "dumps/tests/13-browser-computer.txt:3106",
+        "dumps/tests/13-browser-computer.txt:3107",
+        "src/shared/computer-awake-mode.ts:1",
+        "src/renderer/src/components/settings/AgentAwakeSetting.tsx:33",
+        "registry:settings-keys:keepComputerAwakeWhileAgentsRun"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "17",
+        "03",
+        "05",
+        "19"
+      ]
+    },
+    {
+      "id": "D-13-054",
+      "title": "Browser settings page (home page, link routing, cookies)",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opened Settings → Browser, or 'Browser Settings…' from the toolbar menu.",
+      "user_sees": "A page for home page, search engine and Kagi link, default zoom, link routing and session cookies, plus a remote browsing section.",
+      "rules": [
+        "Features stay with fixed defaults: blank new tabs, one search engine, default zoom 100%; cookie import and profiles stay in the toolbar menu."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: browser settings page removed by table 1b; features kept with fixed defaults and toolbar-menu controls. Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:browser",
+        "dumps/tests/13-browser-computer.txt:3136",
+        "src/renderer/src/components/browser-pane/assemble-chrome/browser-toolbar-menu-dropdown.tsx:235",
+        "src/shared/persisted-ui-state-types.ts:182"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-13-055",
+      "title": "Browser pages hosted on a paired desktop client",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opened browser tabs in a worktree that runs on a paired remote runtime.",
+      "user_sees": "The page ran on the user's desktop while the worktree lived on the server; it survived host restarts and quits, could be reopened on the server, and mixed app versions placed pages safely; a tooltip tour introduced it.",
+      "rules": [
+        "Area 18 remote and paired runtimes are cut."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: paired remote runtimes (area 18) are dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3152",
+        "dumps/tests/13-browser-computer.txt:3158",
+        "dumps/tests/13-browser-computer.txt:3173",
+        "dumps/tests/13-browser-computer.txt:3175",
+        "dumps/tests/13-browser-computer.txt:1389",
+        "dumps/tests/13-browser-computer.txt:2039",
+        "dumps/tests/13-browser-computer.txt:2347",
+        "registry:settings-keys:browserClientHostedRemoteEnabled"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-13-056",
+      "title": "Browser pages streamed to web and phone clients",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Viewed or drove a desktop browser tab from the web client or a phone.",
+      "user_sees": "A live video stream of the page with remote keyboard, address bar and navigation, plus an overlay on the desktop while a phone was driving.",
+      "rules": [
+        "Web client and mobile are cut with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: web client and mobile pairing (area 18) are dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:969",
+        "dumps/tests/13-browser-computer.txt:974",
+        "dumps/tests/13-browser-computer.txt:2375",
+        "dumps/tests/13-browser-computer.txt:2399",
+        "dumps/tests/13-browser-computer.txt:3070",
+        "dumps/tests/13-browser-computer.txt:2141",
+        "dumps/tests/13-browser-computer.txt:1934"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-13-057",
+      "title": "Browser traffic routed through SSH, WSL and remote hosts",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Browsed from a worktree on an SSH host, WSL or remote runtime.",
+      "user_sees": "Pages loaded as if from that host through a tunnel, with an indicator naming where traffic left from; cookie imports could target those routes.",
+      "rules": [
+        "SSH hosts, WSL and remote runtimes are cut with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: SSH, WSL and remote network routing (area 18) are dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:779",
+        "dumps/tests/13-browser-computer.txt:815",
+        "dumps/tests/13-browser-computer.txt:909",
+        "dumps/tests/13-browser-computer.txt:1371",
+        "dumps/tests/13-browser-computer.txt:1517",
+        "dumps/tests/13-browser-computer.txt:1536",
+        "dumps/tests/13-browser-computer.txt:1544",
+        "dumps/tests/13-browser-computer.txt:1866",
+        "dumps/tests/13-browser-computer.txt:344"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-13-058",
+      "title": "Browser tabs inside web-runtime sessions",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opened browser tabs in a headless-served session from the web client.",
+      "user_sees": "Tabs were staged, placed in splits and kept in sync between the server and the web client, backed by off-screen pages on the server.",
+      "rules": [
+        "Headless serve and the web client are cut with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: headless serve and web client (area 18) are dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2799",
+        "dumps/tests/13-browser-computer.txt:2804",
+        "dumps/tests/13-browser-computer.txt:2851",
+        "dumps/tests/13-browser-computer.txt:2861",
+        "dumps/tests/13-browser-computer.txt:1378"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-13-059",
+      "title": "Remote runtime file browser with Windows drives",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Browsed folders on a remote runtime, including Windows drive letters.",
+      "user_sees": "A folder picker that listed the server's drives and directories.",
+      "rules": [
+        "Remote runtimes are cut with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: remote runtimes (area 18) are dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3188",
+        "dumps/tests/13-browser-computer.txt:2788"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-13-060",
+      "title": "Open a URL on the paired client from the CLI",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Ran kolux open-url --url <address> in a remote terminal.",
+      "user_sees": "The address opened on the desktop client that hosted the terminal.",
+      "rules": [
+        "Paired clients are cut with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "kolux open-url --url <url> [--worktree <selector>] [--json]",
+      "decision": "default cut: paired client hosting (area 18) is dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/cli/specs/browser-basic.ts:6",
+        "registry:cli-manifest:open-url"
+      ],
+      "round": 0,
+      "related": [
+        "18",
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-061",
+      "title": "Custom network address for runtime pairing",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Entered a custom address when generating a runtime pairing.",
+      "user_sees": "A dialog to type the network address the pairing should advertise.",
+      "rules": [
+        "Pairing is cut with area 18."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: runtime pairing (area 18) is dropped. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:2551"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    },
+    {
+      "id": "D-13-062",
+      "title": "Computer use: agents control desktop apps",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Let an agent run kolux computer commands.",
+      "user_sees": "The agent listed apps and windows, read an app's state, and clicked, scrolled, dragged, typed, pressed keys and set values in any desktop app.",
+      "rules": [
+        "Actions the provider could not confirm were marked unverified."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "kolux computer capabilities | list-apps | permissions | list-windows | get-app-state | click | perform-secondary-action | scroll | drag | type-text | press-key | hotkey | paste-text | set-value",
+      "decision": "default cut: computer use and its settings section removed by table 1b. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/cli/specs/computer.ts:15",
+        "src/cli/specs/computer.ts:46",
+        "src/cli/specs/computer.ts:118",
+        "registry:cli-manifest:computer click",
+        "dumps/tests/13-browser-computer.txt:1549",
+        "dumps/tests/13-browser-computer.txt:1572"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-13-063",
+      "title": "Computer Use settings section",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Opened Settings → Computer Use.",
+      "user_sees": "A page to let agents control any app on the computer and check its permissions.",
+      "rules": [
+        "Section cut with the feature."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: computer-use settings section removed by table 1b. Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:computer-use"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-13-064",
+      "title": "Mac permission setup for computer use",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Granted Accessibility and Screen Recording to Kolux's helper app on a Mac.",
+      "user_sees": "A helper app walked through each missing permission, reported status, and reset stale grants; other platforms did nothing.",
+      "rules": [
+        "Missing helper or a helper that never closed was reported, not hung."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: computer use removed by table 1b. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1658",
+        "dumps/tests/13-browser-computer.txt:1663",
+        "dumps/tests/13-browser-computer.txt:1665",
+        "dumps/tests/13-browser-computer.txt:1670",
+        "dumps/tests/13-browser-computer.txt:1745",
+        "dumps/tests/13-browser-computer.txt:1746"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-065",
+      "title": "Desktop control helpers for Mac, Windows and Linux",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Used computer use on any platform.",
+      "user_sees": "A native helper on Mac and a script helper on Windows and Linux carried out actions; Windows script policy blocks were detected and explained.",
+      "rules": [
+        "Large pastes were validated before launching the helper; unsupported platforms said so plainly."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: computer use removed by table 1b. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:1550",
+        "dumps/tests/13-browser-computer.txt:1552",
+        "dumps/tests/13-browser-computer.txt:1555",
+        "dumps/tests/13-browser-computer.txt:1605",
+        "dumps/tests/13-browser-computer.txt:1614",
+        "dumps/tests/13-browser-computer.txt:1671",
+        "dumps/tests/13-browser-computer.txt:1685",
+        "dumps/tests/13-browser-computer.txt:1696"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-066",
+      "title": "Computer-use error recovery guidance and key-chord checks",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Hit a computer-use error or sent a key chord.",
+      "user_sees": "Each error came with concrete recovery steps (set up permissions, list windows and retry once, verify state after focus loss); malformed key chords were refused.",
+      "rules": [
+        "Hotkeys needed modifiers plus exactly one key; single key presses refused modifier chords."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: computer use removed by table 1b. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/13-browser-computer.txt:3108",
+        "dumps/tests/13-browser-computer.txt:3110",
+        "dumps/tests/13-browser-computer.txt:3111",
+        "dumps/tests/13-browser-computer.txt:3114",
+        "dumps/tests/13-browser-computer.txt:3115",
+        "dumps/tests/13-browser-computer.txt:3117"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-13-067",
+      "title": "Preview a workspace's running dev server in a browser tab",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Starts a dev server from a workspace terminal, then clicks the globe-shaped Preview button in the focused split's toolbar, or picks another address from the small arrow menu beside it.",
+      "user_sees": "The server's page opens as a browser tab in that same split, named Preview followed by the server's host and port. If a browser tab of this workspace already shows that origin, that tab comes to the front and nothing new opens.",
+      "rules": [
+        "The button appears only in the toolbar of the split that holds focus, beside the new-tab control, never once per split.",
+        "While no listening port belongs to the workspace the button is greyed out and its tooltip explains that no server was found.",
+        "Only ports owned by this workspace are candidates; other workspaces' ports, container ports and outside processes never are.",
+        "Ranking: a port whose address the server printed in a terminal comes first, next a port speaking a recognised web protocol, and the smallest port number breaks any tie; the printed address is used when there is one.",
+        "The arrow menu shows only when two or more candidates exist and lists the others by host and port.",
+        "When friendly local addresses (area 01) are on, the tab opens at the friendly address, falling back to the plain address if registering it fails.",
+        "Kolux adds no file watching of its own; refreshing is left to the dev server's live reload.",
+        "If opening fails, an error toast gives the reason.",
+        "Windows (v0.4.1): the system port scan there carries no working folder, so a port also counts as the workspace's when a terminal bound to that workspace printed an address for it; that attribution survives later rescans while the port keeps listening, process evidence wins when both exist, and the ports list marks such ports as found through a printed address."
+      ],
+      "acceptance": [
+        "No server running in the workspace -> button greyed out, tooltip says no server was found.",
+        "Start a dev server that prints http://localhost:5173 in the workspace terminal, click Preview -> a browser tab for it opens in the focused split; click again -> the same tab is focused and the tab count is unchanged.",
+        "Run two servers in one workspace -> the arrow menu lists the second; picking it opens that one.",
+        "On Windows, start a local web server that prints its address in a workspace terminal -> the button enables after the next port scan and one click opens the page."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "registry:tags:v0.4.0|workspace preview pane",
+        "registry:tags:v0.4.1|Preview button enables on Windows",
+        "dumps/records/tags.csv:9",
+        "dumps/records/tags.csv:10",
+        "src/renderer/src/components/tab-group/WorkspacePreviewButton.tsx:111",
+        "src/renderer/src/components/tab-group/WorkspacePreviewButton.tsx:58",
+        "src/renderer/src/components/tab-group/WorkspacePreviewButton.tsx:168",
+        "src/renderer/src/components/tab-group/workspace-preview-target.ts:33",
+        "src/renderer/src/components/tab-group/TabGroupPanel.tsx:289",
+        "src/renderer/src/lib/workspace-port-actions.ts:116",
+        "src/main/ports/local-workspace-port-attribution.ts:118",
+        "src/main/ports/local-workspace-port-attribution.ts:159",
+        "src/renderer/src/components/right-sidebar/local-port-row.tsx:92",
+        "src/renderer/src/components/tab-group/WorkspacePreviewButton.test.tsx:123",
+        "src/renderer/src/components/tab-group/workspace-preview-target.test.ts:71",
+        "src/main/ports/local-workspace-port-scanner.test.ts:241",
+        "HANDOFF-HISTORY.md:1040",
+        "git:11c3cb2ea",
+        "git:beafcc5d2",
+        "git:d26116fdc"
+      ],
+      "round": 4,
+      "related": [
+        "01",
+        "03",
+        "05"
+      ]
+    }
+  ],
+  "notes": [
+    "Browser settings page is cut but search engine, Kagi session link, home page, default zoom and HTTP proxy (httpProxyUrl/bypass) lose their only UI; decide fixed defaults or a home in General before build.",
+    "No 2026-10-05/06 HANDOFF entry verifies browser behaviour, so all kept cards are live-unverified except the agent endpoint lock-down (10-06 close-out); the HANDOFF still lists a live browser authorization flow and hidden-renderer check as outstanding.",
+    "Agent browser automation (D-13-042, D-13-046..050) wraps a third-party helper CLI; its command set and the raw exec pass-through follow that tool, so the rebuild must pick a replacement or pin that dependency.",
+    "Link routing for terminal links (openLinksInApp, modifier inverts, one-time prompt) has no tests in this area's dump; assumed carded by 03. Keep-computer-awake (D-13-053) is tested here but its UI lives in Agents settings and the status bar.",
+    "How a workspace HTML preview is opened (which editor or explorer action) was not resolved; Markdown preview may belong to 12.",
+    "Roughly 40% of the area's tests cover paired/client-hosted pages, remote streaming, SSH/WSL routes and web-runtime tabs; carded as D-13-055..061 at summary level only.",
+    "No third-party branded assets found (cookie-import browsers and search engines are text labels only; git ls-files shows no logo files), so tier X is empty.",
+    "Unshipped improvement cards touching this area: WORK-4 (browser surface check on installed build), WORK-5 (pop a browser tab out to its own window), VOICE-9 (dictate into the browser pane); not carded.",
+    "Critic r1: D-13-051 raised P1->P0 (named in the 2026-10-06 HANDOFF close-out). pushed set to null on D-13-007/014/018/019/022/023/052 (not the session-per-pane grid) and D-13-027/045 (browser profiles are not worktree isolation).",
+    "Critic r1: D-13-053 (keep computer awake) duplicates D-03-122, D-05-097 and D-19-018; area 03 owns keep-PC-awake per the area map, so merge at spec time and keep one card.",
+    "Critic r1: cards D-13-015/016/024/029/031/032/036/040 carry pushed 5 (safety) but tier P1/P2; kept as rules of P1 browser features. If the tier rule is applied literally (top-5 theme => P0) they need P0 or pushed null; owner call.",
+    "Critic r1: every browser CLI command accepts pairing-code and environment flags; both belong to area 18 and drop with it (D-13-060 covers the paired open-url command).",
+    "Wave 2 patch (2026-10-06): D-13-067 added for the tags rows v0.4.0 (workspace preview pane) and v0.4.1 (Preview button enables on Windows); the v0.4.1 row is folded into the same card as its Windows rule rather than a second card. State kept live-unverified: the in-app verification recorded on 2026-09-14 predates the 10-05 redesign."
+  ]
+}

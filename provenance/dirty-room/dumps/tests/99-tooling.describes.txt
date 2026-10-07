@@ -1,0 +1,7 @@
+# 99-tooling: count	describe title  (6 unique)
+1	stripAmbientAgentConfigEnv
+1	redirectAppDataIntoIsolatedHome
+1	dismissOverlays
+1	packaged node-pty native capability oracle
+1	packaged node-pty launcher-surviving grandchild
+1	packaged Windows native smoke runner boundary

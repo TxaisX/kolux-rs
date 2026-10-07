@@ -1,0 +1,1786 @@
+# 03-terminals-panes: count	describe title  (1785 unique)
+55	connectPanePty
+39	registerPtyHandlers
+16	createRemoteRuntimePtyTransport
+9	daemon-init: runRestartDaemon (7-step sequence)
+9	applyWebSessionTabsSnapshot
+8	createPtySubprocess
+8	createIpcPtyTransport
+7	DaemonPtyAdapter (IPtyProvider)
+7	spawn environment
+7	pane terminal output scheduler
+7	Terminal Panes
+6	FloatingTerminalPanel close behavior
+6	agent completion coordinator
+6	useTerminalPaneGlobalEffects
+5	dispose
+5	Store
+5	handleOscLink
+4	resize
+4	createFilePathLinkProvider range bounds
+3	history integration
+3	write
+3	shutdown
+3	daemon-active provider (parity with LocalPtyProvider)
+3	TabBar PowerShell launch wiring
+3	active agent note send
+3	setActiveWorktree
+2	producer flow control
+2	kill
+2	signal
+2	listSessions
+2	with main side-effect authority on
+2	hidden-delivery gate
+2	extractTerminalHttpLinks
+2	WorktreeJumpPalette recent chats & terminals
+1	AgentAwakeService status array ownership
+1	AgentAwakeService platform assertions
+1	AgentAwakeService
+1	agent startup at the rendered shell prompt
+1	daemon bash PROMPT_COMMAND composition
+1	DaemonClient
+1	connect
+1	RPC
+1	events
+1	disconnect
+1	notify (fire-and-forget)
+1	ColdRestorePayloadCache
+1	classifyDaemonAdoptionOrigin
+1	trackDaemonAdopted
+1	trackDaemonPtyCwdDeniedIfDiverged
+1	daemon audit eligibility telemetry
+1	daemon audit eligibility inventory volume
+1	daemon authenticated client activity
+1	BackgroundTransientFactRelay
+1	daemon bundle staleness
+1	CheckpointSessionQueue
+1	daemon notify partial handoff
+1	requestDaemonRpc
+1	cancel failures the daemon itself produced
+1	durable checkpoint ownership seeding without disk history
+1	endpoint ownership identity rules
+1	daemon endpoint ownership publication
+1	publishDaemonEndpoint
+1	daemon endpoint ownership on win32
+1	daemon entry path per deployment layout
+1	daemon-entry parseArgs
+1	decodeDaemonResponseError
+1	isDaemonEndpointGoneError
+1	createDaemonFileLog
+1	createNoopDaemonFileLog
+1	foreground-confirmation daemon protocol
+1	killStaleDaemon endpoint entries
+1	daemon health socket listener cleanup
+1	daemon health
+1	parseDaemonPidFile
+1	Linux process start-time parsing
+1	startTimeMatches
+1	parseWindowsProcessIdentityJson
+1	startTimesWithinTolerance
+1	killStaleDaemon pid identity guards
+1	killStaleDaemon ownership decisions
+1	buildDaemonHostManifest
+1	materializeRelocatedDaemonHost
+1	getRelocatedDaemonHost
+1	pruneOldDaemonHosts
+1	collectPinnedDaemonVersions
+1	current daemon lifecycle retirement
+1	daemon PID record ownership cleanup
+1	daemon audit evidence main-thread cost
+1	daemon process identity evidence
+1	daemon audit availability evidence
+1	bucketDaemonLiveSessionCount
+1	daemon lifecycle emitters
+1	startDaemon
+1	isNativePtyException
+1	salvagePidFromCorruptDaemonRecord
+1	daemon preflight client replacement
+1	daemon process inspection
+1	mergeProcessLivenessVerdict
+1	daemon protocol version
+1	dead-endpoint write respawn
+1	respawn on daemon death
+1	full-snapshot cooldown
+1	DaemonPtyAdapter history recovery
+1	inventory after the terminal host dies
+1	mode 2031 fact compatibility
+1	background stream thinning compatibility
+1	probePtyLiveness
+1	attach applied-size compatibility
+1	inspectProcess on pre-inspection daemon protocols
+1	DaemonPtyAdapter replacement exit races
+1	spawn with sessionId (reattach)
+1	attach
+1	listProcesses
+1	hasChildProcesses / getForegroundProcess
+1	killed-session tombstones
+1	reconcileOnStartup
+1	steadyState across daemon versions
+1	spawn
+1	getAppliedSize
+1	getBufferSnapshot
+1	sessionsNeedingFullCheckpoint cleanup (leak regression)
+1	sendSignal
+1	getCwd
+1	getInitialCwd
+1	clearBuffer
+1	onData
+1	onExit
+1	serialize / revive
+1	getDefaultShell / getProfiles
+1	fanoutSyntheticExits / getActiveSessionIds (restart primitives)
+1	DaemonPtyRouter history handoff
+1	DaemonPtyRouter
+1	restart accessors
+1	disposeRouterOnly
+1	DaemonPtyAdapter startup delivery
+1	daemon PTY upgrade adoption
+1	parseDaemonReadyIdentity
+1	reattach isolation from a stalled checkpoint
+1	DaemonRespawnThrottle
+1	DaemonSpawner crash-loop containment
+1	previously recoverable restore depth
+1	durable history
+1	adapter remount and restart
+1	daemon self-retirement respawn
+1	daemon async spawn cancellation
+1	DaemonServer attach-only preparation
+1	DaemonServer attachment lifecycle
+1	daemon server error handling
+1	daemon kill attribution
+1	DaemonServer
+1	startup
+1	RPC routing
+1	authentication
+1	stream socket lifecycle
+1	DaemonSessionOwnerResolver
+1	resolveDaemonSessionScrollbackRows
+1	daemon session scrollback window
+1	keep-history stop bounds only the caller wait on the final checkpoint
+1	DaemonSpawner
+1	ensureRunning
+1	restoreClaimedDaemonArtifact
+1	daemon PID publication
+1	daemon socket publication
+1	DaemonStreamDataBatcher
+1	daemon stream droppability lifecycle
+1	DaemonStreamDataBatcher droppable membership
+1	macOS daemon TCC attribution main-thread cost
+1	parseDaemonPidFile spawnerExecPath
+1	macOS daemon TCC attribution health
+1	transport-drop attachment release
+1	DegradedDaemonPtyProvider
+1	Hangul cell width agreement
+1	headless emulator snapshot fidelity fuzz
+1	HeadlessEmulator restored OSC link ranges
+1	headless emulator snapshot cost (issue #5096 harness)
+1	headless emulator unicode widths
+1	wide-character wrap fidelity
+1	repaint over wide characters
+1	headless emulator wide-character snapshot fidelity
+1	HeadlessEmulator
+1	construction
+1	write and snapshot
+1	OSC-7 CWD tracking
+1	OSC title tracking
+1	clear scrollback (CSI 3J)
+1	terminal modes
+1	rehydration sequences
+1	agent hibernation cold-restore (alt-screen TUI)
+1	HistoryManager disabledSessions stays bounded (leak regression)
+1	HistoryManager
+1	openSession
+1	checkpoint
+1	closeSession
+1	multiple sessions
+1	removeSession
+1	hasHistory
+1	readMeta
+1	error handling
+1	large session cleanup responsiveness
+1	terminal history restore memory limits
+1	HistoryReader
+1	detectColdRestore — checkpoint.json
+1	detectColdRestore — scrollback.bin fallback (backward compatibility)
+1	TUI truncation (scrollback.bin fallback path)
+1	listRestorable
+1	repro: daemon failure-mode classification
+1	MacosLoginSessionDeathWatch
+1	encodeNdjson
+1	createNdjsonParser
+1	node-pty diagnostic error hints
+1	node-pty Windows input errors
+1	parseFileUriPath
+1	OSC-7 URI extraction
+1	PostReadyFlushGate
+1	mintPtySessionId
+1	ptySessionIdForAgentCreateOperation
+1	isSafePtySessionId
+1	parsePtySessionId
+1	createDaemonPtyEnvironment (item 3, real boundary)
+1	createPtySubprocess cwd cancellation identity
+1	daemon pty foreground degraded-scan handling
+1	daemon pty foreground scan cadence
+1	proc.kill neutralization for SIGHUP-to-recycled-pid hazard
+1	forceKill/signal guard against recycled pid after exit
+1	%s native-handle contract
+1	%s failure cleanup
+1	checkPtySpawnHealth (retry on transient failure)
+1	reattach snapshot flow
+1	normal-screen TUI (Claude Code style)
+1	alternate-screen TUI (Codex style)
+1	Ink-style cursor-relative repaint (Codex)
+1	dimension handling
+1	inline-viewport (Codex/ratatui) reattach
+1	signal support
+1	mouse tracking survives the death of the process that armed it
+1	remote-server snapshot corruption
+1	daemon session ingest throughput
+1	Session pending output
+1	Session shell-owned recovery through the output barrier
+1	Session terminal control
+1	clearScrollback
+1	windows pty close path leaves no process-tree survivors
+1	Session
+1	state machine
+1	data flow
+1	emulator does not reply to terminal queries
+1	shell readiness gating
+1	snapshot
+1	detach token guard
+1	slow daemon session verification
+1	startup device attributes responder
+1	startup device attributes query filter
+1	terminal checkpoint serializer
+1	bounded terminal checkpoint writer
+1	readTerminalCursorLineContext
+1	incremental terminal history restore
+1	checkpoint-only cold restore of a large checkpoint
+1	terminal history log codec
+1	retainNewestRestorableTerminalHistorySessions
+1	terminal history seed chunks
+1	getRecoveredHistorySeedSegments
+1	TerminalHistorySeedTransferRegistry
+1	tombstoned session tree removal retries
+1	TerminalHistorySessionWriter.checkpoint durability
+1	TerminalHost agent-session claims
+1	TerminalHost attach-only sessions
+1	cheap-tier ps scan volume at 8 idle agent panes over 60s
+1	concurrent createOrAttach across the async spawn
+1	TerminalHost cwd readability verdict
+1	daemon ordinary foreground on %s
+1	daemon cheap-tier process inspection
+1	TerminalHost process inspection
+1	TerminalHost PTY owner backend
+1	TerminalHost readiness reporting
+1	TerminalHost dead-session reaping (leak regression)
+1	TerminalHost startup command terminator
+1	TerminalHost startup command delivery logging
+1	TerminalHost recreate during teardown
+1	TerminalHost WSL context
+1	TerminalHost
+1	createOrAttach
+1	detach
+1	tombstones
+1	TerminalSessionTeardown plain-shell teardown
+1	pty job ownership reaches the daemon teardown path
+1	TerminalShellLifecycleScanner
+1	unclean death trigger
+1	clean exit candidates
+1	revocation
+1	inert input
+1	unclean trigger arming
+1	TerminalShellRecoveryBarrier
+1	clean-exit confirmation retirement
+1	terminal snapshot color parity
+1	OSC 8 hyperlink snapshot round-trip
+1	out-of-range SGR state serialization
+1	SGR intensity round-trip (BUG B, addon patch)
+1	cursor restore after wrap-pending replay (BUG C, absolute-cursor hardening)
+1	warmWindowsConptyOnce
+1	getInFlightWindowsConptyWarmup
+1	normalizeWslColdRestoreCwd
+1	getGhosttyConfigPaths
+1	findGhosttyConfigPath
+1	previewGhosttyImport
+1	mapGhosttyToKolux — split-divider-color
+1	mapGhosttyToKolux — unfocused-split-opacity
+1	mapGhosttyToKolux — scrollback-limit
+1	mapGhosttyToKolux — window-padding
+1	mapGhosttyToKolux — adjust-cell-height
+1	mapGhosttyToKolux — cursor-text
+1	mapGhosttyToKolux — bold-color
+1	mapGhosttyToKolux — mouse-hide-while-typing
+1	mapGhosttyToKolux — selection-word-chars
+1	mapGhosttyToKolux — cursor-opacity
+1	mapGhosttyToKolux — empty values
+1	mapGhosttyToKolux — negative padding
+1	mapGhosttyToKolux — font & cursor
+1	mapGhosttyToKolux — macos-option-as-alt
+1	mapGhosttyToKolux — background & colors
+1	mapGhosttyToKolux — palette
+1	mapGhosttyToKolux — window & padding
+1	mapGhosttyToKolux — unsupported keys
+1	parseGhosttyConfig
+1	previewGhosttyImport theme references
+1	getGhosttyThemeSearchDirs
+1	resolveGhosttyThemeColors
+1	remote filesystem watcher terminal retry resync
+1	floating workspace directory authorization
+1	shouldSeedPreAttachPtySize
+1	resolveCommittedPtySize
+1	commitAttachedPtySize
+1	sendPtyDataToRenderer
+1	sendModelRestoreNeededMarker
+1	assemblePtyIpcSpawnEnv — xAI API key branch
+1	triggerPtySpawnPushTargetMaterialization (real git fixture)
+1	triggerPtySpawnPushTargetMaterialization
+1	spawn size cache on reattach
+1	chunked pty write yield
+1	a stable pane whose reattach was refused
+1	resolvePtyDeliveryWindow
+1	clearPtyWindowOwner
+1	isAuthorizedPtySender
+1	sessionKeyForWebContents / isTerminalSessionWindowWebContents
+1	hasAnyPtyDeliveryTarget
+1	registerHeadlessPtyRuntime
+1	the hosts a PTY inventory can report having queried
+1	renderer IPC write path
+1	runtime controller backstop
+1	pty:getSize reports applied size, not requested size
+1	agent_started telemetry
+1	serializeBuffer dispatch
+1	provider buffer snapshot dispatch
+1	main buffer snapshot dispatch
+1	controller probePtyLiveness routing
+1	aggregate PTY process inventory
+1	Windows PTY UTF-8 encoding
+1	encoding mismatch (root cause)
+1	real shell encoding verification
+1	hidden-at-spawn mark (initiallyHidden)
+1	pty hidden delivery gate
+1	hidden renderer delivery gate
+1	pty:management IPC handlers
+1	killAll
+1	killOne
+1	macTccAttribution
+1	restart
+1	PtyPendingDataDrainQueue
+1	pending PTY projection admissions
+1	PtyProducerFlowController
+1	pty:writeUnavailable renderer-liveness guard
+1	the per-write sender
+1	the daemon-death fan-out
+1	restored AppImage CLI shim refresh
+1	registerPtyHandlers Codex launch refusal on an unreadable managed home
+1	local pty:spawn handler
+1	runtime pty controller spawn
+1	unverifiable Codex resume provenance
+1	PTY startup barrier ordering
+1	registerPtyHandlers daemon-swap-window presence
+1	Windows UTF-8 code page
+1	RendererTerminalSerializerReadiness
+1	writeTerminalRenderDesyncEvidence
+1	registerTerminalWindowsHandlers
+1	terminalWindows:open
+1	terminalWindows:close
+1	terminalWindows:focus
+1	terminalWindows:list
+1	tui agent detection commands
+1	registerWorktreeHandlers
+1	cross-host pane identity migration
+1	host-admitted terminal membership survives a stale renderer replay
+1	findTerminalTabIdForLeaf after persistPtyBinding grafts a leaf
+1	removeAppImageRuntimeEnv
+1	stripInheritedBuildModeEnv
+1	isHostCodexHomeForWsl
+1	Codex preflight under a profile-rewritten PATH
+1	Codex shell launch preflight
+1	PowerShell Codex shell launch preflight
+1	Codex shell launch preflight command
+1	Codex preflight paths containing spaces
+1	dropIncoherentCondaActivationEnv
+1	legacy terminal shim neutralization
+1	legacy terminal Windows tombstone text
+1	node-pty patch: pseudoconsole close on the self-exit path
+1	node-pty patch: conout worker disposal on the self-exit path
+1	omp wrapper under a user alias named omp
+1	safeRemoveOverlay
+1	getPosixPtyForegroundGroup
+1	signalPosixPtyForegroundGroup
+1	process table lookup
+1	POSIX PTY process-group termination
+1	POSIX PTY group-sweep breadcrumbs
+1	readShellStartupEnvVar
+1	fish
+1	readSessionShellStartupEnvVar
+1	terminal color env
+1	persisted Windows PATH process creation
+1	readPersistedWindowsPathSegments
+1	mergePersistedWindowsPath
+1	resolvePathEnvKey
+1	installWindowsPathRegistryChangeListener
+1	WindowsPathRegistryFallback
+1	readWindowsPathRegistry
+1	addKoluxWslInteropEnv
+1	deleteWorktreeHistoryDir main-thread safety
+1	fish keeps per-worktree history under the session Kolux names
+1	history GC filesystem request count
+1	history GC prune decisions
+1	history GC concurrency behaviour
+1	history GC races an async walk introduces
+1	history GC main-thread occupancy
+1	tombstoned history removal retries
+1	terminal-history
+1	resolveShellKind
+1	hashWorktreeId
+1	ensureHistoryDir
+1	injectHistoryEnv
+1	injectWslFishHistoryEnv
+1	updateHistoryEnvForFallback
+1	deleteWorktreeHistoryDir
+1	WSL path conversion
+1	getWarpThemeDirectories
+1	warpThemeSourceLabelForDirectory
+1	previewWarpThemeImport
+1	parseWarpThemeYamlWithTimeout
+1	parseWarpThemeYaml
+1	classifyWindowsTreeKillTarget
+1	verifyWindowsTreeKillTarget
+1	verifyWindowsTreeKillTarget scan volume
+1	admitCloseActiveTabPayload
+1	PTY snapshot capability preload IPC
+1	terminal container geometry
+1	terminal scrollbar styling
+1	floating terminal panel bounds
+1	createFloatingTerminalPanelInputsSelector
+1	floating terminal panel view state
+1	shouldRestoreMaximizedPanelBounds
+1	floating terminal trigger position
+1	floating workspace tab reorder
+1	floating panel titlebar drag target
+1	FloatingBrowserSlot
+1	FloatingTerminalOrchestrationDialog freshness
+1	FloatingTerminalPanel tab drag wiring
+1	FloatingTerminalToggleButton positioning
+1	FloatingTerminalToggleButton attention dot
+1	FloatingTerminalWindowControls default-agent launch
+1	createTerminalPaneHandleRegistry
+1	buildGridLayout
+1	planPaneCount
+1	unstarted panes (order 1)
+1	started sessions (order 2) — confirmation required
+1	multi-tab and non-terminal groups (order 3) — always skipped
+1	computeGridRows
+1	splitPaneForNewSession
+1	tidyLayout
+1	BrowserTab favicon
+1	resolveClientHostedBrowserRowStripGroupId
+1	tab-bar activation census
+1	ClientHostedBrowserTabRows selection
+1	ClientHostedBrowserTabRows close
+1	getDropIndicatorClasses
+1	ACTIVE_TAB_INDICATOR_CLASSES
+1	getTabStripBorderClasses
+1	getTabRootStateClasses
+1	shouldBlockEditorTabLocalOpen
+1	EditorFileTab rename menu
+1	EditorFileTabContextMenu close-all shortcut
+1	getGroupVisibleTabOrder
+1	getActiveTabNavOrder
+1	group order matches the rendered tab strip
+1	preventMiddleButtonDefault
+1	resolveNativeChatTabAgentEvidence
+1	dropFileEntriesCoveredByTabResults
+1	retainOpenTabResultsForQuery
+1	searchOpenTabs ranking
+1	searchOpenTabs filtering
+1	searchOpenTabs result fields
+1	searchOpenTabs query guards
+1	activateOpenTabSearchResult
+1	query token match
+1	QuickLaunchAgentMenuItems
+1	shouldShowLaunchWatchdogTimeout
+1	buildRecentTabSwitcherModel
+1	getNextRecentTabSwitcherIndex
+1	normalizeCtrlTabOrderMode
+1	RecentTabSwitcher
+1	reconcileTabOrder
+1	SortableTab rename shortcut signal
+1	SortableTab update-depth probe
+1	requestActiveTerminalPaneSplit
+1	SortableTabContextMenu
+1	tab agent launch options
+1	selectTabAgentTypesByTabId
+1	real tabs while a client-hosted row is selected
+1	client-hosted row while a real tab is activated
+1	tab-bar active-state census
+1	tab context menu consistency
+1	openTabEntryWithOperations
+1	tab create entry classification
+1	tab create entry path validation
+1	parseForcedSearchQuery
+1	tab create entry history placement
+1	getTabEntryAllowAbsolutePaths
+1	tab create menu options
+1	tab-move-to-pane-column
+1	bindTabStripContentResizeObservers
+1	scrollTabStripByStep
+1	useTabStripPointerActivation
+1	computeTabStripScrollMetrics
+1	computeTabStripThumbLayout
+1	getTabStripScrollMaskClassName
+1	tab title tooltips
+1	TabBar client-hosted row active state
+1	TabBar context menu wiring
+1	TabBar worktree-write gate (non-Windows client)
+1	TabBar worktree-write gate (Windows client)
+1	TabBarCreateEntry browser history rows
+1	TabBarCreateEntry keyboard navigation
+1	TabBarCreateEntry search behavior
+1	TabBarCreateEntry tab results
+1	EntryActionRow
+1	TabBarQuickCommandItem
+1	TabBarQuickCommandsMenu keyboard shortcut
+1	TabStripScrollIndicator
+1	resolveTerminalTabActivityStatus
+1	hasUnreadAgentCompletionForTerminalTab
+1	resolveTerminalTabAttentionBadge
+1	terminalTabHasUnreadActivity
+1	terminalTabActivityToAgentDotState
+1	terminal tab dot attributes spinner titles to the launched agent
+1	TerminalTabLeadingIcon
+1	useOpenTabSearch
+1	useTabBarQuickCommandSearchInput IME Enter ownership
+1	resolveWindowsShellLaunchTarget
+1	shouldShowWindowsShellMenu
+1	planDefaultTerminalsLayoutSeed
+1	useSeedDefaultTerminalsLayout
+1	expanded tab group state
+1	isTabGroupShowingTerminal
+1	shouldReserveRightSidebarToggleSpace
+1	classifyClosableSession
+1	decideSessionRemoval
+1	SessionRemovalConfirmDialog
+1	getDragPointer
+1	restoreTabDragActivationSnapshot
+1	tab drag passthrough over a client-hosted retained guest
+1	resolvePaneColumnEdgeZone
+1	tabGroupBodyAnchorName
+1	resolvePanelEdgePaneColumnSplit
+1	resolveActivePaneColumnSplitTarget
+1	resolveTabInsertion
+1	resolveTabIndicatorEdges
+1	TabGroupPanel context menu id resolution
+1	TabGroupSplitLayout divider drag
+1	TabGroupSplitLayout
+1	TabPaneColumnSplitDragOverlay
+1	useLayoutPresetsCommand
+1	usePaneCountCommand
+1	usePaneCountCommand with a sessionRemoveDefault
+1	tab drag activation distance
+1	canDropTabIntoPaneBody
+1	useTabDragSplit
+1	tab group "+" menu shell launch on a locally-owned workspace
+1	structured agent-session close ordering
+1	closing a browser workspace owned by more than one runtime environment
+1	useTabGroupWorkspaceModel terminal activation focus
+1	selectWorkspacePreviewCandidates
+1	findExistingPreviewTab
+1	WorkspacePreviewButton
+1	active-terminal repair effect cannot drive a React #185 update loop
+1	shouldRepairActiveTerminalTab
+1	resolveRepairedActiveTerminalTabId
+1	terminal workspace startup mount gate
+1	background terminal mount request registry
+1	addBackgroundMountedTerminalWorktree
+1	applyBackgroundMountTabRestriction
+1	shouldMountBackgroundWorktreeTab
+1	pruneClosedBackgroundMountTabs
+1	cold activation tab deferral
+1	scheduleBackgroundTerminalWorktreeMeasure
+1	passive terminal seeding during native chat creation
+1	Terminal auto-create wiring
+1	shouldAutoCreateInitialTerminal
+1	probePtyRunningWork child-process evidence
+1	shouldConfirmRunningTerminalClose
+1	guardRunningTerminalClose
+1	getEffectiveLayoutForWorktree
+1	anyMountedWorktreeHasLayout
+1	getNextTabWithinActiveType
+1	getNextTabAcrossAllTypes
+1	close confirmation policy is the same for keyboard and mouse
+1	terminal close copy kind
+1	terminal close incarnation
+1	createTerminalProviderSnapshotBoundPtyIdsSelector
+1	terminal provider snapshot capability re-settlement
+1	terminal provider snapshot capabilities
+1	closeTerminalTab kill-all routing
+1	structured session disposal from terminal close
+1	closeTerminalTab unified close contract
+1	createNewTerminalTab
+1	closeTerminalTab
+1	closeOtherTerminalTabs
+1	closeTerminalTabsToRight
+1	adopted native-chat disposal in legacy terminal bulk actions
+1	closeTerminalTab running-process confirmation
+1	appendUniqueOpenFileIds
+1	useTerminalProviderSnapshotCapability
+1	useWorktreeFiles
+1	assessWindowCloseRunningWork
+1	agent completion coordinator identity map stays bounded (leak regression)
+1	completion notification when a lead turn ends into monitoring
+1	agent completion coordinator queued inspections
+1	agent completion coordinator stamped turn boundary
+1	agent completion coordinator stamped turn replay
+1	agent completion no-evidence inspection cadence
+1	isAgentProcessInspectionCostly
+1	nextCadenceInspectionDelayMs
+1	agent completion polling under a host capture it cannot use
+1	agent completion steadyState opt-in
+1	agent hook terminal lifecycle
+1	agent interrupt inference
+1	agent process inspection queue rejection containment
+1	agent process inspection rounds
+1	agent question-answered inference
+1	shouldSeedCacheTimerOnInitialTitle
+1	CloseTerminalDialog
+1	Codex auto-approval status suppression
+1	Codex backfill error detector
+1	codex detached pane restart executor
+1	command code done settle window
+1	canCommandCodeOutputOwnPane
+1	composeActiveTerminalTheme
+1	deferred reattach live data queue
+1	deferred split pane handoff
+1	desktop fit fallback
+1	direct-SSH hidden-output restore abandonment
+1	edge-wrapped terminal HTTP links
+1	useExpandCollapseActions render stability
+1	terminal keyboard effect registration stability
+1	createExpandCollapseActions
+1	terminal query responder
+1	fish never receives a color-scheme report it did not query
+1	handleFocusTerminalPaneDetail
+1	flashFocusedPaneRim
+1	captureForceParkedWorktreeBuffers
+1	Git Bash console capacity detection
+1	hard-wrapped terminal HTTP candidate bounds
+1	hidden output restore scheduler
+1	hidden reveal seq-reconciliation fuzz
+1	agent pane startup OSC 10/11 replies on the local path
+1	issue 4631 terminal hover link-provider repro
+1	a cursor chord pressed during a composition
+1	Windows IME Enter-keyup press-time evidence
+1	Windows IME keyboard ownership
+1	matchSearchNavigate
+1	resolveTerminalKeyboardShortcutAction
+1	runTerminalSearchNavigation
+1	matchFileSearchShortcut
+1	buildFontFamily
+1	serializePaneTree
+1	serializeTerminalLayout
+1	replayTerminalLayout
+1	restoreScrollbackBuffers
+1	collectLeafIdsInReplayCreationOrder
+1	replayPayloadEndsWithCursorHidden
+1	buildPostReplayLiveAgentReattachReset
+1	canManuallyParkTerminalWorktreeRenderers
+1	mergeCapturedLeafState
+1	mobile-driver-overlay-collapse
+1	shouldFocusMobileDriverAction
+1	shouldShowMobileDriverOverlay
+1	MobileDriverOverlay
+1	installMouseHideWhileTyping
+1	resolveNativeChatLeafTitleAgent
+1	shouldShowOsc52ClipboardDefaultOnNotice
+1	useOsc52ClipboardDefaultOnNotice
+1	showOsc52ClipboardBlockedToast
+1	showOsc52ClipboardFailedToast
+1	parseOsc52
+1	handleOsc52ClipboardRequest
+1	createOsc52OscHandler
+1	resolveOsc52ClipboardGate
+1	getOverrideAffectedPanes
+1	getPanesNeedingOverrideFit
+1	paired client sleep/wake with several remote terminal tabs
+1	resolvePaneAgentSessionId
+1	liveness
+1	createPaneForegroundAgentTracker
+1	pane foreground inspect observation identity
+1	isWindowsUserAgent
+1	shouldShowAlwaysOnPaneHeaders
+1	shellEscapePath
+1	fitAndFocusPanes
+1	clearPaneTitleOverlayRects
+1	arePaneTitleOverlayRectsEqual
+1	startParkedTerminalByteWatcher
+1	createParkedTerminalCommandStatusPolicy
+1	readInFlightCommandCodeTurn
+1	parseOsc7
+1	PinnedTabCloseDialog
+1	pty buffer serializer registry
+1	recoverUnverifiableDirectSshReattach
+1	consumeForegroundImmediateBudget
+1	shouldIgnoreStalePanePtyLayoutBinding
+1	reattach payload context
+1	reattach payload SSH reconnect model paint
+1	the renderer verdict that licenses replacing a pane PTY
+1	resolveTerminalTabId
+1	settleSpawnThatLeftPaneUnbound
+1	visible foreground agent sampling (perf)
+1	foreground routing confirmation authority
+1	foreground flood restore feedback loop (rc.7.perf)
+1	post-restore backlog reconciliation
+1	mode 2031 subscriptions are tracked per raw PTY chunk, never answered
+1	connectPanePty queued startup consume
+1	pushed remote snapshot replay grid
+1	restored snapshot baseline shortfall
+1	reconcileIfSessionDead
+1	terminal input liveness IPC gating (perf)
+1	fresh spawn leaves a local pane unbound
+1	connectPanePty split cwd resolution
+1	PTY size re-assert on visibility resume
+1	remote pane output pause vs visibility
+1	pty dispatcher delivery interest
+1	pty dispatcher delivery resync
+1	dispatcher → transport → onTitleChange for Pi spinner
+1	pty dispatcher push-listener reattach and delivery blackhole
+1	pty input write queue
+1	pty model-restore channel routing
+1	pre-handler lost-handler warning after LRU eviction
+1	pre-handler PTY buffer
+1	createPtyPreconnectInputBuffer
+1	renderer PTY delivery claims
+1	PTY shutdown output queue
+1	pty side-effect pending census
+1	createPtySizeReassertion
+1	reconcilePtySizeAcrossFrames
+1	applied-size verification before handoff
+1	pty-transport — coalesced OSC titles from Pi
+1	createIpcPtyTransport — Pi titlebar spinner signal
+1	createIpcPtyTransport against a relay-recycled PTY id
+1	regular terminal focus ownership
+1	shouldClaimRemoteDesktopViewport
+1	isRemoteExecutionHostPtyId
+1	remote hidden-output restore outcomes
+1	remote hidden-output restore abandonment (issue2-hidden-output-skip)
+1	createRemotePaneLayoutPusher
+1	recoverable connect failures on a remote runtime pane
+1	remote runtime error surface dismissal
+1	remote runtime outage: toast flood and stuck reconnect (issue3)
+1	createRemoteRuntimePtyTextBatcher
+1	createRemoteRuntimeViewportBatcher
+1	remote runtime pty reattach after the bounded recovery window
+1	remote runtime pty latched-pane retention
+1	remote transport sendInputImmediate
+1	RemoteRuntimePtyRecoveryState
+1	remote transport snapshot escape-tail threading
+1	remote transport snapshot source-grid threading
+1	remote runtime PTY stream end verdict
+1	initial host-mirror attach against a surface published as pending-handle
+1	remote runtime resubscribe failure: recovery routing
+1	renderer-owned agent status registry
+1	replay-guard
+1	replay-guard stall handling (probe-certified release)
+1	canReleaseReplayedScrollbackFromStore
+1	Shift+Space input-source switch regression
+1	hard-wrapped path candidates glue next-line text into URLs
+1	resolveSplitCwd
+1	mergePaneCwdFromOsc7
+1	clearPaneCwdDeferredSpawn
+1	restoredSnapshotPaintsPrintableContent
+1	RunningTerminalCloseDialog
+1	session restored banner pane state
+1	SessionRestoredBanner
+1	scanForShellReadyMarker
+1	captureTerminalShutdownBuffersBestEffort
+1	selectSleepingRecordParkExemptTabIds
+1	split-right white screen: post-spawn PTY size reconcile
+1	resolveSshPaneConnectGate
+1	resolveSshReattachModelSnapshotWithTimeout
+1	shouldFetchSshReattachModelSnapshot
+1	memoizeSshReattachModelSnapshotProbe
+1	decideSshReattachPaintSource
+1	lastAlternateScreenTransition
+1	sshReconnectPaintsFromModel
+1	stale document visibility
+1	selectSwarmNeedsYouItems
+1	resolveProtectedMultilinePasteOptionsForPane
+1	leading-newline paste into a remote agent pane
+1	buildAgentSessionContinuationPrompt
+1	prepareAgentSessionContinuationFromPane
+1	forkAgentSessionFromPane
+1	copyAgentSessionContextFromPane
+1	alternate-screen buffer state at write-callback time
+1	mode2031SequenceFor
+1	maybePushMode2031Flip
+1	applyTerminalAppearance theme assignment
+1	publishTerminalViewAttributesAtAppStart
+1	hexToRgba
+1	terminal bracketed paste policy
+1	installTerminalCapabilityReplyHandlers
+1	sendCapturedTerminalInput
+1	requestCapturedTerminalReconfirmation
+1	the cursor is not displaced by full-width text
+1	shouldUseClipboardEventPaste
+1	getClipboardEventText
+1	firesNativePasteEvent
+1	terminal clipboard paste
+1	force-park exemption flips under capability changes
+1	TerminalPaneOverlayLayer cold-park pre-gate loop
+1	getTerminalWorktreeColdParkRecheckDelayMs
+1	getTerminalTabColdParkRecheckDelayMs
+1	cold-park store subscription narrowing
+1	cold-park effect vs. unrelated commit cascade
+1	cold-park recheck timers under a background title flood
+1	cold-park verdict oscillation
+1	withholdUnparkableTerminalTabs
+1	createTerminalCommandLifecycle
+1	shouldIgnoreTerminalMenuPointerDownOutside
+1	runTerminalCopy
+1	runTerminalIdentityCopy
+1	isLocalWindowsConptyPaneForCtrlArrow
+1	hasCtrlEnterCsiUAuthorityForPane
+1	cursor style and opacity survive the settings path
+1	DECSCUSR from the program outranks the preference
+1	terminal inactive cursor style
+1	shouldReconcileDeadSession
+1	shouldReconcileMissingSession
+1	reconcileMissingSessions
+1	reconcileDeadSessions
+1	terminal delivery watchdog
+1	redactTerminalDiagnostics
+1	buildTerminalDiagnosticsSnapshot
+1	handleTerminalFileDrop
+1	isImageDropPath
+1	handleInternalTerminalFileDrop
+1	terminal drop path writer
+1	runtime terminal drop owner
+1	resolveTerminalDropTargetShell
+1	reportTerminalDropUploadSkipsAndFailures
+1	terminal drop write failure notification
+1	appendTerminalErrorMessage
+1	pane terminal errors
+1	remote-closed terminal banner localization
+1	selectEvictionExemptTerminalTabLayoutKey
+1	terminal file link actions
+1	terminal-fit-restore
+1	terminal freeze report
+1	isTerminalGridChromeClean
+1	shouldShowTabGroupStrip
+1	paneHeaderStatusWord
+1	paneHeaderDensityStyle
+1	paneHeaderDoneUnseenLabel
+1	copyTerminalHandleForPane
+1	extractTerminalHandleLinks
+1	extractOrchestrationTaskLinks
+1	findTerminalHandleTarget
+1	focusRendererTerminalHandle
+1	createTerminalHandleLinkProvider
+1	hidden terminal restore scrollback
+1	selectPairedRuntimeParkingEnvironmentIds
+1	isSnapshotBackedTerminalPty
+1	isParkRestorableTerminalPty
+1	canParkTerminalWorktreeRenderers
+1	canParkTerminalTabRenderer
+1	selectColdParkedTerminalWorktrees
+1	selectColdParkedTerminalTabs
+1	createTerminalWorktreeTopologyProjection
+1	hasPendingRetentionSpawnWork
+1	isEvictionExemptTerminalPty
+1	selectRetentionForceParkedTerminalWorktrees
+1	selectForceParkEvictableTabIds
+1	isTerminalHttpLinkActivation
+1	resolveTerminalHttpLinkSourceOwner
+1	terminal IME candidate key release guard
+1	terminal IME composer placeholder mask
+1	installTerminalImeCompositionRoute
+1	installTerminalImeCompositionTracker
+1	candidate key guard
+1	xterm composition transaction ownership
+1	createTerminalImeDeferredChordSender
+1	sendTerminalInputAfterComposition
+1	createTerminalImeDeferredNewlineSender
+1	createTerminalImeModifiedEnterChordOwner
+1	isTerminalImeProcessEnter
+1	isTerminalImeEnterKeyUp
+1	suppression rests on claiming space and emptying the field
+1	a digit that terminates a Hangul composition
+1	refreshTerminalImeInputContext
+1	createTerminalImeLinuxCandidateState
+1	a DefaultKeyBinding.dict remap reaches the PTY
+1	installTerminalImeNativeTextForwarder
+1	the claim is structural
+1	forwarding the committed text
+1	claim lifetime is bounded by events, never by a timer
+1	composition transactions keep ownership
+1	the kitty read is scoped to the commit
+1	input-source text substitution reaches the terminal
+1	Korean won input after a composition commit
+1	preedit visibility when the IME cancels a composition
+1	xterm IME composition cancellation
+1	xterm IME composition de-duplication
+1	a candidate commit that arrives with no composition session
+1	Korean commit reaches the PTY before the physical Enter
+1	mid-line composition renders the covered row tail after the preedit
+1	preedit visibility across a composition the IME resumes
+1	the block over a trailing Korean syllable is the preedit overlay
+1	Windows/WSL Korean — recorded composition updates keep the preedit visible
+1	resolveTerminalInputHostPlatform
+1	terminal input quarantine
+1	the iPadOS Hangul path alongside everything else
+1	Chinese pinyin on the same device
+1	desktop platforms
+1	the recorded iPad device trace for 한글깨쥠
+1	replayed event for event, exactly as recorded
+1	replayed as keystrokes, with the keypress a browser also fires
+1	iPadOS Hangul typed as bare keydowns
+1	resolveTerminalJisYenInput
+1	dispatchTerminalShortcutAction copySelection
+1	terminal keyboard pane ownership
+1	resolveTerminalKeyboardPane
+1	pane-scoped terminal keyboard protocol agent
+1	terminal kitty CSI-u encoding
+1	terminal keyboard event CSI-u identity
+1	duplicate PTY layout replay
+1	detachTerminalLayoutLeaf
+1	resolveTerminalLayoutActiveLeafId
+1	normalizeTerminalLayoutSnapshot active leaf repair
+1	resolvePtyBoundActiveLeafId
+1	terminal layout preserves overlay focus
+1	terminal layout PTY ownership normalization
+1	terminal link action routing
+1	terminal link activation
+1	terminal hover link provider and network host paths
+1	getTerminalUrlOpenHint
+1	terminalUrlOpenHintOptionsFor
+1	handleOscLink foreign host targets
+1	isTerminalLinkActivation
+1	terminal link pointer gesture
+1	terminal link PTY mouse suppression
+1	installTerminalLinkifierClickPriming
+1	isHostAuthoritativeLayout
+1	planTerminalLiveLayoutInsertions
+1	planTerminalLiveLayoutRemovals
+1	selectRetiredPaneIds
+1	trackRetiredLeafIds
+1	host retirement that lands before the transport teardown
+1	installTerminalMouseTrackingShiftHint
+1	resolveNonLatinControlChordInput
+1	isNonLatinControlChordKeyup
+1	terminal Option kitty releases
+1	hasTerminalDisplayContent
+1	trimIncompleteTerminalControlTail
+1	terminal pane attention subscriptions
+1	shouldClearLaunchAgentForClosedPane
+1	resolveTabTitleAfterPaneClose
+1	TerminalPane refactor hook parity
+1	selectTerminalPaneHostState memo
+1	selectTerminalPaneHostState
+1	TerminalPane refactor listener parity
+1	copyTerminalDiagnosticsToClipboard
+1	cleanupTerminalPaneMount expand-state writes
+1	requestTerminalPaneRecovery
+1	host-rejected input
+1	input quarantine arming
+1	recordCreatedTerminalPaneSplit
+1	parked terminal split request routing
+1	splitTerminalPaneWithInheritedCwd
+1	terminal split writer paths
+1	TerminalPane store subscription budget
+1	resolveTerminalTabStripDropTarget
+1	detachTerminalPaneToTab
+1	burst damping threshold
+1	recordParkVerdictFlips
+1	getParkVerdictUnparkPinUntilMs
+1	expired pins stop gating breadcrumbs
+1	park-verdict damping reaches the worktree-level driver
+1	fallbackParkedPaneCandidates
+1	parked terminal tab eviction exemption
+1	parked terminal watcher batch synchronization
+1	registry scan cost at the real-profile scale
+1	start/dispose decisions match the per-surface path
+1	terminal-parked-tab-watchers
+1	shouldDeferParkedPtyExitTabClose
+1	canWatcherCoverParkedTerminalTab
+1	paired parked-watcher reconciliation
+1	untouchedFreshSpawn carry through the layout-fallback rescue
+1	terminal parked watcher registry removal
+1	sleep-preserved parked exits (sole-owner sidecar)
+1	sole-newborn parked exits (sole-owner sidecar)
+1	getTerminalParkingPolicyOverrides
+1	guardParserHandler
+1	terminal paste coordinator
+1	terminal paste executor default yield
+1	terminal paste multiline policy
+1	terminal paste operation ordering
+1	terminal paste payload metadata
+1	terminal paste runtime
+1	terminal paste target state
+1	terminal process exit restart
+1	terminal programmatic text paste
+1	terminal-pty-ack-gate cumulative totals
+1	terminal-pty-ack-gate parse-deferred crediting
+1	terminal PTY paste writer
+1	sendTerminalQuickCommandToPane
+1	updateTerminalRemoteRuntimeRecoveryUiState
+1	measureDivergence
+1	reachRenderInternals
+1	terminal-render-desync-sentinel
+1	sentinel arming surface
+1	readSentinelWeightProbe
+1	auditPaneWeightParity
+1	resolvePaneRendererPolicy
+1	user GPU modes
+1	WebGL capability and context-loss containment
+1	Gemini compatibility fallback under `auto`
+1	agent token text cannot flip renderer policy under authoritative owners
+1	line-drawing survives a replay for every real terminfo strategy
+1	real TUI shapes survive a replay
+1	repeated gap and restore cycles
+1	content fidelity through a replay
+1	terminal replay state reset
+1	fresh-shell terminal restore SGR state
+1	buildFreshShellViewportBlankingSequence
+1	hidden-worktree retention with recovered capability
+1	terminal HTTP links on a runtime-hosted pane
+1	terminal HTTP links on a direct SSH pane
+1	terminal HTTP links on a local pane
+1	copyTerminalSelection
+1	copyTerminalSelectionOrToastFailure
+1	writeTerminalClipboardTextOrToastFailure
+1	non-mac Ctrl+Left/Right word-nav
+1	Option-composed characters in kitty keyboard panes
+1	resolveTerminalShortcutAction
+1	kitty keyboard protocol panes
+1	terminal select-all shortcut
+1	captureTerminalShutdownLayout
+1	isMainTerminalSideEffectAuthorityForPty
+1	registerTerminalSideEffectFactConsumer
+1	RESET_AFTER_BYTE_GAP
+1	replay convergence with a production-composed snapshot
+1	replay baseline grounding
+1	hasPositiveTerminalDimensions
+1	resolvePositiveTerminalDimensions
+1	buildMainModelSnapshotReplayWrites
+1	shouldSkipAltFrameForWidthMismatch
+1	buildMainModelSnapshotReplayWrites alt-frame skip
+1	terminal startup command classifier
+1	waitForStableStartupGrid
+1	createTerminalTabAgentTypeSelector
+1	getCachedTerminalTabForWorktree
+1	resolvePaneDisplayTitle
+1	resolvePaneTitleDecision
+1	main title tracker parity with the renderer transport processor
+1	main tracker parity with renderer 133;D and PR-link byte parsers
+1	main Command Code scrape parity with the renderer byte detector
+1	terminal unified tab lookup
+1	hard-wrapped terminal HTTP clicks
+1	subscribeToTerminalUserInput
+1	subscribeToTerminalInputData
+1	composeTerminalViewAttributes
+1	publishTerminalViewAttributes dedupe
+1	applyTerminalAppearance publication
+1	resumeTerminalVisibility reveal repaint
+1	terminal WebGL atlas recovery
+1	WebGL diagnostics → freeze breadcrumb ring
+1	resolveWindowsShiftEnterEncoding
+1	resolveKnownWorktreeRootPathLink
+1	TerminalAgentSessionForkDialog
+1	TerminalContextMenu
+1	isSshReconnectOwnedTerminalError
+1	humanizeTerminalError
+1	isExplainedTerminalError
+1	stripSshReconnectOwnedErrorLines
+1	shouldOfferDaemonRestart
+1	TerminalErrorToast environment footer
+1	TerminalPaneHeaderIdentityClean
+1	TerminalPaneHeaderOverlay
+1	TerminalPaneOverlayLayer fallback measure<->fit loop (React #185)
+1	TerminalProcessExitOverlay
+1	TerminalRemoteRuntimeReconnectBanner
+1	TerminalSshReconnectOverlay
+1	titleHasExplicitAgentIdentity
+1	combineTerminalWorktreeParkIds
+1	useMobileOverlayTicks pty-affinity gate
+1	dispatchTerminalNotification
+1	parked terminal watcher synchronization
+1	parked terminal watcher synchronization key semantics
+1	useSystemPrefersDark subscription store
+1	equalize broadcast
+1	applyTerminalPaneCloseRequest
+1	resetTerminalKeyboardProtocolAfterInterrupt
+1	paneOwnsQueuedStartup
+1	createQueuedStartupConsumer
+1	splitPaneWithOneShotStartup
+1	replayLayoutWithOneShotParkIntent
+1	applyTerminalScrollbackRowsToMountedPanes
+1	shouldDetachPaneTransportOnUnmount
+1	mapRestoredPaneTitlesByPaneId
+1	resolveQueuedInitialCwd
+1	clearQueuedInitialCwdAfterFirstPane
+1	resolvePaneLinkCwd
+1	resolvePaneSeedCwd
+1	suppressIntentionalPaneCloseExit
+1	terminal pane visibility resume tracking
+1	useTerminalParkMountIntent
+1	useTerminalScrollVisibilityMemory
+1	useTerminalTabColdParking measure-clock contract
+1	useTerminalWindowWakeRecovery
+1	useVisibleTerminalTabClaim
+1	useSessionRestoredBannerDismiss
+1	useTerminalFontZoom
+1	buildWrappedLogicalLine
+1	buildHardWrappedPathLogicalLineCandidates
+1	shouldHandleTerminalInterruptKeyboardEvent
+1	shouldSuppressTerminalModifierKeyboardEvent
+1	shouldBypassXtermForIosTextEdit
+1	shouldBypassXtermKeyboardEvent — iOS web
+1	shouldBypassXtermKeyboardEvent — Windows/Linux
+1	shouldSuppressTerminalImeKeyboardEvent — Windows/Linux
+1	candidate-selection keys (Sogou Space/digit commit)
+1	shouldPreventDefaultTerminalImeCandidateKey
+1	shouldBypassXtermKeyboardEvent — macOS
+1	shouldSuppressTerminalImeKeyboardEvent — macOS
+1	xterm WriteBuffer stall (vendored 6.1.0-beta.287)
+1	terminal quick command agent options
+1	terminal quick command dialog draft transitions
+1	terminal quick command dialog scope transitions
+1	TerminalQuickCommandDialog animation structure
+1	scrollback decoration eviction
+1	terminal search decoration cleanup
+1	terminal search inside one very long wrapped line
+1	safeFind (TerminalSearch decoration crash guard)
+1	replayTerminalWindowConnection
+1	TerminalWindowHeader
+1	TerminalWindowRoot
+1	handleTerminalWorkspaceKeyDown editor.save
+1	workspace surface ids
+1	TerminalSearch cleanup
+1	TerminalTitlebarTabs
+1	TerminalWorkbenchContainer
+1	useTerminalCreateActions creation gates
+1	proceedToNativeWindowClose
+1	useTerminalWindowLifecycle browser-webview id seed
+1	activateTabAndFocusPane
+1	active agent note runtime error codes
+1	hibernation PTY binding age
+1	pty-bound agent draft readiness budget
+1	post-paste submit retry Enter
+1	pasteDraftWhenAgentReady
+1	getSettingsForAgentTabRuntimeOwner
+1	detectAgentSendTitleStatus
+1	listBoundAgentTabActions
+1	resolveDefaultAgentForNewTab
+1	app menu paste
+1	isCodexRestartEligiblePane
+1	resolveCodexPaneSelectionLaneKey
+1	resolveCodexPaneSelectionLane
+1	getCodexAccountSwitchLaneMatcher
+1	isForeignMachineCodexPtyId
+1	notifyCodexPaneBoundForStaleSweep
+1	ensureSimulatorTab
+1	shouldShutdownSimulatorForPaneUnmountFromTabs
+1	floating terminal open-maximized intent
+1	isFloatingWorkspacePanelVisible
+1	isEmptyFloatingWorkspacePanelVisible
+1	isFloatingWorkspacePanelFocused
+1	isFloatingWorkspaceTerminalInputTarget
+1	isFloatingWorkspacePanelShortcut
+1	matchFloatingWorkspacePanelOwnedAction
+1	matchFloatingWorkspacePanelChord
+1	createFloatingWorkspaceTerminalTab
+1	createFloatingWorkspaceBrowserTab
+1	createFloatingWorkspaceMarkdownTab
+1	switchFloatingWorkspaceTab
+1	shouldMinimizeFloatingWorkspacePanelOnCloseShortcut
+1	handleEmptyFloatingWorkspacePanelCloseShortcut
+1	createFloatingWorkspaceTourInteractionSnapshot
+1	focusTerminalTabSurface
+1	foreground terminal tabs
+1	parked mirrored-pane resume replay
+1	large text control paste
+1	launchAgentInNewTab per-workspace YOLO override
+1	launchAgentInNewTab initial cwd
+1	launchAgentInNewTab execution host resolution
+1	launchAgentInNewTab paired web runtime
+1	launchAgentInNewTab Windows shell quoting
+1	launchAgentInNewTab
+1	launchWorktreeBackgroundTerminals
+1	manual terminal worktree parking requests
+1	notes send agent targets
+1	openMarkdownDocumentInFloatingWorkspace
+1	resolveOpenTabOccupantAgent
+1	orderEmptyQueryWorktrees
+1	isExplicitAgentStatusFresh
+1	classifyTitleActivity
+1	title agent identity facets
+1	resolvePaneAgentActivity
+1	shouldFollowMouseFocus
+1	disposePane container listener cleanup
+1	hidden-pane cursor blink suspension
+1	hidden-pane cursor blink redraw cost
+1	divider pointer capture loss
+1	createDividerFlexFrameScheduler
+1	disposeDivider
+1	createPaneDOM link tooltips
+1	attachPaneDrag
+1	isPaneDropNoOp
+1	attachPaneFitResizeObserver
+1	safeFitAndThen unmeasurable-pane retry
+1	paneFitClientSizeChanged (reveal fit gate)
+1	deferred metric flush inside safeFit
+1	pane initial fit lifecycle
+1	pane-key resolution
+1	buildDefaultTerminalOptions
+1	attachWebgl
+1	attachLigatures
+1	openTerminal — addon and provider wiring
+1	pane manager registry
+1	pane-metric-options-deferral
+1	canApplyPaneMetricOptions gating
+1	metric weight-change forensics
+1	%s pane focus
+1	shouldFocusTerminalFromPanePointerDown
+1	pane PTY resize hold
+1	fitRevealedPane routing
+1	schedulePaneRevealRepaint
+1	schedulePaneRevealPresent
+1	scroll state
+1	splitManagedPane
+1	scheduleSplitScrollRestore
+1	writeForegroundTerminalChunk render-pause ownership
+1	applyTerminalGpuAcceleration
+1	terminal mouse wheel multiplier
+1	pane terminal output queue chunks
+1	parse-deferred ACK crediting
+1	queue memory retention
+1	scheduler drain ceiling
+1	message-channel drain path
+1	safeFit
+1	equalizePaneSplitSizes
+1	insertPaneNextTo reparent frame
+1	terminal WebGL context recovery
+1	pane WebGL refresh lifecycle
+1	terminal WebGL addon lifecycle
+1	fit-anchored WebGL reattach
+1	safeFit drives the fit-anchored WebGL reattach
+1	the deferred fit-anchored refit frame
+1	deferred WebGL addon load
+1	isStrongRtlCodePoint
+1	findRtlJoinRanges
+1	registerArabicShapingJoiner
+1	configureLazyArabicShapingJoiner
+1	repairPaneWebglCanvasDprMismatch
+1	terminalOutputPrefersRenderRefresh
+1	terminalOutputContainsEastAsianRendererRisk
+1	windowsEastAsianOutputPrefersRenderRefresh
+1	terminalRewriteOutputPrefersRenderRefresh
+1	terminalRewriteOutputRenderRefreshDecision
+1	nativeWindowsRewriteNeedsFollowupRenderRefresh
+1	terminal delivery credit
+1	foreground repaint convergence
+1	resolveCursorAgentImeAnchor
+1	installTerminalImeCandidateAnchor
+1	TerminalLigaturesAddon
+1	installTerminalLinkifierHoverResetOnMouseLeave
+1	installTerminalLinkifierHoverResetOnWrite
+1	resetTerminalLinkifierHoverState
+1	isTerminalLinkifierHoverActive
+1	%s parked renderer resize
+1	parked renderer resize on an unpaused terminal
+1	forceRepaintThroughRenderPause
+1	forceFullViewportPresent
+1	requestFullViewportPresent
+1	terminal scroll-intent input resync
+1	terminal scroll intent key retention
+1	terminal structural scroll-intent transitions
+1	terminal scroll intent
+1	terminal structural replay coordinator
+1	terminal WebGL auto policy
+1	terminal-webgl-hidden-retention
+1	isGenuineWindowsCtrlAltChord
+1	shouldRepairWindowsCtrlAltChords
+1	installWindowsCtrlAltChordRepair
+1	rescued chords are encoded by xterm, not Kolux
+1	terminal write pipeline health
+1	buildWindowsPtyCompatibilityOptions
+1	isLocalNativeWindowsConpty
+1	isXtermInstanceDisposed
+1	xterm native user-scrolling contract (vendored 6.1.0-beta.303)
+1	live scrollback-erase pin (CSI 3 J)
+1	live scrollback-erase pin wiring
+1	runGuardedWriteCompletionStep
+1	writeForegroundTerminalChunk completion guarding
+1	getTabIdsAwaitingHostHydrationRemount
+1	paste payload metadata
+1	Pi live session does not spawn a duplicate resume tab
+1	primary selection paste
+1	orderRecentWorkspaceTabs
+1	resolveRecentWorkspaceTabStatus
+1	remapOpenEditorTabsForPathChange
+1	waking panes slept by a manual workspace sleep
+1	runQuickCommandInNewTab
+1	resolveRuntimePaneTitleForLeaf
+1	resolveRuntimePaneTitleLeafResolution
+1	scheduleSimulatorPaneManagedShutdown
+1	activateSimulatorTabPaletteResult
+1	activateStructuredAgentSessionTab
+1	renderer ladder decision table
+1	resolveTabAgent
+1	tabHasLivePty
+1	resolveTabNumberShortcutTarget
+1	resolveTerminalMinimumContrastRatio
+1	resolveTerminalMinimumContrastRatio with a user override
+1	normalizeTerminalMinimumContrastRatio
+1	DARK_BG_MIN_CONTRAST rescue window
+1	DARK_BG_MIN_CONTRAST vs the builtin theme catalog
+1	detectTerminalFileUriLinks
+1	terminal-links ReDoS guard
+1	terminal path helpers
+1	shared terminal file-link tap conformance
+1	extractTerminalFileLinks bare-filename tokens
+1	extractTerminalFileLinks local path tokens
+1	plain-text file:// URIs
+1	sanitizeTerminalLayoutPaneTitles
+1	resolveAnswerablePermissionPrompt
+1	answerPermissionPrompt
+1	terminalQuickCommandMatchesWorkspaceProject
+1	terminal quick command search
+1	verifyTerminalRevealIdentity
+1	resolveTerminalTabIdForPtyId
+1	resolveTerminalTabPtyOwnership
+1	resolveEffectiveTerminalAppearance
+1	default dark terminal theme selection contrast
+1	default light terminal theme ANSI contrast
+1	isTerminalBackgroundLight
+1	resolveOpaqueTerminalBackground
+1	Match app theme terminal selection
+1	resolveTerminalWorktreeRoute
+1	resolveTerminalHostOwnership teardown
+1	text control paste ownership
+1	text control paste
+1	buildAgentStartupPlan
+1	buildAgentDraftLaunchPlan
+1	isShellProcess
+1	useTabAgent observed-signal dispatch
+1	resolveTabAgentFromSignals — Pi/OMP identity
+1	resolveTabAgentFromSignals — identity vs liveness
+1	resolveTabAgentFromSignals process identity
+1	resolveLaunchedAgentExitEvidence shell-foreground gate
+1	useTabAgent process signals
+1	useTabAgent retained completion identity
+1	resolveTabAgentFromSignals sleeping-session precedence
+1	useTabAgent sleeping-session
+1	resolveTabAgentFromSignals
+1	useTabAgent
+1	Windows terminal capability probe ordering
+1	Windows terminal capability host ownership
+1	windows terminal capabilities
+1	windows terminal capability re-probe
+1	queueWorkspaceActivationTerminalFocus
+1	closed-tab tombstones in the persisted session
+1	splitWorkspaceSessionByHost
+1	mergeWorkspaceSessionsFromHosts
+1	split → merge round trip
+1	mergeWorkspaceSessionsFromHosts global-field precedence
+1	collectAgentMetadataForTerminal
+1	host-qualified agent metadata joins
+1	maxAgentActivityAt
+1	activateWorkspaceTabPaletteResult
+1	searchWorkspaceTabs lastActiveAt
+1	searchWorkspaceTabs ranking
+1	workspace-tab-palette-search
+1	ensureWorktreeHasInitialTerminal
+1	empty remote worktree activation
+1	new-workspace marker for the default layout seed
+1	live terminal surface owners
+1	preserved-pane replacement contract on workspace activation
+1	worktree reopen does not fork-bomb tabs
+1	splitWorktreeSortOrderByHost
+1	resolveWorktreeStatus terminal layout roots
+1	notifyHostOfMirroredEditorClose
+1	empty host inventory settling the session mirror
+1	runtime terminal owner routing
+1	remote runtime terminal ids
+1	remote runtime terminal data subscriptions
+1	remote runtime terminal multiplex ACK gate
+1	clear pane identity
+1	terminal mobile session layout publication
+1	runtime terminal registration ownership
+1	buildMobileSessionTabSnapshots
+1	web runtime session tab actions
+1	moveWebRuntimeSessionTab
+1	setWebRuntimeTabProps
+1	createWebRuntimeSessionTerminal
+1	splitWebRuntimeTerminal
+1	closeWebRuntimeTerminal
+1	web-runtime-session terminal workspace routing
+1	web-runtime-wake-terminal-respawn
+1	buildWebSessionExistingTabIndex
+1	resolveWebSessionVisibleTabId — grouped state is authoritative
+1	resolveWebSessionVisibleTabId — no-group compatibility path
+1	resolveWebSessionSiblingVisibleTabId
+1	toVisibleTabType
+1	web session structured tab focus
+1	buildMirroredAgentTabs
+1	browser rows this client hosts own their page content
+1	client-owned tab placement for paired worktrees
+1	a host-retracted paired tab leaves no ghost agent row behind
+1	applyWebSessionTabsSnapshot layout composition
+1	remote mirror resource identity
+1	useWebSessionTabsSync visibility collision recovery
+1	useWebSessionTabsSync window visibility
+1	accepted web-session terminal handle events
+1	inventory absence confirmed across host republications
+1	web session terminal orphan inventory retries
+1	mixed-version web terminal orphan recovery
+1	web session terminal orphan adoption regressions
+1	orphan recovery reads the host scope as coverage owed, not as disclosure
+1	post-adoption reconciliation of previously removed surfaces
+1	web session terminal orphan recovery regressions
+1	web session terminal orphan recovery topology fence
+1	web session terminal orphan recovery
+1	web session pending terminal handle recovery
+1	terminal recovery session-tabs snapshot validation
+1	web session terminal retirement proof ledger
+1	orphan recovery over delta frames
+1	selectActiveTerminalChromeState
+1	guardPinnedTabClose
+1	resolvePinnedTabLabel
+1	isUnifiedTabPinned
+1	plugin panel list loading
+1	running terminal close confirmation store
+1	resolveActiveTabOwnerWorktreeId
+1	generated agent tab titles
+1	bulk worktree purge evicts the per-tab/per-pty terminal maps it previously leaked
+1	createEditorSlice conflict status reconciliation
+1	read-only editor tabs (AI Vault View Log)
+1	createEditorSlice recently closed editor tabs
+1	createEditorSlice floating editor activation
+1	createEditorSlice split-group editor routing
+1	findLayoutSiblingOnSplitSide
+1	isPaneColumnSplitDropNoOp
+1	pane foreground agent slice
+1	createPinnedTabCloseConfirmSlice
+1	terminal recently-closed capture
+1	recently-closed history bounds
+1	terminal snapshot cwd remapping
+1	reopenClosedTerminalTab
+1	restoreRecentlyClosedTabPosition
+1	reopenClosedTab cross-type MRU
+1	splitRepoReorderByHost
+1	purge stops routing session writes to the removed runtime partition
+1	runtimePaneTitle → sortEpoch
+1	createTab tabId hint
+1	reconnectPersistedTerminals
+1	shutdownWorktreeTerminals (sleep) — agent status hygiene
+1	appendOwnedTabIdsToGroups
+1	findTabAndWorktree
+1	findGroupForTab
+1	ensureGroup
+1	pickNeighbor
+1	pushRecentTabId
+1	sanitizeRecentTabIds
+1	pickNextActiveTab
+1	updateGroup
+1	patchTab
+1	tab/worktree removal evicts the module maps it previously leaked
+1	createEmptySplitGroup
+1	TabsSlice
+1	reorderUnifiedTabs
+1	setTabGroupSplitRatio
+1	move/copy/merge group operations
+1	tabOrder dedupe
+1	emptyLayoutSnapshot
+1	clearTransientTerminalState
+1	setTabLayout PTY ownership
+1	getOrphanTerminalIds reconnect-map liveness
+1	syncPaneDetachPtyOwnership agent identity
+1	detach completed split pane → sidebar retention
+1	terminal PTY identity replacement
+1	terminal quick command host collections
+1	queued startup command retention
+1	terminal tab id hydration
+1	terminal tab owner index
+1	remountTerminalTabForRecovery
+1	terminal tab retirement store boundary
+1	terminal tab retirement planning
+1	host-agnostic terminal surfaces are killed, not dropped
+1	sleeping agent retirement
+1	terminal tab title batches
+1	setCacheTimerStartedAt identity bailout
+1	setTabLayout identity bailout
+1	explicit empty terminal hydration
+1	hydrated active workspace with a terminal tombstone
+1	hydrateWorkspaceSession canonical PTY overlap
+1	hydrateWorkspaceSession canonical terminal rows
+1	hydrateWorkspaceSession
+1	hydrationSucceeded flag
+1	createUISlice agent send target mode
+1	createUISlice acknowledgeAgents notification dismissal
+1	openDiffNotesSendMenuForActiveWorktree
+1	worktree terminal removal teardown
+1	purgeWorktreeTerminalState direct (design §4.4)
+1	worktree remote runtime mutations
+1	restored relay session identity
+1	renaming a terminal tab still resolves
+1	recoloring a structured chat tab
+1	renaming a structured chat tab
+1	setTabPaneExpanded
+1	setTabCanExpandPane
+1	markShutdownPending identity
+1	terminal shutdown map identity
+1	closeTab map identity
+1	closeTab close tombstones
+1	resolveTabPendingAgentChoice (pending-agent-choice tab state transition)
+1	terminal workspace routing scales with tab count, not workspace count
+1	buildRuntimeSessionPlaceholders
+1	addHydratedSshWorktreePlaceholders
+1	exemptions
+1	refusal matrix
+1	in-flight fence race
+1	typed error
+1	deriveGeneratedTabTitle
+1	terminalStatusPayloadMatchesHook
+1	buildAgentTuiClearInput
+1	countAgentTuiInputLines
+1	buildAgentTuiClearInputForText
+1	parseCheapProcessTableRows
+1	getCheapProcessTableSnapshot
+1	ClaimedAgentPtyOwnerRegistry
+1	closed terminal tab tombstones
+1	closed terminal tab tombstone acknowledgement
+1	classifyDaemonSpawnerPath
+1	classifyDaemonPtyCwd
+1	daemon_adopted / daemon_pty_cwd_denied schemas
+1	grok startup trace replay (alternate-screen mode)
+1	grok startup trace replay (inline mode, no alternate screen)
+1	createDraftPasteReadyScanner
+1	render-cursor-after-bracketed-paste (mimo-code)
+1	codex-composer-prompt
+1	grok-composer-prompt
+1	render-quiet-after-bracketed-paste (default)
+1	ephemeral setup terminal worktree id
+1	FEATURED_TUI_AGENTS
+1	isFeaturedTuiAgent
+1	partitionFeaturedAgents
+1	partitionFeaturedAgentsForDisplay
+1	a held query reply never reaches the next child process
+1	imagePasteWritesFollowedByText
+1	keybindings
+1	markdown toc panel width
+1	usesNodePtySpawnHelper
+1	per-pane coverage gate
+1	process rung requires a host-stamped proof
+1	uncovered compatibility lane
+1	canonical ladder inside the covered lane
+1	reclaim-versus-stale-hook discriminator (run keys, not title text)
+1	action floor
+1	wire evidence projection
+1	pane agent identity inventory ratchet
+1	resolvePaneAgentIdentity
+1	a display title is the last thing consulted
+1	run generation separates the bug from the legitimate reclaim
+1	mixed-version peers
+1	siblings are tab-scoped
+1	no eligible evidence
+1	input order does not decide the answer
+1	two observations of the same class cannot be settled by array order
+1	run keys from different authorities are incomparable, not stale
+1	an action consumer can refuse to see weak evidence at all
+1	pane agent identity surface inventory (rows 6, 32–65)
+1	identity observation rebind audit
+1	controlled title fixtures (always run)
+1	recorded title corpus characterization (local gate)
+1	resolvePaneAgentOwner
+1	opaque reminted pane keys
+1	process-table-snapshot reader
+1	shared process-table capture
+1	parseProcessTableRows
+1	parseStrictProcessTableRows
+1	getProcessTableIndex
+1	process-table capture completeness
+1	evidence-publishing capture budget
+1	PtyConsumerSession
+1	pty delivery breadcrumb ring
+1	redactPtyIdForDiagnostics
+1	unconfirmed-stop sentences
+1	resolvePtyOwnerBackend
+1	replyEchoProjections against a real bash pty
+1	readPtySlavePath
+1	createPtySlaveLineEditorProbe
+1	live query replies
+1	the short readline needle does not eat ordinary output
+1	PtyStartupIngress
+1	replyEchoProjections on a POSIX pty
+1	replyEchoProjections on other backends
+1	resolvePublishedPaneAgentIdentity
+1	a task title cannot name the pane
+1	title is the last resort, and the parser is what makes that safe
+1	identity must not depend on how the agent was started
+1	a launch record is outranked by live observation, not by other records
+1	requireTuiAgentConfig
+1	retired PTY incarnation retention
+1	stable pane ids
+1	tab title resolution
+1	createBellDetector
+1	terminal color scheme protocol
+1	detectTerminalComposerDraft
+1	terminal custom themes
+1	resolveProcessExitCause
+1	resolveUnreportedExitCause
+1	describeTerminalExitCause
+1	isDeliberateTerminalExit
+1	isProvenProcessExit
+1	resolveTerminalFileUrlTarget
+1	terminal font weights
+1	terminal input bounds
+1	normalizeTerminalLineHeight
+1	DECSET 2031 replies follow the chunk-final state
+1	a fish prompt-accept burst is tracked, never answered
+1	parseTerminalOscColorQuery
+1	createTerminalTitleTracker command-finished facts
+1	createTerminalTitleTracker pr-link facts
+1	createTerminalTitleTracker 2031-subscribe facts
+1	createTerminalTitleTracker synthetic-frame isolation
+1	createTerminalTitleTracker transient-fact scanning suppression
+1	advancePartialEscapeTail differential fuzz
+1	extractPartialEscapeTail
+1	advancePartialEscapeTail
+1	advancePartialEscapeTail ESC-free fast path
+1	permission prompt answer key table
+1	fingerprintPermissionPrompt
+1	decidePermissionPromptAnswer
+1	isTerminalQueryReply
+1	query reply ordering (termenv OSC-then-CPR)
+1	writes that still bypass the ordered queue
+1	terminal quick commands
+1	flattenTerminalQuickCommand
+1	terminal reply query scan
+1	replayed DECSET 2031 state matches the TUI final state
+1	terminal scrollback policy
+1	resolveTerminalStartupCwd
+1	terminal-stream-protocol
+1	migrateTerminalThemeDarkDefault
+1	isGrokRotatingWorkingTitle
+1	resolveExplicitTerminalTitleAgentType
+1	resolveTerminalTitleAgentType
+1	isClaudeAgent
+1	terminal title classification
+1	terminal title classification memo
+1	terminal zero-dimensions diagnostic
+1	TUI_AGENT_CONFIG
+1	applyAgentPermissionModeOverride
+1	resolveWorktreeAgentLaunchArgs requiredPermissionMode
+1	tui agent permissions
+1	pickTuiAgent
+1	normalizeDisabledTuiAgents
+1	haveSameDisabledTuiAgents
+1	Copilot resume startup plan
+1	hermes startup plans
+1	tui agent startup session options
+1	tokenizeStartupCommand spans (windows shells)
+1	one Unix startup dialect
+1	draft prefill teardown ordering
+1	tui agent startup plans
+1	resolveWindowsShellStartupFamily
+1	workspace session unified-tab focus timestamp
+1	pruneLocalTerminalScrollbackBuffers
+1	parseWorkspaceSession terminal fields
+1	closeTerminalTabInWorkspaceSession
+1	alternateScreenFixtureScript
+1	hidden pressure fixture
+1	spec alternate-screen fixtures
+1	app menu paste ownership
+1	Artificial TUI terminal load
+1	Chinese IME terminal chat input repro
+1	Kolux cross-version remote terminal wire
+1	Dead Terminal Reproduction @headful
+1	Dead Terminal Stress @headful
+1	editable context paste ownership
+1	floating Markdown filesystem aliases
+1	floating workspace reopen WebGL recovery @headful
+1	floating workspace shared glyph atlas @headful
+1	Windows runtimes
+1	scanFakeAgentPasteEnd
+1	closeStreamingTerminals
+1	Issue an earlier change terminal link tooltip
+1	Markdown table keyboard
+1	Renderer crash recovery keeps terminal input alive
+1	restored terminal input readiness
+1	real PTY decorative session-tabs fanout
+1	unpublished empty inventory daemon oracle
+1	session-tabs rich-status boundaries
+1	Agent awake setting
+1	Repository Display Name IME composition
+1	Settings sidebar search on the Shortcuts pane
+1	Tab Close Navigation
+1	tab rename paste ownership
+1	Tab Rename (Inline)
+1	Codex terminal cursor jitter repro
+1	Codex hidden startup composer background
+1	Terminal Codex runtime home
+1	local Codex terminal typing latency
+1	cold worktree activation deferral
+1	Terminal column desync repro
+1	Terminal inactive cursor rendering
+1	terminal document visibility WebGL recovery
+1	daemon foreground confirmation composes with pane tracking
+1	Terminal foreground redraw freeze repro
+1	Terminal Hangul wrap-boundary byte exactness
+1	Hidden terminal TUI visual restore
+1	Terminal typing latency vs scrollback history size
+1	Native IBus Hangul terminal input @headful
+1	terminal image paste WebGL recovery @headful
+1	Terminal IME exact-byte forwarding
+1	Inline TUI reveal convergence
+1	Terminal 2-Set Korean composing-chord order
+1	Terminal end-of-row Korean preedit cell span
+1	Terminal mid-line Korean preedit occlusion
+1	Terminal 2-Set Korean preedit visibility
+1	large terminal paste responsiveness
+1	terminal link click ownership
+1	Terminal link hover after worktree return
+1	Terminal long table scroll restore repro
+1	Native macOS 2-Set Korean terminal input @headful
+1	Terminal macOS system key remap
+1	Multi-workspace sustained typing latency bench
+1	Option-composed ASCII in a kitty-keyboard pane
+1	Terminal output scheduler
+1	terminal pane close vs hidden/park lifecycle keeps layout consistent
+1	Terminal parked memory
+1	Terminal hidden worktree retention budget
+1	terminal paste ownership
+1	buildFreshShellProbeInputSequence
+1	buildSettledShellProbeInputSequence
+1	terminal push-delivery loss recovery
+1	Quick Command startup recovery
+1	Terminal raw emoji table scroll restore repro
+1	reattach mouse-mode leak
+1	terminal reattach mouse mode
+1	Terminal restart persistence
+1	terminal hidden-worktree retention budget
+1	terminal reveal paused-render recovery
+1	Terminal reveal stale PTY resize repro
+1	terminal scroll intent keeps following output
+1	Terminal Shortcuts
+1	Terminal sleep wake restore
+1	writeTerminalSplitLatencyArtifact
+1	sanitizeTerminalSplitLatencyReport
+1	terminal split activation latency report
+1	Terminal split activation latency benchmark @headful
+1	split terminal pane paste ownership
+1	terminal stuck-occlusion recovery
+1	Terminal tab switch SIGWINCH restore
+1	Terminal tab switch visual restore
+1	TUI emoji table terminal rendering
+1	terminal TUI wheel report drain
+1	Terminal typing latency
+1	terminal WebGL atlas budget
+1	Wedged terminal write pipeline recovery
+1	terminal window-wake stale grid repro
+1	Windows Codex multiline paste
+1	Windows terminal shell paste ownership
+1	Windows terminal env and shell identity

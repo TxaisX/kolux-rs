@@ -1,0 +1,18 @@
+﻿kolux find
+
+Usage: kolux find --locator <type> --value <text> --action <action> [--text <text>] [--worktree <selector>] [--json]
+
+Find element by semantic locator and perform action
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --locator
+  --value <text>         Value to fill or select
+  --action <name>       Secondary accessibility action name
+  --text <text>          Text payload to send or type
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --page <id>            Stable browser page id from `kolux tab list --json`
+

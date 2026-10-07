@@ -1,0 +1,137 @@
+# 06-usage-limits: count	describe title  (136 unique)
+6	RateLimitService
+4	CodexUsageStore
+4	fetchClaudeRateLimits
+2	normalizeMiniMaxCookieHeader
+2	extractMiniMaxCookieValue
+2	redactMiniMaxSecret
+1	estimateCostUsd cache-write TTL rates
+1	estimateCostUsd Claude Sonnet 5 rates
+1	buildSummary Claude Sonnet 5 pricing over time
+1	listClaudeTranscriptFiles large directories
+1	scanClaudeUsageFiles
+1	parseClaudeUsageRecord
+1	Claude usage aggregation
+1	ClaudeUsageStore
+1	assistant-record prefilter
+1	listCodexSessionFiles large directories
+1	getCodexSessionsDirectory
+1	listCodexSessionFiles
+1	parseCodexUsageRecord
+1	attributeCodexUsageEvent
+1	CodexUsageStore snapshot benchmark
+1	registerRateLimitHandlers
+1	usage provider IPC handlers
+1	readAccountResetTime
+1	resolveResetsAt
+1	resumeDedupeKey
+1	status views
+1	LimitAutoResumeService
+1	setting off
+1	the pane changed before the reset
+1	only a Claude session is typed into
+1	a half-typed draft
+1	reset time source
+1	WSL panes
+1	SSH panes
+1	unreachable local pane
+1	a refused send
+1	once per pane and reset time
+1	startup scan
+1	startLimitAutoResume
+1	readLastUserInputAt
+1	createAccountRuntimeTargetSettingsSync
+1	deriveAntigravityRateLimits
+1	createAuthFilesystemOperation
+1	fetchActiveClaudeRateLimits token-mode CLI-fallback gate (item 15)
+1	createOAuthUsageError
+1	fetchClaudeOAuthUsage
+1	fetchViaPty
+1	classifyClaudeOAuthUsageError
+1	classifyClaudeCredentialAbsence
+1	resolveClaudeUsageRefreshPlan
+1	probeCodexAuthPresence
+1	fetchCodexRateLimits auth errors
+1	Codex backend rate-limit requests
+1	fetchCodexRateLimits probe shutdown
+1	Codex rate-limit process contract
+1	fetchCodexRateLimits PTY settle timers
+1	Codex RPC exit diagnostics
+1	codex rate-limit spawn runtime pairing
+1	Codex backend session supplement credits
+1	fetchCodexRateLimits
+1	POSIX-only child.kill assertions
+1	terminateCodexProbeChild
+1	Codex PTY rate-limit probe cancellation
+1	Codex PTY status parser
+1	classifyCodexRateLimitWindows
+1	Codex RPC rate-limit probe cleanup boundary
+1	getBucketName
+1	deriveSessionSummary
+1	fetchGeminiRateLimits fallback oauth creds
+1	fetchGeminiRateLimits
+1	readGrokAuthSession
+1	fetchGrokRateLimits
+1	cleanupHiddenRateLimitPty
+1	$name initial rate-limit target
+1	fetchKimiRateLimits with a WSL credentials home
+1	fetchKimiRateLimits
+1	fetchMiniMaxRateLimits
+1	getUniqueMiniMaxCookieNames
+1	makeMiniMaxRequestHeaders
+1	fetchMiniMaxWithSessionCookieJar
+1	fetchMiniMaxWithManualCookieHeader
+1	getMiniMaxEndpointUrl
+1	fetchMiniMaxWithApiKey
+1	logMiniMaxFetchFailure
+1	RateLimitService Antigravity usage
+1	refreshAfterClaudeLivePtysDrained
+1	AgentSessionTransitionRecorder
+1	classifyAgentSessionTransition
+1	StatsCollector async debounced save
+1	stats pipeline independence from OSC title detection
+1	usage calendar ranges
+1	UsageProviderStoreLifecycle
+1	getUsageWorktreeFingerprint
+1	canonicalizeUsageWorktreePaths
+1	loadKnownUsageWorktreesByRepo
+1	usage provider preload API
+1	GrokUsagePane
+1	usage daily charts
+1	usage overview model
+1	UsageBreakdownSection
+1	UsageTrackingPaneShell
+1	contextTone
+1	contextFillPercent
+1	formatTokenCount
+1	agent routing
+1	plan usage
+1	SessionUsageMeterView compact
+1	SessionUsageMeterView ring
+1	SessionUsageMeterView label
+1	buildUsageOverviewModel
+1	UsageOverviewDialog
+1	checkUsageWindowAlerts (ACCT-4)
+1	useIpcEvents rate-limit hydration
+1	renderer launch plans and the context cap setting
+1	agent context usage slice
+1	createRateLimitSlice
+1	Codex usage cached snapshot benchmark
+1	applyAgentContextCap
+1	parseClaudeStatusLineBody
+1	formatResetDuration
+1	formatResetCountdown
+1	getResetCountdownNextTickDelay
+1	RateLimitState
+1	normalizeStatusBarUsageMode
+1	context cap in launch plans
+1	resolveUsageLaunchWarnings
+1	resolveUsagePercentageDisplayChangeNoticeDismissed
+1	shouldShowUsagePercentageDisplayChangeNotice
+1	usage percentage display
+1	resolveDueUsageAlertThresholds
+1	describeUsageWindowForCopy
+1	ingestRateLimitStateForForecast
+1	projectUsageWindowRunOut
+1	Resource Usage warm-reattach
+1	usage overview

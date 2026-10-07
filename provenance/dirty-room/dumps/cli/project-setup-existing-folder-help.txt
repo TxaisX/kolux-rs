@@ -1,0 +1,26 @@
+﻿kolux project setup-existing-folder
+
+Usage: kolux project setup-existing-folder --project <id> --host <host-id> --path <path> [--kind git|folder] [--display-name <name>] [--json]
+
+Make a project available on a host by importing an existing folder
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --project
+  --host
+  --path <path>          Path argument for the command
+  --kind
+  --display-name <name>  Override the Kolux display name
+
+Notes:
+  For remote runtimes, --path must be an absolute path on the remote server.
+  --host runtime:<environment-id> targets that paired Kolux server; use the id from `kolux environment list`, not the environment name.
+  SSH targets are set up through the desktop UI because the desktop client owns SSH connections.
+
+Examples:
+  $ kolux project setup-existing-folder --project github:TxaisX/kolux --host local --path ~/kolux
+  $ kolux project setup-existing-folder --project github:TxaisX/kolux --host runtime:03ef704c-b180-4b10-998d-e28fbd5de9a3 --path /home/me/kolux --kind git --json
+

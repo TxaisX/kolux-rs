@@ -1,0 +1,1148 @@
+# 15-skills-plugins-kits: file	describe	title  (1147 titles, 180 files)
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture	stores a local artifact from a sample publish signal
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture	ignores replays, restored rows, and assistant prose
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture	ignores a Published line printed by a tool other than Artifact
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture	never opens a UNC publish path; lists it as unavailable instead
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture	copies an SSH artifact over the remote read path
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture	lists an unreadable SSH artifact as remote instead of failing
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture	lists a path this host cannot read (WSL on Windows) as remote
+src/main/artifacts-library/artifact-capture.test.ts	createArtifactCapture from the Claude transcript	reads the publish from the transcript once the pane moves past the Artifact tool
+src/main/artifacts-library/artifact-capture.test.ts	isNetworkSharePath	flags UNC and double-slash spellings only
+src/main/artifacts-library/artifact-capture.test.ts	isLocallyReadablePath	matches the path spelling to the host platform
+src/main/artifacts-library/artifact-html-inspection.test.ts	extractHtmlTitle	reads and normalizes the <title>
+src/main/artifacts-library/artifact-html-inspection.test.ts	extractHtmlTitle	returns null when there is no usable title
+src/main/artifacts-library/artifact-html-inspection.test.ts	extractHtmlTitle	caps very long titles
+src/main/artifacts-library/artifact-html-inspection.test.ts	collectRelativeAssetReferences	collects only relative src/href/url() references, without query or fragment
+src/main/artifacts-library/artifact-html-inspection.test.ts	CDN script vendoring	collects only https scripts on the artifact CDN allowlist
+src/main/artifacts-library/artifact-html-inspection.test.ts	CDN script vendoring	rewrites vendored sources and leaves the rest untouched
+src/main/artifacts-library/artifact-library-sandbox.test.ts	artifact library preview sandbox	serves the stored page and its assets, and nothing outside the stored files
+src/main/artifacts-library/artifact-library-sandbox.test.ts	artifact library preview sandbox	opens a clicked web link in the system browser instead of a workspace browser tab
+src/main/artifacts-library/artifact-library-store.test.ts	ArtifactLibraryStore	copies the page and its relative assets, but not files outside its folder
+src/main/artifacts-library/artifact-library-store.test.ts	ArtifactLibraryStore	skips assets over the per-file cap
+src/main/artifacts-library/artifact-library-store.test.ts	ArtifactLibraryStore	updates the same entry when the same claude.ai artifact is republished
+src/main/artifacts-library/artifact-library-store.test.ts	ArtifactLibraryStore	vendors allowlisted CDN scripts so the offline viewer can run them
+src/main/artifacts-library/artifact-library-store.test.ts	ArtifactLibraryStore	keeps the original script tag when the download fails
+src/main/artifacts-library/artifact-library-store.test.ts	ArtifactLibraryStore	records an unreadable remote artifact without downgrading a stored copy
+src/main/artifacts-library/artifact-library-store.test.ts	ArtifactLibraryStore	exposes preview paths with the files dir strictly inside the request base
+src/main/artifacts-library/artifact-publish-signal.test.ts	extractPublishedArtifacts	parses the Artifact tool result Claude Code prints
+src/main/artifacts-library/artifact-publish-signal.test.ts	extractPublishedArtifacts	keeps POSIX paths with spaces and code artifact links
+src/main/artifacts-library/artifact-publish-signal.test.ts	extractPublishedArtifacts	dedupes by URL with the last publish winning
+src/main/artifacts-library/artifact-publish-signal.test.ts	extractPublishedArtifacts	ignores text that only mentions a link or is not an html publish
+src/main/artifacts-library/artifact-transcript-scan.test.ts	extractPublishedArtifactsFromTranscript	reads the publish from a tool_result entry and skips broken or unrelated lines
+src/main/artifacts-library/artifact-transcript-scan.test.ts	extractPublishedArtifactsFromTranscript	accepts tool_result content given as text parts
+src/main/artifacts-library/artifact-transcript-scan.test.ts	extractPublishedArtifactsFromTranscript refuses non-Artifact results	ignores a Bash-style tool_result that prints a Published line
+src/main/artifacts-library/artifact-transcript-scan.test.ts	extractPublishedArtifactsFromTranscript refuses non-Artifact results	ignores text whose url or path differs from the Artifact tool result
+src/main/artifacts-library/artifact-transcript-scan.test.ts	readLocalFileTail	returns only the last bytes of the file
+src/main/ipc/plugin-marketplaces.test.ts	plugin marketplace IPC authority	validates every mutating or plugin-selecting request strictly
+src/main/ipc/plugin-marketplaces.test.ts	plugin marketplace IPC authority	dispatches source listing, add, removal, and refresh operations
+src/main/ipc/plugin-marketplaces.test.ts	plugin marketplace IPC authority	refreshes discovery only after a successful install
+src/main/ipc/plugin-marketplaces.test.ts	plugin marketplace IPC authority	deactivates before rollback and refreshes discovery only on success
+src/main/ipc/plugins.test.ts	plugin consent IPC schema	requires the fingerprint reviewed by the caller
+src/main/ipc/plugins.test.ts	plugin consent IPC schema	accepts an explicit reviewed fingerprint
+src/main/ipc/plugins.test.ts	plugin install IPC schema	requires a non-empty git ref
+src/main/ipc/plugins.test.ts	plugin install IPC schema	accepts an explicit git ref
+src/main/ipc/plugins.test.ts	plugin install IPC schema	accepts HTTPS and SSH git transports
+src/main/ipc/plugins.test.ts	plugin install IPC schema	rejects executable helpers and embedded HTTPS credentials
+src/main/ipc/plugins.test.ts	plugin removal authority	allows installed rows but refuses dev overrides and unknown keys
+src/main/ipc/plugins.test.ts	plugin removal authority	refuses bundled installs because startup would restore them
+src/main/ipc/plugins.test.ts	plugin settings lifecycle authority	refreshes from the main-process settings listener without renderer follow-up
+src/main/ipc/skill-ipc-main-window.test.ts	main-window skill IPC	allows the trusted main renderer
+src/main/ipc/skills.test.ts	registerSkillsHandlers	uses host skill discovery when resolved project runtime overrides stale WSL target state
+src/main/ipc/skills.test.ts	registerSkillsHandlers	scopes host skill discovery to the active workspace cwd when provided
+src/main/ipc/skills.test.ts	registerSkillsHandlers	uses the selected project WSL distro for skill discovery
+src/main/ipc/skills.test.ts	registerSkillsHandlers	scans the requested project directory in the selected WSL runtime
+src/main/ipc/skills.test.ts	registerSkillsHandlers	blocks skill discovery when project runtime requires repair
+src/main/ipc/skills.test.ts	registerSkillsHandlers	keeps freshness inventory local and read-only over known repositories
+src/main/plugins/plugin-atomic-file-write.test.ts	writePluginFileAtomically	writes contents and leaves no temp file behind
+src/main/plugins/plugin-atomic-file-write.test.ts	writePluginFileAtomically	replaces an existing file
+src/main/plugins/plugin-atomic-file-write.test.ts	writePluginFileAtomically	applies the requested mode
+src/main/plugins/plugin-atomic-file-write.test.ts	writePluginFileAtomically	cleans up the temp file when the write fails
+src/main/plugins/plugin-atomic-file-write.test.ts	writePluginFileAtomically	cleans up the temp file when the rename gives up
+src/main/plugins/plugin-atomic-file-write.test.ts	writePluginFileAtomically	runs concurrent writers to one target without leaking temp files
+src/main/plugins/plugin-atomic-file-write.test.ts	renamePluginFileWithWindowsRetry	renames when the source exists
+src/main/plugins/plugin-atomic-file-write.test.ts	renamePluginFileWithWindowsRetry	rethrows a non-retryable error
+src/main/plugins/plugin-atomic-file-write.test.ts	on Windows	retries past a transient %s lock
+src/main/plugins/plugin-atomic-file-write.test.ts	on Windows	gives up after the last delay rather than looping forever
+src/main/plugins/plugin-atomic-file-write.test.ts	on Windows	rethrows a non-retryable code without retrying
+src/main/plugins/plugin-atomic-file-write.test.ts	on Windows	does not retry off Windows
+src/main/plugins/plugin-audit-log.test.ts	PluginAuditLog retention	rotates bounded segments while preserving recent entries across the boundary
+src/main/plugins/plugin-bundled-bootstrap-coordinator.test.ts	PluginBundledBootstrapCoordinator	skips disabled requests and refreshes discovery only after publication
+src/main/plugins/plugin-bundled-bootstrap-coordinator.test.ts	PluginBundledBootstrapCoordinator	serializes overlapping startup and feature-toggle requests
+src/main/plugins/plugin-bundled-bootstrap.test.ts	bundled plugin bootstrap	installs release-indexed content once and keeps unchanged startup work bounded
+src/main/plugins/plugin-bundled-bootstrap.test.ts	bundled plugin bootstrap	publishes an updated immutable bundle only when the indexed hash matches
+src/main/plugins/plugin-bundled-bootstrap.test.ts	bundled plugin bootstrap	repairs a missing or modified bundled current version
+src/main/plugins/plugin-bundled-bootstrap.test.ts	bundled plugin bootstrap	refuses mismatched release hashes before publication
+src/main/plugins/plugin-bundled-bootstrap.test.ts	bundled plugin bootstrap	resolves packaged and development resource roots without platform separators
+src/main/plugins/plugin-command-registry.test.ts	PluginCommandRegistry	retains pending previews and exposes only approved commands
+src/main/plugins/plugin-command-registry.test.ts	PluginCommandRegistry	projects worker commands and inherited worktree keybinding context
+src/main/plugins/plugin-command-registry.test.ts	PluginCommandRegistry	errors approved plugins whose keybindings overlap
+src/main/plugins/plugin-command-registry.test.ts	PluginCommandRegistry	uses saved effective bindings to recover conflicting plugins
+src/main/plugins/plugin-command-registry.test.ts	PluginCommandRegistry	rejects conflicting saved bindings within one plugin
+src/main/plugins/plugin-command-registry.test.ts	PluginCommandRegistry	detects cross-platform Mod and physical Ctrl conflicts
+src/main/plugins/plugin-command-registry.test.ts	PluginCommandRegistry	allows the same worktree-only chord after one plugin is disabled
+src/main/plugins/plugin-content-pack-registry.test.ts	PluginContentPackRegistry	activates all contributions from a plugin atomically
+src/main/plugins/plugin-content-pack-registry.test.ts	PluginContentPackRegistry	rolls back valid packs when a VM recipe from the same plugin is invalid
+src/main/plugins/plugin-content-pack-registry.test.ts	PluginContentPackRegistry	withholds content from a plugin killed during the awaited verification phase
+src/main/plugins/plugin-content-safety.test.ts	declared plugin artifacts	validates every content-pack file and directory before enablement
+src/main/plugins/plugin-content-safety.test.ts	declared plugin artifacts	requires declared files to exist and be regular files
+src/main/plugins/plugin-content-safety.test.ts	declared plugin artifacts	refuses a panel reached through an escaping directory link or junction
+src/main/plugins/plugin-content-safety.test.ts	declared plugin artifacts	rejects a panel artifact too large to mount safely in a renderer
+src/main/plugins/plugin-content-safety.test.ts	declared plugin artifacts	parses VM recipes at the immutable install boundary
+src/main/plugins/plugin-content-safety.test.ts	declared plugin artifacts	rejects duplicate VM recipe ids at the immutable install boundary
+src/main/plugins/plugin-content-safety.test.ts	hash-addressed plugin content	uses unambiguous framing for paths and file contents
+src/main/plugins/plugin-content-safety.test.ts	hash-addressed plugin content	hashes and bounds nested .git directories as plugin content
+src/main/plugins/plugin-content-safety.test.ts	hash-addressed plugin content	does not let host locale collation change a content address
+src/main/plugins/plugin-content-safety.test.ts	hash-addressed plugin content	detects content changed after its address was computed
+src/main/plugins/plugin-content-safety.test.ts	hash-addressed plugin content	rejects an oversized sparse file before reading it into memory
+src/main/plugins/plugin-dev-watcher.test.ts	PluginDevWatcher	contains asynchronous watcher errors and requests a retrying refresh
+src/main/plugins/plugin-dev-watcher.test.ts	PluginDevWatcher	unsubscribes a subscription that resolves after disposal
+src/main/plugins/plugin-dev-watcher.test.ts	PluginDevWatcher	contains unsubscribe rejections so dispose cannot fail the host process
+src/main/plugins/plugin-dev-watcher.test.ts	PluginDevWatcher	does not spin refreshes when a missing path cannot be subscribed
+src/main/plugins/plugin-discovery.test.ts	installed plugin discovery identity	keeps the install directory identity when a manifest is invalid or mismatched
+src/main/plugins/plugin-discovery.test.ts	installed plugin discovery identity	keeps a removable qualified identity when the current pointer is missing
+src/main/plugins/plugin-discovery.test.ts	installed plugin discovery identity	rejects an oversized current pointer without an unbounded startup read
+src/main/plugins/plugin-discovery.test.ts	instructional plugin discovery identity	changes dev consent when a VM recipe command changes
+src/main/plugins/plugin-enablement.test.ts	applyPluginConsent	stores approval only for the fingerprint the user reviewed
+src/main/plugins/plugin-enablement.test.ts	applyPluginConsent	rejects a stale review after a same-key plugin update without writing settings
+src/main/plugins/plugin-enablement.test.ts	applyPluginConsent	allows a stale dialog to keep the newer plugin disabled
+src/main/plugins/plugin-enablement.test.ts	applyPluginEnablement	does not persist unknown plugin identities
+src/main/plugins/plugin-host-conformance.test.ts	plugin host main/relay conformance	runs a granted success through both transports for all 13 v0 methods
+src/main/plugins/plugin-host-conformance.test.ts	plugin host main/relay conformance	projects workspace context without host paths on main and relay
+src/main/plugins/plugin-host-conformance.test.ts	plugin host main/relay conformance	returns identical $code codes for $name
+src/main/plugins/plugin-host-conformance.test.ts	plugin host main/relay conformance	enforces the same per-plugin panel budget on desktop main and relay
+src/main/plugins/plugin-host-conformance.test.ts	plugin host main/relay conformance	charges malformed and oversized panel traffic before schema parsing
+src/main/plugins/plugin-host-conformance.test.ts	plugin host main/relay conformance	binds relay plugin identity to the requesting connection
+src/main/plugins/plugin-host-conformance.test.ts	plugin host main/relay conformance	rejects malformed envelopes and client-supplied authority before policy resolution
+src/main/plugins/plugin-host-methods.test.ts	executePluginHostCall mutation auditing	rejects prototype-sensitive storage keys before any host service call
+src/main/plugins/plugin-host-methods.test.ts	executePluginHostCall mutation auditing	rejects non-JSON storage values before any host service call
+src/main/plugins/plugin-host-methods.test.ts	executePluginHostCall mutation auditing	fails closed before a mutation when the audit intent cannot be recorded
+src/main/plugins/plugin-host-methods.test.ts	executePluginHostCall mutation auditing	records an intent before the mutation and its outcome afterward
+src/main/plugins/plugin-host-methods.test.ts	executePluginHostCall mutation auditing	refuses mutations when no audit writer is configured
+src/main/plugins/plugin-host-methods.test.ts	terminal.sendText explicit worktree routing	performs one bounded list and zero sends when the terminal is outside the worktree
+src/main/plugins/plugin-host-methods.test.ts	terminal.sendText explicit worktree routing	bounds workspace.readContext and omits the provider path
+src/main/plugins/plugin-host-methods.test.ts	terminal.sendText under a refusing agent-session lease	reports who holds the session instead of an accepted-looking result
+src/main/plugins/plugin-host-methods.test.ts	terminal.sendText under a refusing agent-session lease	sends unchanged when no lease refuses, which is every plugin send today
+src/main/plugins/plugin-host-process.test.ts	startPluginWorker	does not inherit Kolux execArgv
+src/main/plugins/plugin-host-process.test.ts	startPluginWorker	replays an exit that happened before handle registration
+src/main/plugins/plugin-host-process.test.ts	startPluginWorker	kills a live worker that disconnects its IPC channel
+src/main/plugins/plugin-host-process.test.ts	startPluginWorker	counts delivered events as in flight until their acknowledgement
+src/main/plugins/plugin-host-process.test.ts	startPluginWorker	kills a worker whose event handler never acknowledges completion
+src/main/plugins/plugin-host-process.test.ts	startPluginWorker	kills a worker that exceeds the pending event cap
+src/main/plugins/plugin-host-runtime.test.ts	plugin worker shutdown	normalizes either manifest separator before importing the worker
+src/main/plugins/plugin-host-runtime.test.ts	plugin worker shutdown	awaits an optional deactivate export before exiting
+src/main/plugins/plugin-host-runtime.test.ts	plugin worker shutdown	exits immediately when the plugin has no deactivate export
+src/main/plugins/plugin-install-trust.test.ts	plugin install trust	rejects locally installed reserved identities before publication
+src/main/plugins/plugin-install-trust.test.ts	plugin install trust	allows the app-bundled path only for the complete official identity
+src/main/plugins/plugin-install-trust.test.ts	plugin install trust	blocks a killed plugin even when the caller bypasses marketplace UI
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	refuses to allocate an oversized install lockfile
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	verifies copied content and writes a rollback-compatible consent field
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	publishes metadata from the copied immutable manifest
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	skips root Git metadata before copying while still enforcing plugin limits
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	restores the previous current pointer when lockfile publication fails
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	does not replace provenance when a same-content reinstall fails to publish
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	preserves legacy lock provenance during a same-content reinstall
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	retains only the current and immediately previous content versions
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	keeps the rollback version when current content is reinstalled
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	repairs a pointer-new lock-old interrupted publication from provenance
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	rejects a manifest whose declared panel artifact is missing
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	rejects an oversized manifest without reading an unbounded JSON payload
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	serializes concurrent installs so lockfile entries are not lost
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	serializes concurrent lockfile publications without temporary-file collisions
+src/main/plugins/plugin-install.test.ts	installPluginFromLocalPath	refuses to repoint at a tampered existing content directory
+src/main/plugins/plugin-install.test.ts	installPluginFromGit	uses system Git, resolves the requested ref, and installs its exact bytes
+src/main/plugins/plugin-install.test.ts	removeInstalledPlugin	rejects an unqualified or traversing key before removing anything
+src/main/plugins/plugin-install.test.ts	removeInstalledPlugin	rejects a resolved uninstall target outside its root
+src/main/plugins/plugin-install.test.ts	removeInstalledPlugin	removes qualified install and data directories
+src/main/plugins/plugin-kill-list-content-revocation.test.ts	kill-list revocation of declarative plugin content	withdraws VM recipes and language packs when a live plugin is killed
+src/main/plugins/plugin-kill-list-content-revocation.test.ts	kill-list revocation of declarative plugin content	never publishes killed content after a restart discovers the plugin
+src/main/plugins/plugin-kill-list-service.test.ts	PluginKillListService	loads cached revocations before any network refresh
+src/main/plugins/plugin-kill-list-service.test.ts	PluginKillListService	publishes valid refreshes and notifies runtime reconciliation
+src/main/plugins/plugin-kill-list-service.test.ts	PluginKillListService	starts with no revocations after a corrupt cache and accepts a valid refresh
+src/main/plugins/plugin-kill-list-service.test.ts	PluginKillListService	keeps accepting genuine lists after a far-future snapshot is published
+src/main/plugins/plugin-kill-list-service.test.ts	PluginKillListService	keeps cached revocations live when the device clock runs far behind
+src/main/plugins/plugin-kill-list-service.test.ts	PluginKillListService	rejects a replayed older snapshot without replacing cached revocations
+src/main/plugins/plugin-language-pack-registry.test.ts	PluginLanguagePackRegistry	loads approved catalogs under an isolated plugin language id
+src/main/plugins/plugin-language-pack-registry.test.ts	PluginLanguagePackRegistry	fails closed for protected security copy and clears state when disabled
+src/main/plugins/plugin-launch-content.test.ts	launch plugin content	lists and validates the launch plugin packs
+src/main/plugins/plugin-launch-content.test.ts	launch plugin content	publishes every bundled pack only when its release hash matches exact bytes
+src/main/plugins/plugin-launch-content.test.ts	launch plugin content	boots release-indexed content from the packaged resources layout
+src/main/plugins/plugin-list-projection.test.ts	buildPluginList consent identity	projects the exact current fingerprint for an optimistic consent write
+src/main/plugins/plugin-list-projection.test.ts	buildPluginList consent identity	projects supervised backoff as restarting instead of running
+src/main/plugins/plugin-list-projection.test.ts	buildPluginList consent identity	does not attribute a shadowing dev plugin to the installed source
+src/main/plugins/plugin-list-projection.test.ts	buildPluginList consent identity	does not expose an invalid development plugin absolute path as identity
+src/main/plugins/plugin-list-projection.test.ts	buildPluginList consent identity	projects exact VM lifecycle commands for instructional consent
+src/main/plugins/plugin-list-projection.test.ts	buildPluginList consent identity	projects command handlers and normalized keybindings for consent and dispatch
+src/main/plugins/plugin-manifest-file.test.ts	resolvePluginManifestFilename	prefers kolux-plugin.json when both manifests exist
+src/main/plugins/plugin-manifest-file.test.ts	resolvePluginManifestFilename	falls back to the legacy nightshift-plugin.json filename
+src/main/plugins/plugin-manifest-file.test.ts	resolvePluginManifestFilename	defaults to kolux-plugin.json when neither manifest exists
+src/main/plugins/plugin-manifest-file.test.ts	resolvePluginManifestFilename	reads manifest text through the legacy filename fallback
+src/main/plugins/plugin-marketplace-installer.test.ts	PluginMarketplaceInstaller	previews exact validated bytes and records marketplace provenance on install
+src/main/plugins/plugin-marketplace-installer.test.ts	PluginMarketplaceInstaller	requires a fresh review when the plugin ref moves after preview
+src/main/plugins/plugin-marketplace-installer.test.ts	PluginMarketplaceInstaller	rejects a source whose manifest identity differs from its listing
+src/main/plugins/plugin-marketplace-installer.test.ts	PluginMarketplaceInstaller	updates from recorded marketplace provenance and rolls back one immutable version
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	fetches before registration, then serves browse data from the local snapshot
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	keeps and labels the last valid snapshot when a refresh is offline
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	atomically replaces the cache only after a valid refreshed index
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	does not persist a source whose first fetch fails
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	rejects reserved identities outside the official organization
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	derives the Official badge only from the canonical marketplace and source organization
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	hides listings whose contribution kind this build no longer supports
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	seeds the official marketplace once and keeps it configured across restarts
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	persists an offline official source for a later refresh and does not remove it
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	keeps reads usable and allows retry after official seeding rejects
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	recovers the managed source after a full existing store frees a slot
+src/main/plugins/plugin-marketplace-service.test.ts	PluginMarketplaceService	removes source metadata and browse listings together
+src/main/plugins/plugin-marketplace-store.test.ts	PluginMarketplaceStore	persists bounded source registrations under a deterministic opaque id
+src/main/plugins/plugin-marketplace-store.test.ts	PluginMarketplaceStore	atomically publishes a strict cached snapshot and removes it with its source
+src/main/plugins/plugin-marketplace-store.test.ts	PluginMarketplaceStore	keeps distinct refs as distinct marketplace sources
+src/main/plugins/plugin-marketplace-store.test.ts	PluginMarketplaceStore	rejects path-like source ids before reading or deleting cache files
+src/main/plugins/plugin-panel-controller.test.ts	PluginPanelController identity binding	uses the session identity and rejects caller-supplied plugin claims
+src/main/plugins/plugin-panel-controller.test.ts	PluginPanelController identity binding	charges raw malformed and oversized calls before strict parsing
+src/main/plugins/plugin-panel-controller.test.ts	PluginPanelController identity binding	does not publish stale panel code after approval changes during verification
+src/main/plugins/plugin-panel-controller.test.ts	PluginPanelController identity binding	invalidates an open dev-panel session when its manifest revision changes
+src/main/plugins/plugin-panel-navigation-guard.test.ts	PluginPanelNavigationRegistry	blocks only host-marked plugin srcdoc frames
+src/main/plugins/plugin-panel-navigation-guard.test.ts	PluginPanelNavigationRegistry	keeps pre-parse identity after name mutation and prunes destroyed frames
+src/main/plugins/plugin-panel-owner-lifecycle.test.ts	bindPluginPanelOwnerLifecycle	deduplicates hooks, revokes on renderer loss, and invalidates in-flight loads
+src/main/plugins/plugin-panel-sessions.test.ts	PluginPanelSessions	binds an opaque token to its transport owner and panel revision
+src/main/plugins/plugin-panel-sessions.test.ts	PluginPanelSessions	revokes every session owned by a disconnected transport
+src/main/plugins/plugin-private-marketplace.integration.test.ts	private Git marketplace integration	uses the caller SSH environment for marketplace preview and install
+src/main/plugins/plugin-secrets-store.test.ts	PluginSecretsStore	encrypts, persists, decrypts, deletes, and isolates plugin namespaces
+src/main/plugins/plugin-secrets-store.test.ts	PluginSecretsStore	fails closed without OS encryption and writes no plaintext file
+src/main/plugins/plugin-secrets-store.test.ts	PluginSecretsStore	reports corrupt or wrong-key ciphertext without returning bytes
+src/main/plugins/plugin-secrets-store.test.ts	PluginSecretsStore	refuses ciphertext that would exceed the bounded vault
+src/main/plugins/plugin-secrets-store.test.ts	PluginSecretsStore	rejects unsafe plugin namespaces
+src/main/plugins/plugin-service-integrity.test.ts	PluginService lazy content verification	does not share an in-flight verification across same-key content revisions
+src/main/plugins/plugin-service-integrity.test.ts	PluginService lazy content verification	detects tampering only when panel code is first consumed
+src/main/plugins/plugin-service-integrity.test.ts	PluginService lazy content verification	blocks a worker fork when installed content changed after discovery
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	blocks every runtime surface until a saved override resolves a content conflict
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	rejects declarative aliases at the worker-command boundary without activating code
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	denies every authority boundary immediately when the feature flag turns off
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	deactivates a worker when its plugin becomes disabled
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	immediately revokes every authority surface and stops a killed plugin
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	deactivates a worker when changed capabilities make consent pending
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	cancels the old generation when a worker spec changes without eager reactivation
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	cannot reactivate the old revision while refresh awaits worker shutdown
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	deactivates removed and replaced dev paths without eager activation
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	starts and stops housekeeping on feature-flag transitions
+src/main/plugins/plugin-service-reconciliation.test.ts	PluginService worker reconciliation	serializes activation reconciliation so the latest disabled state wins
+src/main/plugins/plugin-startup-budget.test.ts	plugin startup budget	stays below 50ms P95 with 20 approved content packs and executes no plugin code
+src/main/plugins/plugin-storage-store.test.ts	PluginKvStore limits	enforces the value cap in UTF-8 bytes rather than JavaScript code units
+src/main/plugins/plugin-vm-recipe-registry.test.ts	PluginVmRecipeRegistry	retains pending previews and exposes only approved recipes
+src/main/plugins/plugin-vm-recipe-registry.test.ts	PluginVmRecipeRegistry	rejects malformed artifacts and duplicate ids within one plugin
+src/main/plugins/plugin-vm-recipe-registry.test.ts	PluginVmRecipeRegistry	errors every approved plugin that contributes the same global id
+src/main/plugins/plugin-vm-recipe-registry.test.ts	PluginVmRecipeRegistry	deactivates disabled recipes and removes previews after uninstall
+src/main/plugins/plugin-vm-recipe-registry.test.ts	PluginVmRecipeRegistry	refuses recipe bytes changed after the reviewed content identity
+src/main/plugins/plugin-worker-controller.test.ts	PluginWorkerController activation authority	does not start code after approval is revoked during integrity verification
+src/main/plugins/plugin-worker-controller.test.ts	PluginWorkerController activation authority	disposes a worker whose approval changes while the process starts
+src/main/plugins/plugin-worker-controller.test.ts	PluginWorkerController activation authority	rejects and stops workers that register undeclared commands
+src/main/plugins/plugin-worker-controller.test.ts	PluginWorkerController activation authority	rejects workers that register declarative action aliases
+src/main/plugins/plugin-worker-env.test.ts	buildPluginWorkerEnv	matches allowlisted keys case-sensitively on POSIX
+src/main/plugins/plugin-worker-env.test.ts	buildPluginWorkerEnv	matches Windows environment keys case-insensitively
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager capacity	atomically counts in-flight starts against maxActive
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager capacity	removes a cancelled waiter without disturbing FIFO order
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager capacity	releases a failed start so the next FIFO waiter can run
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager capacity	cancels an in-flight start without allowing its generation to land
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager capacity	disposes running workers and rejects queued waiters
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager restart policy	cancels a stale in-flight revision instead of joining it by plugin key
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager restart policy	retries startup failures at 500/2000/5000ms before errored
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager restart policy	joins triggers during backoff without resetting restart history
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager restart policy	applies the same backoff history to unexpected post-ready exits
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager restart policy	cancels a pending restart and never resurrects after deactivate
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager idle reap	does not reap a worker while an event handler is still in flight
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager idle reap	disposes an idle worker and activates a fresh generation on demand
+src/main/plugins/plugin-worker-manager.test.ts	PluginWorkerManager idle reap	waits for an in-progress idle shutdown during manager disposal
+src/main/plugins/plugin-worker-output-buffer.test.ts	pipePluginWorkerOutput	bounds an unterminated line and resumes after its newline
+src/main/plugins/plugin-worker-supervision.integration.test.ts	real plugin worker supervision	terminates and supervises a live worker that disconnects IPC
+src/main/plugins/plugin-worker-supervision.integration.test.ts	real plugin worker supervision	restarts forced exits with 500/2000/5000ms backoff, then stays errored
+src/main/skills/claude-plugin-skill-sources-wsl.test.ts	WSL Claude plugin metadata	quotes a distro path for the guest shell script
+src/main/skills/claude-plugin-skill-sources-wsl.test.ts	WSL Claude plugin metadata	decodes present files and retains missing files as null
+src/main/skills/claude-plugin-skill-sources-wsl.test.ts	WSL Claude plugin metadata	rejects malformed metadata responses
+src/main/skills/claude-plugin-skill-sources.test.ts	Claude plugin skill sources	selects the applicable project install over a stale user version
+src/main/skills/claude-plugin-skill-sources.test.ts	Claude plugin skill sources	falls back to the user install outside the project scope
+src/main/skills/claude-plugin-skill-sources.test.ts	Claude plugin skill sources	honors project and local settings overrides for disabled plugins
+src/main/skills/claude-plugin-skill-sources.test.ts	Claude plugin skill sources	chooses the newest applicable install within the same scope
+src/main/skills/discovery.test.ts	skill discovery	keeps every healthy root when one root walk is aborted
+src/main/skills/discovery.test.ts	skill discovery	does not report an aborted root as missing
+src/main/skills/discovery.test.ts	skill discovery	serves the last answered skills for a root whose rescan did not answer
+src/main/skills/discovery.test.ts	skill discovery	drops the retained copy once a root answers as absent
+src/main/skills/discovery.test.ts	skill discovery	stops serving a retained copy once it is older than the retention window
+src/main/skills/discovery.test.ts	skill discovery	discovers home and repo SKILL.md packages with provider metadata
+src/main/skills/discovery.test.ts	skill discovery	discovers the enabled Claude plugin version applicable to the project cwd
+src/main/skills/discovery.test.ts	skill discovery	skips Claude plugin discovery when no explicit cwd targets the scan (Settings shape)
+src/main/skills/discovery.test.ts	skill discovery	records every contributing root when symlinked roots dedup to one skill
+src/main/skills/discovery.test.ts	skill discovery	keys every deduped root to an owning source so per-agent coverage resolves
+src/main/skills/discovery.test.ts	skill discovery	names every source owner after a real agent id
+src/main/skills/discovery.test.ts	skill discovery	scans a home-equal workspace path as both a home and a repo root
+src/main/skills/discovery.test.ts	skill discovery	does not add SSH-backed repository paths to local scan roots
+src/main/skills/discovery.test.ts	skill discovery	scans each provider home skill root that npx skills --global writes to
+src/main/skills/discovery.test.ts	skill discovery	does not add runtime-owned repository paths to local scan roots
+src/main/skills/discovery.test.ts	skill discovery	can exclude the implicit cwd without excluding explicit local repositories
+src/main/skills/discovery.test.ts	skill discovery	discovers skill packages through symlinked skill directories
+src/main/skills/discovery.test.ts	skill discovery	discovers a symlinked skill inside a provider home root
+src/main/skills/discovery.test.ts	skill discovery	discovers Skills installed in the Hermes home
+src/main/skills/discovery.test.ts	skill discovery	discovers Hermes Skills under a relocated HERMES_HOME profile
+src/main/skills/discovery.test.ts	skill discovery	discovers worktree .agents skill symlinks from the requested cwd
+src/main/skills/discovery.test.ts	skill discovery	keeps home classification when cwd points at the same directory as home
+src/main/skills/discovery.test.ts	skill discovery	does not loop through recursive symlinked skill directories
+src/main/skills/discovery.test.ts	skill discovery	enforces depth limits for valid child directories whose names start with dot-dot
+src/main/skills/skill-bundle-artifacts.test.ts	skill bundle artifacts	loads the committed schema-2 artifacts and rejects a stamped schema-1 manifest
+src/main/skills/skill-bundle-artifacts.test.ts	skill bundle artifacts	rejects malformed nested release entries before building provenance
+src/main/skills/skill-bundle-observability-summary.test.ts	skill bundle observability summary	caps distinct error categories while preserving the aggregate count
+src/main/skills/skill-candidate-concurrency.test.ts	runSkillCandidateTasks	bounds concurrency and preserves task order
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan placement enumeration	still refuses when the content is outside and no link sits in a root
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan placement enumeration	refuses a plugin-cache skill symlinked into a plain home root
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan placement enumeration	lists an overlapping root\u2019s directory once, not twice
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan placement enumeration	never treats a root itself as a placement
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan freshness guard	reports stale when the file changed beyond the tolerance
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan freshness guard	fails closed on a null updatedAt rather than skipping the check
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan freshness guard	accepts a second-granularity updatedAt, as WSL discovery reports it
+src/main/skills/skill-delete/plan.test.ts	buildSkillDeletePlan freshness guard	reports missing when the skill file is gone
+src/main/skills/skill-delete/recovery.test.ts	skill delete journal validation	round-trips a valid journal
+src/main/skills/skill-delete/recovery.test.ts	skill delete journal validation	returns null when there is no journal
+src/main/skills/skill-delete/recovery.test.ts	skill delete journal validation	refuses a move whose source escapes every allowed root
+src/main/skills/skill-delete/recovery.test.ts	skill delete journal validation	refuses a staged path that is not our sibling naming convention
+src/main/skills/skill-delete/recovery.test.ts	skill delete journal validation	refuses a movedCount larger than the move list
+src/main/skills/skill-delete/recovery.test.ts	recoverSkillDeleteTransaction	rolls a staged phase forward by removing the staged path
+src/main/skills/skill-delete/recovery.test.ts	recoverSkillDeleteTransaction	rolls an interrupted staging back so the skill survives whole
+src/main/skills/skill-delete/recovery.test.ts	recoverSkillDeleteTransaction	keeps the journal when a rollback rename fails, so startup can retry it
+src/main/skills/skill-delete/recovery.test.ts	recoverSkillDeleteTransaction	clears the journal when the recorded move was never performed
+src/main/skills/skill-delete/recovery.test.ts	recoverSkillDeleteTransaction	clears the journal on retry after an earlier pass already restored a move
+src/main/skills/skill-delete/recovery.test.ts	recoverSkillDeleteTransaction	restores canonical before alias-file, so no alias dangles mid-recovery
+src/main/skills/skill-delete/service.test.ts	deleteSkills	removes every placement and leaves no staged residue
+src/main/skills/skill-delete/service.test.ts	deleteSkills	removes an emptied alias-file directory
+src/main/skills/skill-delete/service.test.ts	deleteSkills	takes the lock an install of the same destination directory would take
+src/main/skills/skill-delete/service.test.ts	deleteSkills	continues the batch when one skill is locked by another transaction
+src/main/skills/skill-delete/service.test.ts	deleteSkills	restores every staged placement when a later rename fails
+src/main/skills/skill-delete/service.test.ts	deleteSkills	reports partial with the staged paths when the rollback itself fails
+src/main/skills/skill-delete/service.test.ts	deleteSkills	reports partial rather than deleted when a staged removal fails
+src/main/skills/skill-delete/service.test.ts	deleteSkills	deletes the install receipt so no phantom managed install survives
+src/main/skills/skill-delete/service.test.ts	deleteSkills	removes a link to outside content and leaves the content itself intact
+src/main/skills/skill-delete/service.test.ts	deleteSkills	skips a blocked skill without touching disk
+src/main/skills/skill-delete/staging-visibility.test.ts	isSkillStagingEntryName	leaves %s alone
+src/main/skills/skill-delete/staging-visibility.test.ts	native walker	still finds an ordinary skill beside a staged one
+src/main/skills/skill-delete/staging-visibility.test.ts	WSL guest scan	prunes the same staging shapes the native walker skips
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslListEntriesOutput	keys listings by the caller’s own strings, not the guest spelling
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslListEntriesOutput	reports an absent directory as an empty listing rather than a missing key
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslListEntriesOutput	refuses an unknown record kind instead of guessing
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslListEntriesOutput	refuses an index no argument produced
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslListEntriesOutput	refuses an unreadable directory rather than reporting it empty
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslInspectPathsOutput	scales the guest’s whole-second mtime the way WSL discovery does
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslInspectPathsOutput	reports an unresolvable realpath and an unreadable mtime as null
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	parseWslInspectPathsOutput	refuses an unknown entry kind
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	guest scripts	classify a symlink before following it, so a broken link is not "missing"
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	guest scripts	reads mtime without dereferencing, matching WSL discovery
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	guest scripts	takes every path positionally rather than interpolating it into the script
+src/main/skills/skill-delete/wsl-enumeration-protocol.test.ts	guest scripts	marks an unreadable directory instead of listing it as empty
+src/main/skills/skill-discovery-concurrency.test.ts	bounded concurrent skill discovery	collapses a burst of identical scans into one walk of each root
+src/main/skills/skill-discovery-concurrency.test.ts	bounded concurrent skill discovery	shares the fixed home roots across panes that only differ by workspace
+src/main/skills/skill-discovery-concurrency.test.ts	bounded concurrent skill discovery	reports missing roots without walking them
+src/main/skills/skill-discovery-concurrency.test.ts	bounded concurrent skill discovery	re-reads disk when a caller refreshes, and serves the new result afterwards
+src/main/skills/skill-discovery-concurrency.test.ts	bounded concurrent skill discovery	gives every caller its own arrays so a shared scan cannot be mutated across results
+src/main/skills/skill-discovery-concurrency.test.ts	bounded concurrent skill discovery	logs the roots it walked, by id, and never a filesystem path
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	collapses simultaneous identical requests from several clients into one scan
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	does not let two workspaces share a scan
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	does not let two repo lists share a scan
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	keeps repo-list identity stable regardless of stored order
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	forwards refresh to the native scan so it re-reads disk
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	reuses a WSL result rather than booting wsl.exe again
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	never shares a WSL result across distros or workspaces
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	re-reads a WSL target when the caller refreshes
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	drops the root cache too when the host clears its scans
+src/main/skills/skill-discovery-target.test.ts	discoverSkillsOnTarget	reports a stalled target as a retryable error rather than as no skills
+src/main/skills/skill-discovery-wsl-plugins.test.ts	WSL Claude plugin skill discovery	reads enabled plugin metadata and scans the selected install inside the distro
+src/main/skills/skill-discovery-wsl-script-roundtrip.test.ts	WSL skill discovery script round-trip	parses back exactly what the generated script emits
+src/main/skills/skill-discovery-wsl.test.ts	WSL skill discovery	parses distro-native metadata and deduplicates canonical skill paths
+src/main/skills/skill-discovery-wsl.test.ts	WSL skill discovery	builds a distro-side scan for enumeration, reads, and canonical identity
+src/main/skills/skill-discovery-wsl.test.ts	WSL skill discovery	rejects malformed host responses instead of reporting an empty scan
+src/main/skills/skill-freshness-eligibility.test.ts	skill freshness name-scoped update eligibility	offers a name when at least one supported placement is outdated and all are official
+src/main/skills/skill-freshness-eligibility.test.ts	skill freshness name-scoped update eligibility	still updates the canonical copy when a clean standalone duplicate exists
+src/main/skills/skill-freshness-eligibility.test.ts	skill freshness name-scoped update eligibility	does not promise an update when only an unreachable duplicate is outdated
+src/main/skills/skill-freshness-eligibility.test.ts	skill freshness name-scoped update eligibility	does not offer a skill that exists only as a standalone copy
+src/main/skills/skill-freshness-eligibility.test.ts	skill freshness name-scoped update eligibility	scopes each name independently and leaves an all-current name alone
+src/main/skills/skill-freshness-eligibility.test.ts	skill freshness name-scoped update eligibility	does not offer an official canonical copy missing from the updater lock
+src/main/skills/skill-freshness-eligibility.test.ts	skill freshness name-scoped update eligibility	builds only an explicit, deterministic global command
+src/main/skills/skill-freshness-inventory-limits.test.ts	skill freshness inventory limits	caps repository roots before creating candidate probes
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	offers an exact older official name only when all global placements are safe
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	does not offer an older copied bundle the external updater has never registered
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	labels newer known and unrecognized bytes honestly without calling them modified
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	trusts the updater lock for canonical bytes the bundle has never seen (scan half)
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	reads up to date after the OS drops a sidecar into an untouched install
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	scopes the lock hash to the current bundle, not every path a revision ever shipped
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	trusts the updater lock for upstream bytes beside an agent CLI sidecar
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	still trusts the lock when the upstream revision added a file (guard)
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	still withholds an unwinnable update when a sidecar sits beside the stale copy
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	still flags canonical bytes that do not match what the lock says was installed
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	does not let the lock vouch for a same-name copy outside the placements it wrote
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	retains full-file identity without projecting unused metadata
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	keeps an unreadable foreign-home placement visible without withholding the update
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	does not lose an inaccessible known repository placement
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	keeps another ecosystem’s same-name plugin skill unrecognized
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	reads a plugin-cache copy with untouched official files as current
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	does not classify an empty plugin-cache directory as a skill
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	accepts CRLF as the same official text identity
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	classifies exact current bytes as current when a later snapshot reuses them
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	reports the repository scan limit without withholding the global update
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	scans a real-shaped plugin cache completely and leaves eligibility unchanged
+src/main/skills/skill-freshness-inventory.test.ts	read-only skill freshness inventory	reports incomplete plugin coverage without inventing per-skill installations
+src/main/skills/skill-git-tree-identity.test.ts	observed skill git tree identity	matches the gitTreeSha the bundled manifest records for every shipped skill
+src/main/skills/skill-git-tree-identity.test.ts	observed skill git tree identity	matches git write-tree over nesting, executables and the directory sort edge
+src/main/skills/skill-install-lock-release.test.ts	cleanupReleasedSkillInstallLock	keeps a released lock recoverable when directory removal races
+src/main/skills/skill-install-lock.test.ts	skill install lock	rejects a non-positive owner pid (%s)
+src/main/skills/skill-install-lock.test.ts	skill install lock	reclaims a fresh legacy lock whose process was killed
+src/main/skills/skill-install-lock.test.ts	skill install lock	reclaims a lock after its release deletion fails
+src/main/skills/skill-install-lock.test.ts	skill install lock	publishes a complete candidate atomically when acquisitions overlap
+src/main/skills/skill-install-lock.test.ts	skill install lock	does not publish a lock when writing its owner fails
+src/main/skills/skill-install-lock.test.ts	skill install lock	retries when the current owner releases after a contended rename
+src/main/skills/skill-install-lock.test.ts	skill install lock	reclaims abandoned legacy owner files at startup
+src/main/skills/skill-install-lock.test.ts	skill install lock	reclaims dead locks, abandoned candidates, and completed releases at startup
+src/main/skills/skill-install-lock.test.ts	skill install lock	continues startup recovery past a non-empty released lock
+src/main/skills/skill-install-lock.test.ts	skill install lock	frees the canonical lock before release cleanup finishes
+src/main/skills/skill-install-provenance.test.ts	managed skill install receipts	lists bounded receipt metadata without exposing package contents
+src/main/skills/skill-operation-observability.test.ts	skill operation observability	maps install results to bounded labels without private operation data
+src/main/skills/skill-operation-observability.test.ts	skill operation observability	keeps support bundles free of paths, filenames, share URLs, policies, ACLs, and grants
+src/main/skills/skill-operation-observability.test.ts	skill operation observability	records bundle counts and conflicts without skill identities or paths
+src/main/skills/skill-operation-observability.test.ts	skill operation observability	bounds phase counts and records only fixed capability labels
+src/main/skills/skill-operation-observability.test.ts	skill operation observability	reduces phase failures to a bounded category
+src/main/skills/skill-package-identity.test.ts	skill package identity	matches CRLF installed text to an LF official snapshot
+src/main/skills/skill-package-identity.test.ts	skill package identity	uses exact bytes for executable and binary files
+src/main/skills/skill-package-identity.test.ts	skill package identity	infers shebang scripts as executable on Windows filesystems
+src/main/skills/skill-package-identity.test.ts	skill package identity	matches receipt executable paths case-insensitively on Windows
+src/main/skills/skill-package-identity.test.ts	skill package identity	orders package files by locale-independent code units
+src/main/skills/skill-package-identity.test.ts	skill package identity	rejects links and bounded-observation overflows
+src/main/skills/skill-package-identity.test.ts	skill package identity	rejects hardlinks, FIFOs, and Unix sockets
+src/main/skills/skill-package-identity.test.ts	skill package identity	ignores OS-authored sidecars so a browsed folder still matches its snapshot
+src/main/skills/skill-package-identity.test.ts	skill package identity	keeps guarding a directory or link that only wears an OS metadata name
+src/main/skills/skill-package-identity.test.ts	skill package identity	still reports a genuinely modified skill as unmatched
+src/main/skills/skill-package-identity.test.ts	skill package identity	does not let an older revision launder drift on a file the current one lists
+src/main/skills/skill-package-identity.test.ts	skill package identity	hashes official paths for the lock without hiding an upstream file it added
+src/main/skills/skill-package-identity.test.ts	skill package identity	scopes the lock hash to the current bundle, not every path ever shipped
+src/main/skills/skill-package-identity.test.ts	skill package identity	does not hand the lock an empty tree when no official path is present
+src/main/skills/skill-package-identity.test.ts	skill package identity	tracks executable mode in package identity
+src/main/skills/skill-placement-alias-repair.test.ts	skill provider alias reconciliation	detects a provider parent already linked to canonical storage
+src/main/skills/skill-placement-alias-repair.test.ts	skill provider alias reconciliation	repairs a broken Kolux-owned alias
+src/main/skills/skill-placement-copy-drift.test.ts	independent skill placement copy drift	preserves a locally modified copy during update reconciliation
+src/main/skills/skill-placement-copy-drift.test.ts	independent skill placement copy drift	refuses to remove a locally modified copy
+src/main/skills/skill-placement-reconciliation.test.ts	skill provider placement reconciliation	creates a verified independent copy when native alias creation is denied
+src/main/skills/skill-placement-reconciliation.test.ts	skill provider placement reconciliation	creates a verified copy when a host-owned alias operation is denied
+src/main/skills/skill-placement-reconciliation.test.ts	skill provider placement reconciliation	uses host alias inspection when the client cannot stat the destination
+src/main/skills/skill-placement-reconciliation.test.ts	skill provider placement reconciliation	updates an owned copy even when host alias inspection returns false
+src/main/skills/skill-placement-reconciliation.test.ts	skill provider placement reconciliation	does not update a byte-identical copy previously recorded as skipped
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	stops at the package candidate budget and marks the scan incomplete
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	stops at the entry budget and reports the truncation at the scan root
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	stops walking the directory whose read crossed the entry budget
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	stops at the entry budget while resolving declared skill roots
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	resolves the last declared skill root when the entry budget is exactly spent
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	completes a real-shaped Codex cache without reporting coverage issues
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	does not emit a plugin directory that only shares a skill name
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	does not emit a bare known-name directory that carries no SKILL.md
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	stops descending once a skill package payload exceeds the nested skill budget
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	reports a depth-truncated subtree as scan coverage instead of a skill candidate
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	does not scan dependency packages for plugin skill entrypoints
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	scans only declared Codex plugin skill roots
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	uses the default skills root for compatible manifests without a skills field
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	falls back to traversal when a manifest skills path is invalid
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	does not traverse plugin payload when the default skills root is missing
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	does not traverse plugin payload when the manifest declares no skill roots
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	discovers nested skill packages recursively within declared roots
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	rejects Windows parent traversal without hiding the default skills root
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	falls through empty manifest directories to the first manifest file
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	bounds how many skill roots one manifest can declare
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	keeps valid roots when a skills array contains an invalid value
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	does not reset the depth budget across nested plugin manifests
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	ignores non-directory manifest markers when selecting precedence
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	reports manifests that exceed the bounded read limit
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	reports the bound that ended the walk even with the issue budget spent
+src/main/skills/skill-plugin-cache-scan.test.ts	plugin skill candidate scan	keeps scanning past the issue budget
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	gives an agent that reads the canonical root no placement of its own
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	resolves scope-specific roots for an agent that is canonical in a workspace only
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	places every detected agent that owns a directory
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	uses the canonical root for Codex at global scope
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	honors custom global config roots without changing workspace roots
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	treats a custom root equal to canonical as canonical
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	rejects two providers claiming one noncanonical root
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	ignores agents Kolux cannot place skills for
+src/main/skills/skill-provider-destinations.test.ts	resolveSkillProviderDestinations	requires a workspace directory for workspace scope
+src/main/skills/skill-provider-destinations.test.ts	selectedOrDetectedSkillProviders	keeps every detected agent when nothing was selected
+src/main/skills/skill-provider-destinations.test.ts	selectedOrDetectedSkillProviders	honors selected agents even when they are not currently detected
+src/main/skills/skill-provider-destinations.test.ts	selectedOrDetectedSkillProviders	places nothing extra when the choice is empty
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	maps Claude and Grok config homes to their global skill roots
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	rejects relative config roots and lets a target-specific Claude root win
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	maps a relocated HERMES_HOME to its skill root and ignores relative ones
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	defaults the Hermes skills root to the home dotfolder off Windows
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	defaults the Hermes skills root under LOCALAPPDATA on Windows
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	keeps a pre-LOCALAPPDATA Windows dotfolder install discoverable
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	prefers the LOCALAPPDATA tree on Windows when both layouts exist
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	falls back to the dotfolder when Windows exposes no usable LOCALAPPDATA
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	maps the WSL login shell GROK_HOME to a host-readable skill root
+src/main/skills/skill-provider-runtime-roots.test.ts	skill provider runtime roots	ignores unsafe or missing WSL GROK_HOME values
+src/main/skills/skill-root-file-walk.test.ts	findSkillFiles	finds packages inside the depth bound and ignores deeper ones
+src/main/skills/skill-root-file-walk.test.ts	findSkillFiles	does not stat directory links beyond the depth bound but still follows in-bound links
+src/main/skills/skill-root-file-walk.test.ts	findSkillFiles	returns nothing for a missing root rather than throwing
+src/main/skills/skill-root-file-walk.test.ts	findSkillFiles	stops walking once its signal aborts, rejecting with an AbortError
+src/main/skills/skill-root-file-walk.test.ts	findSkillFiles	propagates an abort thrown while following a symlinked directory
+src/main/skills/skill-root-file-walk.test.ts	findSkillFiles	rejects rather than returning the entries it had already collected
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	collapses concurrent callers on one key into a single scan
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	keeps distinct keys isolated, including paths differing only by case
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	reuses a result inside the ttl and rescans after it lapses
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	retains nothing when the ttl is zero
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	bypasses cached and in-flight results when refreshing
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	caches every key when a refresh fans out across roots
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	does not let a scan that started before a refresh publish its stale result
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	does not let a scan that started before clear() repopulate the cache
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	does not cache a failed scan
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	evicts the least recently used entry past the bound
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	stops joining a scan that never settles, and never lets it publish later
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	aborts the scan it abandons so its walk stops doing filesystem work
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	does not abort the scan a refresh supersedes
+src/main/skills/skill-scan-coalescer.test.ts	SkillScanCoalescer	sheds a replacement once too many abandoned scans are still live
+src/main/skills/skill-transaction-startup-recovery.test.ts	skill transaction startup recovery	cleans extraction bytes and a dead lock left before the first install journal
+src/main/skills/skill-transaction-startup-recovery.test.ts	skill transaction startup recovery	preserves bytes referenced by an extraction journal outside its destination root
+src/main/skills/skill-transaction-startup-recovery.test.ts	skill transaction startup recovery	bounds corrupt journal scanning and leaves unknown files untouched
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	drops a skill whose lock records a revision the disk does not have
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	keeps a skill whose lock matches disk even when it is outdated
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	keeps a skill whose disk content matches no known revision
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	keeps a skill with no observable placement
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	drops a stale skill whose folder holds files no revision lists
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	keeps a skill when any placement still matches the lock
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	keeps a skill whose lock names no revision we know
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	keeps a skill when one placement is stale but another is unidentifiable
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	ignores an unidentifiable plugin-cache copy when judging the canonical
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	ignores a plugin-cache copy that matches the lock
+src/main/skills/skill-update-convergence.test.ts	convergableSkillNames	judges each locked skill independently
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	treats a convergent copy that is now current as landed
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	reports a copy the run left outdated
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	reports a half-written bundle instead of reading it as success
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	reports an unreadable copy
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	reports a skill the run removed outright
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	accepts a revision newer than this build ships
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	ignores placements the update command never writes to
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	fails the name when any convergent alias was left behind
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	judges each requested name independently
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	treats unrecognized content whose tree sha matches the lock as landed
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	still reports unrecognized content whose bytes do not match the lock
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	still reports unrecognized content when the skill has no lock entry
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	never forgives an outdated copy, even at the lock hash
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames	does not let a lock-matching canonical copy excuse a degraded alias
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames over a real inventory	accepts post-cut source content when the lock records exactly those bytes
+src/main/skills/skill-update-outcome.test.ts	skillUpdateFailedNames over a real inventory	keeps failing the same content when the lock names different bytes
+src/main/skills/skill-update-registration.test.ts	global skill update registration	reads only updateable entries from the external updater lock
+src/main/skills/skill-update-registration.test.ts	global skill update registration	uses the XDG state lock when configured
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	passes both non-interactive flags and the sorted skill names
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	ignores stdin so the CLI sees a non-TTY
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	rejects names that could carry shell syntax
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	refuses a second concurrent run
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	strips ANSI colour and carriage returns from captured output
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	treats a clean re-scan as success even though the exit code is non-zero
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	attributes failure to the names the re-scan says are still outdated
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	fails every requested name when the re-scan itself throws
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	keeps the spawn error when the failed child also emits close
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	refuses a new run until the cancelled process tree is actually dead
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	releases the run even if the kill sweep never settles
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	does not let a cancelled child settle the run that replaced it
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	returns to idle on cancel and stops reporting output
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	ignores a re-scan that resolves after the run was cancelled
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	kills the whole npx tree on cancel, not just the wrapper
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	surfaces an unspawnable command path instead of silently doing nothing
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	spawns npx from a Program Files (x86) install instead of refusing it
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	coalesces progress frames into one push instead of one per chunk
+src/main/skills/skill-update-run.test.ts	SkillUpdateRunner	acknowledge clears a settled run but leaves a live one alone
+src/main/skills/skill-windows-rename-contention.integration.test.ts	real Windows rename contention	retries a transient exclusive file lock
+src/main/skills/skill-windows-rename-contention.integration.test.ts	real Windows rename contention	preserves the source after bounded retry exhaustion
+src/main/skills/skill-wsl-delete.integration.test.ts	real WSL skill deletion primitives	refuses an unauthorized root before authorizeRoots, and permits it after
+src/main/skills/skill-wsl-delete.integration.test.ts	real WSL skill deletion primitives	keeps containment case-sensitive, as the guest filesystem is
+src/main/skills/skill-wsl-delete.integration.test.ts	real WSL skill deletion primitives	classifies alias-dir and alias-file from one batched inspection
+src/main/skills/skill-wsl-delete.integration.test.ts	real WSL skill deletion primitives	reads mtime without dereferencing, so an alias-file records the link itself
+src/main/skills/skill-wsl-delete.integration.test.ts	real WSL skill deletion primitives	renames a placement to a hidden sibling and removes it
+src/main/skills/skill-wsl-install-filesystem.test.ts	WslSkillInstallFilesystem	allows every global provider destination inside the selected distro
+src/main/skills/skill-wsl-install-filesystem.test.ts	WslSkillInstallFilesystem	applies and verifies manifest modes through bounded guest argv batches
+src/main/skills/skill-wsl-install-filesystem.test.ts	WslSkillInstallFilesystem	maps Windows workspace roots into the selected distro and rejects escapes
+src/main/skills/skill-wsl-install-filesystem.test.ts	WslSkillInstallFilesystem	uses manifest mode provenance for Windows-backed WSL paths
+src/main/skills/skill-wsl-install-filesystem.test.ts	WslSkillInstallFilesystem	rejects a path from another distro before spawning wsl.exe
+src/main/skills/skill-wsl-install-filesystem.test.ts	WslSkillInstallFilesystem	authorizes a historical provider root before update or removal
+src/main/skills/skill-wsl-install-filesystem.test.ts	WslSkillInstallFilesystem	surfaces a nonzero guest exit as a guest-operation failure
+src/main/starter-kits/starter-kit-file-picker.test.ts	pickStarterKitFile	opens the dialog against the sender window with extension filters built from accept
+src/main/starter-kits/starter-kit-file-picker.test.ts	pickStarterKitFile	passes defaultPath through when provided
+src/main/starter-kits/starter-kit-file-picker.test.ts	pickStarterKitFile	falls back to the focused window when the event has no sender window
+src/main/starter-kits/starter-kit-file-picker.test.ts	pickStarterKitFile	calls the dialog without a parent window when none is available
+src/main/starter-kits/starter-kit-file-picker.test.ts	pickStarterKitFile	returns null when the dialog is canceled
+src/main/starter-kits/starter-kit-file-picker.test.ts	pickStarterKitFile	falls back to an "All files" filter when no accept extensions are given
+src/main/starter-kits/starter-kit-file-picker.test.ts	pickStarterKitFile	ignores non-string accept entries and normalizes a leading dot/case
+src/main/starter-kits/starter-kit-results-collection.test.ts	formatCollectionTimestamp	formats a friendly, colon-free local timestamp
+src/main/starter-kits/starter-kit-results-collection.test.ts	formatCollectionTimestamp	uses 12-hour clock with noon and midnight as 12, not 0
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	copies existing declared files and reports missing ones, with a README
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	moves the sha256 lines to a "For auditing" footer, after the friendly summary
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	writes a self-contained Results.html rendering the markdown result and linking the rest
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	links a non-markdown copied result from Results.html instead of inlining it
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	never modifies or removes the original file
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	rejects a role write path that escapes results/ via ../, without writing outside results/
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	rejects an absolute role write path
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	records a sha256 of each copied file, matching the copy on disk
+src/main/starter-kits/starter-kit-results-collection.test.ts	collectKitResults	treats a symlinked declared file as missing instead of following it
+src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts	renderSanitizedMarkdownToHtml	renders ordinary markdown to HTML
+src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts	renderSanitizedMarkdownToHtml	escapes a raw HTML block instead of passing it through
+src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts	renderSanitizedMarkdownToHtml	escapes raw inline HTML instead of passing it through
+src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts	renderSanitizedMarkdownToHtml	keeps an ordinary http(s) link
+src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts	renderSanitizedMarkdownToHtml	keeps a relative link (used for linking to sibling result files)
+src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts	renderSanitizedMarkdownToHtml	drops a javascript: link, keeping only the visible label
+src/main/starter-kits/starter-kit-results-markdown-sanitize.test.ts	renderSanitizedMarkdownToHtml	drops a javascript: image, keeping only the alt text
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	resolveWithinKitResultsRoot	resolves an ordinary declared path under results/
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	resolveWithinKitResultsRoot	resolves the results root itself
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	resolveWithinKitResultsRoot	rejects a relative path that escapes results/ via ../
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	resolveWithinKitResultsRoot	rejects an absolute path outright, on this host
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	resolveWithinKitResultsRoot	rejects a Windows-style absolute path regardless of the host running the check
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	resolveWithinKitResultsRoot	rejects a sibling folder that merely shares a name prefix with results
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	kitResultsRoot	joins the project folder with results
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	assertNoSymlinksInKitResultsPath / resolveAndVerifyKitResultsPath	passes for an ordinary path with no symlinks anywhere in the chain
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	assertNoSymlinksInKitResultsPath / resolveAndVerifyKitResultsPath	passes when nothing has been written yet (nothing on disk to escape through)
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	assertNoSymlinksInKitResultsPath / resolveAndVerifyKitResultsPath	rejects when results/ itself is a symlink to somewhere else
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	assertNoSymlinksInKitResultsPath / resolveAndVerifyKitResultsPath	rejects when a role subfolder inside results/ is a symlink to somewhere else
+src/main/starter-kits/starter-kit-results-path-guard.test.ts	assertNoSymlinksInKitResultsPath / resolveAndVerifyKitResultsPath	rejects when the final file itself is a symlink to somewhere else
+src/main/starter-kits/starter-kit-results-status.test.ts	computeKitResultsStatus	reports one status per declared write path, exists reflecting the filesystem
+src/main/starter-kits/starter-kit-results-status.test.ts	computeKitResultsStatus	throws for a run record naming an unknown kit
+src/main/starter-kits/starter-kit-results-status.test.ts	computeKitResultsStatus	reports false, not a thrown error, for a declared path that escapes via a symlink
+src/main/starter-kits/starter-kit-results-status.test.ts	computeKitRoleDoneStatus	reports one DONE.md status per role, with mtimeMs only when it exists
+src/main/starter-kits/starter-kit-results-status.test.ts	computeKitRoleDoneStatus	throws for a run record naming an unknown kit
+src/main/starter-kits/starter-kit-run-history-store.test.ts	listKitRunHistory	returns [] for a folder with no history file yet
+src/main/starter-kits/starter-kit-run-history-store.test.ts	listKitRunHistory	returns [] for the global list when nothing has been appended
+src/main/starter-kits/starter-kit-run-history-store.test.ts	listKitRunHistory	returns [] instead of throwing when the file is not valid JSON
+src/main/starter-kits/starter-kit-run-history-store.test.ts	listKitRunHistory	returns [] without reading an oversized file
+src/main/starter-kits/starter-kit-run-history-store.test.ts	listKitRunHistory	drops entries that are not shaped like a history entry
+src/main/starter-kits/starter-kit-run-history-store.test.ts	appendKitRunHistory	appends to both the folder-scoped and the global history
+src/main/starter-kits/starter-kit-run-history-store.test.ts	appendKitRunHistory	is idempotent for the same (folderPath, kitId, startedAt)
+src/main/starter-kits/starter-kit-run-history-store.test.ts	appendKitRunHistory	sorts the list newest first
+src/main/starter-kits/starter-kit-run-history-store.test.ts	appendKitRunHistory	caps each list at the last 50 entries
+src/main/starter-kits/starter-kit-run-history-store.test.ts	markKitRunHistoryCollected	sets collectedDir on the matching folder and global entries
+src/main/starter-kits/starter-kit-run-history-store.test.ts	markKitRunHistoryCollected	does nothing when no entry matches
+src/main/starter-kits/starter-kit-run-history-store.test.ts	markKitRunHistoryCollected	only updates the entry matching folderPath+kitId+startedAt, leaving others untouched
+src/main/starter-kits/starter-kit-run-record-store.test.ts	readKitRunRecord	returns null when no run has been recorded
+src/main/starter-kits/starter-kit-run-record-store.test.ts	readKitRunRecord	returns null when the stored file is not valid JSON
+src/main/starter-kits/starter-kit-run-record-store.test.ts	readKitRunRecord	returns null when the stored JSON is not shaped like a run record
+src/main/starter-kits/starter-kit-run-record-store.test.ts	readKitRunRecord	returns null without reading an oversized file, even if it would otherwise be valid JSON
+src/main/starter-kits/starter-kit-run-record-store.test.ts	writeKitRunRecord + readKitRunRecord	round-trips a run record through results/.kolux-kit.json
+src/main/starter-kits/starter-kit-run-record-store.test.ts	writeKitRunRecord + readKitRunRecord	creates the results/ directory when it does not exist yet
+src/main/starter-kits/starter-kit-run-record-store.test.ts	writeKitRunRecord + readKitRunRecord	also appends a history entry to the folder and to the global recent list
+src/main/starter-kits/starter-kit-run-record-store.test.ts	writeKitRunRecord + readKitRunRecord	does not append a second history entry when the same run is re-written (e.g. to add roleTabIds)
+src/main/starter-kits/starter-kit-run-record-store.test.ts	writeKitRunRecord + readKitRunRecord	appends a distinct history entry for a later, different run in the same folder
+src/main/starter-kits/starter-kit-run-record-store.test.ts	recordKitRunCollected	sets collectedDir on the matching folder and global history entries
+src/main/starter-kits/starter-kit-run-record-store.test.ts	recordKitRunCollected	does nothing when the folder has no recorded run
+src/main/starter-kits/starter-kit-sample-materialization.test.ts	kitSampleDestinationPath	joins the home folder, Kolux samples, and the kit id
+src/main/starter-kits/starter-kit-sample-materialization.test.ts	materializeKitSampleData	copies the bundled sample data to <home>/Kolux samples/<kitId>/
+src/main/starter-kits/starter-kit-sample-materialization.test.ts	materializeKitSampleData	is idempotent: an existing destination is reused, never overwritten
+src/main/starter-kits/starter-kit-sample-materialization.test.ts	materializeKitSampleData	throws a clear error when the kit has no bundled sample data
+src/main/starter-kits/starter-kit-sample-resource-root.test.ts	computeStarterKitSampleResourceRoot	resolves under the repo resources/ folder in dev
+src/main/starter-kits/starter-kit-sample-resource-root.test.ts	computeStarterKitSampleResourceRoot	resolves under app.asar.unpacked/resources when packaged
+src/main/starter-kits/starter-kits-ipc.test.ts	materializeSampleData handler	rejects an unknown kit id without calling the materializer
+src/main/starter-kits/starter-kits-ipc.test.ts	materializeSampleData handler	rejects a non-string kit id
+src/main/starter-kits/starter-kits-ipc.test.ts	materializeSampleData handler	materializes a known kit and returns its folder path
+src/main/starter-kits/starter-kits-ipc.test.ts	folder path validation shared by the remaining handlers	rejects a relative folder path
+src/main/starter-kits/starter-kits-ipc.test.ts	folder path validation shared by the remaining handlers	rejects a folder path that does not exist
+src/main/starter-kits/starter-kits-ipc.test.ts	folder path validation shared by the remaining handlers	rejects a folder path that points at a file, not a directory
+src/main/starter-kits/starter-kits-ipc.test.ts	recordKitRun / readKitRun handlers	rejects recording a run for an unknown kit
+src/main/starter-kits/starter-kits-ipc.test.ts	recordKitRun / readKitRun handlers	records then reads back a run record
+src/main/starter-kits/starter-kits-ipc.test.ts	recordKitRun / readKitRun handlers	readKitRun returns null when nothing was recorded
+src/main/starter-kits/starter-kits-ipc.test.ts	getResultsStatus handler	returns [] when no run has been recorded
+src/main/starter-kits/starter-kits-ipc.test.ts	getResultsStatus handler	reports status for every declared write once a run is recorded
+src/main/starter-kits/starter-kits-ipc.test.ts	getRoleDoneStatus handler	returns [] when no run has been recorded
+src/main/starter-kits/starter-kits-ipc.test.ts	getRoleDoneStatus handler	reports DONE.md status for every role once a run is recorded
+src/main/starter-kits/starter-kits-ipc.test.ts	collectResults handler	rejects when no run has been recorded
+src/main/starter-kits/starter-kits-ipc.test.ts	collectResults handler	collects the recorded kit results into a dated folder
+src/main/starter-kits/starter-kits-ipc.test.ts	folder scoping (finding 8)	rejects an existing, absolute folder that is not a registered project or under Kolux samples
+src/main/starter-kits/starter-kits-ipc.test.ts	folder scoping (finding 8)	accepts a folder that is a registered local repo/workspace
+src/main/starter-kits/starter-kits-ipc.test.ts	folder scoping (finding 8)	accepts a folder under ~/Kolux samples even when not separately registered as a repo
+src/main/starter-kits/starter-kits-ipc.test.ts	folder scoping (finding 8)	rejects a remote (SSH-registered) repo path even though it is a registered repo id
+src/main/starter-kits/starter-kits-ipc.test.ts	listKitRuns handler	returns [] for a folder with no recorded run
+src/main/starter-kits/starter-kits-ipc.test.ts	listKitRuns handler	returns the folder-scoped history once a run is recorded
+src/main/starter-kits/starter-kits-ipc.test.ts	listKitRuns handler	returns the cross-folder global list when no folder path is given
+src/main/starter-kits/starter-kits-ipc.test.ts	listKitRuns handler	rejects a folder path that is not a registered local project (finding 8 applies here too)
+src/renderer/src/components/artifacts-library/ArtifactViewer.test.tsx	ArtifactViewer	renders the stored copy in a sandboxed document-preview guest
+src/renderer/src/components/artifacts-library/ArtifactViewer.test.tsx	ArtifactViewer	shows a remote state, without minting a preview, for an artifact that was not copied
+src/renderer/src/components/artifacts-library/ArtifactViewer.test.tsx	filterArtifactLibraryRecords	sorts newest first and matches every title term case-insensitively
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeletePlacementSummary	summarizes folders, links, and the roots they sit in
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeletePlacementSummary	drops the zero half so a link-only delete never reads "0 folders"
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeletePlacementSummary	is null when the plan removes nothing
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeleteRetainedSourceLines	says where the content stays when only links are removed
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeleteRetainedSourceLines	stays silent when a real folder is being removed
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeleteBlockedLines	groups by typed reason rather than one merged skipped line
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeleteResultLines	omits deleted rows and keeps one line per distinct outcome
+src/renderer/src/components/skills/skill-delete-copy.test.ts	skillDeleteResultLines	renders nothing when every skill was deleted
+src/renderer/src/components/skills/skill-delete-selection.test.ts	delete selection	keeps two rows sharing a name independently selectable
+src/renderer/src/components/skills/skill-delete-selection.test.ts	delete selection	excludes bundled and plugin rows from select-all
+src/renderer/src/components/skills/skill-delete-selection.test.ts	delete selection	drops a selection whose row no longer exists after a rescan
+src/renderer/src/components/skills/skill-delete-selection.test.ts	delete selection	returns the same set reference when a rescan changes nothing
+src/renderer/src/components/skills/skill-delete-selection.test.ts	delete selection	drops a row that became ineligible between scans
+src/renderer/src/components/skills/skill-delete-selection.test.ts	delete selection	gives a reason only when the row is not deletable
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	marks an eligible outdated skill as update-available with one location
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	hides skills whose every copy is current
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	keeps a plugin-managed copy of a same-named skill out of the list
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	lists a skill whose only fault cannot be fixed by the update, so Details explains it
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	lists an edited canonical copy, which is what an update would overwrite
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	raises no row for a copy that is ahead of this build
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	groups a blocked skill and flags the culprit location, not the main copy
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	blocks a skill whose only outdated copy is an unreachable duplicate
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	ranks a read failure over ownership, ownership over byte status, and maps every topology
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	raises no group when every finding is project-owned
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	still lists a project copy inside a group another placement earned
+src/renderer/src/components/skills/skill-freshness-grouping.test.ts	groupSkillFreshness	marks only the project copy as one the global update never judged
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	names the stale duplicate the global command cannot reach
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	leads with the harder blocker when several placements are off
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	hands over the reinstall command when no location is at fault
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	never offers the reinstall for a copy that is ahead of this build
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	keeps a placement blocker ahead of the record advice
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	keeps the reinstall remedy when a project copy sits beside the blocked global copy
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	does not let a project copy outrank the placement that blocked the update
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	explains a project copy when that is the only location there is
+src/renderer/src/components/skills/skill-freshness-skipped-reason.test.ts	skippedReason	falls back to the generic sentence when no skill name is available
+src/renderer/src/components/skills/skill-source-inventory.test.ts	summarizeSkillSources	counts a symlinked skill under every root that reached it
+src/renderer/src/components/skills/skill-source-inventory.test.ts	summarizeSkillSources	reports why a root produced nothing instead of showing an empty count
+src/renderer/src/components/skills/skill-source-inventory.test.ts	summarizeSkillSources	reports an unanswered root as unavailable even though it claims to exist
+src/renderer/src/components/skills/skill-source-inventory.test.ts	summarizeSkillSources	counts only roots that were actually scanned
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	lingers without an auto-close timer or auto-close dismissal write
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	opens the update dialog on action click without persisting a dismissal
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	retracts a resolved nudge without recording a dismissal
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	retracts a stale nudge when re-inventory fails
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	retracts an active local nudge when runtime freshness becomes unavailable
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	persists the exact placement/revision key once on explicit dismissal
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	does not repeat the same nudge within a session
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	does not repeat a nudge for an already dismissed exact tuple
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	does not nudge for a poisoned name with no eligible update
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	keeps a project copy out of the dismissal key it persists
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	stays dismissed when only a project copy changed identity
+src/renderer/src/components/skills/SkillFreshnessNudge.test.tsx	SkillFreshnessNudge	waits for persisted settings before deciding whether to nudge
+src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx	SkillFreshnessStatusPill	shows Update available for an eligible outdated skill
+src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx	SkillFreshnessStatusPill	shows Up to date when every placement is current
+src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx	SkillFreshnessStatusPill	flags a blocked outdated placement instead of reading as all-clear
+src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx	SkillFreshnessStatusPill	falls back to Installed before the inventory loads
+src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx	SkillFreshnessStatusPill	shows a neutral verdict while freshness is being checked
+src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx	SkillFreshnessStatusPill	does not report success after a freshness check fails
+src/renderer/src/components/skills/SkillFreshnessStatusPill.test.tsx	SkillFreshnessStatusPill	opens the freshness review dialog from Details
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	stays closed until an open request arrives
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	offers a primary update action and never renders a terminal
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	starts a background run with the eligible names
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	shows indeterminate progress and says the run survives closing
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	does not cancel the run when the dialog is closed
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	reports per-skill success once the run settles
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	attributes failures to the names the re-scan says are still outdated
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	keeps the same row elements across the whole run instead of swapping layouts
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	collapses each skill’s locations behind its own disclosure
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	does not let the status-bar linger retire the result being read here
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	shows the captured log verbatim without parsing it
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	contains unbroken failure output inside the dialog grid
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	shows the up-to-date state once every installation is current
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	shows why a skill was skipped without needing the disclosure
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	raises no row for a skill whose only finding is a project-owned copy
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	still lists a project copy when another placement earns the group
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	names the skill in the stale-record remedy so the command is runnable as-is
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	keeps the stale-record remedy when a project copy is listed beside it
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	stays coherent while an idle re-scan is in flight
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	says it is stopping while the process tree is still being killed
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	re-reads the inventory after a run is stopped
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	keeps the rows on screen while the settling re-scan is in flight
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	retries what failed rather than the emptied eligibility list
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	offers a way out of a run that never finishes
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	surfaces a scan error instead of a stale summary
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	wraps an unbroken scan error inside the dialog grid
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	shows incomplete plugin coverage without presenting a fabricated skill copy
+src/renderer/src/components/skills/SkillFreshnessUpdateDialog.test.tsx	SkillFreshnessUpdateDialog	lists a traversal bound without headlining it
+src/renderer/src/components/skills/skills-filter.test.ts	skills filtering	filters by provider, source, and text query
+src/renderer/src/components/skills/skills-filter.test.ts	skills filtering	rejects oversized pasted queries before reading skill metadata
+src/renderer/src/components/skills/skills-filter.test.ts	skills filtering	counts skills by source kind
+src/renderer/src/components/skills/SkillsPage.test.tsx	SkillsPage	uses platform-neutral Escape navigation without stealing editable input Escape
+src/renderer/src/components/skills/SkillsPage.test.tsx	SkillsPage	contains long cross-platform skill paths while preserving the full path
+src/renderer/src/components/skills/SkillsPage.test.tsx	SkillsPage	scans the connected remote runtime instead of the client disk
+src/renderer/src/components/skills/SkillsPage.test.tsx	SkillsPage	does not let a slow local scan overwrite a newer remote scan
+src/renderer/src/components/skills/SkillsPage.test.tsx	SkillsPage	keeps scanning rather than listing client skills before the owner is known
+src/renderer/src/components/skills/SkillsPage.test.tsx	SkillsPage	filters by source from the count chips
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	openKitResultsFolder	joins with the folder path own separator instead of mixing them
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	openKitResultFileExternally	opens the exact file path with the OS-default app
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	previewKitResultFile	opens .html results in the built-in browser pane, unchanged
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	previewKitResultFile	shows an error toast when the browser preview plan is unsupported
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	previewKitResultFile	opens .md results in the rendered Markdown preview, not raw source
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	previewKitResultFile	opens .csv (and other) results as a read-only editor tab
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	previewKitResultFile	never targets the active group — a preview must land beside an AI tab, not on it
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	previewKitResultFile	reuses an existing sibling split instead of creating another one
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	collectKitResults	shows a friendly toast instead of throwing when the IPC call rejects
+src/renderer/src/components/starter-kits/kit-result-file-actions.test.ts	collectKitResults	shows a success toast on a normal collection
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is finished when DONE.md exists at/after startedAt, even if the pane looks busy
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is not finished when DONE.md predates this run (a leftover from an earlier run)
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is stopped with the stop reason and reset time for a StopFailure-classified block
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is stopped for an auth stop reason
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is stopped when the runtime peek reports the seat exited
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	does not treat an exited peek as stopped when the pane never resolved
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is needs-you when the runtime peek finds a known blocked prompt (e.g. Codex hooks review)
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is needs-you (sign-in-required) when the runtime peek finds the Claude login prompt
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is working when the peek finds the pane still busy, even with no hook evidence at all
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	does not treat an idle (satisfied) peek as working on its own
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	prefers a busy peek over an unfinished waitsFor
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is needs-you (question) when the hook reports the agent is waiting
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is needs-you (permission) for an ordinary block with no stop reason
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is working with elapsed time from stateStartedAt when the hook reports working
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is queued with the upstream role title when waitsFor is unfinished and nothing else is happening
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	prefers a live working signal over an unfinished waitsFor
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	falls through past a finished waitsFor to the file-based states
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is working (zero elapsed) when a declared file was written this run with no hook evidence
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is from-last-run when a declared file exists but predates this run's startedAt
+src/renderer/src/components/starter-kits/kit-role-live-state.test.ts	computeKitRoleLiveState	is starting when nothing has happened yet
+src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts	openAiConnectionsSettings	opens the accounts pane and the settings page
+src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts	focusKitRolePane	activates the worktree then sets the active tab to the given pane
+src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts	focusKitRolePane	does nothing when the worktree cannot be activated
+src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts	relaunchKitRoleOnAgent	launches one seat on the given agent and persists the new tab + agent onto the record
+src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts	relaunchKitRoleOnAgent	returns false and never persists when nothing launched
+src/renderer/src/components/starter-kits/kit-role-pane-actions.test.ts	relaunchKitRoleOnAgent	returns false without launching when settings are unavailable
+src/renderer/src/components/starter-kits/kit-role-pane-resolution-hook.test.tsx	useKitRolePaneTargets	resolves a role via roleTabIds using the live store tabs/layouts
+src/renderer/src/components/starter-kits/kit-role-pane-resolution-hook.test.tsx	useKitRolePaneTargets	returns no targets when there is no active worktree
+src/renderer/src/components/starter-kits/kit-role-pane-resolution.test.ts	resolveKitRolePaneTargets	uses roleTabIds directly when present, deriving the paneKey from the tab
+src/renderer/src/components/starter-kits/kit-role-pane-resolution.test.ts	resolveKitRolePaneTargets	returns undefined via roleTabIds when the named tab no longer exists
+src/renderer/src/components/starter-kits/kit-role-pane-resolution.test.ts	resolveKitRolePaneTargets	falls back to matching by agent + launch order when roleTabIds is absent
+src/renderer/src/components/starter-kits/kit-role-pane-resolution.test.ts	resolveKitRolePaneTargets	never matches the same tab to two roles in the fallback path
+src/renderer/src/components/starter-kits/kit-role-pane-resolution.test.ts	resolveKitRolePaneTargets	leaves a role unresolved in the fallback path when no tab matches its agent
+src/renderer/src/components/starter-kits/kit-role-pane-resolution.test.ts	resolveKitRolePaneTargets	treats a tab with no resolved leaf id as unresolved
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	renders nothing when there is no kit run for this workspace
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	never asks the run-status hook for a remote (SSH) worktree
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	shows "Not ready yet" for a role with no file and no run signal, and "Waiting for Analyst" for its checker
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	shows "Finished" with Preview/Open actions once DONE.md exists for this run
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	shows "From last run" for a declared file older than the run\'s startedAt
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	shows "Needs you" when the hook reports the pane is blocked with no stop reason
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	shows a resting label and Move-to action for a limit stop, using another connected agent
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	focuses the role pane when its row is clicked
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	does not offer to focus a role whose pane has not resolved
+src/renderer/src/components/starter-kits/KitResultsPanel.test.tsx	KitResultsPanel	carries the guided-first-run tour target, and records the "first results" milestone on Open/Collect
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows "Not ready yet" for a fresh pane with no output
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows plain "Working" for the first minute, then "Working · N min"
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows "Waiting for {title}" while queued
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows "Finished" and Preview/Open actions when the role is done
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows "From last run" for a stale declared file
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows "Needs you" for an ordinary permission wait
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows the click-to-answer copy for a known blocked prompt
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows a plain sign-in prompt and an Open AI connections action for the Claude login prompt
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows a resting label and a Move-to button for a limit stop with another connected agent
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	omits the Move-to button when no other agent is connected
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows a sign-in prompt and action for an auth stop
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	shows a generic stopped label and Restart for an exited seat with no stop reason
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	focuses the pane when the row itself is clicked
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	does not bubble an action button click into the row focus handler
+src/renderer/src/components/starter-kits/KitRoleRow.test.tsx	KitRoleRow	is not clickable when the pane cannot be focused
+src/renderer/src/components/starter-kits/starter-kit-icon.test.tsx	StarterKitIcon	renders a distinct, non-fallback icon for every bundled kit
+src/renderer/src/components/starter-kits/starter-kit-icon.test.tsx	StarterKitIcon	falls back to Sparkles for an unknown icon name
+src/renderer/src/components/starter-kits/starter-kit-input-memory.test.ts	rememberedStarterKitInputValues	fills only the inputs the sample-data pass left untouched
+src/renderer/src/components/starter-kits/starter-kit-input-memory.test.ts	rememberedStarterKitInputValues	returns the sample values unchanged when nothing is remembered
+src/renderer/src/components/starter-kits/starter-kit-input-memory.test.ts	rememberedStarterKitInputValues	ignores a remembered value for an input the kit no longer declares
+src/renderer/src/components/starter-kits/starter-kit-input-memory.test.ts	starterKitInputValuesWorthRemembering	keeps only non-empty values
+src/renderer/src/components/starter-kits/starter-kit-input-memory.test.ts	starterKitInputValuesWorthRemembering	remembers nothing from a materialized sample-data workspace
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	buildKitSeatRequests	builds one shared-checkout seat per assignment with the composed prompt
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	buildKitSeatRequests	builds an empty prompt for a role that waits for another role, and a full prompt for others
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	records the run before launching, and launches one seat per role
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	does not record the "first kit launched" milestone when nothing launched
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	reports failure without launching when settings are unavailable
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	reports failure when no assignments exist (no agent connected)
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	shows the "N AIs are working on <kit>" toast with the launched count and kit title
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	auto-collects existing results before relaunching, and tells the user where they were saved
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	never deletes anything and launches normally when the folder has no existing result files
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	still launches when the pre-relaunch results check fails
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	records roleTabIds when the launch returns { launched, tabIds } and every seat started
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	does not record roleTabIds when only some seats launched (tabIds shorter than the assignments)
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKit	still reports success when the plain numeric launch result is returned (pre-migration shape)
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKitWithRunGuard	launches immediately when the folder has no existing run
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKitWithRunGuard	launches immediately when the existing run is from the same kit
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKitWithRunGuard	warns instead of launching when the folder has a different kit run, and force-launches on confirm
+src/renderer/src/components/starter-kits/starter-kit-launch.test.ts	launchStarterKitWithRunGuard	skips the existing-run check when force is true
+src/renderer/src/components/starter-kits/starter-kit-remote-gate.test.ts	isRemoteStarterKitWorkspace	is false for local / undefined / null
+src/renderer/src/components/starter-kits/starter-kit-remote-gate.test.ts	isRemoteStarterKitWorkspace	is true for an SSH host
+src/renderer/src/components/starter-kits/starter-kit-remote-gate.test.ts	isRemoteStarterKitWorkspace	is true for a runtime environment host
+src/renderer/src/components/starter-kits/starter-kit-run-history-actions.test.ts	openKitRunResults	opens the collected folder when one exists
+src/renderer/src/components/starter-kits/starter-kit-run-history-actions.test.ts	openKitRunResults	falls back to the live results folder when nothing has been collected yet
+src/renderer/src/components/starter-kits/starter-kit-run-history-actions.test.ts	openKitRunProject	activates the worktree whose path matches the folder
+src/renderer/src/components/starter-kits/starter-kit-run-history-actions.test.ts	openKitRunProject	shows an error instead of activating when no registered project matches
+src/renderer/src/components/starter-kits/starter-kit-sample-data.test.ts	materializeAndRegisterSampleData	copies the sample data, registers it as a project, and returns its workspace
+src/renderer/src/components/starter-kits/starter-kit-sample-data.test.ts	materializeAndRegisterSampleData	shows a friendly toast and returns null when the IPC call rejects (e.g. remote project)
+src/renderer/src/components/starter-kits/starter-kit-sample-data.test.ts	materializeAndRegisterSampleData	returns null when registering the folder as a project fails
+src/renderer/src/components/starter-kits/starter-kit-sample-data.test.ts	materializeAndRegisterSampleData	returns null when the registered project has no worktree yet
+src/renderer/src/components/starter-kits/starter-kit-sample-inputs.test.ts	buildSampleInputValues	joins each file input sample onto the folder path with the folder path own separator
+src/renderer/src/components/starter-kits/starter-kit-sample-inputs.test.ts	buildSampleInputValues	uses forward slashes when the folder path does
+src/renderer/src/components/starter-kits/starter-kit-sample-inputs.test.ts	buildSampleInputValues	prefills the declared sampleValue for text inputs
+src/renderer/src/components/starter-kits/starter-kit-sample-inputs.test.ts	buildSampleInputValues	prefills every input across kits that declare two file inputs
+src/renderer/src/components/starter-kits/StarterKitCard.test.tsx	StarterKitCard	renders the title, summary, category badge and estimated time
+src/renderer/src/components/starter-kits/StarterKitCard.test.tsx	StarterKitCard	shows each role\'s title with "Not connected" when no assignments are given
+src/renderer/src/components/starter-kits/StarterKitCard.test.tsx	StarterKitCard	shows each role's title with its assigned agent, not the bare agent name
+src/renderer/src/components/starter-kits/StarterKitCard.test.tsx	StarterKitCard	calls onSelect when clicked
+src/renderer/src/components/starter-kits/StarterKitDialogsHost.test.tsx	StarterKitDialogsHost	renders no dialog when starterKitDialog is null
+src/renderer/src/components/starter-kits/StarterKitDialogsHost.test.tsx	StarterKitDialogsHost	shows the setup dialog for the kit opened through the store
+src/renderer/src/components/starter-kits/StarterKitDialogsHost.test.tsx	StarterKitDialogsHost	shows the gallery dialog when opened through the store
+src/renderer/src/components/starter-kits/StarterKitGalleryDialog.test.tsx	StarterKitGalleryDialog recent runs	renders nothing for "Recent kit runs" when there is no history (empty state hidden)
+src/renderer/src/components/starter-kits/StarterKitGalleryDialog.test.tsx	StarterKitGalleryDialog recent runs	lists each run with its kit title, folder name, and actions
+src/renderer/src/components/starter-kits/StarterKitGalleryDialog.test.tsx	StarterKitGalleryDialog recent runs	"Open results" delegates to openKitRunResults with the run
+src/renderer/src/components/starter-kits/StarterKitGalleryDialog.test.tsx	StarterKitGalleryDialog recent runs	"Open project" delegates to openKitRunProject with the folder path
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	stripSurroundingQuotes	strips a single layer of matching double quotes
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	stripSurroundingQuotes	strips a single layer of matching single quotes
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	stripSurroundingQuotes	leaves an unquoted value untouched
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	stripSurroundingQuotes	leaves mismatched quotes untouched
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	shows the kit hint as persistent helper text, not a placeholder
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	Browse... calls the file picker scoped by accept and the project folder
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	does not fill the field when Browse is canceled
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	strips surrounding quotes from a pasted "Copy as path" value
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	leaves a normal paste alone (no quotes to strip)
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	fills the field from the relayed starter-kit-input native drop payload
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	still fills the field when the dropped file extension is not in accept
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	ignores a dropped folder (no file extension)
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	uses only the first path from a multi-file drop
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	ignores drops targeting a different input id or a different native drop target
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	still clears the drag-over highlight on a raw DOM drop event (no native relay)
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	shows the Excel guidance card for an .xlsx/.xls value
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	does not show the Excel card without a matching input id
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	shows "Required" only for input ids the caller marks missing
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	shows a file-not-found message only for input ids the caller marks invalid
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	calls onBlurInput when a field loses focus
+src/renderer/src/components/starter-kits/StarterKitInputsForm.test.tsx	StarterKitInputsForm	marks an optional text input as optional
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	with 0 connected agents: shows the connect notice and disables Start kit
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	with 1 connected agent: all three roles cycle onto it, no connect notice
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	with 3 connected agents: each role gets its preferred agent
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	does not show "Required" before the field is touched (finding: it used to)
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	shows "Required" once the empty required field is blurred, and hides it again once filled
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	shows the "results are saved in" line once a project folder is known
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	shows an inline notice, not a toast, when a different kit already ran in this folder
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	shows the Excel guidance card and natively disables Start kit for an .xlsx value
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	natively disables Start kit while the file path does not exist on disk
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	Browse... opens the native picker and fills the field with the chosen path
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	shows a non-blocking usage warning when an assigned role is near its limit
+src/renderer/src/components/starter-kits/StarterKitSetupDialog.test.tsx	StarterKitSetupDialog	shows no usage warning when nothing is near its limit
+src/renderer/src/components/starter-kits/StartWithKitBlock.test.tsx	StartWithKitBlock	opens a kit through the store instead of rendering its own setup dialog (survives Landing unmounting)
+src/renderer/src/components/starter-kits/StartWithKitBlock.test.tsx	StartWithKitBlock	opens the gallery through the store
+src/renderer/src/components/starter-kits/use-kit-queued-roles.test.tsx	useKitQueuedRoles	delivers the queued prompt once the upstream DONE.md exists and the pane is resolved
+src/renderer/src/components/starter-kits/use-kit-queued-roles.test.tsx	useKitQueuedRoles	does not deliver when the upstream role has not finished yet
+src/renderer/src/components/starter-kits/use-kit-queued-roles.test.tsx	useKitQueuedRoles	does not deliver when the upstream file is a leftover from an earlier run
+src/renderer/src/components/starter-kits/use-kit-queued-roles.test.tsx	useKitQueuedRoles	does not deliver when the queued role pane has not resolved yet
+src/renderer/src/components/starter-kits/use-kit-queued-roles.test.tsx	useKitQueuedRoles	never delivers twice once a send has succeeded
+src/renderer/src/components/starter-kits/use-kit-queued-roles.test.tsx	useKitQueuedRoles	retries on the next data change after a failed delivery
+src/renderer/src/components/starter-kits/use-kit-role-runtime-peeks.test.tsx	useKitRoleRuntimePeeks	peeks each resolved role pane and reports its status/satisfied/blockedReason
+src/renderer/src/components/starter-kits/use-kit-role-runtime-peeks.test.tsx	useKitRoleRuntimePeeks	reports null for a role whose terminal cannot be found
+src/renderer/src/components/starter-kits/use-kit-role-runtime-peeks.test.tsx	useKitRoleRuntimePeeks	never throws out of the hook when the probe rejects
+src/renderer/src/components/starter-kits/use-kit-role-runtime-peeks.test.tsx	useKitRoleRuntimePeeks	does not poll when disabled
+src/renderer/src/components/starter-kits/use-kit-role-runtime-peeks.test.tsx	useKitRoleRuntimePeeks	skips roles with no resolved pane target
+src/renderer/src/components/starter-kits/use-kit-role-runtime-peeks.test.tsx	useKitRoleRuntimePeeks	polls again after the interval elapses
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	returns null and shows the run once recordKitRun fires its event, for a panel mounted before the run was written
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	checks for a record on mount and never installs a "no record yet" interval
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	re-checks for a record when the window regains focus/visibility
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	does not re-check on a visibility event once a record is found
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	polls getResultsStatus every ~10s only while a run exists and the panel is open
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	polls getRoleDoneStatus in lockstep with getResultsStatus and exposes it on the status
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	does not poll getResultsStatus while the panel is collapsed
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	refreshes results immediately on expand
+src/renderer/src/components/starter-kits/use-kit-run-status.test.tsx	useKitRunStatus	pauses the results poll while the document is hidden, and resumes on becoming visible
+src/renderer/src/components/starter-kits/use-starter-kit-available-agents.test.tsx	useStarterKitAvailableAgents	returns only claude/codex/grok, in featured order, from detected agents
+src/renderer/src/components/starter-kits/use-starter-kit-available-agents.test.tsx	useStarterKitAvailableAgents	drops a detected agent the user disabled
+src/renderer/src/components/starter-kits/use-starter-kit-available-agents.test.tsx	useStarterKitAvailableAgents	returns an empty list when nothing is detected
+src/renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx	useStarterKitFileValidation	reports no issues while the file input is empty
+src/renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx	useStarterKitFileValidation	flags a value as an Excel file synchronously, without waiting on the existence check
+src/renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx	useStarterKitFileValidation	flags a .csv value that does not exist on disk, after the debounced check resolves
+src/renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx	useStarterKitFileValidation	does not flag a .csv value that exists on disk
+src/renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx	useStarterKitFileValidation	clears stale status when the reset key changes
+src/renderer/src/components/starter-kits/use-starter-kit-file-validation.test.tsx	useStarterKitFileValidation	never checks a text-kind input
+src/renderer/src/components/starter-kits/use-starter-kit-run-conflict.test.tsx	useStarterKitRunConflict	reports no conflict when nothing has run in the folder
+src/renderer/src/components/starter-kits/use-starter-kit-run-conflict.test.tsx	useStarterKitRunConflict	reports no conflict when the same kit ran here before
+src/renderer/src/components/starter-kits/use-starter-kit-run-conflict.test.tsx	useStarterKitRunConflict	flags a conflict and names the other kit when a different kit ran here
+src/renderer/src/components/starter-kits/use-starter-kit-run-conflict.test.tsx	useStarterKitRunConflict	clears the conflict once acknowledged
+src/renderer/src/components/starter-kits/use-starter-kit-run-conflict.test.tsx	useStarterKitRunConflict	re-checks and resets acknowledgement when the folder changes
+src/renderer/src/components/starter-kits/use-starter-kit-run-conflict.test.tsx	useStarterKitRunConflict	does not check when there is no folder yet
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	prefills every file input from sampleFile and every text input from sampleValue on "Try with sample data"
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	prefills inputs from an initialWorkspace already flagged as sample data (first-run flow, no extra click)
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	does not prefill from an initialWorkspace that is a real project, not sample data
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	canLaunch is false while a required input is empty, and reports it in missingRequiredInputIds
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	canLaunch is false while a required file input looks like an Excel file (accessibility: native disabled)
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	canLaunch becomes true once every required input is filled
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	resets folder and inputs when the kit id changes on the same dialog instance
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	delegates launch to launchStarterKitWithRunGuard with the current kit/inputs/workspace
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	forwards force=true through to launchStarterKitWithRunGuard
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	does not call launchStarterKitWithRunGuard while a required input is missing
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	picks up an initialWorkspace that arrives after mount, with the same kit id throughout
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	warns when an assigned role would run on an account near its usage limit
+src/renderer/src/components/starter-kits/use-starter-kit-setup-state.test.tsx	useStarterKitSetupState	has no usage warning when nothing is near its limit
+src/renderer/src/lib/agent-skill-cli-prerequisite.test.ts	isKoluxCliAvailableOnPath	requires the installed CLI command to be visible on PATH
+src/renderer/src/lib/agent-skill-cli-prerequisite.test.ts	ensureKoluxCliAvailableForAgentSkillTerminal	runs the CLI installer when the command exists but is not visible on PATH
+src/renderer/src/lib/agent-skill-cli-prerequisite.test.ts	ensureKoluxCliAvailableForAgentSkillTerminal	does not run the CLI installer when the Windows PATH read is unknown
+src/renderer/src/lib/agent-skill-cli-prerequisite.test.ts	ensureKoluxCliAvailableForAgentSkillTerminal	lets the registration toast paint before opening the native installer
+src/renderer/src/lib/agent-skill-nav-install-status.test.ts	getAgentSkillNavInstallStatus	keeps loading and missing states ahead of freshness
+src/renderer/src/lib/agent-skill-nav-install-status.test.ts	getLinearAgentSkillNavInstallStatus	reports canonical installs under kolux-linear
+src/renderer/src/lib/agent-skill-nav-install-status.test.ts	getLinearAgentSkillNavInstallStatus	reports legacy-only installs under linear-tickets
+src/renderer/src/lib/agent-skill-nav-install-status.test.ts	getLinearAgentSkillNavInstallStatus	prefers canonical freshness when both names are installed
+src/renderer/src/lib/agent-skill-nav-install-status.test.ts	getLinearAgentSkillNavInstallStatus	falls back to presence-only status when freshness does not apply
+src/renderer/src/lib/plugin-command-execution.test.ts	plugin command execution	dispatches aliases without invoking a plugin worker
+src/renderer/src/lib/plugin-command-execution.test.ts	plugin command execution	routes worker commands through the authenticated preload binding
+src/renderer/src/lib/plugin-command-keybindings.test.ts	plugin command keybindings	builds a stable dynamic action definition
+src/renderer/src/lib/plugin-command-keybindings.test.ts	plugin command keybindings	lets user overrides replace or disable contributed defaults
+src/renderer/src/lib/plugin-command-keybindings.test.ts	plugin command keybindings	keeps removed-plugin overrides inert and restores them on reinstall
+src/renderer/src/lib/plugin-command-keybindings.test.ts	plugin command keybindings	matches effective overrides and honors explicit disablement
+src/renderer/src/lib/plugin-command-keybindings.test.ts	plugin command keybindings	reports conflicts between plugin and built-in definitions
+src/renderer/src/lib/plugin-command-keybindings.test.ts	plugin command keybindings	does not match worktree commands without an active worktree
+src/renderer/src/lib/project-skill-runtime.test.ts	project skill runtime helpers	passes the resolved project runtime through the discovery target
+src/renderer/src/lib/project-skill-runtime.test.ts	project skill runtime helpers	maps resolved host and WSL project runtimes into setup runtimes
+src/renderer/src/lib/project-skill-runtime.test.ts	project skill runtime helpers	keeps repair-required WSL projects scoped to their preferred distro
+src/renderer/src/lib/project-skill-runtime.test.ts	project skill runtime helpers	forces PowerShell for WSL setup and for host setup when the terminal shell is WSL
+src/renderer/src/lib/project-skill-runtime.test.ts	project skill runtime helpers	forces PowerShell for host setup when the terminal shell is Git Bash
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	shows update available when the inventory authorizes an update
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	shows up to date only when every discovered placement is current
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	reports needs attention for the io-error scan fault
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	stays up to date beside another ecosystem’s same-name skill
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	shows recognized-newer content as up to date instead of blaming the user
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	still reports drift beside a newer-known copy
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	still reports drift in our own copy when a plugin-managed one sits alongside
+src/renderer/src/lib/skill-freshness-display-status.test.ts	getSkillFreshnessDisplayStatus	reports attention when a plugin-cache copy is inaccessible
+src/renderer/src/lib/skill-freshness-display-status.test.ts	hasSkillCopyNeedingAttention	raises no attention marker over a routine outdated copy the update converges
+src/renderer/src/lib/skill-freshness-display-status.test.ts	hasSkillCopyNeedingAttention	ignores a traversal bound but keeps a real scan fault
+src/renderer/src/lib/skill-freshness-display-status.test.ts	hasSkillCopyNeedingAttention	reports up to date for a current global copy beside a drifted project copy
+src/renderer/src/lib/skill-freshness-display-status.test.ts	hasSkillCopyNeedingAttention	reports presence only when every copy is project-owned
+src/renderer/src/lib/skill-freshness-display-status.test.ts	hasSkillCopyNeedingAttention	keeps a non-eligible outdated global copy amber
+src/renderer/src/lib/skill-freshness-display-status.test.ts	hasSkillCopyNeedingAttention	does not blame a skill with no placement for a fault elsewhere in the cache
+src/renderer/src/lib/skill-freshness-display-status.test.ts	hasSkillCopyNeedingAttention	does not treat a project copy as the presence that owns a cache fault
+src/renderer/src/runtime/runtime-skills-client.test.ts	discoverSkillsForRuntimeTarget	scans the local host through the skills IPC for a local target
+src/renderer/src/runtime/runtime-skills-client.test.ts	discoverSkillsForRuntimeTarget	routes to the remote runtime and drops the local-only target
+src/renderer/src/runtime/runtime-skills-client.test.ts	discoverSkillsForRuntimeTarget	sends no target at all to a remote runtime
+src/renderer/src/runtime/runtime-skills-client.test.ts	discoverSkillsForRuntimeTarget	forwards an explicit refresh to a remote runtime
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	runtimeTargetSupportsSkillDelete	asks the preload, not the environment probe, for the local target
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	runtimeTargetSupportsSkillDelete	is unsupported when the web "local" host predates the capability
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	runtimeTargetSupportsSkillDelete	is unsupported while the runtime target is still unresolved
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	runtimeTargetSupportsSkillDelete	asks the environment for the capability
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	delete routing	issues no RPC against a host that lacks the capability
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	delete routing	routes a local delete through IPC rather than RPC
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	delete routing	refuses a local delete when the web "local" host lacks the capability
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	delete routing	sends the whole request to a capable remote host
+src/renderer/src/runtime/runtime-skills-delete-client.test.ts	delete routing	gates the preview on the same capability
+src/renderer/src/store/plugin-language-packs.test.ts	plugin language pack loading	rejects malformed runtime IPC language-pack results at the renderer ingress
+src/renderer/src/store/plugin-language-packs.test.ts	plugin language pack loading	filters malformed language-pack array members without changing valid order
+src/renderer/src/store/plugin-language-packs.test.ts	plugin language pack loading	rejects a structured-cloned cyclic catalog before i18next resource installation
+src/renderer/src/store/plugin-language-packs.test.ts	plugin language pack loading	rejects an inconsistent resource language before i18next owns its cleanup
+src/renderer/src/store/plugin-language-packs.test.ts	plugin language pack loading	rejects a missing resource language before i18next resource installation
+src/renderer/src/store/plugin-language-packs.test.ts	plugin language pack loading	keeps the latest request when an older language-pack response finishes last
+src/shared/plugins/plugin-consent-fingerprint.test.ts	fingerprintPluginConsent	drops malformed persisted consent identities and oversized fingerprints
+src/shared/plugins/plugin-consent-fingerprint.test.ts	fingerprintPluginConsent	is stable across capability order and duplicate declarations
+src/shared/plugins/plugin-consent-fingerprint.test.ts	fingerprintPluginConsent	changes when a panel-only plugin gains a trusted Node worker
+src/shared/plugins/plugin-consent-fingerprint.test.ts	fingerprintPluginConsent	preserves capability-only fingerprints for existing panel plugins
+src/shared/plugins/plugin-consent-fingerprint.test.ts	fingerprintPluginConsent	requires re-consent when instructional content bytes change
+src/shared/plugins/plugin-consent-fingerprint.test.ts	fingerprintPluginConsent	does not invalidate inert content consent when only its content hash changes
+src/shared/plugins/plugin-consent-fingerprint.test.ts	plugin install lockfile consent fingerprints	reads the legacy capabilityHash field as a consent fingerprint
+src/shared/plugins/plugin-consent-fingerprint.test.ts	plugin install lockfile consent fingerprints	keeps writing the v1 field name for rollback compatibility
+src/shared/plugins/plugin-consent-fingerprint.test.ts	plugin install lockfile consent fingerprints	drops a lockfile whose record key disagrees with its embedded identity
+src/shared/plugins/plugin-consent-fingerprint.test.ts	plugin install lockfile consent fingerprints	accepts SHA-256 Git object ids in lockfile provenance
+src/shared/plugins/plugin-consent-request.test.ts	pluginConsentRequestSchema	requires the exact reviewed consent fingerprint
+src/shared/plugins/plugin-consent-request.test.ts	pluginConsentRequestSchema	accepts an explicit opaque fingerprint and rejects contract drift
+src/shared/plugins/plugin-content-pack-contributions.test.ts	content-pack manifest contributions	accepts the documented P1 contribution set without a worker
+src/shared/plugins/plugin-content-pack-contributions.test.ts	content-pack manifest contributions	defaults every contribution registry to an empty array
+src/shared/plugins/plugin-content-pack-contributions.test.ts	content-pack manifest contributions	rejects the removed plugin skills contribution
+src/shared/plugins/plugin-content-pack-contributions.test.ts	content-pack manifest contributions	still requires a worker entry for non-alias commands
+src/shared/plugins/plugin-content-pack-contributions.test.ts	content-pack manifest contributions	rejects duplicate ids, locales, paths, and bindings
+src/shared/plugins/plugin-demo-fixture.test.ts	hello Kolux plugin fixture	uses an ESM entry that remains loadable outside a type-module package
+src/shared/plugins/plugin-hostile-fixture.test.ts	hostile panel fixture	is complete JavaScript and retains every containment probe
+src/shared/plugins/plugin-install-lockfile.test.ts	pluginInstallSourceSchema marketplace provenance	records both the marketplace snapshot and plugin Git ref
+src/shared/plugins/plugin-install-lockfile.test.ts	pluginInstallSourceSchema marketplace provenance	requires pinned refs and an exact marketplace snapshot commit
+src/shared/plugins/plugin-kill-list.test.ts	pluginKillListSchema	parses a strict versioned revocation document
+src/shared/plugins/plugin-kill-list.test.ts	pluginKillListSchema	rejects duplicate killed plugin identities
+src/shared/plugins/plugin-kill-list.test.ts	pluginKillListSchema	caps the revocation document size by entry count
+src/shared/plugins/plugin-kill-list.test.ts	isPluginKillListTooFarInFuture	flags a snapshot that would freeze out every later revocation
+src/shared/plugins/plugin-kill-list.test.ts	isPluginKillListTooFarInFuture	allows a snapshot inside the clock-skew window
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	maps qualified IDs to distinct alphanumeric i18next resource languages
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	accepts nested string catalogs and reports their bounded entry count
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	still refuses the development-plugin permission promise
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	still refuses install failure copy that reports a trust event
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	forges no trust badge: the community→Official swap is refused
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	still lets language packs translate non-plugin settings copy
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	rejects excessive nesting without recursive validation
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	accepts the entry limit and rejects one additional entry
+src/shared/plugins/plugin-language-pack-artifact.test.ts	plugin language-pack artifacts	shape-validates 16 maximum-entry registrations without returning catalog copies
+src/shared/plugins/plugin-manifest.test.ts	pluginManifestSchema boundaries	accepts documented dotted command namespaces with camel-case actions
+src/shared/plugins/plugin-manifest.test.ts	pluginManifestSchema boundaries	rejects oversized identities and invalid semantic versions
+src/shared/plugins/plugin-manifest.test.ts	pluginManifestSchema boundaries	rejects duplicate contribution ids
+src/shared/plugins/plugin-manifest.test.ts	pluginManifestSchema boundaries	caps contribution arrays before they reach renderer or worker registries
+src/shared/plugins/plugin-marketplace.test.ts	pluginMarketplaceSchema	parses a bounded, pinned Git marketplace index
+src/shared/plugins/plugin-marketplace.test.ts	pluginMarketplaceSchema	rejects duplicate plugin identities
+src/shared/plugins/plugin-marketplace.test.ts	pluginMarketplaceSchema	caps the marketplace entry count
+src/shared/plugins/plugin-marketplace.test.ts	marketplace provenance contracts	does not trust lookalike organizations or hosts
+src/shared/plugins/plugin-marketplace.test.ts	marketplace provenance contracts	recognizes only the canonical official marketplace repository
+src/shared/plugins/plugin-marketplace.test.ts	marketplace provenance contracts	parses nested repository paths without confusing the repository name
+src/shared/plugins/plugin-marketplace.test.ts	marketplace provenance contracts	prevents an untrusted listing from self-awarding trust metadata
+src/shared/plugins/plugin-marketplace.test.ts	marketplace provenance contracts	marks listings with a deferred contribution category as unsupported
+src/shared/plugins/plugin-panel-call-admission.test.ts	createPluginPanelCallAdmission	shares the rate budget across panel sessions for one plugin
+src/shared/plugins/plugin-panel-call-admission.test.ts	createPluginPanelCallAdmission	rejects oversized calls and can revoke a plugin budget
+src/shared/plugins/plugin-panel-message-budget.test.ts	structuredCloneMessageBytes	counts strings as UTF-8 bytes
+src/shared/plugins/plugin-panel-message-budget.test.ts	structuredCloneMessageBytes	counts binary backing stores instead of JSON object projections
+src/shared/plugins/plugin-panel-message-budget.test.ts	structuredCloneMessageBytes	handles cycles and stops walking once the cap is exceeded
+src/shared/plugins/plugin-panel-message-budget.test.ts	createPanelMessageBudget	charges oversized traffic against the message-rate budget
+src/shared/plugins/plugin-panel-pong-frame.test.ts	readPanelPongId	returns the pingId the watchdog must correlate against
+src/shared/plugins/plugin-panel-shell.test.ts	buildPluginPanelShellHtml	keeps destructive surface and foreground tokens paired
+src/shared/plugins/plugin-panel-shell.test.ts	buildPluginPanelShellHtml	places CSP and navigation guards before plugin content
+src/shared/plugins/plugin-panel-shell.test.ts	buildPluginPanelShellHtml	cancels anchor and form default navigation in the fallback path
+src/shared/plugins/plugin-path-safety.test.ts	plugin path portability	accepts %s
+src/shared/plugins/plugin-path-safety.test.ts	plugin path portability	applies portable path validation to every declared artifact kind
+src/shared/plugins/plugin-vm-recipe-artifact.test.ts	plugin VM recipe artifacts	parses bounded lifecycle commands for verbatim consent
+src/shared/plugins/plugin-vm-recipe-artifact.test.ts	plugin VM recipe artifacts	requires paired suspend/resume commands and rejects unknown fields
+src/shared/plugins/plugin-vm-recipe-artifact.test.ts	plugin VM recipe artifacts	represents an explicitly disabled destroy action without executing text
+src/shared/plugins/plugin-vm-recipe-artifact.test.ts	plugin VM recipe artifacts	rejects NUL bytes and commands beyond the bounded artifact contract
+src/shared/skill-bundle-install-contract.test.ts	skill bundle install contract	accepts one aggregate request with per-skill conflict decisions
+src/shared/skill-bundle-install-contract.test.ts	skill bundle install contract	rejects duplicate selections and decisions for unselected skills
+src/shared/skill-delete-contract.test.ts	SkillDeleteRequestSchema	accepts a request with no target, which is what the page sends
+src/shared/skill-delete-contract.test.ts	SkillDeleteRequestSchema	rejects an unknown top-level field rather than ignoring it
+src/shared/skill-delete-contract.test.ts	SkillDeleteRequestSchema	strips unknown keys inside the nested discovery target
+src/shared/skill-delete-contract.test.ts	SkillDeleteRequestSchema	keeps a null updatedAt, which the host fails closed on
+src/shared/skill-delete-contract.test.ts	SkillDeleteRequestSchema	refuses an empty or oversized batch
+src/shared/skill-delete-contract.test.ts	plan and result schemas	carries a typed block reason so the band can group without string matching
+src/shared/skill-delete-contract.test.ts	plan and result schemas	rejects a block reason outside the shared vocabulary
+src/shared/skill-delete-contract.test.ts	plan and result schemas	has no `unsupported` status, because such a delete is never issued
+src/shared/skill-delete-contract.test.ts	plan and result schemas	accepts a partial result carrying the staged paths
+src/shared/skill-deletion-eligibility.test.ts	skillDeletionEligibility	names the reason a bundled skill would come back
+src/shared/skill-deletion-eligibility.test.ts	skillDeletionEligibility	points a plugin skill at the plugin rather than the file
+src/shared/skill-deletion-eligibility.test.ts	skillDeletionEligibility	has a message for every host-only reason the client never predicts
+src/shared/skill-install-contract.test.ts	skill install wire compatibility	enforces compressed package bytes below, at, and above the V1 limit
+src/shared/skill-install-contract.test.ts	skill install wire compatibility	accepts an older client request that omits every additive field
+src/shared/skill-install-contract.test.ts	skill install wire compatibility	accepts an older host result that omits additive failure and placement fields
+src/shared/skill-install-failure.test.ts	skill install failure contract	freezes every V1 failure category
+src/shared/skill-install-failure.test.ts	skill install failure contract	keeps retryability explicit and rejects unstable codes
+src/shared/skill-metadata.test.ts	summarizeSkillMarkdown	reads name and folded description from YAML frontmatter
+src/shared/skill-metadata.test.ts	summarizeSkillMarkdown	falls back to heading and first paragraph when frontmatter is absent
+src/shared/skill-package-manifest.test.ts	skill package manifest	parses a canonical manifest
+src/shared/skill-package-manifest.test.ts	skill package manifest	rejects case collisions and digest drift
+src/shared/skill-package-manifest.test.ts	skill package manifest	requires one identity-matched SKILL.md in canonical path order
+src/shared/skill-package-manifest.test.ts	skill package manifest	enforces path depth at, below, and above the V1 limit
+src/shared/skill-package-manifest.test.ts	skill package manifest	enforces file count at, below, and above the V1 limit
+src/shared/skill-package-manifest.test.ts	skill package manifest	enforces per-file and total extracted bytes around both V1 limits
+src/shared/skill-package-manifest.test.ts	skill package manifest	rejects Unicode normalization and case-fold collisions
+src/shared/skill-package-manifest.test.ts	skill package manifest	fuzzes path normalization without accepting traversal or platform syntax
+src/shared/skill-path-containment.test.ts	skillPathInside	refuses the root itself, so a delete can never target a discovery root
+src/shared/skill-path-containment.test.ts	skillPathInside	refuses a `..` escape
+src/shared/skill-path-containment.test.ts	skillPathInside	accepts a child
+src/shared/skill-path-containment.test.ts	skillPathInside	keeps POSIX case-sensitive even when the process is win32
+src/shared/skill-path-containment.test.ts	skillPathInside	folds case for Windows semantics
+src/shared/skill-path-containment.test.ts	skillPathInside	does not treat a `..`-prefixed name as a traversal
+src/shared/skill-path-containment.test.ts	skillPathDepthBelow	counts segments and returns null outside the root
+src/shared/skill-path-containment.test.ts	nativeSkillPathSemantics	reads the platform it is given rather than the process it runs in
+src/shared/skill-path-containment.test.ts	normalizedSkillPath	resolves before comparing
+src/shared/skills-cli-agent-keys.test.ts	skills CLI agent keys	only maps onto keys the skills CLI accepts
+src/shared/skills-cli-agent-keys.test.ts	skills CLI agent keys	covers every agent Kolux can detect
+src/shared/skills-cli-agent-keys.test.ts	skills CLI agent keys	follows Kolux's own evidence for the two non-obvious mappings
+src/shared/skills-cli-agent-keys.test.ts	skills CLI agent keys	rejects values the skills CLI would drop, and allows the explicit wildcard
+src/shared/skills-cli-agent-keys.test.ts	skills CLI agent keys	always includes the shared directory and drops unmappable agents
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	ships exactly the 6 v1 kits
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	has unique kit ids
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	getStarterKit finds a kit by id and returns undefined for an unknown one
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	has exactly 3 roles with unique ids
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	declares a real lucide-react icon
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	has at least one input and unique input ids
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	every role write path stays under results/<role.id>/
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	waitsFor, when set, names another real role id in the same kit (not itself)
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	every prompt placeholder resolves to a declared kit input
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	every required input is referenced by at least one role prompt
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	every file input declares a sampleFile that exists in the bundled sample data
+src/shared/starter-kits/starter-kit-catalog.test.ts	starter kit catalog	every text input declares a non-empty sampleValue
+src/shared/starter-kits/starter-kit-prompts.test.ts	assignKitRoles	returns [] when no agents are available
+src/shared/starter-kits/starter-kit-prompts.test.ts	assignKitRoles	assigns every role to the single available agent
+src/shared/starter-kits/starter-kit-prompts.test.ts	assignKitRoles	gives each role its preferred agent when all 3 are available
+src/shared/starter-kits/starter-kit-prompts.test.ts	assignKitRoles	gives preferred agents priority and cycles the rest over the remaining 2
+src/shared/starter-kits/starter-kit-prompts.test.ts	assignKitRoles	ignores duplicate and unordered input, cycling in fixed featured order
+src/shared/starter-kits/starter-kit-prompts.test.ts	assignKitRoles	pairs every assignment with its own role object
+src/shared/starter-kits/starter-kit-prompts.test.ts	findInputPlaceholders	extracts unique {{input.<id>}} ids
+src/shared/starter-kits/starter-kit-prompts.test.ts	findInputPlaceholders	returns [] when there are no placeholders
+src/shared/starter-kits/starter-kit-prompts.test.ts	composeKitSeatPrompt	fills every input placeholder
+src/shared/starter-kits/starter-kit-prompts.test.ts	composeKitSeatPrompt	substitutes missing inputs with an empty string instead of leaving the placeholder
+src/shared/starter-kits/starter-kit-prompts.test.ts	composeKitSeatPrompt	appends the fixed kit rules block with the role results folder and exact file list
+src/shared/starter-kits/starter-kit-prompts.test.ts	composeKitSeatPrompt	allows read-only computation with built-in tools instead of forbidding every tool
+src/shared/starter-kits/starter-kit-prompts.test.ts	composeKitSeatPrompt	tells the agent not to mention the rules or DONE.md in its own output
+src/shared/starter-kits/starter-kit-prompts.test.ts	composeKitSeatPrompt	never installs software and never touches input files, across both the safety rule and the compute allowance
+tests/e2e/plugin-demo.spec.ts		runs hello-kolux panel, command, and event behind visible consent
+tests/e2e/plugin-marketplace-content.spec.ts		installs and applies official Phase 1 content from a fresh profile
+tests/e2e/plugin-startup-budget.spec.ts		keeps real Electron launch stable with 20 approved inert plugins

@@ -1,0 +1,9 @@
+﻿kolux host
+
+Usage: kolux host <command> [options]
+
+Commands:
+  list               List every machine this Kolux host can target, and how to name each one
+
+Run `kolux host <command> --help` for command-specific usage.
+

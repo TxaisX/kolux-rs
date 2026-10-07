@@ -1,0 +1,13 @@
+﻿kolux emulator devices
+
+Usage: kolux emulator devices [--worktree <selector>] [--json]
+
+List all emulator devices/AVDs across iOS and Android
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+

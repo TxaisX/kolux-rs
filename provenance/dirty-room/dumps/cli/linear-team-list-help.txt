@@ -1,0 +1,16 @@
+﻿kolux linear team list
+
+Usage: kolux linear team list [--workspace <id>|all] [--json]
+
+List connected Linear teams
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --workspace <id>      Connected Linear workspace id
+
+Examples:
+  $ kolux linear team list --workspace all --json
+

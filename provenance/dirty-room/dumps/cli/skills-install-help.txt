@@ -1,0 +1,35 @@
+﻿kolux skills install
+
+Usage: kolux skills install [--skill <name>]... [--all] [--agent <name>[,<name>]] [--local] [--dry-run] [--json]
+
+Install bundled Kolux skills via the community skills CLI
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --skill <name>         Bundled skill to act on; repeat for several
+  --all
+  --agent <names>        Comma-separated install targets; default is detected agents
+  --local                Target the current project instead of the global install
+  --dry-run
+
+Notes:
+  Reads the bundled skill registry locally without contacting the Kolux runtime.
+  Resolves to the same `npx skills add <repo> --skill <name> ...` command used by Kolux Settings, plus the non-interactive flags an unattended host needs (`npx --yes` and `-y`), then runs it and forwards its output and exit code.
+  Installs globally (all projects, adds --global) by default. Use --local to install into the current project instead.
+  Targets the coding agents Kolux detects on this host, plus the shared .agents/skills directory. Without an explicit target the skills CLI installs into every agent it knows about, which litters a host with config directories for agents it does not have.
+  Use --agent <name>[,<name>...] to choose targets yourself, or --agent universal for the shared directory alone. Required when Kolux detects no agent.
+  Use --dry-run to print the resolved command without running it.
+  With --json, the skill listing and --dry-run emit JSON; a real install streams npx's own non-JSON output live and rejects --json.
+  Omit --skill and --all to list installable skill names.
+  Intended for headless hosts (SSH, containers, CI) with no desktop Settings UI to copy the install command from.
+
+Examples:
+  $ kolux skills install
+  $ kolux skills install --skill kolux-cli --skill orchestration
+  $ kolux skills install --skill kolux-cli --local
+  $ kolux skills install --skill kolux-cli --agent claude-code,codex
+  $ kolux skills install --all --dry-run
+

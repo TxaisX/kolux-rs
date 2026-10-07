@@ -1,0 +1,101 @@
+# 17-settings-appearance random sample round 2 (100 of 1405): file	title
+src/main/persistence-settings-ui-defaults.test.ts	coerces loaded minimizeToTrayOnClose to false unless stored as true
+src/renderer/src/components/settings/PluginsSettingsSection.lifecycle.test.tsx	clears feature busy state and skips refresh when the setting write fails
+src/renderer/src/components/settings/repository-source-control-ai-persist-queue.test.ts	persists a changed value and stores the normalized saved result
+src/renderer/src/components/settings/terminal-search.test.ts	omits legacy WSL distribution terminal settings on Windows
+src/renderer/src/components/settings/PluginSettingsRow.test.tsx	shows official provenance and prevents re-enabling killed plugins
+src/shared/keybindings/definitions-workspace-view.test.ts	gives view.cycleWorkspaceView a default binding on every platform
+src/renderer/src/components/settings/SshTargetForm.test.tsx	submits via the primary action and closes via Cancel
+src/renderer/src/components/settings/ExperimentalPane.test.tsx	renders new card style as an off-by-default searchable experimental switch
+src/renderer/src/components/settings/task-source-setup-state.test.ts	treats hidden providers as deliberately disabled regardless of connection state
+src/main/keybindings/keybinding-file.test.ts	preserves a customized action while still pinning the un-customized ones
+src/renderer/src/store/slices/settings.test.ts	keeps the existing update action best-effort and logs persistence failures
+src/renderer/src/store/slices/settings-owner-hydration-write-fence.test.ts	waits for a replacement owner hydration before publishing remote rows
+src/main/persistence-settings-ui-defaults.test.ts	does not mutate gate fields for a consistent closed-onboarding existing user
+src/renderer/src/components/settings/repository-icon-github.test.ts	prefers the renamed fork own owner over the stored upstream
+src/renderer/src/components/settings/PluginMarketplaceBrowser.test.tsx	disables a listing revoked by the safety list
+src/renderer/src/components/settings/CliSkillRuntimeSetup.test.tsx	keeps copied WSL skill installs valid for the target POSIX shell
+src/renderer/src/components/settings/AgentSignInButton.test.tsx	opens other CLIs without submitting work in the current folder workspace
+src/renderer/src/components/settings/CliSkillRuntimeSetup.test.tsx	skips the Windows preflight when the configured Windows shell is POSIX-family
+src/renderer/src/components/settings/repository-hook-settings-draft.test.ts	normalizes persisted settings without dropping either script
+src/renderer/src/components/settings/SshTargetCard.test.tsx	does not clamp it to a single line
+src/renderer/src/components/settings/integrations-pane-status.test.ts	derives connected status labels and account details from preflight state
+src/renderer/src/components/settings/AgentSignInButton.test.tsx	requires a workspace and keeps settings open when launch fails
+src/renderer/src/lib/document-theme.test.ts	resolves system from matchMedia
+src/renderer/src/components/settings/ShortcutCommandBlock.test.tsx	wraps persistent conflict remediation instead of truncating it
+src/shared/keybindings-parse-cache.test.ts	caches rejections without re-parsing
+src/renderer/src/components/settings/EphemeralVmRuntimesSection.test.tsx	does not repeat load-error toasts while polling a running cleanup
+src/renderer/src/components/settings/plugin-install-source.test.ts	accepts HTTPS and SSH git URLs
+src/renderer/src/i18n/pseudo-localization.test.ts	recognizes the pseudo locale id
+src/renderer/src/components/settings/GitPane.test.ts	renders the local main freshness setting with outcome-focused copy
+src/main/ipc/settings-renderer-safe.test.ts	leaves an update with no secret fields untouched
+src/renderer/src/components/settings/OpenInMenuSetting.test.ts	recognizes legacy preset rows by command
+src/renderer/src/components/settings/provider-account-visibility.test.ts	keeps local Active scoped to the selected host/WSL view
+src/renderer/src/components/settings/TerminalPane.pwsh.test.ts	hides Git Bash as a Windows default shell option when not detected
+src/renderer/src/components/settings/GeneralPane.test.ts	shows the section on Windows-capable hosts when entries match
+src/renderer/src/components/settings/WorkspaceDirectorySetting.test.tsx	allows retrying the same draft when the persisted value has not changed
+src/renderer/src/components/settings/settings-project-list.test.ts	falls back to the first ready setup when there is no local host
+src/renderer/src/components/settings/settings-project-list.test.ts	returns undefined when there are no setups
+src/renderer/src/components/settings/PluginMarketplaceSourceDialog.test.tsx	adds private SSH marketplaces through the system-Git source contract
+src/renderer/src/components/ui/popover-wheel-scroll.test.tsx	still scrolls the content itself when it is the scroller
+src/renderer/src/components/settings/PluginsSettingsSection.lifecycle.test.tsx	accepts overlapping mutations in completion order without regressing final state
+src/renderer/src/components/settings/MobilePane.test.tsx	renders only paired-device management and the auto-restore-fit setting
+src/renderer/src/components/settings/task-source-setup-state.test.ts	does not hand the expansion to a provider whose check landed later
+src/renderer/src/components/settings/sparse-preset-date.test.ts	returns null for invalid persisted timestamps
+src/main/system-fonts.test.ts	spawns the Windows font script without an -ExecutionPolicy switch
+src/renderer/src/components/settings/RepositorySourceControlAiSection.test.ts	renders save controls on dirty repository action recipes
+src/renderer/src/components/settings/GeneralPane.test.ts	omits the default project runtime setting when Windows runtimes are unsupported
+src/renderer/src/components/settings/codex-account-auth-warning.test.ts	does not warn for inactive accounts or a different runtime
+src/renderer/src/store/slices/settings-owner-hydration-write-fence.test.ts	does not overwrite a settings write with an older owner hydration
+src/renderer/src/components/settings/RepositoryHooksSection.test.ts	routes issue-command reads through the repository runtime owner
+src/renderer/src/components/settings/CliSection.test.tsx	passes the default project WSL distro to CLI skill prerequisite checks
+src/renderer/src/components/settings/CliSkillRuntimeSetup.test.tsx	emits a cmd.exe payload that cannot break its own if/else block
+src/renderer/src/components/settings/AgentsPane.test.tsx	includes agent permission search metadata
+src/renderer/src/components/settings/integrations-pane-status.test.ts	treats token-only Azure DevOps setup as configured while base URL is inferred later
+src/renderer/src/components/shared/kill-all-terminal-surfaces.test.ts	does not exact-kill daemon sessions already settled by management
+src/renderer/src/store/slices/worktree-visibility-settings-write.test.ts	rejects base visibility writes before contacting an unsupported runtime host
+src/renderer/src/components/settings/RepositoryPaneDraftInput.test.tsx	does not re-persist a confirmed value on blur or unmount
+src/shared/keybindings-parsing.test.ts	allows Shift-only chords only for native input-source switching
+src/renderer/src/components/settings/RepositoryWorktreeDefaultsSection.test.tsx	shows the inherited effective value without stamping the repo
+src/renderer/src/components/settings/AgentSkillSetupPanel.test.tsx	keeps update copy until the installed panel checks CLI prerequisites
+src/renderer/src/components/settings/OpenInMenuSetting.test.ts	allows commit when every draft row has a label and command
+src/renderer/src/components/settings/shortcut-binding-list-mutations.test.ts	leaves the index unchanged when a row below it is removed
+src/renderer/src/components/settings/CommitMessageAiPane.test.tsx	allows default-agent recipes even when the old default generator is unsupported
+src/main/ipc/settings.test.ts	rebuilds the app menu after Automations sidebar visibility changes
+src/main/persistence-settings-update.test.ts	removes unsupported TUI skip-permissions args from migrated profiles
+src/renderer/src/store/slices/settings.test.ts	keeps the current environment when the selected remote server is unreachable
+src/renderer/src/components/settings/repository-source-control-ai-global-ux.test.ts	preserves keystrokes typed while an action save is in flight
+src/renderer/src/components/settings/PluginMarketplaceBrowser.test.tsx	does not let an older preview response replace the latest selection
+src/renderer/src/components/settings/RepositoryHooksSection.test.ts	recommends run-both when local and shared scripts both exist
+src/renderer/src/components/ui/slider.test.tsx	renders two thumbs from an uncontrolled two-value defaultValue
+src/renderer/src/components/settings/useGhosttyImport.test.ts	flows through click -> preview -> apply -> success -> close/reset
+src/main/ipc/settings.test.ts	settings:previewWarpThemeImport returns preview result
+src/renderer/src/i18n/zh-technical-literal-mistranslations.test.ts	keeps CLI / product technical strings un-translated
+src/renderer/src/components/settings/settings-setup-guide-progress-hook.test.tsx	uses legacy-aware completion returned by the shared setup progress path
+src/renderer/src/components/settings/RepositoryForkSyncSection.test.tsx	syncs a runtime-hosted repo by its main worktree id, not the bare repo id
+src/renderer/src/components/settings/AgentSkillSetupPanel.test.tsx	keeps a failed setup command visible with durable recovery
+src/renderer/src/components/ui/popover-wheel-scroll.test.tsx	leaves popovers that did not opt in alone
+src/renderer/src/components/settings/ssh-target-remove.test.ts	propagates removeTarget failures so the caller can surface them
+src/renderer/src/components/settings/AgentsPane.test.tsx	still offers the stored agent so the choice can be kept
+src/renderer/src/components/settings/AgentsPane.test.tsx	renders the keep-awake modes from settings
+src/shared/keybindings-default-bindings.test.ts	assigns the floating workspace maximize default only on macOS
+src/renderer/src/components/settings/settings-search.test.ts	preserves source order for equally ranked matches
+src/renderer/src/components/settings/PluginsSettingsSection.lifecycle.test.tsx	keeps a development path and handles a failed removal without rejection
+src/renderer/src/store/slices/settings.test.ts	stores the authoritative settings after a successful checked update
+src/renderer/src/components/settings/SettingsSidebar.test.tsx	does not render the setup guide row after every checklist step is complete
+src/renderer/src/components/settings/GeneralWorkspaceSettingsSection.test.tsx	exposes a stable deep-link target for global defaults
+src/renderer/src/components/settings/AgentSkillSetupPanel.test.tsx	keeps an open terminal on the WSL runtime captured when it opened
+src/renderer/src/components/settings/provider-rate-limit-scope-panels.test.tsx	shows the local host scope for GitHub API budget
+src/renderer/src/components/settings/SshTargetCard.test.tsx	shows the whole message, remedy included
+src/shared/keybindings-unassigned-actions.test.ts	leaves floating workspace minimize unassigned because floating terminal toggle owns show and hide
+src/renderer/src/components/settings/linear-agent-skill-install-cta.test.tsx	shows the install command and explanation when the skill is missing
+src/renderer/src/components/settings/terminal-search.test.ts	omits the Warp import appearance entry when desktop-only controls are hidden
+src/renderer/src/components/settings/browser-search.test.ts	indexes both titles so the row is findable in either routing state
+src/renderer/src/components/settings/ProjectWindowsRuntimeSetting.test.tsx	shows the selected distro for explicit WSL project overrides
+src/shared/ui-locale.test.ts	resolves explicit Korean independently of system locale
+src/renderer/src/components/settings/settings-project-list.test.ts	distinguishes same-id repo rows by execution host
+src/renderer/src/i18n/zh-technical-literal-mistranslations.test.ts	preserves brand names in product copy
+src/renderer/src/components/settings/SettingsFormControls.font-autocomplete.test.tsx	keeps typed searches filtered even after the value updates
+src/shared/ui-locale.test.ts	normalizes Spanish locale prefixes
+src/renderer/src/components/settings/browser-search.test.ts	uses Ctrl shortcut text for Link Routing copy and search metadata off macOS
+src/renderer/src/components/settings/ViewsAndSessionsPane.test.tsx	renders the default-mode control and the Look control together

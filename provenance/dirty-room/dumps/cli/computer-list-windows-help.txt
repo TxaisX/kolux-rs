@@ -1,0 +1,13 @@
+﻿kolux computer list-windows
+
+Usage: kolux computer list-windows --app <name|bundle|pid:N> [--json]
+
+List windows for an app available to computer-use
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --app <app>            App name, bundle ID, or pid:N
+

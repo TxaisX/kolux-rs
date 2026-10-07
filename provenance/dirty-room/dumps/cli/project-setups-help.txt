@@ -1,0 +1,26 @@
+﻿kolux project setups
+
+Usage: kolux project setups [--project <id>] [--host <host-id>] [--json]
+
+List project host setups
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --project
+  --host
+
+Notes:
+  A setup means a project is available on a host at a concrete filesystem path.
+  --host runtime:<environment-id> runs the command on that paired Kolux server instead of filtering this runtime; unknown environment ids are rejected rather than answered with an empty list.
+  Run `kolux environment list` to see the environment ids that runtime:<environment-id> accepts. It matches ids only, never environment names.
+  A routed --host runtime:<id> also lists that server's own local-stamped setups, because both spellings name the machine the command reached.
+
+Examples:
+  $ kolux project setups
+  $ kolux project setups --project github:TxaisX/kolux
+  $ kolux project setups --host local
+  $ kolux project setups --host runtime:03ef704c-b180-4b10-998d-e28fbd5de9a3
+

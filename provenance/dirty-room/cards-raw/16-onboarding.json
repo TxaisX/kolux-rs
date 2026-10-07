@@ -1,0 +1,1384 @@
+{
+  "area": "16-onboarding",
+  "prefix": "ONB",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-16-001",
+      "title": "Guided first run opens as a four-screen modal over the app",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Launches Kolux for the first time on a fresh profile.",
+      "user_sees": "A centred card over a dimmed, lightly blurred app with the Kolux mark, a row of four progress bars plus a counter giving the current position out of four, a large heading and one-line subheading for the current screen, a scrollable body, and a footer with the screen's actions.",
+      "rules": [
+        "Screens run in a fixed order: welcome, connect an AI, your work, choose a kit.",
+        "The current bar is wider and solid, finished bars are mid-tone, later bars are faint; hovering a bar shows that screen's heading as a tooltip.",
+        "Ctrl+Enter (Cmd+Enter on Mac) triggers the screen's primary action unless focus is in a text field or an IME composition is in progress; it does nothing while the primary action is disabled. The shortcut is fixed, not rebindable.",
+        "The footer shows Back only from screen 2 on; the primary button carries a small modifier + Return chip; a secondary action, when present, sits on the left.",
+        "A thin strip along the top edge stays draggable so the window can still be moved.",
+        "While the starter-kit setup dialog is open, the wizard hides itself but keeps its state, then reappears when that dialog closes.",
+        "The card caps at roughly 860 px wide and 880 px tall and shrinks with the window."
+      ],
+      "acceptance": [
+        "Fresh profile → wizard shows screen 1 and the counter reads one out of four.",
+        "Press Ctrl+Enter on screen 1 → advances to screen 2; press it while typing in a field → nothing happens.",
+        "On screen 1 there is no Back button; on screen 2 Back returns to screen 1."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:19",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:92",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:126",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:160",
+        "src/renderer/src/components/onboarding/OnboardingFooter.tsx:1",
+        "src/renderer/src/lib/screen-submit-shortcut.ts:15",
+        "src/renderer/src/components/onboarding/use-onboarding-flow.test.ts:122"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-16-002",
+      "title": "Welcome screen shows three AIs working side by side",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Reads the first screen and clicks 'Get started'.",
+      "user_sees": "A heading that says several AIs can work on the user's own files at once, and three small tiles, one per AI (Claude, Codex, Grok), each with a short activity label and a pulsing status dot.",
+      "rules": [
+        "The status-dot pulse only animates when the system does not ask for reduced motion.",
+        "All three tiles always render.",
+        "'Get started' is always enabled and moves to screen 2."
+      ],
+      "acceptance": [
+        "Turn on reduced motion → the three tiles render with still dots.",
+        "Click 'Get started' → screen 2 appears and progress is saved."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/WelcomeStep.tsx:9",
+        "src/renderer/src/components/onboarding/WelcomeStep.test.tsx:1",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:264"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-16-003",
+      "title": "Connect an AI screen gates Continue on at least one connection",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Signs in to one AI provider from the cards on screen 2, or clicks 'I'll do this later'.",
+      "user_sees": "The same provider Connect cards used elsewhere in the app, under a subheading that promises sign-in on an existing plan with no terminal. Continue stays disabled until any provider shows as connected.",
+      "rules": [
+        "Continue is enabled as soon as any provider reports connected.",
+        "'I'll do this later' advances to screen 3 without a connection.",
+        "The first time any AI becomes connected, a local first-AI-connected milestone is stamped (see the milestones card)."
+      ],
+      "acceptance": [
+        "No provider connected → Continue disabled; 'I'll do this later' moves on.",
+        "Connect one provider → Continue becomes enabled without leaving the screen."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/ConnectStep.tsx:1",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:272",
+        "src/renderer/src/components/onboarding/use-onboarding-flow.test.ts:91",
+        "src/renderer/src/components/ai-connections/ai-connection-status-store.ts:51"
+      ],
+      "round": 0,
+      "related": [
+        "07"
+      ]
+    },
+    {
+      "id": "D-16-004",
+      "title": "Your work screen: pick a folder or try sample data",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "On screen 3 clicks 'Pick a folder', or chooses one of the sample datasets and clicks Continue ('Try with sample data').",
+      "user_sees": "Two paths separated by an 'or': a folder picker that leaves the wizard for the normal Add Project flow, and a list of sample cards (icon beside the title) with the spreadsheet-analysis sample preselected.",
+      "rules": [
+        "Only starter kits that ship sample data appear as samples; the default is the spreadsheet-analysis kit.",
+        "Continue builds the chosen sample as a workspace; while it loads, Continue shows busy and is disabled.",
+        "If the sample cannot be built, the wizard stays on screen 3 and no workspace is set.",
+        "Building the sample also closes the launch-agents modal that would normally pop open for a new workspace, and preselects the matching kit on screen 4.",
+        "Pick a folder marks onboarding completed and hands off to Add Project; the wizard does not return."
+      ],
+      "acceptance": [
+        "Open screen 3 → the spreadsheet sample is preselected.",
+        "Continue with a sample → screen 4 opens with that sample's kit already selected and no extra launch modal on screen.",
+        "Pick a folder → wizard closes as completed and the Add Project dialog opens."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/YourWorkStep.tsx:1",
+        "src/renderer/src/components/onboarding/use-onboarding-your-work-state.ts:1",
+        "src/renderer/src/components/onboarding/use-onboarding-your-work-state.test.ts:29",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:285"
+      ],
+      "round": 0,
+      "related": [
+        "15",
+        "01"
+      ]
+    },
+    {
+      "id": "D-16-005",
+      "title": "Choose a starter kit screen launches a kit or a plain session",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "On screen 4 picks a kit card and clicks 'Start kit', or clicks 'Just open a session'; may flip the done-notification switch.",
+      "user_sees": "Kit cards with their seat roles, a switch to be pinged when an AI finishes (on by default), and either an immediate launch or the kit setup dialog.",
+      "rules": [
+        "The kit implied by the chosen sample is preselected; otherwise the first kit in the catalogue.",
+        "'Start kit' launches at once, without the setup dialog, only when the sample workspace already fills every required input and an agent is available; otherwise the kit setup dialog opens (no workspace yet, a real folder, or no agent).",
+        "'Just open a session' launches one empty-prompt session with the first available agent in the shared checkout; with no agent or no workspace it does nothing and onboarding stays open.",
+        "The ping switch is the app-wide notifications setting, so changing it here changes it everywhere.",
+        "A successful launch by either path marks onboarding completed and starts the grid tour."
+      ],
+      "acceptance": [
+        "Sample workspace + available agent → 'Start kit' launches without a dialog and the wizard closes.",
+        "No agent installed → 'Start kit' opens the setup dialog; 'Just open a session' does nothing.",
+        "Turn the ping switch off → the notifications setting is off in Settings."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/KitStep.tsx:1",
+        "src/renderer/src/components/onboarding/use-onboarding-kit-state.test.ts:91",
+        "src/renderer/src/components/onboarding/onboarding-plain-session-launch.test.ts:1",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:298"
+      ],
+      "round": 0,
+      "related": [
+        "15",
+        "02",
+        "04"
+      ]
+    },
+    {
+      "id": "D-16-006",
+      "title": "Leaving the wizard asks for confirmation and says how to come back",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Presses Escape, or clicks outside the wizard card.",
+      "user_sees": "A small confirmation dialog asking whether to skip setup, telling the user where in Help they can resume, with 'Skip' and 'No, keep going'.",
+      "rules": [
+        "Only a primary-button click outside every onboarding surface asks; clicks inside the card, inside nested dialogs or dropdown menus (such as the sound picker), and non-primary clicks are ignored.",
+        "Escape while the confirmation is already open does not stack a second one.",
+        "Skip closes onboarding as dismissed: no tour starts, and the sidebar checklist is marked dismissed.",
+        "'No, keep going' returns to the same screen."
+      ],
+      "acceptance": [
+        "Press Escape on screen 2 → confirmation appears; 'No, keep going' → still on screen 2.",
+        "Right-click outside the card → nothing happens.",
+        "Skip → wizard closes and no tour appears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/OnboardingSkipConfirmationDialog.tsx:14",
+        "src/renderer/src/components/onboarding/OnboardingSkipConfirmationDialog.test.tsx:13",
+        "src/renderer/src/components/onboarding/onboarding-dismiss-target.test.ts:16",
+        "src/renderer/src/components/onboarding/OnboardingFlow.tsx:106"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-16-007",
+      "title": "Wizard progress and outcome persist; a failed save can be retried",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Moves through screens, quits midway, or finishes.",
+      "user_sees": "On relaunch the wizard resumes at the screen reached; after finishing or skipping it does not come back. If saving the close fails, an error toast says progress could not be saved and the user can try again.",
+      "rules": [
+        "Each forward step saves the last completed screen; the move happens even if that save fails.",
+        "Closing records when it closed and whether it was completed or dismissed; a completed close records the final screen as done.",
+        "Closing is latched: a second close while the first is in flight does nothing; a failed save releases the latch so the user can retry.",
+        "A completed close asks the star prompt to show its onboarding-completed toast on the next tick."
+      ],
+      "acceptance": [
+        "Advance to screen 3, quit, relaunch → wizard opens on screen 3.",
+        "Finish via 'Just open a session', relaunch → no wizard.",
+        "Make the save fail on close → error toast; clicking the action again retries."
+      ],
+      "compat": "Onboarding state in the profile (flow version, closed time, outcome completed or dismissed, last completed screen, checklist booleans, milestone times) is a data category the importer must carry.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/use-onboarding-flow-persistence.ts:27",
+        "src/renderer/src/components/onboarding/use-onboarding-flow.test.ts:193",
+        "src/shared/onboarding-state-types.ts:1",
+        "src/shared/constants.ts:143"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-16-008",
+      "title": "Only new profiles see the wizard; older progress is mapped forward",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Updates Kolux from an older version, or starts with an existing profile.",
+      "user_sees": "Existing users are never forced through the new wizard; someone mid-way through an older version resumes at the equivalent screen or restarts at screen 1.",
+      "rules": [
+        "A profile with no onboarding record at all counts as already completed.",
+        "Progress from the version that had a view-choice screen after welcome shifts back one slot past it; progress from the version without it is kept as is.",
+        "Any open progress from the older five-step wizard restarts at screen 1, even if it was dismissed.",
+        "Older versions keep their own fallbacks (completed with enough steps → final screen; in-progress capped).",
+        "Progress is clamped to the four screens; the stored version is bumped to the current one on load.",
+        "A missing closed time is recovered when an outcome exists."
+      ],
+      "acceptance": [
+        "Load a profile with no onboarding block → no wizard.",
+        "Load progress saved past the old view-choice screen → wizard resumes on the same visible screen.",
+        "Load open progress from the five-step wizard → wizard starts at screen 1."
+      ],
+      "compat": "The importer must carry onboarding progress and outcome so imported users are not re-onboarded.",
+      "decision": "",
+      "evidence": [
+        "src/main/persistence/applying-settings/onboarding-normalization.ts:128",
+        "src/main/persistence/applying-settings/onboarding-normalization.ts:246",
+        "src/main/persistence/applying-settings/onboarding-normalization.ts:256",
+        "src/renderer/src/components/onboarding/onboarding-flow-state.test.ts:30",
+        "src/shared/constants.ts:50"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-16-009",
+      "title": "Reopen the wizard from the sidebar Help menu",
+      "tier": "P2",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Opens the sidebar help menu and clicks 'Onboarding'.",
+      "user_sees": "The guided first run opens again from screen 1.",
+      "rules": [
+        "Reopening clears the closed time, outcome and progress but keeps the rest of the checklist state; only the dismissed mark is cleared.",
+        "Clicks within half a second of each other count once."
+      ],
+      "acceptance": [
+        "Finish onboarding, then click 'Onboarding' in the help menu → wizard shows screen 1 again.",
+        "Double-click the item quickly → wizard opens once."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/sidebar/SidebarSettingsHelpMenu.tsx:125",
+        "src/renderer/src/components/sidebar/SidebarSettingsHelpMenu.tsx:278",
+        "src/renderer/src/components/onboarding/show-onboarding-event.ts:1"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-16-010",
+      "title": "First folder added after onboarding auto-starts the default agent",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Adds a first project folder right after onboarding (via 'Pick a folder', or after skipping before any project existed).",
+      "user_sees": "A session with the user's saved default agent opens in that folder without further clicks.",
+      "rules": [
+        "Uses the saved default agent; if the default is a blank terminal, a blank terminal opens; an automatic default does not guess an agent.",
+        "Chat-style defaults open as chat, terminal defaults as terminal.",
+        "Applies after a skipped run only if no project had been added yet; never when a project already existed or onboarding itself already added one."
+      ],
+      "acceptance": [
+        "Default agent set, skip onboarding with no projects, add a folder → that agent starts in it.",
+        "Add a second project later → no automatic agent."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/onboarding-folder-agent-startup.test.ts:14"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "02"
+      ]
+    },
+    {
+      "id": "D-16-011",
+      "title": "First-success milestones are stamped locally and show in diagnostics",
+      "tier": "P2",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Connects a first AI, launches a first kit, opens first results; later copies terminal diagnostics.",
+      "user_sees": "Nothing during use; the copied diagnostics include when each first milestone happened.",
+      "rules": [
+        "Three milestones: first AI connected, first kit launched, first results opened.",
+        "Each is written once, the first time it happens, and never overwritten; a missing value counts as not yet.",
+        "Milestones never leave the machine."
+      ],
+      "acceptance": [
+        "Connect an AI twice → the milestone keeps the first time.",
+        "Copy terminal diagnostics after a kit launch → the kit-launched time is listed."
+      ],
+      "compat": "Milestone timestamps are part of the onboarding data the importer must carry.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/onboarding/onboarding-milestones.test.ts:22",
+        "src/main/persistence/applying-settings/onboarding-normalization.ts:240"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "19"
+      ]
+    },
+    {
+      "id": "D-16-012",
+      "title": "Grid tour runs once after the first run finishes",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Finishes onboarding by launching a kit or a plain session.",
+      "user_sees": "A three-stop callout tour on the live grid: what a session is, where its status shows (spinning, yellow, green), and where to collect results.",
+      "rules": [
+        "Starts only after a kit or plain-session finish, and only once; skip and folder-picker finishes do not start it.",
+        "Uses the same overlay, skip and progress rules as every contextual tour."
+      ],
+      "acceptance": [
+        "Finish with 'Just open a session' → tour points at the terminal, then the sidebar, then the kit results.",
+        "Skip onboarding → no tour."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/contextual-tours.ts:233",
+        "src/shared/contextual-tours.test.ts:198",
+        "src/renderer/src/components/onboarding/use-onboarding-flow.test.ts:151"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "15"
+      ]
+    },
+    {
+      "id": "D-16-013",
+      "title": "Newcomer setup checklist (four plain first-success items)",
+      "tier": "H",
+      "pushed": 6,
+      "state": "half-done",
+      "user_does": "Opens the setup checklist as a newcomer.",
+      "user_sees": "Intended: a short checklist of connect an AI, run a kit, open results, run on your own file, with a one-time toast when all four are done.",
+      "rules": [
+        "Items derive from connection state and the milestones; the list counts as done only when ready and all four are ticked.",
+        "The all-done toast fires once per profile, not per launch, and not on re-renders.",
+        "Gate defect at 0.15.0: the checklist only appears for profiles on onboarding flow version 5, but every profile is migrated to version 7 on load, so nobody sees it; the generic eight-step setup guide shows instead.",
+        "The checklist always points at the first unticked item in a fixed order (connect an AI, run a kit, open results, run on your own file); once all four are ticked there is no next item."
+      ],
+      "acceptance": [
+        "If built: a new profile that finishes onboarding sees the four-item list; completing all four shows one toast that never repeats."
+      ],
+      "compat": "",
+      "decision": "H: default build. It is the newcomer path the business frame designed; at 0.15.0 it is unreachable only because of a version-gate mismatch.",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/newcomer-setup-checklist-items.ts:52",
+        "src/renderer/src/components/feature-wall/newcomer-setup-checklist-completion-toast.test.ts:52",
+        "src/main/persistence/applying-settings/onboarding-normalization.ts:246",
+        "src/renderer/src/components/feature-wall/newcomer-setup-checklist-items.test.ts:93"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-16-014",
+      "title": "Setup Guide dialog with a progress ring and step list",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens Help › 'Getting Started with Kolux', the sidebar checklist entry, or 'Milestones' in the sidebar help menu.",
+      "user_sees": "A dialog with a progress ring (core steps done of total), a step list grouped into a Setup section followed by a numbered parallel-work section, and the selected step's action on the right; an eye-off button hides the checklist from the sidebar.",
+      "rules": [
+        "Eight steps: Multi-task, Use Kolux's browser, notifications, default agent, Enable Kolux CLI, Connect integrations, Automate workspace setup, Start work in multiple repos.",
+        "Opens on the first incomplete step, Setup section first, then parallel work; a caller can ask for a specific step and the guide moves on once that step completes.",
+        "The 'Milestones' help-menu item only appears while core steps are incomplete and carries a small progress ring.",
+        "Content stays mounted through the close animation; reopening during that time cancels the unmount.",
+        "Step names and descriptions exist in English and Korean."
+      ],
+      "acceptance": [
+        "Open from Help → first incomplete step is selected.",
+        "Complete every core step → 'Milestones' disappears from the help menu.",
+        "Close and reopen quickly → no flicker of empty content."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/setup-guide/SetupGuideModal.tsx:30",
+        "src/shared/feature-wall-setup-steps.ts:27",
+        "src/renderer/src/components/feature-wall/feature-wall-setup-progress.test.ts:68",
+        "src/renderer/src/components/setup-guide/SetupGuideModal.mount-gating.test.tsx:134",
+        "src/renderer/src/components/sidebar/SidebarSettingsHelpMenu.tsx:258",
+        "registry:menu-items:Getting Started with Kolux"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "17"
+      ]
+    },
+    {
+      "id": "D-16-015",
+      "title": "Setup Guide steps complete from real state, not from clicks",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Works normally; the guide ticks steps off as things become true.",
+      "user_sees": "Ticks appear only when the underlying thing exists.",
+      "rules": [
+        "Multi-task: done once a real non-main workspace exists beyond the main checkout; a placeholder or two main checkouts do not count.",
+        "Browser: done once a non-blank page has been viewed.",
+        "Multiple repos: done from the durable count of git projects (two or more).",
+        "Integrations: done when any supported provider is connected, not while checks are pending.",
+        "CLI and capabilities: done only when required skills and permissions are ready; an unavailable desktop-control capability never blocks it; starting setup alone does not count.",
+        "Workspace setup script: readiness resets when inputs change, ignores late older results, and a failed probe settles as no script.",
+        "Old profiles that had finished the earlier steps, or had dismissed the sidebar checklist, count as legacy-complete everywhere; a failed status read is not treated as completion.",
+        "A retired split-terminal step no longer counts toward progress."
+      ],
+      "acceptance": [
+        "Only the main checkout exists → Multi-task not ticked; create one workspace → ticked.",
+        "Open a blank browser tab → Browser not ticked; load a page → ticked."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/feature-wall-setup-progress.test.ts:206",
+        "src/renderer/src/components/setup-guide/use-setup-guide-progress.test.ts:46"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "13"
+      ]
+    },
+    {
+      "id": "D-16-016",
+      "title": "Setup Guide step actions for workspaces, notifications and default agent",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses the action panel of a selected step.",
+      "user_sees": "Multi-task opens the new-workspace composer with a short tour; notifications shows sound choices and, on macOS, a permission card; default agent shows an agent picker with a collapsible list of fallback agents; the setup-script step offers to automate workspace setup.",
+      "rules": [
+        "Actions that need a project first ask for one; workspace creation uses the active git project, else the first git project; folders without git never qualify.",
+        "A stale composer request after close and reopen is ignored; tour retries only fire on the expected screen.",
+        "The macOS permission card stays hidden until the delivery check returns: delivered means enabled, pending means awaiting, a first rejection reads as an unanswered dialog, a later rejection as blocked; it is hidden where notifications are unsupported.",
+        "No volume slider is shown for non-system sounds; the old per-source notification switches are gone.",
+        "The fallback-agents list sits behind a summary toggle whose label reads show while collapsed and hide while expanded."
+      ],
+      "acceptance": [
+        "Only a non-git folder added → Multi-task asks for a git project.",
+        "macOS, notifications previously denied → card reads as blocked."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/FeatureWallSetupWorkflowActions.test.tsx:1",
+        "src/renderer/src/components/onboarding/NotificationStep.test.tsx:52",
+        "src/renderer/src/components/onboarding/AgentStep.test.tsx:1",
+        "src/renderer/src/components/feature-wall/FeatureWallSetupChecklist.tsx:167",
+        "src/renderer/src/components/onboarding/AgentStep.test.tsx:29"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "02",
+        "04"
+      ]
+    },
+    {
+      "id": "D-16-017",
+      "title": "Enable Kolux CLI step installs the CLI and agent skills",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Selects the capabilities to set up (CLI, skills such as orchestration and browser use) and runs setup.",
+      "user_sees": "A checklist of capabilities with missing ones preselected and ready ones unchecked, an explanation of CLI registration before install, a small inline terminal with the install command already typed at its prompt, waiting for the user to press Enter, and a copyable command.",
+      "rules": [
+        "Every setup item defaults on so first-launch setup is ready to run.",
+        "Selected skills install through one combined command; selecting only orchestration never touches browser or desktop-control setup.",
+        "On Windows with WSL, commands run through the chosen WSL distro; if that runtime needs repair they fall back to the host, and the runtime chosen at start is kept for the run.",
+        "A copied command is shaped for the target shell; failure to copy warns.",
+        "If PATH cannot be read from the registry, it warns without changing PATH.",
+        "On macOS a Full Disk Access prompt appears only for statuses the user can act on, refreshes when Kolux regains focus, opens the system setting, and never appears on other systems.",
+        "Clearing every selection clears the setup markers.",
+        "The inline setup terminal opens in the user's shell, waits until a prompt is visible (or, when no prompt text can be read, until the terminal has been up briefly), then types the setup command without running it; a short note under it says to press Enter.",
+        "It gives up waiting for the prompt after a capped number of checks (about fifty) instead of polling forever.",
+        "If the shell the terminal ends up in changes, for example from a WSL distro to the host, the command is re-shaped for that shell and typed again; the same command is never typed twice into the same terminal.",
+        "When the setup shell exits, installed skills are re-detected so the step can tick off; exit results from any other terminal are ignored.",
+        "When the setup panel disappears, its terminal is closed so no installer keeps running out of sight."
+      ],
+      "acceptance": [
+        "CLI installed but skills missing → only skills preselected.",
+        "WSL distro broken → setup runs on the Windows host.",
+        "Windows → no Full Disk Access prompt.",
+        "Open the CLI step → the inline terminal shows the install command at the prompt, not yet run; press Enter → it runs, and when the shell exits the step re-checks and ticks off if the skills are now installed."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/AgentCapabilitiesSetupAction.test.ts:26",
+        "src/renderer/src/components/onboarding/onboarding-feature-setup.test.ts:276",
+        "src/renderer/src/components/onboarding/FeatureSetupInlineTerminal.test.tsx:1",
+        "src/renderer/src/components/feature-wall/FullDiskAccessSetupPrompt.test.ts:83",
+        "src/shared/feature-wall-setup-steps.ts:53",
+        "src/renderer/src/components/onboarding/OnboardingInlineCommandTerminal.tsx:213",
+        "src/renderer/src/components/onboarding/OnboardingInlineCommandTerminal.tsx:262",
+        "src/renderer/src/components/onboarding/OnboardingInlineCommandTerminal.tsx:138",
+        "src/renderer/src/components/onboarding/OnboardingInlineCommandTerminal.tsx:370",
+        "src/renderer/src/components/onboarding/OnboardingInlineCommandTerminal.test.ts:8",
+        "src/renderer/src/components/onboarding/OnboardingInlineCommandTerminal.command-finished.test.tsx:81",
+        "src/renderer/src/components/onboarding/OnboardingInlineCommandTerminal.command-finished.test.tsx:155",
+        "src/renderer/src/components/onboarding/FeatureSetupInlineTerminal.tsx:93",
+        "src/renderer/src/components/onboarding/FeatureSetupInlineTerminal.tsx:100"
+      ],
+      "round": 0,
+      "related": [
+        "20",
+        "15"
+      ]
+    },
+    {
+      "id": "D-16-018",
+      "title": "Connect integrations step: GitHub review and tasks",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Connects GitHub from the Connect integrations step.",
+      "user_sees": "A review step and a task-source step; once GitHub is connected both resolve and the task step collapses to a summary listing the connected source.",
+      "rules": [
+        "The review step is active first and the task step waits, collapsed but openable.",
+        "A connected code host completes the task step only after review is connected and tracker checks have settled.",
+        "Cached sign-in is not shown as connected while checks are stale or errored; a failed token sign-in is not review-ready.",
+        "Rebuild keeps GitHub only (see the cut card for other providers)."
+      ],
+      "acceptance": [
+        "Nothing connected → review active, tasks upcoming.",
+        "Connect GitHub → both steps done and GitHub listed in the summary."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/use-integration-connection-status.test.ts:77",
+        "src/renderer/src/components/feature-wall/ConnectIntegrationsList.test.tsx:1",
+        "src/shared/feature-wall-setup-steps.ts:60"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-16-019",
+      "title": "Non-GitHub providers in the setup guide and feature wall",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Would connect GitLab, Linear or Jira from the integrations step or the Tasks stop of Explore Kolux.",
+      "user_sees": "Provider rows and tracker-first ordering for those services.",
+      "rules": [
+        "Trackers were listed before code hosts; a tracker connected first completed the task step on its own."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: GitLab, Bitbucket, Azure DevOps, Gitea, Jira and Linear are dropped by owner (table 1b); GitHub stays. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/ConnectIntegrationsList.test.tsx:1",
+        "src/renderer/src/components/feature-wall/FeatureWallBody.tsx:121"
+      ],
+      "round": 0,
+      "related": [
+        "11"
+      ]
+    },
+    {
+      "id": "D-16-020",
+      "title": "Sidebar onboarding checklist entry",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Sees a checklist entry in the left sidebar after onboarding; clicks it or picks 'Hide from sidebar'.",
+      "user_sees": "A compact entry with progress that opens the Setup Guide, and a hide option.",
+      "rules": [
+        "Hiding persists.",
+        "On every load the entry counts as dismissed once onboarding has ever closed, so in practice it only shows in the session in which onboarding closed.",
+        "The newcomer variant is used only for newcomer profiles (unreachable, see the newcomer checklist card).",
+        "A finished setup never makes the entry flash into view while capability checks are still loading.",
+        "Only an explicit hide counts as hidden when saved state loads."
+      ],
+      "acceptance": [
+        "Finish onboarding → entry visible; relaunch → entry gone.",
+        "'Hide from sidebar' → entry gone and stays gone.",
+        "Relaunch with every step done while capability checks are slow → the entry never appears, not even briefly."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/sidebar/SetupGuideSidebarEntry.tsx:29",
+        "src/main/persistence/applying-settings/onboarding-normalization.ts:287",
+        "tests/e2e/setup-guide-sidebar.spec.ts:19",
+        "src/renderer/src/store/slices/ui-notice-dismissals.test.ts:99"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-16-021",
+      "title": "Onboarding checklist settings section",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Would open Settings and pick the onboarding checklist section.",
+      "user_sees": "The Setup Guide content embedded as a settings page.",
+      "rules": [
+        "The guide keeps its own dialog and Help entry; only the settings section goes."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: setup-guide settings section removed by owner (table 1b); the guide keeps its own view. Revive via DECISIONS.md.",
+      "evidence": [
+        "registry:settings-sections:setup-guide",
+        "src/renderer/src/components/settings/settings-setup-workflow-section-renderers.tsx:24"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-16-022",
+      "title": "Explore Kolux workflow tour",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens Help › 'Explore Kolux', moves through workflows with Continue or the left rail.",
+      "user_sees": "A large dialog describing itself as a short workflow-by-workflow tour: a rail of five workflows (workspaces, tasks, agents, workbench, review), each with an animated visual, a short caption, a docs link and Optional/Completed markers.",
+      "rules": [
+        "Agents has sub-stops statuses, usage, orchestration; workbench has terminal, editor, browser; review has notes, PR view, ship.",
+        "Continue walks through sub-stops before the next workflow and uses the Ctrl/Cmd+Enter screen shortcut.",
+        "The rail answers ArrowUp, ArrowDown, Home and End, clamped at both ends.",
+        "The Tasks stop shows unified task copy without leaving the walkthrough."
+      ],
+      "acceptance": [
+        "Help › 'Explore Kolux' → dialog opens on workspaces with the rail visible.",
+        "On agents, Continue → statuses, usage, orchestration, then workbench.",
+        "Focus the rail and press End → last workflow selected."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "tests/e2e/feature-wall.spec.ts:31",
+        "src/shared/feature-wall-workflows.ts:1",
+        "src/renderer/src/components/feature-wall/feature-wall-rail-navigation.test.ts:29",
+        "registry:menu-items:Explore Kolux"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-16-023",
+      "title": "Explore Kolux completion requires a visit plus the real setup",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Visits workflows and sub-stops, sets things up, reopens the tour later.",
+      "user_sees": "Checkmarks only on stops the user has visited and, where setup is involved, actually configured; they survive reopening.",
+      "rules": [
+        "Nothing is pre-checked because it is already configured; the user must visit it in the tour.",
+        "Tasks completes after visiting and a task source is connected; orchestration needs a visit and the orchestration skill detected; browser needs the browser-use skill.",
+        "Once complete, a stop or workflow stays complete even if detection later reports unavailable.",
+        "Visits are restored on reopen; unknown or duplicate ids are dropped.",
+        "Visit state lives in per-browser local storage, not the profile."
+      ],
+      "acceptance": [
+        "Configure GitHub, open the tour → Tasks not checked until visited.",
+        "Complete review, reopen → still checked."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/use-feature-wall-completion.test.ts:1",
+        "src/renderer/src/components/feature-wall/feature-wall-completion-persistence.ts:12",
+        "tests/e2e/feature-wall.spec.ts:31"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-16-024",
+      "title": "Explore Kolux stops carry inline setup cards",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Changes a setting from inside a tour stop.",
+      "user_sees": "Per-stop setup: tasks shows provider rows; agent statuses shows a keep-PC-awake card; usage shows connected accounts; orchestration and browser stops show a skill setup card with an inline terminal; PR view shows GitHub; ship shows AI commit and PR text settings.",
+      "rules": [
+        "Keep-awake turns on its automatic mode from off; either on mode can be turned off.",
+        "Usage counts as connected from managed accounts or from the provider's own default rate-limit data, even before live quota arrives.",
+        "Inline setup terminals are shorter when shown inside onboarding than in the tour."
+      ],
+      "acceptance": [
+        "Keep-awake off → card switch turns on automatic mode.",
+        "Codex signed in outside Kolux → usage stop shows connected."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/FeatureWallBody.tsx:121",
+        "src/renderer/src/components/feature-wall/KeepAwakeCard.test.tsx:12",
+        "src/renderer/src/components/feature-wall/feature-wall-usage-tracking.test.ts:21"
+      ],
+      "round": 0,
+      "related": [
+        "03",
+        "06",
+        "08",
+        "11",
+        "13"
+      ]
+    },
+    {
+      "id": "D-16-025",
+      "title": "Explore Kolux animated visuals respect visibility and platform",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Watches a tour stop, switches away and back.",
+      "user_sees": "Looping demos (workspace card rotation, workbench run queue, agent-status cycle, browser storyboard) that pause while hidden and resume where they left off; shortcut labels match the platform.",
+      "rules": [
+        "Hidden demos pause and resume without skipping ahead.",
+        "Windows shows Ctrl-style shortcut copy in workbench and browser demos.",
+        "The browser demo keeps a fixed storyboard order and cycle length."
+      ],
+      "acceptance": [
+        "Hide the window mid-rotation, return → same card continues.",
+        "On Windows → no Cmd symbols in the demos."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/feature-wall-animation-visibility.test.tsx:49",
+        "src/renderer/src/components/feature-wall/feature-wall-shortcut-labels.test.tsx:22",
+        "src/renderer/src/components/feature-wall/browser-animated-visual-sequence.test.ts:1"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-16-026",
+      "title": "Feature tile recordings and third-party names in tile captions",
+      "tier": "X",
+      "pushed": 10,
+      "state": "live-unverified",
+      "user_does": "Views the media tiles that feature the product.",
+      "user_sees": "Twelve animated tiles with poster frames, recorded before Kolux existed, with captions naming other tools (a terminal and an editor by brand, plus a list of agent CLIs).",
+      "rules": [
+        "Each tile has an animation, a poster image and a recording-date record.",
+        "One tile shows remote workspaces, which belongs to the dropped remote area."
+      ],
+      "acceptance": [
+        "Replacement tiles are recorded from Kolux RS itself and captions avoid other products' brands."
+      ],
+      "compat": "",
+      "decision": "X: replace with the owner's own recordings of Kolux RS and own captions; drop the remote-workspaces tile with area 18.",
+      "evidence": [
+        "src/shared/feature-wall-tiles.ts:59",
+        "resources/onboarding/feature-wall/tile-01.recorded-at.json:1"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-16-027",
+      "title": "Startup feature tips: one tip per launch, in priority order",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Opens Kolux as an existing user.",
+      "user_sees": "At most one small tip dialog at launch: first the CLI tip, later the command-palette tip, then none.",
+      "rules": [
+        "New tips come before older ones; seen tips and tips for features already done are skipped.",
+        "Never shown while onboarding is showing, and not later in that same session.",
+        "Waits until saved UI state is ready, settings and onboarding are loaded, no modal is open and the CLI install status is known.",
+        "The CLI tip is skipped when the CLI is unsupported or installed and on PATH; installed but off PATH still counts as not done.",
+        "If the CLI status read fails, the CLI is treated as installed.",
+        "A tip is marked seen the moment it is shown.",
+        "A tip already on screen stays open after it has been marked seen; it closes only when the user acts on it.",
+        "Seen tips are saved once; unknown tip ids from older data are dropped on load."
+      ],
+      "acceptance": [
+        "Existing user without CLI → CLI tip on launch; relaunch → palette tip; relaunch → no tip.",
+        "First-time user → no tip during or after onboarding in that session."
+      ],
+      "compat": "Seen-tip ids are a data category the importer should carry.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-tips/feature-tip-startup-gate.test.ts:40",
+        "src/shared/feature-tips.test.ts:11",
+        "src/renderer/src/components/app-shell/use-onboarding-and-feature-tips.ts:53",
+        "src/renderer/src/components/feature-tips/feature-tip-modal-state.test.ts:5",
+        "src/renderer/src/store/slices/ui-notice-dismissals.test.ts:47"
+      ],
+      "round": 0,
+      "related": [
+        "20"
+      ]
+    },
+    {
+      "id": "D-16-028",
+      "title": "CLI feature tip installs the CLI and skills",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks 'Install CLI & Skills' in the CLI tip.",
+      "user_sees": "A tip describing concrete things the CLI enables, an install action with an inline setup terminal, and a result of installed or needs attention.",
+      "rules": [
+        "Result is installed only after clean registration; needs attention if install did not finish cleanly or the launcher is installed but not on PATH.",
+        "On Windows with a broken WSL runtime the setup runs on the host instead.",
+        "The tip's inline terminal behaves like the Setup Guide's CLI step: the command is typed at the prompt and runs only when the user presses Enter."
+      ],
+      "acceptance": [
+        "Install succeeds and is on PATH → installed.",
+        "Installed but not on PATH → needs attention."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-tips/feature-tip-cli-install-action.test.ts:1",
+        "src/renderer/src/components/feature-tips/CliSkillSetupTerminal.test.tsx:1",
+        "src/shared/feature-tips.ts:33",
+        "src/renderer/src/components/feature-tips/CliSkillSetupTerminal.tsx:92"
+      ],
+      "round": 0,
+      "related": [
+        "20",
+        "15"
+      ]
+    },
+    {
+      "id": "D-16-029",
+      "title": "Command palette tip with a one-shot demo",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Sees the palette tip and clicks 'Got it'.",
+      "user_sees": "A dialog with a tip badge, a title that includes the live palette shortcut as key chips, a short demo of typing in the palette that reveals a create-workspace row, and a note on how to rebind.",
+      "rules": [
+        "Shortcut chips follow the user's binding; an unassigned binding falls back to the default; double-tap bindings show without plus signs.",
+        "The demo plays once and settles; with reduced motion it shows the end state with no timers.",
+        "The tip is a passive acknowledgement, not an action."
+      ],
+      "acceptance": [
+        "Rebind the palette → tip title shows the new keys.",
+        "Reduced motion on → static end state."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/feature-tips/CmdJPaletteTipDialog.test.tsx:63",
+        "src/renderer/src/components/feature-tips/CmdJPaletteFeatureTipVisual.test.tsx:47",
+        "src/shared/feature-tips.ts:43"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "17"
+      ]
+    },
+    {
+      "id": "D-16-030",
+      "title": "Voice dictation feature tip",
+      "tier": "H",
+      "pushed": null,
+      "state": "retired 2026-10-05",
+      "user_does": "Would have been told about desktop voice dictation at launch.",
+      "user_sees": "Nothing now; the tip id is still accepted from older data but never saved or shown.",
+      "rules": [
+        "Retired with desktop voice and dictation."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/shared/feature-tips.ts:7"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-16-031",
+      "title": "Contextual tour overlay: callouts with Back, Next, Skip and Done",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Follows a tour that appears next to a real control.",
+      "user_sees": "A floating panel anchored to the target with step copy, progress dots and a step label, Back/Next/Skip buttons, Done on the last step, and an optional pulsing ring on the target.",
+      "rules": [
+        "Single-step tours show no step label; Back is hidden on the first visible step.",
+        "Some steps replace Next with an action button, or hide it when the real control is the call to action.",
+        "Escape acts as Skip before page shortcuts see it; if the panel is gone, Escape does nothing.",
+        "The panel follows its target as layout changes and re-measures cheaply; it works inside dialogs and side sheets.",
+        "Steps whose target is missing are skipped and progress counts only visible steps.",
+        "Tour copy is localized.",
+        "While the app window is hidden the panel stops its periodic re-measure, and re-measures as soon as the window is visible again.",
+        "A target that keeps moving for a few frames, or moves without any layout event, is still followed.",
+        "The panel sits on the step's preferred side of its target with an arrow pointing at it; when no side has room it stays inside the window or dialog, overlapping the target if it must."
+      ],
+      "acceptance": [
+        "Press Escape during a tour → tour ends as skipped and is not shown again.",
+        "Resize the window → panel stays attached to its target."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/contextual-tours/ContextualTourOverlay.test.tsx:109",
+        "src/renderer/src/components/contextual-tours/ContextualTourOverlay.test.tsx:245",
+        "src/renderer/src/components/contextual-tours/contextual-tour-floating-position.test.ts:1",
+        "src/renderer/src/components/contextual-tours/ContextualTourOverlay.visibility.test.tsx:75",
+        "src/renderer/src/components/contextual-tours/contextual-tour-floating-position.test.ts:362",
+        "src/renderer/src/components/contextual-tours/contextual-tour-floating-position.test.ts:389",
+        "src/renderer/src/components/contextual-tours/contextual-tour-floating-position.test.ts:62",
+        "src/renderer/src/components/contextual-tours/contextual-tour-floating-position.test.ts:104"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-16-032",
+      "title": "Contextual tours show once, only for new profiles, when the target is ready",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Visits a feature for the first time.",
+      "user_sees": "A tour the first time only, if this profile started with onboarding; explicit buttons can replay a tour at any time.",
+      "rules": [
+        "Auto-tour eligibility is decided once: profiles that saw onboarding at first load are eligible; existing profiles never get automatic tours.",
+        "No tour until onboarding has loaded, and none while it shows.",
+        "A tour starts only after saved seen-ids load and its first target is visible and measurable; hidden copies are passed over; if measurement fails the tour does not start and is not marked seen.",
+        "No tour starts over a confirmation dialog; only the workspace-creation tour may run over its own composer.",
+        "Skipping or finishing marks the tour seen once; stale dismissals for another tour are ignored.",
+        "If the feature that owns a tour turns off, the tour is suppressed unless it was intentionally detached.",
+        "A forced request from a button retries until the target appears, stops if another tour starts or the user moves away, and can wait for another tour to clear.",
+        "A tour waiting for its first target gives up after a capped number of tries (about 20) instead of watching forever.",
+        "At most one tour starts on its own per app session; a tour cancelled before it ever appeared frees that slot, one that already appeared keeps it used. A replay button ignores both the per-session limit and the seen list."
+      ],
+      "acceptance": [
+        "Existing profile updates → no automatic tours.",
+        "New profile opens the browser pane → browser tour once; second visit → none.",
+        "Click a replay button with tours exhausted → tour runs.",
+        "Enable a tour whose target never renders → after the retry cap nothing is still watching and no tour appears.",
+        "Meet two surfaces with unseen tours in one session → only the first tour appears on its own; the second waits for the next launch, but its replay button still opens it now."
+      ],
+      "compat": "Seen tour ids and auto-tour eligibility are a data category the importer should carry.",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/contextual-tours/contextual-tour-gate.test.ts:209",
+        "src/renderer/src/store/slices/ui-contextual-tours.test.ts:235",
+        "src/renderer/src/store/slices/ui-contextual-tours.test.ts:246",
+        "src/renderer/src/components/contextual-tours/request-contextual-tour-when-ready.test.ts:11",
+        "src/renderer/src/components/app-shell/use-onboarding-and-feature-tips.ts:53",
+        "src/renderer/src/components/contextual-tours/use-contextual-tour-target-watch.test.tsx:68",
+        "src/renderer/src/components/contextual-tours/use-contextual-tour.ts:26",
+        "src/renderer/src/store/slices/ui/ui-slice-tour-actions.ts:57",
+        "src/renderer/src/store/slices/ui/ui-slice-tour-actions.ts:213",
+        "src/renderer/src/store/slices/ui-contextual-tours.test.ts:469",
+        "src/renderer/src/components/contextual-tours/use-contextual-tour.ts:181"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-16-033",
+      "title": "Contextual tour catalogue",
+      "tier": "P1",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Meets each surface for the first time.",
+      "user_sees": "Short tours for: the board (plan, move through lanes to done); running agents in parallel (split a pane, then start another task); the browser pane (grab, annotate, keep logged in by importing cookies); tasks (source, filter, start from a row); automations (create, then results); the floating workspace (works across all projects, scratchpad); workspace creation (pick project, name or reuse work, choose agent); and the post-onboarding grid tour.",
+      "rules": [
+        "The parallel-agents tour advances from the split step when the split command runs, opens the sidebar if the create button is hidden, and cancels if that button is absent.",
+        "The browser cookie step waits until its menu row can be measured, falling back from a hint button to the overflow menu row.",
+        "The floating workspace tour falls back to the panel surface when its list is empty.",
+        "The workspace-creation tour hands off into the composer; enabling first-message auto-naming clears a generated name, disabling it leaves the name.",
+        "The parallel-agents tour offers itself only on an active workspace terminal tab, and only to people who have never split a pane.",
+        "Opening the workspace composer from anywhere other than the parallel-agents tour's create step starts no tour handoff.",
+        "The browser tour's progress always counts its three steps, even while the cookie step's target is not yet visible.",
+        "The tasks tour points first at a row's start-work action and only then at toolbar controls.",
+        "The parallel-agents tour's first step has a 'Split terminal' button that splits the current tab side by side; with no active tab the button does nothing."
+      ],
+      "acceptance": [
+        "Split a pane during the parallel-agents tour → tour moves to the create-workspace step.",
+        "Tour ids saved by an older version that no longer exist are dropped on load.",
+        "Profile that has split a pane before opens a new workspace → no parallel-agents tour."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/contextual-tours.ts:60",
+        "src/shared/contextual-tours.test.ts:1",
+        "src/renderer/src/components/contextual-tours/workspace-creation-tour-handoff.test.ts:1",
+        "src/renderer/src/components/contextual-tours/ContextualTourControl.test.ts:1",
+        "src/renderer/src/components/use-terminal-workspace-projection.ts:87",
+        "src/renderer/src/components/contextual-tours/workspace-creation-tour-handoff.test.ts:16",
+        "src/renderer/src/components/contextual-tours/contextual-tour-overlay-measurement.test.ts:102",
+        "src/shared/contextual-tours.test.ts:129",
+        "tests/e2e/golden-core-flows.spec.ts:430",
+        "src/shared/contextual-tours.ts:87",
+        "src/renderer/src/components/contextual-tours/contextual-tour-step-actions.ts:34",
+        "src/renderer/src/components/contextual-tours/contextual-tour-step-actions.test.ts:33"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "09",
+        "11",
+        "13",
+        "01",
+        "03"
+      ]
+    },
+    {
+      "id": "D-16-034",
+      "title": "Hosted-browser tour for remote setups",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Would be guided to the client-hosted browser setting.",
+      "user_sees": "A tour that opened the hosted-browser settings for remote workspaces.",
+      "rules": [
+        "Belongs to the remote and hosts area."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: area 18 (remote and hosts) dropped by owner. Revive via DECISIONS.md.",
+      "evidence": [
+        "src/shared/contextual-tours.ts:129"
+      ],
+      "round": 0,
+      "related": [
+        "13"
+      ]
+    },
+    {
+      "id": "D-16-035",
+      "title": "Developer builds suppress first-run education",
+      "tier": "H",
+      "pushed": null,
+      "state": "dev-only",
+      "user_does": "Runs a development build.",
+      "user_sees": "No onboarding, no tips and no automatic tours, unless a developer environment variable asks for them.",
+      "rules": [
+        "Onboarding is closed, all tips and tours are marked seen, and auto tours are turned off.",
+        "End-to-end test data folders and the opt-in variable keep education on."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "Environment variable KOLUX_DEV_SHOW_FIRST_RUN_EDUCATION=1 re-enables first-run education in dev builds.",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/main/startup/dev-education-suppression.ts:11"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-16-036",
+      "title": "Plain-language rule and jargon guard on newcomer paths",
+      "tier": "P1",
+      "pushed": 6,
+      "state": "live-unverified",
+      "user_does": "Reads onboarding, Add Project, the non-git folder dialog, the launcher, sidebar labels, Connect cards and error toasts.",
+      "user_sees": "Everyday words first, with the precise technical term available on hover.",
+      "rules": [
+        "Banned in visible text on these paths: worktree, checkout, clone, repo, PTY, CLI, shell.",
+        "Product names stay allowed: PowerShell, GitHub, Git Bash.",
+        "Hover and explanation text may carry the technical term.",
+        "A shared glossary maps each technical term to its plain word and supplies Connect-card strings.",
+        "An automated check scans in-scope screens' text and fails the build when a banned term appears."
+      ],
+      "acceptance": [
+        "Grep newcomer screens' visible strings → no banned term.",
+        "Hover a plain label → the technical term appears."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/plain-language-glossary.ts:20",
+        "src/renderer/src/i18n/plain-language-jargon-guard.ts:20",
+        "src/renderer/src/i18n/plain-language-jargon-guard.ts:26"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "02",
+        "07",
+        "17"
+      ]
+    },
+    {
+      "id": "D-16-037",
+      "title": "GitHub star prompt: when it appears",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses Kolux: launches many agents, gets a finished result, or finishes onboarding.",
+      "user_sees": "A card asking for a GitHub star after enough agents, after a finished task, or a toast right after onboarding completes.",
+      "rules": [
+        "Threshold: 35 agents launched since the baseline taken for the current app version; every update resets the baseline unless the user already completed the prompt.",
+        "'Later' starts a three-day cooldown and doubles the next threshold.",
+        "A finished-task moment fires once per app version: after a non-interrupted completion of a prompted session, once other live agents and typing have been quiet for about a second.",
+        "The onboarding-completed prompt uses a toast and replaces any visible threshold card; if a check is in flight it queues behind it.",
+        "If the user has already starred, nothing shows and a visible card is hidden.",
+        "Prompts are never shown while a cooldown is active, after completion, or when no window can receive them; a forced show bypasses the cooldown.",
+        "A finished-task moment that arrives during a cooldown is used up for that app version and does not show later in it; one that finds no window to show in is not used up.",
+        "A dismissal counts only while a prompt is showing and only once per prompt: stray or repeated dismissals neither restart the cooldown nor double the threshold again."
+      ],
+      "acceptance": [
+        "Launch 35 agents in a new version → card shows.",
+        "Click 'Later' → nothing for three days, then only after 70 more agents.",
+        "Finish onboarding → star toast appears."
+      ],
+      "compat": "Star-prompt state (baseline, next threshold, cooldown, completed) is a data category the importer should carry.",
+      "decision": "",
+      "evidence": [
+        "src/main/star-nag/threshold-trigger.ts:30",
+        "src/main/star-nag/service.ts:21",
+        "src/main/star-nag/service-threshold-prompt.test.ts:161",
+        "src/main/star-nag/service-prompt-moments.test.ts:62",
+        "src/renderer/src/components/star-nag/StarNagAgentValueMomentObserver.test.tsx:108",
+        "src/shared/constants.ts:105",
+        "src/main/star-nag/service-prompt-moments.test.ts:90",
+        "src/main/star-nag/service-prompt-moments.test.ts:110",
+        "src/main/star-nag/service-force-show-races.test.ts:258"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "19"
+      ]
+    },
+    {
+      "id": "D-16-038",
+      "title": "GitHub star prompt: starring and its states",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Clicks 'Star on GitHub', 'Later' or 'Dismiss' in the card or toast; or uses the star button in Settings General or the landing screen.",
+      "user_sees": "The star is applied directly through the user's GitHub sign-in, with a busy state and then a thank-you; if direct starring is not possible, an 'Open GitHub' button opens the repo page instead.",
+      "rules": [
+        "Success is confirmed only after the direct star succeeds.",
+        "If the star state cannot be checked, the browser fallback is offered; a failed direct star switches to the fallback.",
+        "While busy, Dismiss and closing are disabled; duplicate in-flight stars are ignored and a thrown attempt can be retried.",
+        "Replacing or hiding the toast is not counted as the user dismissing it.",
+        "The landing-screen star updates optimistically.",
+        "If the user dismisses while a direct star is still running and it then fails, the cooldown stands and the prompt does not come back."
+      ],
+      "acceptance": [
+        "Signed in to GitHub → 'Star on GitHub' → busy → thank-you.",
+        "Not signed in → 'Open GitHub' opens the repo in the browser."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/star-nag/StarNagToastHost.test.tsx:118",
+        "src/main/star-nag/service-direct-star.test.ts:177",
+        "src/main/star-nag/service-threshold-prompt.test.ts:87",
+        "src/main/github/client/fetch/kolux-star.ts:21",
+        "src/renderer/src/components/StarNagCard.tsx:23",
+        "src/renderer/src/components/settings/GeneralSupportSection.tsx:28",
+        "src/main/star-nag/service-direct-star.test.ts:153",
+        "src/renderer/src/components/StarNagCard.test.tsx:73"
+      ],
+      "round": 0,
+      "related": [
+        "11",
+        "17"
+      ]
+    },
+    {
+      "id": "D-16-039",
+      "title": "Onboarding, tour, tip and star telemetry events",
+      "tier": "H",
+      "pushed": null,
+      "state": "hidden",
+      "user_does": "Nothing visible.",
+      "user_sees": "Nothing; events for onboarding steps, setup guide, feature wall depth, tips, tours and star outcomes are defined but telemetry is compiled off.",
+      "rules": [
+        "Payloads were privacy-safe and counted only selected items and depth."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/shared/telemetry-feature-wall-events.test.ts:1",
+        "src/main/star-nag/service-outcome-telemetry.test.ts:1",
+        "src/renderer/src/components/feature-tips/feature-tip-telemetry.test.ts:1"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-16-040",
+      "title": "Computer Use setup inside the guide and capabilities step",
+      "tier": "D",
+      "pushed": null,
+      "state": "dropped",
+      "user_does": "Would enable desktop control for agents from setup.",
+      "user_sees": "A Computer Use option preselected while permissions still needed setup, with a warning when the macOS helper app was missing.",
+      "rules": [
+        "Unavailable builds left it unchecked and it never blocked completion."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: computer use dropped by owner (table 1b). Revive via DECISIONS.md.",
+      "evidence": [
+        "src/renderer/src/components/feature-wall/AgentCapabilitiesSetupAction.test.ts:1",
+        "src/renderer/src/components/onboarding/onboarding-feature-setup.test.ts:1"
+      ],
+      "round": 0,
+      "related": [
+        "13"
+      ]
+    },
+    {
+      "id": "D-16-041",
+      "title": "Retired first-run screens",
+      "tier": "H",
+      "pushed": null,
+      "state": "retired 2026-10-04",
+      "user_does": "Would have chosen agent, theme, integrations, Windows terminal type and notifications in the older five-step wizard, or a default view in a later version.",
+      "user_sees": "Nothing now; those choices live in Settings and the Setup Guide.",
+      "rules": [
+        "The five-step wizard was replaced by the guided first run on 2026-09-28.",
+        "The default-view screen was removed on 2026-10-04."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/renderer/src/components/onboarding/onboarding-flow-state.test.ts:30",
+        "src/main/persistence/applying-settings/onboarding-normalization-first-run.test.ts:47",
+        "tests/e2e/onboarding.spec.ts:163"
+      ],
+      "round": 0,
+      "related": [
+        "17",
+        "21"
+      ]
+    },
+    {
+      "id": "D-16-042",
+      "title": "Kolux remembers locally which features each profile has used",
+      "tier": "P2",
+      "pushed": null,
+      "state": "live-unverified",
+      "user_does": "Uses features in the normal course of work: opens the board, the palette, the browser pane, Tasks, Automations, splits a pane, creates a workspace, sets up a skill, and so on.",
+      "user_sees": "Nothing directly; guidance adapts. Setup steps tick off from real use, tours aimed at a feature stop offering themselves once that feature is already familiar, and one-off hints reach only people who used the old location of a moved control.",
+      "rules": [
+        "For a fixed list of about forty features, the profile keeps the time of first use and a running count of uses.",
+        "Nothing is recorded until saved interface state has loaded; earlier uses are not counted.",
+        "Counts only grow; when saves finish out of order the newest count wins.",
+        "On load, records for unknown features and malformed records are dropped silently.",
+        "Opening a surface that has a tour counts as using that feature.",
+        "Has-used checks feed: the browser setup step, the legacy split-pane setup credit, the parallel-agents tour gate, the moved-control hint, and tips a feature use makes pointless.",
+        "The record stays on the machine; its usage-band telemetry is compiled off."
+      ],
+      "acceptance": [
+        "Fresh profile: view a non-blank page in the browser pane → the Setup Guide browser step ticks, and stays ticked after a restart.",
+        "Split a terminal pane once, then open a new workspace → the parallel-agents tour does not start.",
+        "Add an unknown feature name to the saved record → it is ignored on load and nothing errors."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/feature-interactions.ts:28",
+        "src/shared/feature-interaction-catalog.ts:58",
+        "src/shared/feature-interactions.test.ts:98",
+        "src/renderer/src/store/slices/ui-feature-interactions.test.ts:69",
+        "src/renderer/src/store/slices/ui-feature-interactions.test.ts:144",
+        "src/renderer/src/store/slices/ui-feature-interactions.test.ts:189",
+        "src/renderer/src/components/contextual-tours/use-contextual-tour.ts:34",
+        "src/renderer/src/components/feature-wall/feature-wall-setup-progress.ts:63",
+        "src/renderer/src/components/use-terminal-workspace-projection.ts:87",
+        "src/renderer/src/components/sidebar/SidebarToolbar.tsx:37",
+        "src/shared/feature-tips.ts:23"
+      ],
+      "round": 1,
+      "related": [
+        "03",
+        "05",
+        "13",
+        "19"
+      ]
+    }
+  ],
+  "notes": [
+    "Newcomer setup checklist is unreachable at 0.15.0: it is gated on onboarding flow version 5, but load migration and fresh profiles both set version 7 (newcomer-setup-checklist-items.ts vs onboarding-normalization.ts:246, constants.ts:50); carded as H default build.",
+    "Skip confirmation tells users to resume from Help › Explore Kolux, but the wizard actually reopens from the sidebar help 'Onboarding' item; Explore Kolux does not replay the grid tour, so the guided-first-run spec criterion for replay is unmet.",
+    "Sidebar onboarding checklist is forced dismissed on every load once onboarding has closed (onboarding-normalization.ts:287), so it only shows in the session where onboarding closed.",
+    "Explore Kolux visit progress is stored in per-browser localStorage, not the profile, so it is lost on profile import; the rebuild should decide whether to persist it.",
+    "Help > About milestone line from SPEC-guided-first-run was never implemented; milestones only appear in Copy terminal diagnostics.",
+    "Feature-wall tile media was recorded 2026-05-13, before the Kolux repo began, so it is upstream material (X); tile-06 shows remote workspaces and goes with area 18.",
+    "settings-keys.tsv has no onboarding, tips or tours rows; e2e onboarding.spec.ts and setup-guide-sidebar.spec.ts are mapped to area 05, not 16.",
+    "The old repo contains an untracked-looking tests/e2e/.cross-version-checkouts tree that shows up in recursive greps; it was not touched.",
+    "Critic r1: tests/e2e/onboarding.spec.ts (mapped to area 05) and the New-user golden core flow in tests/e2e/golden-core-flows.spec.ts still drive the retired five-step wizard screens (default agent, theme, notifications), not the four-screen guided first run; the rebuild needs fresh end-to-end checks for D-16-001..012.",
+    "Critic r1: D-16-017 and D-16-028 carry a rule about running CLI setup inside a WSL distro; area 18 cuts WSL execution, so the owner may want that rule dropped while keeping the host path.",
+    "Critic r1: the one-time 12-second hint that the workspace board moved (sidebar toolbar, shown only to people who had used the board) is not carded in area 05 as far as a keyword search shows; area 05 should check.",
+    "Critic r2: D-16-017 said the inline setup terminal runs the install; it only types the command and the user presses Enter. user_sees corrected and inline-terminal rules added (also referenced from D-16-028).",
+    "Critic r2: rules added to D-16-016 (fallback-agents toggle label), D-16-031 (panel placement and arrow), D-16-032 (one automatic tour per app session), D-16-033 (Split terminal step button), D-16-037 (stray or repeated star dismissals ignored). No tier, state or pushed value needed changing.",
+    "Critic r2: the step-action kinds for show workspaces, open Tasks and open Getting Started exist in code and tests but no current tour uses them; not carded as live behaviour.",
+    "Critic r2: settings-keys.tsv and readme-features.tsv still have no rows for this area; the WSL setup rules in D-16-017/D-16-028 remain open for the owner (see the r1 note)."
+  ]
+}

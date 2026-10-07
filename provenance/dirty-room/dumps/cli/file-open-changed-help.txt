@@ -1,0 +1,23 @@
+﻿kolux file open-changed
+
+Usage: kolux file open-changed [--mode edit|diff|both] [--worktree <selector>] [--json]
+
+Open all git-changed files for a workspace
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --mode <mode>          Mode such as edit, diff, or both
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+
+Notes:
+  For v1, changed files come from git status for the selected worktree.
+  The default mode is diff. Edit mode skips deleted files because there is no file to open.
+
+Examples:
+  $ kolux file open-changed
+  $ kolux file open-changed --mode both
+  $ kolux file open-changed --mode diff --worktree active
+

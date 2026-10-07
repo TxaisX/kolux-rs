@@ -1,0 +1,17 @@
+﻿kolux worktree
+
+Usage: kolux worktree <command> [options]
+
+Commands:
+  list               List Kolux-managed worktrees
+  show               Show one worktree
+  current            Show the Kolux-managed worktree for the current directory
+  create             Create a new Kolux-managed worktree
+  set                Update Kolux metadata for a worktree
+  rm                 Remove a worktree from Kolux and git
+  changes            Show a worktree's committed + uncommitted file changes since its base
+  overlap            Compare a worktree against its sibling worktrees for shared files and merge conflicts
+  ps                 Show a compact orchestration summary across worktrees
+
+Run `kolux worktree <command> --help` for command-specific usage.
+

@@ -1,0 +1,246 @@
+source,item,verdict,card_id,note
+sample,rich-markdown-review-rail-blocks.test.ts :: invalidates an in-place serializer replacement and a manager replacement,NOT-USER-FACING,,review-rail cache invalidation
+sample,editor-rekey-open-files.test.ts :: does not gate a clean destination,MAPPED,D-12-032,rule added: autosave held after a move until disk confirms
+sample,untitled-file-rename-path.test.ts :: handles nested untitled relative paths,MAPPED,D-12-054,names with folders
+sample,worktree-palette-search.test.ts :: matches the GitLab review title and number already selected by Checks,MAPPED,D-12-047,review title/number matching; GitLab provider itself is D in area 11
+sample,useEditorPanelContentState.test.tsx :: keeps a loaded unstaged diff when git status moves the row to staged,MAPPED,D-12-027,rule added: unstaged diff kept when file is staged elsewhere
+sample,markdown-round-trip.test.ts :: preserves links whose label is inline code,MAPPED,D-12-019,
+sample,monaco-auto-height.test.ts :: caps newline-heavy pasted content without splitting or walking the full payload,MAPPED,D-12-029,rule added: inline section height capped
+sample,filesystem-download-transfers.test.ts :: aborts before opening the folder picker when the renderer is already destroyed,DROP,D-12-051,remote download save dialog; area 18
+sample,pdf-view-position.test.ts :: returns null when the document reports no pages,MAPPED,D-12-022,rule added: invalid remembered position ignored
+sample,pdf-scale-preference.test.ts :: records the absolute scale so a later reload can restore it,MAPPED,D-12-022,
+sample,editor-rekey-open-files.test.ts :: migrates a pending editor reveal to the new path,MAPPED,D-12-032,rule added: pending line jump follows the move
+sample,rich-markdown-table-actions.test.ts :: gives a new column an equal share of the locked table width,MAPPED,D-12-013,rule added: new column gets equal width share
+sample,diff-editor-word-wrap-options.test.ts :: keeps long diff lines unwrapped by default,MAPPED,D-12-027,
+sample,monaco-conflict-decorations.test.ts :: stops marker existence scans after the first marker line,NOT-USER-FACING,,conflict-marker scan performance
+sample,diff-section-layout.test.ts :: lets image diffs use intrinsic height in combined diff sections,MAPPED,D-12-029,rule added: image diffs natural height
+sample,CheckRunDetailsPanel.copy.test.tsx :: renders a copy action for every card and copies each card payload,MAPPED,D-12-030,
+sample,markdown-render-mode.test.ts :: falls back to source mode when rich editing is unsupported,MAPPED,D-12-012,
+sample,worktree-palette-search.test.ts :: rejects oversized whitespace before trimming worktree palette queries,MAPPED,D-12-047,
+sample,markdown-preview-search.test.ts :: checks whole-word boundaries around astral letters by code point,MAPPED,D-12-017,rule added: whole word across scripts
+sample,use-combined-diff-section-index-map.test.tsx :: rebuilds when a section key changes in place,NOT-USER-FACING,,section index memo rebuild
+sample,combined-diff-section-cache-match.test.ts :: rejects cached sections when a same-path entry has new line counts,MAPPED,D-12-029,rule added: cached sections reused only when unchanged
+sample,diff-navigation-context.test.tsx :: exposes the change count and routes nav actions to the registered editor,MAPPED,D-12-027,rule added: change buttons disabled at zero changes
+sample,editor-file-operation-owner.test.ts :: rejects a restored external SSH file after its target changes,DROP,D-12-051,SSH external file; area 18
+sample,diff-section-layout.test.ts :: falls back to line-count height before Monaco has mounted,MAPPED,D-12-029,rule added: estimated height before render
+sample,image-viewer-zoom.test.ts :: leaves scroll unchanged when the current zoom is invalid,MAPPED,D-12-021,
+sample,rich-markdown-code-block-languages.test.ts :: caches the resolved list so repeated renders skip i18next lookups,NOT-USER-FACING,,translation lookup caching
+sample,rich-markdown-html-superscript-link.test.ts :: keeps source matching linear across many rejected candidates,NOT-USER-FACING,,citation parser performance
+sample,pdf-view-position.test.ts :: returns null when left is missing,MAPPED,D-12-022,
+sample,editor-external-watch-path-index.test.ts :: matches /mnt drive aliases without folding WSL filesystem case,MAPPED,D-12-044,rule added: WSL path and drive alias are one file for change detection
+sample,markdown-preview-search.test.ts :: uses Cmd+Option+F on macOS,MAPPED,D-12-017,rule added: replace shortcut in markdown
+sample,editor-file-operation-owner.test.ts :: round-trips capture and assert for a local folder workspace,NOT-USER-FACING,,owner capture round trip plumbing
+sample,runtime-workspace-file-route.test.ts :: routes direct SSH siblings only on the exact SSH host,DROP,D-12-051,SSH host routing; area 18
+sample,pdf-view-position.test.ts :: returns an in-range position untouched,MAPPED,D-12-022,
+sample,monaco-reveal-range.test.ts :: falls back to a one-column range when match length is zero,MAPPED,D-12-037,zero-length match still reveals
+sample,runtime-workspace-file-route.test.ts :: routes a file through its sibling worktree on the same runtime,DROP,D-12-051,routing through a remote runtime; area 18
+sample,setup-contextual-copy.test.ts :: polls a focused editor while a contextual copy hint is visible,MAPPED,D-12-007,rule added: copy-context hint beside the selection
+sample,editor-panel-render-model.test.ts :: disables export when an inline markdown tab renders Changes mode,NEW,D-12-056,Changes view on edit tabs; export disabled there
+sample,"useEditorPanelContentState.test.tsx :: routes reloadContent for an edit tab to a forced file read, not a diff refetch",MAPPED,D-12-003,rule added: Reload reads disk afresh
+sample,rich-markdown-list-continuation.test.ts :: leaves non-empty ordered list items to the default Enter behavior,MAPPED,D-12-013,
+sample,markdown-preview-search-crash.test.tsx :: applies highlights without mutating the react-owned subtree,MAPPED,D-12-017,
+sample,rich-markdown-html-superscript-link.test.ts :: enforces aggregate UTF-8 bounds even when oversized text precedes the citation,NOT-USER-FACING,,citation parser input bound
+sample,monaco-context-menu-paste.test.ts :: falls through when the focused editor has no model,MAPPED,D-12-008,right-click paste
+sample,filesystem-conflict-operation-routing.test.ts :: probes with the registered worktree's local git options,MAPPED,D-12-009,conflict actions use the owning worktree
+sample,markdown-document-list-request.test.ts :: clears rejected requests so a retry can run,MAPPED,D-12-012,rule added: failed note listing retries
+sample,editor-rekey-open-files.test.ts :: does not gate a tab already showing the changed-on-disk banner,MAPPED,D-12-032,rule added: banner tab keeps banner after move
+sample,diff-navigation-context.test.tsx :: re-renders when onDidUpdateDiff flips the count 0 -> N (count is state),MAPPED,D-12-027,
+sample,markdown-toc-visibility-gate.test.ts :: returns a stable empty-array reference across content changes while closed,NOT-USER-FACING,,table of contents memo while closed
+sample,filesystem-list-files.test.ts :: falls back to git ls-files when rg is not available,MAPPED,D-12-036,
+sample,editor-markdown-link-activation.test.ts :: rejects ambiguous same-path owner fallback and honors an explicit source owner,MAPPED,D-12-014,link resolves against its own workspace
+sample,simulator-palette-search.test.ts :: rejects oversized pasted queries before scanning simulator tabs,DROP,D-12-052,simulator palette; area 18
+sample,"rich-markdown-large-text-paste.test.ts :: ignores small, empty, default-prevented, and missing-editor paste events",MAPPED,D-12-008,
+sample,filesystem-watcher.test.ts :: keeps a pending SSH watcher install alive when only one pending sender unwatches,DROP,D-12-051,SSH watcher; area 18
+sample,markdown-doc-links.test.ts :: extracts preview heading anchor ids from doc link targets,MAPPED,D-12-014,rule added: [[doc#heading]] jumps
+sample,file-explorer-watch-refresh.spec.ts :: refreshes the visible tree after external Windows file changes,MAPPED,D-12-035,
+sample,text-search.test.ts :: wholeWord wraps in \\b,MAPPED,D-12-037,
+sample,details-markdown-html.test.ts :: accepts nested toggles whose descendants are all editable,MAPPED,D-12-013,
+sample,rich-markdown-table-keyboard.test.ts :: adds a row when Tab is pressed in the last cell,MAPPED,D-12-013,rule added: Tab in last cell adds a row
+sample,filesystem-mutations.test.ts :: rejects directory creation outside allowed roots,MAPPED,D-12-045,
+sample,durable-file-write.test.ts :: publishes the payload at the final path,MAPPED,D-12-046,
+sample,store-session-editor-hydration.test.ts :: drops legacy visible=true front-matter entries so upgraded sessions fall back to the visible default,MAPPED,D-12-019,"rule added: front matter show/hide, remembered"
+sample,editor-file-save-attempt.test.ts :: surfaces a failed save and reports failure to dependent actions,MAPPED,D-12-001,rule added: failed save toast
+sample,combined-diff-section-load-state.test.ts :: commits when a limited reload moves the character count or reason,MAPPED,D-12-029,click-to-load section state
+sample,editor-panel-render-model.test.ts :: disables preview for non-HTML diffs,MAPPED,D-12-025,
+sample,filesystem-search-file-paths.test.ts :: retries a transient rg spawn failure instead of demanding a ripgrep install,MAPPED,D-12-036,rule added: transient search-tool start failure retried
+sample,rich-markdown-empty-paragraph-delete.test.ts :: Backspace in an inserted empty paragraph preserves soft-wrapped prose,MAPPED,D-12-019,
+sample,markdown-round-trip.test.ts :: does not surface Linear issue reference definitions as description text,MAPPED,D-12-014,rule added: reference definitions folded into links (Linear URLs are only test data)
+sample,filesystem-list-files.test.ts :: lets cancellation win a native-unavailable race before Git starts,NOT-USER-FACING,,listing cancellation race
+sample,editor-markdown-link-activation.test.ts :: sets line-anchor source mode on the owner-qualified target id,MAPPED,D-12-014,rule added: line anchor opens in source mode
+sample,"EditorContent.markdown-classification.test.tsx :: classifies each rich draft once, including after content changes",NOT-USER-FACING,,render classification memo
+sample,ExternalFileChangeCompareDialog.test.tsx :: surfaces a read failure instead of a blank comparison,MAPPED,D-12-003,rule added: Compare shows read error
+sample,editor-file-operation-owner.test.ts :: fails closed when folder ownership changes between capture and assert,MAPPED,D-12-045,rule added: action refused if folder workspace changes mid-way
+sample,runtime-workspace-file-owner.test.ts :: uses the most specific nested workspace root,MAPPED,D-12-042,rule added: innermost worktree owns an absolute path
+sample,EditorContent.monaco-lifecycle.test.tsx :: tells Monaco which pane it is so it can retire an explicit focus handoff,MAPPED,D-12-001,editor focus per split pane
+sample,closed-editor-tab-disposal.test.ts :: is a no-op when nothing closed,NOT-USER-FACING,,disposal no-op
+sample,editor-markdown-link-activation.test.ts :: delegates external links to openHttpLink with the ctx worktreeId,MAPPED,D-12-014,
+sample,runtime-workspace-file-owner.test.ts :: uses an exact nested workspace root instead of its parent,MAPPED,D-12-042,
+sample,editor-font-zoom.test.ts :: returns undefined (inherit UI font) when neither font is set,MAPPED,D-12-006,rule added: notebook font fallback
+sample,markdown-doc-completions.test.ts :: detects partial doc links,MAPPED,D-12-014,
+sample,editor-branch-line-total.test.ts :: stores an exact zero total rather than treating it as absent,OTHER-AREA:11,,branch line totals
+sample,editor-file-operation-owner.test.ts :: uses the folder root when a legacy caller passes an empty worktree path,NOT-USER-FACING,,legacy caller fallback
+sample,monaco-content-sync.test.ts :: reconciles a stale read-only live-tail model on mount without undo history,MAPPED,D-12-026,
+sample,register-astro.test.ts :: routes all entries into markup through markupReenter,MAPPED,D-12-010,
+sample,editor-close-file-cleanup.test.ts :: returns to the landing state when closing all editors and no other surfaces remain,MAPPED,D-12-031,
+sample,rich-markdown-table-actions.test.ts :: keeps a two-column table when one column is deleted,MAPPED,D-12-013,rule added: deletes keep the table valid
+sample,ImageViewer.test.tsx :: forwards the scroll cache key to PdfViewer,MAPPED,D-12-022,
+sample,useEditorPanelRemoteSiblingContentState.test.tsx :: keeps a client-local live-tail log on the client,DROP,D-12-051,remote workspace content routing; area 18
+sample,rich-markdown-source-reconcile.test.ts :: falls back to canonical when either string exceeds the size cap (branch 3),MAPPED,D-12-019,
+sample,agent-state-file-reader.test.ts :: preserves normal UTF-8 auth and config contents,OTHER-AREA:07,,agent auth/config file reader
+sample,markdown-internal-links.test.ts :: classifies non-markdown local file as file,MAPPED,D-12-014,rule added: non-markdown file links open as files
+sample,editor-autosave.test.ts :: dispatches a close request event with the file id,NOT-USER-FACING,,close-request event plumbing
+sample,filesystem-watcher.test.ts :: does not re-arm an SSH watch for a worktree that was successfully deleted,DROP,D-12-051,SSH watcher; area 18
+sample,filesystem-watcher.test.ts :: re-arms an SSH watch whose first install found no provider yet,DROP,D-12-051,SSH watcher; area 18
+sample,editor-self-write-registry.test.ts :: keeps same-path stamps isolated by runtime owner,DROP,D-12-051,self-write stamps per remote runtime owner; local case is D-12-003
+sample,native-file-drop.test.ts :: preserves file explorer destination routing in accepted payloads,MAPPED,D-12-039,
+sample,monaco-context-menu-paste.test.ts :: ignores empty-selection metadata when the option is disabled,MAPPED,D-12-008,rule added: whole-line and multi-cursor paste metadata
+sample,combined-diff-restore-signal-equivalence.test.tsx :: holds the signal steady through a 500-section progressive load and lands on the same rows,MAPPED,D-12-029,scroll restore through progressive load
+sample,runtime-workspace-file-route.test.ts :: rejects paths outside every workspace owned by the runtime,DROP,D-12-051,remote runtime workspace boundary; local boundary is D-12-045
+sample,runtime-file-client-search-listing.test.ts :: routes markdown document listing and stat through the selected runtime,DROP,D-12-051,markdown listing through remote runtime; area 18
+sample,secure-file-coarse-ctime.test.ts :: re-hardens a directory when only POSIX mode changes under stable timestamps,OTHER-AREA:07,,secure file permissions re-hardening
+sample,local-log-tail-decoder.test.ts :: holds a partial final line until a later append completes it,MAPPED,D-12-026,
+registry:cli-manifest.tsv,file open,MAPPED,D-12-042,
+registry:cli-manifest.tsv,file diff,MAPPED,D-12-042,
+registry:cli-manifest.tsv,file open-changed,MAPPED,D-12-042,
+registry:keybindings.tsv,worktree.quickOpen,MAPPED,D-12-036,
+registry:keybindings.tsv,sidebar.explorer.toggle,MAPPED,D-12-033,
+registry:keybindings.tsv,sidebar.search.toggle,MAPPED,D-12-037,
+registry:keybindings.tsv,tab.newMarkdown,MAPPED,D-12-054,
+registry:keybindings.tsv,tab.openMarkdown,MAPPED,D-12-012,
+registry:keybindings.tsv,tab.closeAll,MAPPED,D-12-031,
+registry:keybindings.tsv,browser.find,OTHER-AREA:13,,browser pane find
+registry:keybindings.tsv,editor.find,MAPPED,D-12-005,
+registry:keybindings.tsv,editor.replace,MAPPED,D-12-005,"Mod+Alt+F on macOS, Mod+H elsewhere"
+registry:keybindings.tsv,editor.save,MAPPED,D-12-001,
+registry:keybindings.tsv,editor.markdownPreview,MAPPED,D-12-012,
+registry:keybindings.tsv,editor.toggleWordWrap,MAPPED,D-12-006,
+registry:keybindings.tsv,editor.copyContext,MAPPED,D-12-007,rule added r2: shortcut hint beside the selection
+registry:keybindings.tsv,editor.previousChange,MAPPED,D-12-027,
+registry:keybindings.tsv,editor.nextChange,MAPPED,D-12-027,
+registry:keybindings.tsv,editor.addReviewNote,MAPPED,D-12-020,
+registry:keybindings.tsv,sourceControl.sendReviewNotes,MAPPED,D-12-020,ships unbound
+registry:keybindings.tsv,fileExplorer.undo,MAPPED,D-12-034,
+registry:keybindings.tsv,fileExplorer.redo,MAPPED,D-12-034,
+registry:keybindings.tsv,fileExplorer.copyPath,MAPPED,D-12-034,rule added: copy-path shortcuts
+registry:keybindings.tsv,fileExplorer.copyRelativePath,MAPPED,D-12-034,
+registry:keybindings.tsv,fileExplorer.delete,MAPPED,D-12-034,rule added: Delete / Mod+Backspace on macOS
+registry:keybindings.tsv,settings.search,MAPPED,D-12-049,
+registry:keybindings.tsv,terminal.search,OTHER-AREA:03,,terminal pane search
+registry:view-ids.tsv,right-sidebar-panel explorer,MAPPED,D-12-033,
+registry:view-ids.tsv,right-sidebar-panel search,MAPPED,D-12-037,"search is a mode of the explorer view, not its own tab"
+registry:settings-keys.tsv,editorAutoSave,MAPPED,D-12-002,
+registry:settings-keys.tsv,editorAutoSaveDelayMs,MAPPED,D-12-002,
+registry:settings-keys.tsv,editorMinimapEnabled,MAPPED,D-12-006,
+registry:settings-keys.tsv,editorFontFamily,MAPPED,D-12-006,
+registry:settings-keys.tsv,editorWordWrap,MAPPED,D-12-006,
+registry:settings-keys.tsv,richMarkdownSpellcheckEnabled,MAPPED,D-12-013,rule added: spellcheck on by default
+registry:settings-keys.tsv,markdownReviewToolsEnabled,MAPPED,D-12-020,
+registry:settings-keys.tsv,terminalWindowsWslDistro,OTHER-AREA:03,,terminal shell distro; WSL execution may fall under the area 18 cut
+registry:settings-keys.tsv,localAccountWslDistro,MAPPED,D-12-044,distro used for file reads and search on WSL projects; owner decision on WSL execution still open
+registry:settings-keys.tsv,openInApplications,MAPPED,D-12-043,card corrected: user-edited app list
+registry:settings-keys.tsv,showGitIgnoredFiles,MAPPED,D-12-035,
+registry:settings-keys.tsv,diffDefaultView,MAPPED,D-12-027,
+registry:settings-keys.tsv,diffWordWrap,MAPPED,D-12-027,
+registry:settings-keys.tsv,diffShowWhitespace,MAPPED,D-12-027,
+registry:settings-keys.tsv,combinedDiffFileTreeVisibleByDefault,MAPPED,D-12-029,
+registry:e2e/spec-names.txt,12 file-explorer-watch-refresh.spec.ts,MAPPED,D-12-035,
+registry:e2e/spec-names.txt,12 file-open.spec.ts,MAPPED,D-12-001,
+registry:e2e/spec-names.txt,12 golden-file-open-edit-save.spec.ts,MAPPED,D-12-001,
+registry:e2e/spec-names.txt,12 markdown-explorer-find-focus.spec.ts,MAPPED,D-12-017,
+registry:e2e/spec-names.txt,12 quick-open-file-paths.spec.ts,MAPPED,D-12-036,
+registry:e2e/spec-names.txt,12 settings-search-responsiveness.spec.ts,MAPPED,D-12-049,
+registry:e2e/spec-names.txt,01 markdown-nested-toggle.spec.ts,MAPPED,D-12-013,dumped under 01; rule added: nested toggles
+registry:e2e/spec-names.txt,03 editor-tab-selection-restore.spec.ts,MAPPED,D-12-001,dumped under 03
+registry:e2e/spec-names.txt,03 floating-tab-rename-filesystem-alias.spec.ts,MAPPED,D-12-034,dumped under 03
+registry:e2e/spec-names.txt,03 golden-terminal-file-link.spec.ts,OTHER-AREA:03,,terminal link detection; opening lands in D-12-001
+registry:e2e/spec-names.txt,03 markdown-table-row-backspace.spec.ts,MAPPED,D-12-013,dumped under 03; rule added
+registry:e2e/spec-names.txt,03 settings-search-shortcuts-pane.spec.ts,OTHER-AREA:17,,shortcuts settings page search
+registry:e2e/spec-names.txt,03 tab-create-entry-file-paths.spec.ts,MAPPED,D-12-036,dumped under 03; rule added: new-tab file search
+registry:e2e/spec-names.txt,03 terminal-pane-title-focus-handoff.spec.ts,OTHER-AREA:03,,"focus handoff, not the handoff note"
+registry:e2e/spec-names.txt,03 terminal-windows-path-expansion.spec.ts,OTHER-AREA:03,,terminal path expansion
+registry:e2e/spec-names.txt,07 golden-fresh-profile-terminal.spec.ts,OTHER-AREA:07,,
+registry:e2e/spec-names.txt,07 golden-posix-profile-index-fsync.spec.ts,OTHER-AREA:07,,
+registry:e2e/spec-names.txt,11 markdown-add-review-note-shortcut.spec.ts,MAPPED,D-12-020,dumped under 11
+registry:e2e/spec-names.txt,11 source-control-large-file-count.spec.ts,OTHER-AREA:11,,
+registry:e2e/spec-names.txt,13 runtime-file-browser-windows-drives.spec.ts,DROP,D-12-051,paired runtime file browser; area 18
+registry:e2e/spec-names.txt,18 windows-wsl-terminal-restore.spec.ts,OTHER-AREA:18,,WSL terminal restore; area 18 inventory
+readme,"README.md:25 Everything in one window (terminals, editor, browser, diff review)",MAPPED,D-12-001,"editor part; diff review D-12-027/029; terminals 03, browser 13"
+readme,"README.md:139 Privacy: everything typed, every file opened, terminal output stays local",OTHER-AREA:19,,privacy and telemetry promise
+handoff,"handoff-recent-work.md:9 2026-10-06 close-out (network-share guards, executable detection, WSL paths local again)",MAPPED,D-12-045,"also D-12-044 (WSL local) and D-12-053 (executable detection, new this round via triage)"
+handoff,handoff-recent-work.md:17 2026-10-05 redesign incl. Swarm Open file,OTHER-AREA:03,,Swarm pane footer and its Open file went with the footer removal later on 10-05 (commit 28991c4b0)
+triage,renameLocalPathSerializedByDestination (destination-serialized-local-rename.test.ts),MAPPED,D-12-034,rule added: renames to one destination serialized
+triage,local log tail IPC (local-log-tail.test.ts),MAPPED,D-12-026,
+triage,markdownDocumentFromFilePath (markdown-documents.test.ts),MAPPED,D-12-012,
+triage,notebook IPC (notebook.test.ts),MAPPED,D-12-024,
+triage,parcel watcher child registry capacity notifications (parcel-watcher-child-registry.test.ts),MAPPED,D-12-035,overwhelmed watcher triggers a full reload
+triage,watcher disconnect termination (parcel-watcher-disconnect-termination.test.ts),NOT-USER-FACING,,watcher process lifecycle
+triage,resolveWatcherProcessEntryPath (parcel-watcher-entry-path.test.ts),NOT-USER-FACING,,watcher process entry
+triage,prepareWatcherProcessEvents (parcel-watcher-event-delivery.test.ts),MAPPED,D-12-035,event batching
+triage,subscribeViaWatcherProcess (parcel-watcher-process.test.ts),NOT-USER-FACING,,watcher subscription plumbing
+triage,parcel watcher process canary (parcel-watcher-process-entry.test.ts),NOT-USER-FACING,,watcher canary
+triage,watcher-process root path rewrite (parcel-watcher-root-path-rewrite.test.ts),MAPPED,D-12-035,rule added: aliased roots refresh
+triage,shallow watcher subscription (parcel-watcher-shallow-subscription.test.ts),NOT-USER-FACING,,shallow subscription internals
+triage,WatcherProcessSupervisor capacity wait (parcel-watcher-supervisor-capacity.test.ts),NOT-USER-FACING,,supervisor capacity wait
+triage,WatcherSupervisorCapacityWait (parcel-watcher-supervisor-capacity-wait.test.ts),NOT-USER-FACING,,supervisor capacity wait
+triage,watcher native unsubscribe timeout (parcel-watcher-unsubscribe-timeout.test.ts),MAPPED,D-12-035,watchers stop promptly
+triage,checkRgAvailable (rg-availability.test.ts),MAPPED,D-12-036,ripgrep availability
+triage,RuntimeWatcherPendingAssignment (runtime-watcher-pending-assignment.test.ts),NOT-USER-FACING,,watcher pool
+triage,RuntimeWatcherProcessPool (runtime-watcher-process-pool.test.ts),NOT-USER-FACING,,watcher pool
+triage,shallow watch delivery probe (shallow-watch-delivery-probe.test.ts),NOT-USER-FACING,,delivery probe
+triage,legacy file open handlers (shell.test.ts),MAPPED,D-12-053,"relative, missing, non-file and remote file links ignored"
+triage,POSIX exec bit (shell.test.ts),MAPPED,D-12-053,execute permission check
+triage,registerShellHandlers (shell.test.ts),MAPPED,D-12-043,describe also holds audio and folder pickers owned by other areas
+triage,shell:openFilePath executable types (I3) (shell.test.ts),MAPPED,D-12-053,"executables revealed, never launched (10-06 close-out); carded in round 1"
+triage,shell:openInExternalEditor (shell.test.ts),MAPPED,D-12-043,
+triage,shell:openInFileManager (shell.test.ts),MAPPED,D-12-043,
+triage,shell:openPath (shell.test.ts),MAPPED,D-12-043,
+triage,createRootPathRewriter (watcher-event-root-path-rewrite.test.ts),MAPPED,D-12-035,
+triage,resolveWatcherRootPaths (watcher-event-root-path-rewrite.test.ts),MAPPED,D-12-035,
+triage,rewriteWatcherEvents (watcher-event-root-path-rewrite.test.ts),MAPPED,D-12-035,
+triage,watcher removal gate (watcher-removal-gate.test.ts),NOT-USER-FACING,,removal fencing between watcher installs
+triage,promoteLocalDownloadedFolder (local-downloaded-folder-promotion.test.ts),DROP,D-12-051,remote folder download promotion; area 18
+triage,rich markdown task-list styling (rich-markdown-task-list-style.test.ts),MAPPED,D-12-013,
+triage,QuickOpen mount gating (QuickOpen.mount-gating.test.tsx),MAPPED,D-12-036,
+triage,QuickOpenInstallRgGuidance (quick-open-install-rg-guidance.render.test.tsx),MAPPED,D-12-036,
+triage,parseQuickOpenInstallRgGuidance (quick-open-install-rg-guidance.test.ts),MAPPED,D-12-036,
+triage,createUntitledMarkdownFile (create-untitled-markdown.test.ts),MAPPED,D-12-054,untitled note naming and first-save naming prompt; carded in round 1
+triage,detectLanguage (language-detect.test.ts),MAPPED,D-12-001,language detection for colouring
+triage,markdown document templates (markdown-document-templates.test.ts),MAPPED,D-12-055,repo markdown templates with placeholders; carded in round 1
+triage,editorSelectionCache (scroll-cache.test.ts),MAPPED,D-12-001,
+triage,pdfViewPositionCache (scroll-cache.test.ts),MAPPED,D-12-022,
+triage,scrollTopCache (scroll-cache.test.ts),MAPPED,D-12-001,
+triage,setWithLRU (scroll-cache.test.ts),NOT-USER-FACING,,LRU helper
+triage,New Markdown — isUntitled flag (new-markdown.test.ts),MAPPED,D-12-054,
+triage,New Markdown — markFileDirty interaction (new-markdown.test.ts),MAPPED,D-12-054,
+triage,New Markdown — preview behavior (new-markdown.test.ts),MAPPED,D-12-054,
+triage,New Markdown — rename flow store operations (new-markdown.test.ts),MAPPED,D-12-054,
+triage,New Markdown — split group targeting (new-markdown.test.ts),MAPPED,D-12-054,
+triage,New Markdown — tab bar ordering with openFile (new-markdown.test.ts),MAPPED,D-12-054,
+triage,isWslUncPathForCallerLinuxPath (cross-platform-path.test.ts),MAPPED,D-12-044,
+triage,isWslUncPathForLinuxMountedPath (cross-platform-path.test.ts),MAPPED,D-12-044,
+triage,local Windows WSL aliases (cross-platform-path.test.ts),MAPPED,D-12-044,
+triage,buildImageDataUri (image-data-uri.test.ts),MAPPED,D-12-015,rule added: inline image data checked
+triage,validateRasterImageDataUri (image-data-uri.test.ts),MAPPED,D-12-015,
+triage,Markdown document listing limits (markdown-document-listing-limits.test.ts),MAPPED,D-12-012,rule added: picker list capped
+triage,normalizeOpenInApplications (open-in-applications.test.ts),MAPPED,D-12-043,
+triage,quick-open streaming directory reader (quick-open-directory-reader.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,collapseQuickOpenExpansionPaths (quick-open-expansion-paths.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,quick-open-filter renderer safety (quick-open-filter.renderer-safety.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,buildExcludePathPrefixes (quick-open-filter.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,buildGitLsFilesArgsForQuickOpen (quick-open-filter.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,buildHiddenDirExcludeGlobs (quick-open-filter.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,buildRgArgsForQuickOpen (quick-open-filter.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,normalizeQuickOpenRgLine (quick-open-filter.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,shouldExcludeQuickOpenRelPath (quick-open-filter.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,shouldIncludeQuickOpenPath (quick-open-filter.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,Quick Open listing limits (quick-open-listing-limits.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,quick-open readdir walk (quick-open-readdir-walk.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,Quick Open transport byte budget (quick-open-transport-budget.test.ts),MAPPED,D-12-036,Quick Open listing
+triage,readRasterImageDimensions (raster-image-dimensions.test.ts),MAPPED,D-12-021,
+triage,ripgrep process availability (ripgrep-process-availability.test.ts),MAPPED,D-12-036,
+triage,Markdown ordered-list exit regression (markdown-ordered-list-exit.spec.ts),MAPPED,D-12-013,
+triage,Markdown prose reflow (markdown-prose-reflow.spec.ts),MAPPED,D-12-019,rule added: hard-wrapped prose reflows
+triage,Rich markdown link bubble stacking (rich-markdown-link-bubble-stacking.spec.ts),MAPPED,D-12-014,rule added: link bubble above Explorer
+triage,[e2e spec] markdown-ordered-list-exit.spec.ts (markdown-ordered-list-exit.spec.ts),MAPPED,D-12-013,
+triage,[e2e spec] markdown-prose-reflow.spec.ts (markdown-prose-reflow.spec.ts),MAPPED,D-12-019,
+triage,[e2e spec] rich-markdown-link-bubble-stacking.spec.ts (rich-markdown-link-bubble-stacking.spec.ts),MAPPED,D-12-014,

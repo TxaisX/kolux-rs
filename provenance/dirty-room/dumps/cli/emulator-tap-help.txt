@@ -1,0 +1,17 @@
+﻿kolux emulator tap
+
+Usage: kolux emulator tap <x> <y> [--device <id>] [--worktree <selector>] [--json]
+
+Tap at normalized 0..1 coords (preferred for single taps)
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --device
+  --emulator
+  --worktree <selector>  Worktree selector such as identity:<identity>, id:<repo-id>::<path>, name:<displayName>, branch:<branch>, issue:<number>, path:<path>, or active/current
+  --x
+  --y
+

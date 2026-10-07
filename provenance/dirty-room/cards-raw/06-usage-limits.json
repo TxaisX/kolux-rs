@@ -1,0 +1,1237 @@
+{
+  "area": "06-usage-limits",
+  "prefix": "USAGE",
+  "generated": "2026-10-06",
+  "cards": [
+    {
+      "id": "D-06-001",
+      "title": "Every pane header shows a context ring with a percentage",
+      "tier": "P0",
+      "pushed": 7,
+      "state": "live",
+      "user_does": "Looks at the header of any agent pane.",
+      "user_sees": "Beside the pane title sits a small ring that fills as the agent's context window fills, with the percentage next to it, coloured by how full it is; hovering explains the figure.",
+      "rules": [
+        "The ring and percentage are always present in an agent pane header; before the first reading arrives the header shows a muted 0% and the hover says there is no data yet.",
+        "Colour follows fullness: neutral or green under 70%, yellow from 70% through 90%, red above 90%.",
+        "The figure belongs to that pane only; two panes in one tab each show their own reading.",
+        "A newer reading always replaces an older one; a reading that arrives late and is older than the one shown is ignored.",
+        "Closing or clearing the pane drops its reading."
+      ],
+      "acceptance": [
+        "Start a Claude session → header shows a muted 0% until the first turn, then a toned percentage that rises as the conversation grows.",
+        "Push a session past 90% of its window → ring and number turn red.",
+        "Split a tab into two Claude panes at different fill levels → each header shows its own percentage."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/terminal-pane/TerminalPaneHeaderRow.tsx:262",
+        "dumps/tests/06-usage-limits.txt:636",
+        "dumps/tests/06-usage-limits.txt:637",
+        "dumps/tests/06-usage-limits.txt:657",
+        "dumps/tests/06-usage-limits.txt:658",
+        "dumps/records/handoff-recent-work.md (2026-10-05 pane header title + usage %)"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-06-002",
+      "title": "Board cards carry a session usage meter",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Opens the Board and looks at a session card.",
+      "user_sees": "A compact meter on the card: a context bar reading used tokens against the window (for example 84k / 200k) and, under it, the account's plan usage as 5-hour and weekly percentages.",
+      "rules": [
+        "The context bar only appears once the session has reported context; plan usage still shows without it.",
+        "Only the windows Kolux actually knows are listed: a plan with only a weekly limit shows only the weekly figure.",
+        "When neither context nor plan usage is known the meter is absent rather than empty.",
+        "The bar turns yellow at 70% and red above 90%, the same scale as the pane header."
+      ],
+      "acceptance": [
+        "A Claude card mid-session shows a context bar plus 5-hour and weekly percentages.",
+        "A fresh card before its first turn shows plan usage only; a card for an agent with no usage source shows no meter."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/board/BoardSessionCard.tsx:147",
+        "dumps/tests/06-usage-limits.txt:627",
+        "dumps/tests/06-usage-limits.txt:630",
+        "dumps/tests/06-usage-limits.txt:631",
+        "dumps/tests/06-usage-limits.txt:632",
+        "dumps/records/handoff-recent-work.md (2026-10-05 session usage meter)"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-06-003",
+      "title": "Tabs show a small context ring",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Glances along the tab strip.",
+      "user_sees": "Each agent tab carries a tiny ring showing how full its context is; hovering gives the same wording as the Board meter. There is no number on the tab.",
+      "rules": [
+        "A tab with several panes shows the pane that reported most recently.",
+        "The ring is hidden until there is a context reading, even if plan usage is known.",
+        "The ring never prints a percentage; the number lives in the pane header."
+      ],
+      "acceptance": [
+        "Run Claude in a tab → a ring appears after the first reply and fills over time; hover shows context and plan text.",
+        "A Codex tab with plan usage but no context reading shows no ring."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/tab-bar/SortableTab.tsx:301",
+        "dumps/tests/06-usage-limits.txt:633",
+        "dumps/tests/06-usage-limits.txt:634",
+        "dumps/tests/06-usage-limits.txt:635"
+      ],
+      "round": 0,
+      "related": [
+        "03"
+      ]
+    },
+    {
+      "id": "D-06-004",
+      "title": "Agents view shows usage per session and a plan usage line",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Opens the Agents view and selects an agent.",
+      "user_sees": "The detail header carries the compact meter (context bar plus 5-hour and weekly figures); each session row carries a ring; the footer reads the provider's 5-hour usage and when it resets.",
+      "rules": [
+        "The footer line names the provider, its 5-hour percentage and the reset time; it honours the used/remaining display choice.",
+        "Session rows use the same ring as tabs and hide it without context data."
+      ],
+      "acceptance": [
+        "Select a Claude agent at 40% of its 5-hour window → footer reads Claude 40% with a reset time; switch the display to remaining → it reads 60%.",
+        "Each session row with context shows a ring; rows without context show none."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/agents-view/AgentDetail.tsx:107",
+        "src/renderer/src/components/agents-view/AgentDetail.tsx:159",
+        "src/renderer/src/components/agents-view/AgentDetailFooter.tsx:17",
+        "src/renderer/src/components/agents-view/use-agent-usage-line.ts:1"
+      ],
+      "round": 0,
+      "related": [
+        "05"
+      ]
+    },
+    {
+      "id": "D-06-005",
+      "title": "How session meters measure context and plan usage",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Reads any session meter, ring or header percentage.",
+      "user_sees": "Figures that match the window the session really runs in and the plan the session's agent bills to, with token counts shortened to k and M.",
+      "rules": [
+        "Context fill is measured against the effective window: the 200k cap when the cap is on, otherwise the model's own window; overflow clamps at 100% and a zero window reads 0%.",
+        "Context comes from Claude's statusline feed; used tokens are the reported total, else input plus cache writes plus cache reads, else the reported percentage of the window.",
+        "Only Claude (and Claude Agent Teams) report context; Codex and Grok sessions show plan usage only.",
+        "Plan usage follows the session's agent: Claude and Agent Teams map to Claude, Codex to Codex, Grok to Grok; unknown agents and remote sessions show no plan usage.",
+        "Only a 5-hour window and a weekly window are shown, rounded to whole percent; a window of any other length is skipped rather than mislabelled.",
+        "Failed, unavailable or missing plan data shows nothing instead of a stale or zero figure.",
+        "Token counts abbreviate thousands to k and millions to M."
+      ],
+      "acceptance": [
+        "With the cap on, a Claude session using 100k tokens on a 1M model shows 50%, not 10%.",
+        "Turn the cap off → the same session now reads against the model window.",
+        "Make the usage read fail → the plan figures disappear from the meter rather than showing 0%."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/usage/session-usage-meter-model.ts:1",
+        "src/shared/claude-statusline-context.ts:1",
+        "dumps/tests/06-usage-limits.txt:618",
+        "dumps/tests/06-usage-limits.txt:619",
+        "dumps/tests/06-usage-limits.txt:620",
+        "dumps/tests/06-usage-limits.txt:621",
+        "dumps/tests/06-usage-limits.txt:622",
+        "dumps/tests/06-usage-limits.txt:623",
+        "dumps/tests/06-usage-limits.txt:624",
+        "dumps/tests/06-usage-limits.txt:625",
+        "dumps/tests/06-usage-limits.txt:626",
+        "dumps/tests/06-usage-limits.txt:629"
+      ],
+      "round": 0,
+      "related": [
+        "04"
+      ]
+    },
+    {
+      "id": "D-06-006",
+      "title": "Agents are capped at a 200k context window by default",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Launches Claude, Claude Agent Teams or Codex; optionally turns the cap off on the Agents settings page.",
+      "user_sees": "Sessions compact themselves around 200k tokens instead of running up to the model's full window, which keeps long sessions cheaper on plan usage; a switch on the Agents page turns this off.",
+      "rules": [
+        "On by default; a missing setting counts as on. Turning it off affects the next launch, not running sessions.",
+        "Claude and Agent Teams get the cap through an environment variable; their arguments are untouched.",
+        "Codex gets the cap as per-run config overrides (window 200k, auto-compact at 180k) placed before any argument terminator; its environment is untouched.",
+        "A window the user already chose wins: an existing env value, an explicit compact flag, or Codex args or a command override that set those keys or pick a profile or open-source mode all skip the cap.",
+        "Grok and every other agent are left alone. No agent config file on disk is ever written.",
+        "The saved launch config stays clean; the cap is re-applied exactly once when a saved command is replayed, when a session resumes, and for draft launches.",
+        "Applying the cap twice changes nothing."
+      ],
+      "acceptance": [
+        "Launch Claude with defaults → the process environment carries the 200k compact window.",
+        "Launch Codex with its own profile flag → no cap overrides are added.",
+        "Turn the switch off and relaunch → neither agent gets the cap; Grok never does."
+      ],
+      "compat": "Environment variable CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000 for Claude and Agent Teams; Codex per-run overrides -c model_context_window=200000 and -c model_auto_compact_token_limit=180000; settings key agentContextCapEnabled (default true).",
+      "decision": "",
+      "evidence": [
+        "src/shared/agent-context-cap.ts:1",
+        "src/renderer/src/components/settings/AgentsPane.tsx:270",
+        "src/renderer/src/components/settings/AgentContextCapSetting.tsx:1",
+        "registry:settings-keys:agentContextCapEnabled",
+        "dumps/tests/06-usage-limits.txt:655",
+        "dumps/tests/06-usage-limits.txt:656",
+        "dumps/tests/06-usage-limits.txt:662",
+        "dumps/tests/06-usage-limits.txt:666",
+        "dumps/tests/06-usage-limits.txt:670",
+        "dumps/tests/06-usage-limits.txt:688",
+        "dumps/tests/06-usage-limits.txt:692",
+        "dumps/tests/06-usage-limits.txt:694",
+        "dumps/records/handoff-recent-work.md (2026-10-05 200k context cap)"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "17"
+      ]
+    },
+    {
+      "id": "D-06-007",
+      "title": "Claude resumes on its own after a usage limit resets (opt-in)",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Turns on the resume-after-limit switch in the Claude section of the AI connections page, then leaves a Claude session that hits its limit.",
+      "user_sees": "About a minute after the limit resets, Kolux types a short prompt into the stopped Claude pane telling it the limit has reset and to carry on, and the agent continues unattended.",
+      "rules": [
+        "Off by default. Turning it off drops anything pending; turning it on picks up panes already stopped on a limit. The setting is checked again at the moment of firing.",
+        "Only a Claude pane stopped on a usage limit qualifies; other stop reasons and other agents are ignored.",
+        "It only types when Claude is the foreground program: never into a plain shell left after Claude quit or another agent that took over; while the foreground cannot be read it waits rather than giving up.",
+        "If the user typed in that pane after the stop, the resume is cancelled; typing before the stop or in another pane does not cancel it.",
+        "Reset time comes from the stop event first; failing that, from the account's exhausted weekly window, else its exhausted 5-hour window; past or non-exhausted windows are ignored, an exhausted weekly window with no reset time does not fall back to the 5-hour window, and nothing fires when no reset time is known.",
+        "Fires once per pane per reset time (reset times a few seconds apart count as the same); a genuinely new reset time fires again; panes are independent.",
+        "Fires on the first check after the computer wakes past the due time; gives up 30 minutes after due if the pane never becomes reachable; closing the pane cancels it.",
+        "After an app restart, stopped panes are scheduled again but a restored pane waits a short settle period first, is skipped if its reset passed while the app was closed, and is never typed into twice.",
+        "A send the terminal refuses is not retried and is logged once.",
+        "The timer only runs while something is pending."
+      ],
+      "acceptance": [
+        "Enable the switch, let a Claude pane stop on a limit with a reset time → about a minute after reset the continue prompt appears once and Claude works again.",
+        "Type a draft in the stopped pane → no prompt is sent at reset.",
+        "Quit Claude so a shell remains → nothing is typed and the resume expires.",
+        "Leave the switch off → nothing is ever typed."
+      ],
+      "compat": "Settings key agentAutoResumeAfterLimit (default false).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/accounts-pane-provider-setting-sections.tsx:80",
+        "src/main/limit-auto-resume/limit-auto-resume-schedule.ts:1",
+        "registry:settings-keys:agentAutoResumeAfterLimit",
+        "dumps/tests/06-usage-limits.txt:98",
+        "dumps/tests/06-usage-limits.txt:105",
+        "dumps/tests/06-usage-limits.txt:111",
+        "dumps/tests/06-usage-limits.txt:113",
+        "dumps/tests/06-usage-limits.txt:115",
+        "dumps/tests/06-usage-limits.txt:126",
+        "dumps/tests/06-usage-limits.txt:131",
+        "dumps/tests/06-usage-limits.txt:134",
+        "dumps/tests/06-usage-limits.txt:152",
+        "dumps/tests/06-usage-limits.txt:154",
+        "dumps/tests/06-usage-limits.txt:159",
+        "dumps/tests/06-usage-limits.txt:166",
+        "dumps/records/handoff-recent-work.md (2026-10-05 limit auto-resume)",
+        "dumps/tests/06-usage-limits.txt:137"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "07",
+        "03"
+      ]
+    },
+    {
+      "id": "D-06-008",
+      "title": "Weekly usage pill in the top bar",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Looks at the top right of the window.",
+      "user_sees": "A rounded pill showing how much of the week is left for Claude and for Codex (for example Claude 62% left), coloured by how full the week is; hovering shows that this is the weekly limit and how long until it resets.",
+      "rules": [
+        "Shows only the weekly window, never the 5-hour one.",
+        "A provider appears only when its agent is detected, its weekly window is known, and its usage item is switched on in the status-bar item list.",
+        "Always phrased as amount left, regardless of the used/remaining display setting.",
+        "Colour uses the same 70/90 used-percentage scale as the session meters.",
+        "When the reset time is unknown the hover says so instead of a countdown.",
+        "The pill is read-only; clicking it does nothing."
+      ],
+      "acceptance": [
+        "With Claude and Codex signed in, the pill lists both with percent left; Claude at 85% used reads 15% left in yellow.",
+        "Switch off the Codex usage item → Codex disappears from the pill.",
+        "Hover → weekly limit and a resets-in countdown."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/app-shell/TopBarUsagePill.tsx:31",
+        "src/renderer/src/app-shell/WorkspaceTopBar.tsx:31",
+        "registry:view-ids:status-bar-segment/claude",
+        "registry:view-ids:status-bar-segment/codex",
+        "dumps/records/handoff-recent-work.md (2026-10-05 weekly-only usage pill)"
+      ],
+      "round": 0,
+      "related": [
+        "05",
+        "17"
+      ]
+    },
+    {
+      "id": "D-06-009",
+      "title": "Notifications at 80% and 95% of a usage window",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Keeps working while an account's usage climbs.",
+      "user_sees": "A system notification titled with the agent name and usage alert, saying which window (5-hour, weekly, monthly and so on) has reached 80% or 95% and roughly when it resets.",
+      "rules": [
+        "Covers Claude, Codex, Gemini (each quota bucket), Kimi, Antigravity, MiniMax and Grok.",
+        "Each threshold fires once per window; it re-arms only when the window rolls to a new reset time. Fired markers are saved, so a restart does not repeat them.",
+        "If usage is already at or above 95% the first time it is seen, both alerts fire together; below 80% nothing fires.",
+        "Nothing fires when the window's reset time is unknown.",
+        "Window wording covers 5-hour, weekly, monthly, N-day and N-hour windows, with a generic phrase for anything else.",
+        "Gated by the global notifications switch and by a usage-alerts preference that defaults on; nothing is sent before settings have loaded.",
+        "When the window is hidden the tray icon shows the attention dot even if the notification itself is suppressed."
+      ],
+      "acceptance": [
+        "Push a 5-hour window from 70% to 82% → one notification for 80%; further refreshes in the same window add none.",
+        "Start the app with a window at 97% → two notifications, 80% and 95%, once.",
+        "Wait for the window to reset and climb again → the alerts fire again."
+      ],
+      "compat": "Notification settings keys usageAlerts (default true) and usageAlertFiredMarkers (provider:window:threshold to reset time).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/hooks/usage-window-alert-notifications.ts:42",
+        "src/shared/usage-window-alert.ts:19",
+        "src/main/ipc/notifications.ts:140",
+        "src/main/ipc/notification-options.ts:50",
+        "src/shared/constants.ts:133",
+        "dumps/tests/06-usage-limits.txt:647",
+        "dumps/tests/06-usage-limits.txt:648",
+        "dumps/tests/06-usage-limits.txt:650",
+        "dumps/tests/06-usage-limits.txt:652",
+        "dumps/tests/06-usage-limits.txt:653",
+        "dumps/tests/06-usage-limits.txt:718",
+        "dumps/tests/06-usage-limits.txt:720",
+        "dumps/records/improvement-cards.md (ACCT-4)"
+      ],
+      "round": 0,
+      "related": [
+        "04",
+        "07"
+      ]
+    },
+    {
+      "id": "D-06-010",
+      "title": "Launch dialogs warn when an account is nearly used up",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Opens the Launch agents dialog or a starter kit setup and picks agents.",
+      "user_sees": "A warning banner above the launch button naming each provider whose current usage window is at or above 80%, so the user knows the seats about to start share an almost-empty account.",
+      "rules": [
+        "One line per provider, however many seats use it; two providers over the line give two lines.",
+        "Uses the 5-hour window, falling back to weekly and then monthly when a provider has no shorter window.",
+        "Below 80%, or with no usage data at all, no warning shows.",
+        "Agents with no usage source are ignored. The warning never blocks the launch."
+      ],
+      "acceptance": [
+        "With Claude at 85%, pick three Claude seats → one warning line for Claude.",
+        "Add a Codex seat with Codex at 90% → a second line for Codex.",
+        "Drop Claude to 50% → no warning."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/shared/usage-launch-warning.ts:20",
+        "src/renderer/src/components/launch-agents/LaunchAgentsDialog.tsx:249",
+        "src/renderer/src/components/starter-kits/StarterKitSetupDialog.tsx:157",
+        "dumps/tests/06-usage-limits.txt:698",
+        "dumps/tests/06-usage-limits.txt:700",
+        "dumps/tests/06-usage-limits.txt:701",
+        "dumps/tests/06-usage-limits.txt:702",
+        "dumps/tests/06-usage-limits.txt:703"
+      ],
+      "round": 0,
+      "related": [
+        "02",
+        "08",
+        "15"
+      ]
+    },
+    {
+      "id": "D-06-011",
+      "title": "Usage settings page with Kolux activity stats",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Opens Settings and picks the Stats & Usage page, or types usage in the command palette.",
+      "user_sees": "Three headline cards (agents spawned, time agents worked, PRs created) with a tracking-since date, and below them a usage analytics area; before any agent has run, a prompt to start the first agent.",
+      "rules": [
+        "Searching usage in the palette jumps to this page.",
+        "Counts are local and survive restarts; saves are batched and a final save on quit always wins over a pending one.",
+        "One agent turn counts as one session: a status replayed on reconnect or restored from disk never opens a new one, waiting and blocked end a stretch of work rather than extend it, and identity-only refreshes are ignored.",
+        "Agents that only report through hooks are counted even without a recognisable terminal title.",
+        "Closing a pane, or losing the connection that owned it, closes any session it had open."
+      ],
+      "acceptance": [
+        "Fresh profile → page shows the start-your-first-agent prompt.",
+        "Run two agent turns, reconnect, reopen the page → agents spawned and time worked reflect two turns, not more.",
+        "Quit during activity and relaunch → counts are intact."
+      ],
+      "compat": "Data category for the importer: local Kolux stats (agents spawned, agent working time, PRs created, tracking start date).",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/stats/StatsPane.tsx:108",
+        "src/renderer/src/components/cmd-j/palette-results.ts:83",
+        "registry:settings-sections:stats",
+        "dumps/tests/06-usage-limits.txt:567",
+        "dumps/tests/06-usage-limits.txt:568",
+        "dumps/tests/06-usage-limits.txt:573",
+        "dumps/tests/06-usage-limits.txt:575",
+        "dumps/tests/06-usage-limits.txt:581",
+        "dumps/tests/06-usage-limits.txt:586",
+        "dumps/tests/06-usage-limits.txt:589"
+      ],
+      "round": 0,
+      "related": [
+        "17",
+        "04"
+      ]
+    },
+    {
+      "id": "D-06-012",
+      "title": "Usage analytics opens on a combined overview",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Scrolls to usage analytics on the Usage page and uses the provider picker (Overview, Claude, Codex, Grok).",
+      "user_sees": "By default a combined overview: total tokens, estimated cost, active days and cache share, a day-by-day activity grid with a best day, a token mix (new input, cache, output, reasoning), a provider count, and a refresh button.",
+      "rules": [
+        "Only the chosen provider panel is loaded.",
+        "Totals add Claude and Codex without counting cached input twice; recent days with no use show as empty cells.",
+        "If no provider has tracking enabled, the overview offers Enable Claude and Enable Codex instead of figures.",
+        "If tracking is on but no logs exist yet, it says the overview fills after the next agent session.",
+        "When some model prices are unknown the header says the cost is partial.",
+        "Refresh is disabled while a scan runs and only rescans providers that are enabled.",
+        "Opening the page counts as using the usage feature for in-app guidance."
+      ],
+      "acceptance": [
+        "Open the page with tracking on for both → overview shows combined totals and the activity grid.",
+        "Turn tracking off for both → overview shows the two enable buttons.",
+        "Switch the picker to Codex → only the Codex panel renders."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/stats/UsageOverviewPane.tsx:117",
+        "src/renderer/src/components/stats/StatsPane.tsx:87",
+        "dumps/e2e/spec-names.txt:196",
+        "dumps/tests/06-usage-limits.txt:609",
+        "dumps/tests/06-usage-limits.txt:610",
+        "dumps/tests/06-usage-limits.txt:611",
+        "dumps/tests/06-usage-limits.txt:612",
+        "dumps/tests/06-usage-limits.txt:613",
+        "dumps/tests/06-usage-limits.txt:741"
+      ],
+      "round": 0,
+      "related": [
+        "17",
+        "16"
+      ]
+    },
+    {
+      "id": "D-06-013",
+      "title": "Token tracking is an opt-in per provider",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Enables or disables Claude or Codex token tracking from its panel or the overview.",
+      "user_sees": "A disabled panel explaining that Kolux would scan local agent logs, with an enable switch; once enabled, an empty state until logs exist, then the figures, with a switch, an options menu and a refresh button in the panel header.",
+      "rules": [
+        "Tracking reads only log files the agents already write on this machine; nothing is uploaded.",
+        "Refresh is disabled while a scan is running; a scan already running is shared rather than started twice.",
+        "If a scan fails, the last good figures stay on screen.",
+        "Cached results show immediately on open, before a slow rescan finishes.",
+        "An old profile with no recorded choice keeps working and its cache is rebuilt."
+      ],
+      "acceptance": [
+        "Open the Claude panel on a fresh profile → disabled state with an enable switch; enable it → scan runs, then figures appear.",
+        "Break the log folder mid-scan → previous figures remain."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/stats/UsageTrackingPaneShell.tsx:79",
+        "dumps/tests/06-usage-limits.txt:615",
+        "dumps/tests/06-usage-limits.txt:616",
+        "dumps/tests/06-usage-limits.txt:617",
+        "dumps/tests/06-usage-limits.txt:594",
+        "dumps/tests/06-usage-limits.txt:596",
+        "dumps/tests/06-usage-limits.txt:599",
+        "dumps/tests/06-usage-limits.txt:661",
+        "dumps/tests/06-usage-limits.txt:38"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-06-014",
+      "title": "Claude and Codex token analytics panels",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Picks Claude or Codex in the provider picker and adjusts the range and scope filters.",
+      "user_sees": "Input, output, cache-read and cache-write totals, an estimated cost, a daily chart, a per-model breakdown, and a recent sessions list, filtered to the chosen range and scope.",
+      "rules": [
+        "Range choices: last 7, 30 or 90 days, or all time; default is 30 days.",
+        "Scope choices: Kolux worktrees only (the default) or all local usage for that agent; Kolux scope with only outside usage shows no data rather than everything.",
+        "Days follow the local calendar, not UTC.",
+        "Long model names wrap instead of being cut off; models with guessed prices are marked as inferred, unknown prices show n/a.",
+        "A session that used several models is listed once under each model it really used.",
+        "Daily charts stay responsive for very long histories."
+      ],
+      "acceptance": [
+        "Switch Claude from 30 days to 7 days → totals and chart shrink to the last week.",
+        "Switch scope to all local usage → sessions run outside Kolux appear.",
+        "A session that crossed midnight local time is split by local day."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/stats/ClaudeUsagePane.tsx:21",
+        "src/renderer/src/components/stats/CodexUsagePane.tsx:13",
+        "src/renderer/src/store/slices/usage-provider-slices.ts:266",
+        "dumps/tests/06-usage-limits.txt:39",
+        "dumps/tests/06-usage-limits.txt:40",
+        "dumps/tests/06-usage-limits.txt:80",
+        "dumps/tests/06-usage-limits.txt:81",
+        "dumps/tests/06-usage-limits.txt:593",
+        "dumps/tests/06-usage-limits.txt:607",
+        "dumps/tests/06-usage-limits.txt:608",
+        "dumps/tests/06-usage-limits.txt:614"
+      ],
+      "round": 0,
+      "related": [
+        "01"
+      ]
+    },
+    {
+      "id": "D-06-015",
+      "title": "Estimated cost uses each model's published rates",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Reads the estimated cost on the overview, a provider panel or a share card.",
+      "user_sees": "A dollar estimate computed from token counts and per-model prices; models Kolux has no price for are left out and flagged rather than guessed.",
+      "rules": [
+        "Claude cache writes are priced by lifetime: 5-minute writes at 1.25x and 1-hour writes at 2x base input; a mixed bucket is split without double billing, and a 1-hour count larger than the total is clamped.",
+        "Each Claude family gets its own rates; older releases are never repriced at newer family rates, unknown newer point releases of a family take that family's current rate.",
+        "Models with a flat long-context price keep it across the whole window; older models keep their long-context surcharge, and moving writes to 1-hour never lowers an estimate.",
+        "Historic days are priced at the rate that applies to them and are not repriced upward in the all-time range.",
+        "Codex cost counts uncached and cached input separately with no double billing; reasoning-effort suffixes and model variants are normalised before pricing; a bare model alias takes its base tier's rate.",
+        "Unknown models return no cost and keep their real name rather than taking a fallback price."
+      ],
+      "acceptance": [
+        "A Claude day with 1M 1-hour cache-write tokens costs twice base input per million.",
+        "A Codex session on an unpriced model shows its tokens and n/a cost; the header notes the cost is partial."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:2",
+        "dumps/tests/06-usage-limits.txt:4",
+        "dumps/tests/06-usage-limits.txt:11",
+        "dumps/tests/06-usage-limits.txt:17",
+        "dumps/tests/06-usage-limits.txt:18",
+        "dumps/tests/06-usage-limits.txt:42",
+        "dumps/tests/06-usage-limits.txt:45",
+        "dumps/tests/06-usage-limits.txt:47",
+        "dumps/tests/06-usage-limits.txt:76",
+        "dumps/tests/06-usage-limits.txt:83",
+        "dumps/tests/06-usage-limits.txt:86",
+        "dumps/tests/06-usage-limits.txt:87"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-06-016",
+      "title": "Claude transcript scan counts every turn exactly once",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Uses Claude normally, including forking or resuming sessions, then looks at Claude analytics.",
+      "user_sees": "Token totals that match real use: forked or copied sessions are not counted twice, and usage is credited to the Kolux worktree it ran in.",
+      "rules": [
+        "Reads the configured Claude projects folder, including very large nested folders.",
+        "Turns copied into a forked session file count once; ownership moves back if the original file is deleted; unrelated cached files are kept.",
+        "Streamed duplicates of one reply are merged.",
+        "Usage in a subfolder of a worktree is credited to that worktree; a session spanning several places keeps its per-place breakdown.",
+        "Files that did not change since the last scan are not re-read.",
+        "Automation runs can look up the usage of their own worktree session."
+      ],
+      "acceptance": [
+        "Fork a Claude session and rescan → totals rise only by the new turns.",
+        "Run Claude in a worktree subfolder → its tokens appear under that worktree in Kolux scope."
+      ],
+      "compat": "Reads Claude Code's per-project transcript JSONL files (assistant usage records, cache-write breakdown by lifetime, message and request ids, cwd).",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:19",
+        "dumps/tests/06-usage-limits.txt:20",
+        "dumps/tests/06-usage-limits.txt:24",
+        "dumps/tests/06-usage-limits.txt:26",
+        "dumps/tests/06-usage-limits.txt:31",
+        "dumps/tests/06-usage-limits.txt:32",
+        "dumps/tests/06-usage-limits.txt:48",
+        "dumps/tests/06-usage-limits.txt:600"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "09"
+      ]
+    },
+    {
+      "id": "D-06-017",
+      "title": "Codex session scan counts every token event exactly once",
+      "tier": "P1",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Uses Codex through Kolux and on its own, then looks at Codex analytics.",
+      "user_sees": "Codex totals that include sessions from Kolux-managed accounts and the normal Codex folder without double counting copies, forks or resumed sessions.",
+      "rules": [
+        "Scans both Kolux-managed Codex homes (including per-account homes) and the system Codex folder; an ambient Codex home override does not redirect the scan.",
+        "Never follows an account home or sessions folder redirected outside Kolux's own storage.",
+        "Aliases that point at the same sessions are read once; legacy copied sessions are read from the point they diverged.",
+        "Cumulative totals are used only as a baseline, so a resumed session's first event is not counted as the whole history.",
+        "Usage is credited to the nearest containing worktree; paths that only look similar, real parent escapes and other Windows drives are not credited.",
+        "Caches from an older format are discarded and rebuilt."
+      ],
+      "acceptance": [
+        "Resume a long Codex session and rescan → only new tokens are added.",
+        "Fork a Codex rollout → its copied events count once."
+      ],
+      "compat": "Reads Codex rollout session files under each Codex home (token_count events, session metadata, cwd).",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:54",
+        "dumps/tests/06-usage-limits.txt:55",
+        "dumps/tests/06-usage-limits.txt:56",
+        "dumps/tests/06-usage-limits.txt:58",
+        "dumps/tests/06-usage-limits.txt:65",
+        "dumps/tests/06-usage-limits.txt:68",
+        "dumps/tests/06-usage-limits.txt:73",
+        "dumps/tests/06-usage-limits.txt:79",
+        "dumps/tests/06-usage-limits.txt:91"
+      ],
+      "round": 0,
+      "related": [
+        "01",
+        "07"
+      ]
+    },
+    {
+      "id": "D-06-018",
+      "title": "Grok usage panel",
+      "tier": "P1",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Picks Grok in the usage analytics picker.",
+      "user_sees": "The share of weekly Grok credits used (or the monthly included budget on unified billing), a refresh button, and a link to the Grok account settings; when not signed in, a prompt to set it up in Accounts.",
+      "rules": [
+        "Opening the panel does not trigger a refresh of every provider; only its own refresh button fetches, and only Grok.",
+        "A missing percentage on a weekly credits period reads as 0% only when the reply carries no other usage figures; if it carries explicit credit fields but no percentage, usage reads as not reported (unavailable), never 0%. A monthly budget pair is shown as a monthly window without an extra request.",
+        "Expired sign-in, a failed fallback request or an empty billing reply show as an error or unavailable, never as 0%.",
+        "Signed-out and malformed sign-in files are reported without exposing file paths.",
+        "A sign-in file that holds no token counts as signed out, not as an error."
+      ],
+      "acceptance": [
+        "Open the Grok panel → no other provider refreshes; press refresh → Grok figures update.",
+        "Sign out of Grok → panel offers set up in Accounts."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/stats/GrokUsagePane.tsx:1",
+        "dumps/tests/06-usage-limits.txt:605",
+        "dumps/tests/06-usage-limits.txt:606",
+        "dumps/tests/06-usage-limits.txt:364",
+        "dumps/tests/06-usage-limits.txt:367",
+        "dumps/tests/06-usage-limits.txt:372",
+        "dumps/tests/06-usage-limits.txt:378",
+        "dumps/tests/06-usage-limits.txt:357",
+        "dumps/tests/06-usage-limits.txt:366",
+        "dumps/tests/06-usage-limits.txt:358"
+      ],
+      "round": 0,
+      "related": [
+        "07"
+      ]
+    },
+    {
+      "id": "D-06-019",
+      "title": "Share a usage card as an image or a post",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Clicks Share on the Claude or Codex panel.",
+      "user_sees": "A dialog previewing a Kolux-branded card with total tokens, estimated cost, top model, a daily token strip and the date range; Copy image puts it on the clipboard (the button briefly reads Copied); Share on X opens a pre-written post in the browser.",
+      "rules": [
+        "The card reflects the panel's current provider and range.",
+        "The post text names the provider, range, total tokens and cost; costs under a cent show four decimals, missing cost shows n/a.",
+        "Closing the dialog during capture does not error."
+      ],
+      "acceptance": [
+        "Click Share then Copy image → an image of the card is on the clipboard and the button shows Copied for about two seconds.",
+        "Click Share on X → the browser opens a post draft naming the range and totals."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/stats/ShareUsageButton.tsx:56",
+        "src/renderer/src/components/stats/ShareUsageButton.tsx:76",
+        "src/renderer/src/components/stats/ShareUsageCard.tsx:111",
+        "src/renderer/src/components/stats/ClaudeUsagePane.tsx:164"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-06-020",
+      "title": "X logo on the Share on X button",
+      "tier": "X",
+      "pushed": 10,
+      "state": "live-unverified",
+      "user_does": "Opens the share dialog.",
+      "user_sees": "The share-to-post button carries the X company logo drawn inline.",
+      "rules": [
+        "Third-party brand mark; the rebuild ships its own glyph or a text label."
+      ],
+      "acceptance": [
+        "Share dialog shows no third-party logo."
+      ],
+      "compat": "",
+      "decision": "X: third-party branded asset; replace with an owner-made glyph or plain text.",
+      "evidence": [
+        "src/renderer/src/components/stats/ShareUsageButton.tsx:12"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-06-021",
+      "title": "Claude plan usage is read safely from several sources",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Uses Claude with a signed-in account, an API token, or self-managed sign-in.",
+      "user_sees": "Claude's 5-hour and weekly figures (and the separate weekly limit for the top model tier) kept current, or a clear reason they are unavailable, without Kolux disturbing the user's sign-in.",
+      "rules": [
+        "While a Claude session is running, its own statusline posts feed the figures live and background account polls pause; posts from an unknown or different config folder are dropped, malformed posts or posts without usage windows are ignored, and a post with one window keeps the other.",
+        "Otherwise Kolux asks the provider's usage service with the stored sign-in, then falls back to reading Claude's own usage screen in a hidden terminal when that is safe; that fallback is used for Kolux-managed accounts, not for the system default sign-in.",
+        "In token mode or with self-managed sign-in Kolux makes no usage request at all and shows usage as unavailable; token mode never uses the hidden-terminal fallback.",
+        "A rejected sign-in may be repaired once through the CLI and retried; a missing permission is shown as needing action; a provider rate limit is honoured until its retry time (at most 24 hours) and is never masked by the fallback.",
+        "When a live Claude terminal owns the sign-in refresh, Kolux waits and refetches once those terminals close rather than fighting over it; that refetch happens only when the last read was actually deferred for this reason.",
+        "The top model tier's weekly limit is shown as its own window; an entry whose window length is ambiguous is ignored.",
+        "Hidden usage terminals start in a safe folder, honour the configured proxy, and are always cleaned up on timeout or cancel.",
+        "Several credential stores are tried in a fixed order (scoped, legacy, file); a stale scoped token falls back to the legacy one only for the system default account.",
+        "When the usage service gives the 5-hour and weekly figures but not the top model tier's weekly figure, only that missing figure is filled in from Claude's own usage screen; the service's figures are kept."
+      ],
+      "acceptance": [
+        "Run a Claude session → usage figures update within a turn without a background poll.",
+        "Switch Claude to token mode → no usage request is made and the figures read unavailable.",
+        "Make the service return a rate limit with a retry time → Kolux waits until then unless the user presses refresh."
+      ],
+      "compat": "Consumes the Claude Code statusline JSON (rate_limits windows, resets_at, context_window, config dir) posted by Kolux's managed statusline script.",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:claudeConnectionMode",
+        "registry:settings-keys:claudeSelfManagedSignIn",
+        "dumps/tests/06-usage-limits.txt:192",
+        "dumps/tests/06-usage-limits.txt:194",
+        "dumps/tests/06-usage-limits.txt:197",
+        "dumps/tests/06-usage-limits.txt:207",
+        "dumps/tests/06-usage-limits.txt:212",
+        "dumps/tests/06-usage-limits.txt:234",
+        "dumps/tests/06-usage-limits.txt:238",
+        "dumps/tests/06-usage-limits.txt:242",
+        "dumps/tests/06-usage-limits.txt:518",
+        "dumps/tests/06-usage-limits.txt:519",
+        "dumps/tests/06-usage-limits.txt:525",
+        "dumps/tests/06-usage-limits.txt:672",
+        "dumps/tests/06-usage-limits.txt:210",
+        "dumps/tests/06-usage-limits.txt:526",
+        "dumps/tests/06-usage-limits.txt:677",
+        "dumps/tests/06-usage-limits.txt:494"
+      ],
+      "round": 0,
+      "related": [
+        "07",
+        "04"
+      ]
+    },
+    {
+      "id": "D-06-022",
+      "title": "Codex plan usage is read without starting a session",
+      "tier": "P0",
+      "pushed": 4,
+      "state": "live",
+      "user_does": "Uses Codex with one or more signed-in accounts.",
+      "user_sees": "Codex 5-hour and weekly figures and the number of limit-reset credits left, or a sign-in prompt when the account needs re-authentication.",
+      "rules": [
+        "Kolux reads usage from Codex's own service first, then from a read-only background Codex process, then from Codex's status screen in a hidden terminal.",
+        "Nothing is spawned when the user is not signed in; a sign-in screen or dead refresh token stops the read and raises a re-auth warning.",
+        "A plan with only a weekly limit never shows that limit in the 5-hour slot; each window keeps its own reset time; model-specific weekly rows are ignored.",
+        "Reset-credit count comes from the background process or, when it omits it, from the service.",
+        "Only one read runs per Codex home at a time; background processes get time to shut down cleanly before being forced.",
+        "Failure messages name what went wrong with paths and secrets removed.",
+        "If the background process reports only the weekly window while the service still knows the 5-hour one, the 5-hour figure is filled in from the service.",
+        "Sign-in presence is checked in the account's own Codex home first, then the Codex home environment variable, then the default Codex folder in the user's home."
+      ],
+      "acceptance": [
+        "Signed in on a weekly-only plan → only the weekly figure shows, with its reset time.",
+        "Revoke the Codex sign-in → figures go away and a re-auth warning appears; no Codex window is spawned."
+      ],
+      "compat": "Honours CODEX_HOME, defaulting to ~/.codex, when checking Codex sign-in presence.",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:278",
+        "dumps/tests/06-usage-limits.txt:281",
+        "dumps/tests/06-usage-limits.txt:282",
+        "dumps/tests/06-usage-limits.txt:289",
+        "dumps/tests/06-usage-limits.txt:294",
+        "dumps/tests/06-usage-limits.txt:297",
+        "dumps/tests/06-usage-limits.txt:301",
+        "dumps/tests/06-usage-limits.txt:303",
+        "dumps/tests/06-usage-limits.txt:309",
+        "dumps/tests/06-usage-limits.txt:321",
+        "dumps/tests/06-usage-limits.txt:324",
+        "dumps/tests/06-usage-limits.txt:322",
+        "dumps/tests/06-usage-limits.txt:270"
+      ],
+      "round": 0,
+      "related": [
+        "07"
+      ]
+    },
+    {
+      "id": "D-06-023",
+      "title": "Usage figures refresh on a schedule and survive errors",
+      "tier": "P0",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Leaves Kolux open, switches back to it, or presses a refresh button.",
+      "user_sees": "Usage figures that stay reasonably current, refresh when the window regains focus, and keep the last known numbers through temporary failures without flickering.",
+      "rules": [
+        "Background refresh every 5 minutes; focusing the window triggers a refresh unless one just happened.",
+        "The first focus after a delayed startup fetches once, and a failed startup fetch is retried on the next focus with backoff while it keeps failing.",
+        "A manual refresh skips the debounce and the provider's retry-after wait.",
+        "Recent figures are kept through repeated failures; an error indicator stays settled during background retries instead of flashing a loading state.",
+        "One provider failing or being slow never blocks or blanks the others.",
+        "Usage updates that arrive while the app is still starting are not lost."
+      ],
+      "acceptance": [
+        "Disconnect the network → figures stay at their last values; reconnect and focus → they refresh.",
+        "Make Grok slow → Claude and Codex figures still update promptly."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:540",
+        "dumps/tests/06-usage-limits.txt:541",
+        "dumps/tests/06-usage-limits.txt:545",
+        "dumps/tests/06-usage-limits.txt:551",
+        "dumps/tests/06-usage-limits.txt:554",
+        "dumps/tests/06-usage-limits.txt:557",
+        "dumps/tests/06-usage-limits.txt:560",
+        "dumps/tests/06-usage-limits.txt:561",
+        "dumps/tests/06-usage-limits.txt:563",
+        "dumps/tests/06-usage-limits.txt:564",
+        "dumps/tests/06-usage-limits.txt:654"
+      ],
+      "round": 0,
+      "related": [
+        "19"
+      ]
+    },
+    {
+      "id": "D-06-024",
+      "title": "Reset times read as live countdowns",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Hovers the usage pill or reads a reset time in a usage line.",
+      "user_sees": "Reset times shown as a countdown in whole units (for example 2h 15m) that ticks over by itself, reading resets now when due.",
+      "rules": [
+        "Durations are floored to whole units and drop zero parts; a past or zero time reads now.",
+        "Under a day away the countdown updates just after each minute; a day or more away it updates on the hour; with several resets the soonest drives the update."
+      ],
+      "acceptance": [
+        "A reset 90 seconds away reads as about a minute and then reads now at the due time.",
+        "A reset two days away changes only on the hour."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:678",
+        "dumps/tests/06-usage-limits.txt:679",
+        "dumps/tests/06-usage-limits.txt:680",
+        "dumps/tests/06-usage-limits.txt:682",
+        "dumps/tests/06-usage-limits.txt:683",
+        "dumps/tests/06-usage-limits.txt:684"
+      ],
+      "round": 0,
+      "related": []
+    },
+    {
+      "id": "D-06-025",
+      "title": "Choose whether usage reads as used or remaining",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Goes to Appearance, status bar section, and flips Usage percentages between Used and Remaining.",
+      "user_sees": "Plan usage lines that honour the setting switch between how much is used and how much is left.",
+      "rules": [
+        "Unknown or missing values default to used.",
+        "Percentages are rounded and clamped to 0–100; a broken provider value reads 0.",
+        "At 0.15.0 only the Agents view usage line honours it; the top bar pill always reads left."
+      ],
+      "acceptance": [
+        "Set Remaining → the Agents view footer reads 70% for an account at 30% used.",
+        "Set Used → it reads 30%; the top pill keeps saying left."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "src/renderer/src/components/settings/AppearanceWindowSidebarSection.tsx:128",
+        "src/renderer/src/components/agents-view/AgentDetailFooter.tsx:36",
+        "dumps/tests/06-usage-limits.txt:709",
+        "dumps/tests/06-usage-limits.txt:710",
+        "dumps/tests/06-usage-limits.txt:711",
+        "dumps/tests/06-usage-limits.txt:712"
+      ],
+      "round": 0,
+      "related": [
+        "17"
+      ]
+    },
+    {
+      "id": "D-06-026",
+      "title": "Gemini and Antigravity quota reading",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Opts in to using the Gemini CLI sign-in for usage, then uses Gemini or Antigravity.",
+      "user_sees": "Gemini quota per model bucket, with the most constrained bucket as the headline, and Antigravity shown as the same shared quota; at 0.15.0 these figures surface only through usage alerts and launch warnings.",
+      "rules": [
+        "Without the opt-in Kolux never reads Gemini's credential files and reports usage unavailable.",
+        "Expired tokens are refreshed; a 401 is retried once; buckets are de-duplicated and broken entries dropped; model ids become readable names.",
+        "Antigravity mirrors a successful Gemini read; when the read fails it says unavailable without blaming sign-in, and points to the missing opt-in only when that is the cause.",
+        "After a failed Gemini read, Antigravity drops any earlier figure and reads unavailable rather than showing old numbers as a failed refresh."
+      ],
+      "acceptance": [
+        "Opt-in off → no Gemini file is read and no Gemini alerts fire.",
+        "Opt-in on with two buckets at 40% and 85% → the headline is 85% and an 80% alert fires."
+      ],
+      "compat": "Reads the Gemini CLI oauth_creds.json; settings key geminiCliOAuthEnabled (default false).",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:geminiCliOAuthEnabled",
+        "dumps/tests/06-usage-limits.txt:342",
+        "dumps/tests/06-usage-limits.txt:345",
+        "dumps/tests/06-usage-limits.txt:348",
+        "dumps/tests/06-usage-limits.txt:351",
+        "dumps/tests/06-usage-limits.txt:356",
+        "dumps/tests/06-usage-limits.txt:183",
+        "dumps/tests/06-usage-limits.txt:187",
+        "dumps/tests/06-usage-limits.txt:547",
+        "dumps/tests/06-usage-limits.txt:503"
+      ],
+      "round": 0,
+      "related": [
+        "07"
+      ]
+    },
+    {
+      "id": "D-06-027",
+      "title": "Kimi and MiniMax quota reading",
+      "tier": "P2",
+      "pushed": 4,
+      "state": "live-unverified",
+      "user_does": "Signs in to Kimi, or saves a MiniMax cookie or API key with region, group and model choices.",
+      "user_sees": "5-hour and weekly quota for these providers, feeding usage alerts and launch warnings; errors say whether the cookie or key expired or the service failed.",
+      "rules": [
+        "Kimi reads its own sign-in read-only: an expired token is reported, never refreshed; a custom Kimi home is honoured, a blank one ignored.",
+        "MiniMax uses the API key when present (overseas or China endpoint), otherwise the browser cookie; the cookie is accepted in header or quoted export form.",
+        "MiniMax 5-hour window is fixed at five hours regardless of the reported interval; weekly is optional; an explicit group id beats the one in the cookie; the first configured model is used (a blank model list means the general model), with a lone result as fallback.",
+        "Cookie values, group ids and tokens are redacted from every log and error; cookies live in a separate storage partition cleared before and after each read.",
+        "Changing MiniMax credentials discards the old figures; MiniMax failures never affect other providers.",
+        "An empty Kimi usage reply is reported as an error, never as 0%."
+      ],
+      "acceptance": [
+        "Save an expired MiniMax cookie → usage reads expired session cookie, other providers unaffected.",
+        "Kimi token expired → reported as expired, no refresh attempted."
+      ],
+      "compat": "Settings keys minimaxGroupId, minimaxUsageModels (default general), minimaxEndpoint (default overseas); reads Kimi's ~/.kimi-code credentials and honours KIMI_CODE_HOME.",
+      "decision": "",
+      "evidence": [
+        "registry:settings-keys:minimaxEndpoint",
+        "registry:settings-keys:minimaxGroupId",
+        "registry:settings-keys:minimaxUsageModels",
+        "dumps/tests/06-usage-limits.txt:394",
+        "dumps/tests/06-usage-limits.txt:399",
+        "dumps/tests/06-usage-limits.txt:401",
+        "dumps/tests/06-usage-limits.txt:413",
+        "dumps/tests/06-usage-limits.txt:418",
+        "dumps/tests/06-usage-limits.txt:431",
+        "dumps/tests/06-usage-limits.txt:443",
+        "dumps/tests/06-usage-limits.txt:466",
+        "dumps/tests/06-usage-limits.txt:530",
+        "dumps/tests/06-usage-limits.txt:533",
+        "dumps/tests/06-usage-limits.txt:428",
+        "dumps/tests/06-usage-limits.txt:398"
+      ],
+      "round": 0,
+      "related": [
+        "07"
+      ]
+    },
+    {
+      "id": "D-06-028",
+      "title": "Resource Manager counts reattached terminals",
+      "tier": "P2",
+      "pushed": 9,
+      "state": "live-unverified",
+      "user_does": "Opens the Resource Manager after Kolux reattached to terminals that survived a reload.",
+      "user_sees": "Reattached local terminals listed with their process ids, not marked as remote.",
+      "rules": [
+        "A warm-reattached local terminal is included in the snapshot like any other local terminal."
+      ],
+      "acceptance": [
+        "Reload the window with a terminal running → Resource Manager lists it with a pid and as local."
+      ],
+      "compat": "",
+      "decision": "",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:740",
+        "dumps/e2e/spec-names.txt:195",
+        "registry:view-ids:status-bar-segment/resource-usage"
+      ],
+      "round": 0,
+      "related": [
+        "19",
+        "03"
+      ]
+    },
+    {
+      "id": "D-06-029",
+      "title": "Status-bar provider usage segments and switcher bars (retired 2026-10-05)",
+      "tier": "H",
+      "pushed": 4,
+      "state": "retired 2026-10-05",
+      "user_does": "Used to read usage from the status bar.",
+      "user_sees": "Per-provider usage segments with inline bars, menus to switch accounts with each account's usage, and a verbose or compact display mode.",
+      "rules": [
+        "Removed when usage moved to the top bar pill and pane headers; the components remain in the source but are never mounted.",
+        "The per-provider item toggles survive only as switches that hide providers from the top pill.",
+        "Background previews of accounts not in use, which fed these menus, still exist in the service."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/renderer/src/components/status-bar/StatusBarSurface.tsx:40",
+        "registry:view-ids:status-bar-segment/minimax",
+        "dumps/tests/06-usage-limits.txt:686",
+        "dumps/tests/06-usage-limits.txt:498",
+        "dumps/tests/06-usage-limits.txt:504",
+        "dumps/tests/06-usage-limits.txt:514",
+        "dumps/records/handoff-recent-work.md (2026-10-05 status-bar Claude/Codex usage removed)"
+      ],
+      "round": 0,
+      "related": [
+        "21",
+        "07"
+      ]
+    },
+    {
+      "id": "D-06-030",
+      "title": "Usage overview dialog (unreachable since 2026-10-05)",
+      "tier": "H",
+      "pushed": 4,
+      "state": "retired 2026-10-05",
+      "user_does": "Used to open a usage overview from the status bar.",
+      "user_sees": "A dialog listing every usage provider with each window's percentage and resets-in time, today's tokens, recent sessions, and providers marked not detected or unavailable, with a refresh button.",
+      "rules": [
+        "The dialog is still mounted but its only opener is no longer wired to anything."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/renderer/src/components/status-bar/StatusBarSurface.tsx:135",
+        "src/renderer/src/components/status-bar/use-status-bar-controller.ts:203",
+        "dumps/tests/06-usage-limits.txt:638",
+        "dumps/tests/06-usage-limits.txt:643",
+        "dumps/tests/06-usage-limits.txt:644",
+        "dumps/tests/06-usage-limits.txt:646"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-06-031",
+      "title": "Usage run-out forecast (no longer shown since 2026-10-05)",
+      "tier": "H",
+      "pushed": 4,
+      "state": "retired 2026-10-05",
+      "user_does": "Used to hover a provider's status-bar usage.",
+      "user_sees": "A line projecting when the current window would run out at the recent pace, or saying it would not run out before it resets.",
+      "rules": [
+        "Projection uses the last hour or so of samples, needs at least two samples five minutes apart, returns nothing for flat or falling use or when run-out falls after the reset, and treats 100% or more as now.",
+        "Samples are still collected per window and cleared when the window resets; only the hover that showed the line was removed."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default build: the projection still runs and directly serves theme 4 (know limits ahead); show it in the top pill's hover.",
+      "evidence": [
+        "src/renderer/src/components/status-bar/tooltip.tsx:35",
+        "src/renderer/src/store/slices/rate-limits.ts:35",
+        "dumps/tests/06-usage-limits.txt:722",
+        "dumps/tests/06-usage-limits.txt:724",
+        "dumps/tests/06-usage-limits.txt:730",
+        "dumps/tests/06-usage-limits.txt:733",
+        "dumps/tests/06-usage-limits.txt:734",
+        "dumps/tests/06-usage-limits.txt:735",
+        "dumps/tests/06-usage-limits.txt:737"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-06-032",
+      "title": "Notice that usage percentages changed meaning",
+      "tier": "H",
+      "pushed": 4,
+      "state": "hidden",
+      "user_does": "Upgraded from a version that showed usage differently.",
+      "user_sees": "A dismissible notice explaining the used/remaining choice, shown only to upgraded profiles still on the old default and only while usage meters were visible.",
+      "rules": [
+        "New profiles and users who already chose remaining never saw it; a dismissal is kept.",
+        "The notice component is not mounted anywhere at 0.15.0."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "H: default skip",
+      "evidence": [
+        "src/renderer/src/components/status-bar/UsagePercentageDisplayChangeNotice.tsx:1",
+        "dumps/tests/06-usage-limits.txt:704",
+        "dumps/tests/06-usage-limits.txt:707",
+        "dumps/tests/06-usage-limits.txt:708"
+      ],
+      "round": 0,
+      "related": [
+        "21"
+      ]
+    },
+    {
+      "id": "D-06-033",
+      "title": "Usage reading and auto-resume for WSL, SSH and mobile",
+      "tier": "D",
+      "pushed": 4,
+      "state": "dropped",
+      "user_does": "Runs agents inside WSL or over SSH, or watches usage from the mobile app.",
+      "user_sees": "Usage read from the WSL distro's own accounts, auto-resume for SSH panes that carry their own reset time, and usage pushed to mobile subscribers.",
+      "rules": [
+        "WSL panes never read the host's account windows; Codex, Claude and Kimi usage is read from the distro's home, with a stalled distro bounded rather than blocking the cycle.",
+        "SSH panes resume only on the event's own reset time and wait while the link is down.",
+        "Switching the runtime to WSL retargets only Claude and Codex usage reads.",
+        "Mobile subscription replays never force a refetch.",
+        "Hidden usage terminals started inside WSL carry the configured proxy; a WSL target never retries with the host's legacy stored credential; the first usage read picks the WSL or host target from the runtime setting before any stale selection."
+      ],
+      "acceptance": [
+        "n/a — decision item"
+      ],
+      "compat": "",
+      "decision": "default cut: WSL, SSH and mobile execution were dropped with area 18. Revive via DECISIONS.md.",
+      "evidence": [
+        "dumps/tests/06-usage-limits.txt:143",
+        "dumps/tests/06-usage-limits.txt:146",
+        "dumps/tests/06-usage-limits.txt:179",
+        "dumps/tests/06-usage-limits.txt:188",
+        "dumps/tests/06-usage-limits.txt:326",
+        "dumps/tests/06-usage-limits.txt:387",
+        "dumps/tests/06-usage-limits.txt:484",
+        "dumps/tests/06-usage-limits.txt:542",
+        "dumps/tests/06-usage-limits.txt:245",
+        "dumps/tests/06-usage-limits.txt:218",
+        "dumps/tests/06-usage-limits.txt:386"
+      ],
+      "round": 0,
+      "related": [
+        "18"
+      ]
+    }
+  ],
+  "notes": [
+    "Since the 2026-10-05 status-bar removal, Gemini, Antigravity, Kimi and MiniMax usage has no on-screen display: only 80/95% alerts and launch warnings use it. The pill covers only Claude and Codex, and the meters cover only Claude, Codex and Grok.",
+    "Dead code at 0.15.0: the status-bar provider menus, roster and inline bars are never mounted. UsageOverviewDialog is mounted, but its opener (use-status-bar-controller.ts:203) is unused. UsagePercentageDisplayChangeNotice is not mounted. The forecast label lives only in the removed status-bar tooltip.",
+    "The usageAlerts notification preference defaults on, but no settings switch for it was found in the renderer. It can only be changed through the master notifications switch or the saved setting.",
+    "ACCT-4 (warn before limit) has no shipped marker in improvement-cards.md, but its alerts and launch warnings are live in the code.",
+    "Covered elsewhere, so not duplicated here: the account switcher and the Codex reset-credit consume confirm (07 D-07-036/037, H), MiniMax and Gemini credential entry (07), the Stopped-on-limit state and statusline hook (04 D-04-022/040), and the prompt cache timer (01; promptCacheTimerEnabled is on the Agents page).",
+    "The top pill always reads 'left' and ignores the Used/Remaining setting. That setting now affects only the Agents view footer, so the rebuild should decide whether one setting governs both.",
+    "The Privacy settings section is cut. Token tracking is still a per-provider opt-in that only reads local agent logs, and that local-only rule is recorded on D-06-013.",
+    "Critic r1 fixes: D-06-021 and D-06-022 tier P1->P0 and state live-unverified->live (the 2026-10-05 session usage meter entry names plan usage, and the P0 meters and weekly pill cannot work without these reads); D-06-023 tier P1->P0 (the P0 pill and meters need the refresh schedule); pushed 3->4 on D-06-002/003/004/011 and 6->4 on D-06-019 (usage, theme 4); pushed 6->10 on D-06-020 (third-party brand asset, matching other areas' X cards).",
+    "Duplicates for the merge stage: D-05-008 (weekly usage pill) = D-06-008; D-05-018 (usage line on the Agents screen) = D-06-004 footer; D-05-102 (provider usage chips, retired) = D-06-029; D-05-104 (provider logos in usage UI, X) overlaps D-06-020. Pick one owner each."
+  ]
+}

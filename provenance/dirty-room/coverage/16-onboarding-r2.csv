@@ -1,0 +1,115 @@
+source,item,verdict,card_id,note
+sample,onboarding/onboarding-milestones.test.ts :: writes the timestamp the first time a milestone fires,MAPPED,D-16-011,"first-fire timestamp, never overwritten"
+sample,onboarding/NotificationStep.test.tsx :: renders sound setup without the old notification source switches,MAPPED,D-16-016,"notification step: sound choices, old per-source switches gone"
+sample,onboarding/AgentStep.test.tsx :: labels the fallback agents summary as hide when expanded,MAPPED,D-16-016,rule added: fallback-agents toggle reads show or hide
+sample,src/main/star-nag/service-direct-star.test.ts :: records failed direct star before web fallback and guards duplicate in-flight attempts,MAPPED,D-16-038,failed direct star switches to browser fallback; duplicate in-flight ignored
+sample,src/shared/feature-tips.test.ts :: normalizes persisted tip ids,MAPPED,D-16-027,unknown tip ids dropped on load
+sample,onboarding/OnboardingInlineCommandTerminal.test.ts :: stops scheduling readiness checks after the capped number of attempts,MAPPED,D-16-017,rule added: inline setup terminal stops waiting for a prompt after about fifty checks
+sample,feature-tips/feature-tip-startup-gate.test.ts :: opens the CLI feature tip first for an existing user on app open,MAPPED,D-16-027,CLI tip first for existing users
+sample,setup-guide/use-setup-guide-progress.test.ts :: resets readiness on setup-script generation changes and ignores late older results,MAPPED,D-16-015,"setup-script readiness resets on input change, late results ignored"
+sample,contextual-tours/use-contextual-tour-target-watch.test.tsx :: disconnects the MutationObserver on unmount even before the retry cap is reached,NOT-USER-FACING,,observer cleanup on unmount
+sample,src/renderer/src/store/slices/ui-contextual-tours.test.ts :: preserves the bounded setup-guide parallel-work source on forced tour requests,MAPPED,D-16-032,forced replay from the Setup Guide parallel-work step; source label is telemetry
+sample,feature-tips/CmdJPaletteFeatureTipVisual.test.tsx :: renders the live binding as separate shortcut key chips with plus separators,MAPPED,D-16-029,live binding shown as key chips
+sample,feature-wall/feature-wall-setup-progress.test.ts :: groups setup guide steps into Parallel work and Setup sections,MAPPED,D-16-014,Setup then parallel-work sections
+sample,contextual-tours/use-contextual-tour.test.ts :: can record after hydration while preserving an explicit pre-open snapshot,MAPPED,D-16-042,opening a toured surface records a use; pre-open snapshot is telemetry only
+sample,setup-guide/use-setup-guide-progress.test.ts :: treats checked but ungranted Computer Use permissions as settled readiness,DROP,D-16-040,Computer Use permission readiness; cut with computer use
+sample,src/renderer/src/store/slices/ui-contextual-tours.test.ts :: does not bias first-visit contextual tour telemetry from navigation actions,MAPPED,D-16-039,"tour telemetry, compiled off"
+sample,feature-wall/use-feature-wall-completion.test.ts :: keeps persisted workbench visits and drops duplicates or unknown steps,MAPPED,D-16-023,"visits restored, duplicates and unknown ids dropped"
+sample,onboarding/onboarding-feature-setup.test.ts :: clears feature markers when no setup items are selected,MAPPED,D-16-017,clearing every selection clears setup markers
+sample,contextual-tours/contextual-tour-step-actions.test.ts :: dispatches the terminal-pane split action against the active tab,MAPPED,D-16-033,rule added: 'Split terminal' step button splits the active tab
+sample,onboarding/use-onboarding-flow.test.ts :: advance() moves forward through screens and persists progress,MAPPED,D-16-007,each forward step saves progress
+sample,feature-wall/feature-wall-rail-navigation.test.ts :: moves up past the current row,MAPPED,D-16-022,rail arrow keys clamped
+sample,feature-tips/CmdJPaletteFeatureTipVisual.test.tsx :: does not schedule animation timers when reduced motion is preferred,MAPPED,D-16-029,"reduced motion: end state, no timers"
+sample,feature-wall/FeatureWallSetupWorkflowActions.test.tsx :: rejects a stale setup-guide composer request after close and reopen,MAPPED,D-16-016,stale composer request after close and reopen ignored
+sample,star-nag/StarNagAgentValueMomentObserver.test.tsx :: asks main after a prompted non-interrupted done transition and idle window,MAPPED,D-16-037,finished-task moment after quiet window
+sample,feature-wall/FeatureWallSetupWorkflowActions.test.tsx :: chooses the active git repo for setup-guide workspace creation,MAPPED,D-16-016,workspace creation uses the active git project
+sample,feature-tips/feature-tip-telemetry.test.ts :: keeps feature tip sources low-cardinality,MAPPED,D-16-039,"tip telemetry, compiled off"
+sample,"onboarding/onboarding-flow-state.test.ts :: restarts any open v4 (five-step) progress at screen 1, regardless of how far it got",MAPPED,D-16-008,five-step progress restarts at screen 1
+sample,feature-wall/feature-wall-shortcut-labels.test.tsx :: renders Windows shortcut copy in workbench and browser visuals,MAPPED,D-16-025,Windows shortcut labels in demos
+sample,feature-tips/CmdJPaletteFeatureTipVisual.test.tsx :: shows the create-worktree row only once the demo query is non-empty,MAPPED,D-16-029,demo typing reveals the create-workspace row
+sample,src/main/star-nag/service-prompt-moments.test.ts :: shows agent value moment prompts once per app version after eligibility passes,MAPPED,D-16-037,finished-task moment once per app version
+sample,feature-wall/feature-wall-usage-tracking.test.ts :: treats system-default Codex rate limit data as connected,MAPPED,D-16-024,usage connected from provider default rate-limit data
+sample,tests/e2e/feature-wall.spec.ts :: keeps persisted completed setup-backed substeps checked when reopened,MAPPED,D-16-023,completed setup-backed substeps survive reopening
+sample,onboarding/onboarding-dismiss-target.test.ts :: requests confirmation for primary clicks outside onboarding UI,MAPPED,D-16-006,primary click outside asks to skip
+sample,feature-wall/use-integration-connection-status.test.ts :: starts with review active and tasks upcoming when nothing is connected,MAPPED,D-16-018,"review active first, tasks waiting"
+sample,setup-guide/use-setup-guide-progress.test.ts :: does not treat a failed status read as unavailable setup completion,MAPPED,D-16-015,failed status read is not completion
+sample,onboarding/onboarding-dismiss-target.test.ts :: ignores clicks inside the onboarding modal,MAPPED,D-16-006,clicks inside the card ignored
+sample,feature-wall/newcomer-setup-checklist-completion-toast.test.ts :: persists across the marker/checker pair,MAPPED,D-16-013,"all-done toast once per profile (H, unreachable at 0.15.0)"
+sample,feature-tips/feature-tip-startup-gate.test.ts :: does not open later in the same session after onboarding suppressed it,MAPPED,D-16-027,no tip later in a session onboarding suppressed
+sample,contextual-tours/contextual-tour-gate.test.ts :: allows only workspace creation over its workspace composer modal,MAPPED,D-16-032,only the workspace-creation tour runs over its composer
+sample,contextual-tours/ContextualTourControl.test.ts :: does not clear the workspace name when disabling first-message auto-name,MAPPED,D-16-033,disabling first-message auto-name keeps the name
+sample,onboarding/onboarding-feature-setup.test.ts :: uses the WSL CLI APIs for the selected distro,MAPPED,D-16-017,WSL distro setup path; WSL execution cut is an open owner question (r1 note)
+sample,feature-wall/use-feature-wall-completion.test.ts :: completes tasks only after the user visits Tasks and a task source is connected,MAPPED,D-16-023,tasks needs a visit plus a connected source
+sample,contextual-tours/contextual-tour-floating-position.test.ts :: places the panel by the preferred side and returns arrow coordinates,MAPPED,D-16-031,"rule added: preferred side with arrow, stays inside the host"
+sample,contextual-tours/contextual-tour-gate.test.ts :: falls back to the overflow-menu row when the hint button is hidden,MAPPED,D-16-033,cookie step falls back to the overflow menu row
+sample,setup-guide/use-setup-guide-progress.test.ts :: derives the probe signature from runtime and ordered git repo inputs,MAPPED,D-16-015,setup-script probe re-runs when runtime or repo set changes
+sample,onboarding/onboarding-feature-setup.test.ts :: keeps the copied command valid for the WSL target shell,MAPPED,D-16-017,copied command shaped for the target shell
+sample,onboarding/onboarding-folder-agent-startup.test.ts :: does not seed after another project was already added outside onboarding,MAPPED,D-16-010,no auto-start when a project already existed
+sample,feature-wall/use-feature-wall-completion.test.ts :: requires the Browser Use skill before completing the workbench browser step,MAPPED,D-16-023,browser stop needs the browser-use skill
+sample,star-nag/StarNagToastHost.test.tsx :: does not allow unresolved close while the primary action is busy,MAPPED,D-16-038,close disabled while starring is busy
+sample,onboarding/onboarding-flow-state.test.ts :: leaves v5 progress untouched -- it already had no view_choice screen,MAPPED,D-16-008,progress from the version without view-choice kept
+sample,"contextual-tours/contextual-tour-step-actions.test.ts :: opens the workspace composer after detaching, without advancing the tour itself",MAPPED,D-16-033,create step hands off into the composer
+sample,onboarding/onboarding-flow-state.test.ts :: keeps the pre-v4 completed-outcome fallback for older versions,MAPPED,D-16-008,older-version completed fallback kept
+sample,contextual-tours/request-contextual-tour-when-ready.test.ts :: can wait for another tour to clear before requesting the target tour,MAPPED,D-16-032,forced request can wait for another tour to clear
+sample,src/renderer/src/store/slices/ui-contextual-tours.test.ts :: does not auto-start tours for profiles that are not eligible,MAPPED,D-16-032,ineligible profiles get no automatic tours
+sample,onboarding/FeatureSetupInlineTerminal.test.tsx :: keeps the runtime captured when setup started,MAPPED,D-16-017,runtime chosen at start kept for the run
+sample,src/shared/feature-wall-tour-depth.test.ts :: builds session-local counts and furthest step from visited sets,MAPPED,D-16-039,Explore Kolux depth summary feeds telemetry only
+sample,contextual-tours/ContextualTourOverlay.test.tsx :: renders later progress and Done on the final visible step,MAPPED,D-16-031,progress counts visible steps; Done on the last
+sample,onboarding/FeatureSetupInlineTerminal.test.tsx :: uses the host command builder when the WSL runtime needs repair,MAPPED,D-16-017,host fallback when the WSL runtime needs repair
+sample,contextual-tours/ContextualTourOverlay.visibility.test.tsx :: pauses the 500ms full pass while hidden and re-measures on return,MAPPED,D-16-031,periodic re-measure pauses while hidden
+sample,feature-wall/feature-wall-setup-progress.test.ts :: does not pre-complete the step when two repos contribute only main checkouts,MAPPED,D-16-015,two main checkouts do not complete multi-task
+sample,feature-wall/feature-wall-setup-progress.test.ts :: does not mark agent capabilities complete from setup-start interactions alone,MAPPED,D-16-015,starting setup alone does not complete capabilities
+sample,feature-wall/feature-wall-setup-checklist-localized-copy.test.ts :: returns non-empty localized name and description for all setup checklist steps,MAPPED,D-16-014,step names and descriptions localized
+sample,feature-tips/feature-tip-startup-gate.test.ts :: suppresses feature tips for first-time users while onboarding is showing,MAPPED,D-16-027,no tips while onboarding shows
+sample,contextual-tours/ContextualTourOverlaySurface.localization.test.tsx :: renders default tour actions in Korean when the UI locale is Korean,MAPPED,D-16-031,tour copy localized
+sample,src/renderer/src/store/slices/ui-contextual-tours.test.ts :: preserves the session guard when canceling an already-rendered tour,MAPPED,D-16-032,rule added: one automatic tour per app session; cancelling a shown tour keeps the slot used
+sample,onboarding/onboarding-milestones.test.ts :: treats an absent field the same as null,MAPPED,D-16-011,missing value counts as not yet
+sample,feature-wall/feature-wall-setup-progress.test.ts :: marks the browser step complete once a non-blank page has been viewed,MAPPED,D-16-015,browser step after a non-blank page
+sample,contextual-tours/ContextualTourOverlay.test.tsx :: handles global Escape through the panel button so telemetry callbacks run,MAPPED,D-16-031,Escape acts as Skip
+sample,onboarding/onboarding-flow-state.test.ts :: shifts v6 progress at or past view_choice back one slot so it resumes at the same screen,MAPPED,D-16-008,view-choice version progress shifted back one slot
+sample,feature-tips/feature-tip-telemetry.test.ts :: tracks CLI tip exposure once per explicit call,MAPPED,D-16-039,"tip telemetry, compiled off"
+sample,feature-wall/KeepAwakeCard.test.tsx :: disables either enabled mode,MAPPED,D-16-024,keep-awake card turns either on mode off
+sample,feature-tips/feature-tip-startup-gate.test.ts :: waits for CLI install status before opening later tips,MAPPED,D-16-027,later tips wait for CLI install status
+sample,setup-guide/use-setup-guide-telemetry.test.ts :: emits visible setup-guide completions during the startup baseline window,MAPPED,D-16-039,"setup-guide telemetry, compiled off"
+sample,src/renderer/src/store/slices/ui-contextual-tours.test.ts :: lets the caller preserve the pre-enable interaction snapshot for telemetry,MAPPED,D-16-039,"tour telemetry snapshot, compiled off"
+sample,feature-wall/use-integration-connection-status.test.ts :: lists every connected task source with trackers before code hosts,DROP,D-16-019,"tracker-first ordering; trackers cut, GitHub summary kept in D-16-018"
+sample,onboarding/OnboardingInlineCommandTerminal.command-finished.test.tsx :: prepares auto-paste again when the resolved tab shell changes,MAPPED,D-16-017,rule added: command re-shaped and typed again when the resolved shell changes
+sample,"onboarding/use-onboarding-kit-state.test.ts :: launches immediately, without opening the dialog, when the sample workspace prefills every required input and an agent is connected",MAPPED,D-16-005,Start kit launches at once when the sample fills every input
+sample,src/main/star-nag/service-force-show-races.test.ts :: ignores stray and duplicate dismissals without logging or advancing backoff,MAPPED,D-16-037,rule added: stray or repeated dismissals do not restart cooldown or double threshold
+sample,src/main/star-nag/service-force-show-races.test.ts :: marks completion without adding duplicate success logging,MAPPED,D-16-038,completion recorded once; logging detail not user-facing
+sample,feature-tips/CmdJPaletteFeatureTipVisual.test.tsx :: does not render infinite animation classes in the default preview,MAPPED,D-16-029,demo plays once and settles
+sample,setup-guide/use-setup-guide-telemetry.test.ts :: uses setup-first ordering for setup-guide open first-incomplete telemetry,MAPPED,D-16-039,"setup-guide telemetry, compiled off"
+sample,src/main/star-nag/service-force-show-races.test.ts :: does not log or block a later force_show when no window exists,MAPPED,D-16-037,forced show with no window is not used up
+sample,feature-tips/CliSkillSetupTerminal.test.tsx :: runs the Windows host fallback when the selected WSL runtime needs repair,MAPPED,D-16-028,CLI tip host fallback when WSL needs repair
+sample,feature-wall/browser-animated-visual-sequence.test.ts :: opens the split at working and keeps ordered phase comparisons,MAPPED,D-16-025,browser demo fixed storyboard order
+sample,src/shared/contextual-tours.test.ts :: defines the workspace agent sessions value tour as split then create-worktree,MAPPED,D-16-033,"parallel-agents tour: split, then create workspace"
+sample,src/main/star-nag/service-direct-star.test.ts :: emits direct-star attempted and succeeded outcomes plus app_starred_kolux,MAPPED,D-16-039,"star telemetry, compiled off"
+sample,feature-wall/FullDiskAccessSetupPrompt.test.ts :: opens Full Disk Access settings from the prompt action,MAPPED,D-16-017,Full Disk Access prompt opens the system setting
+sample,"onboarding/use-onboarding-your-work-state.test.ts :: defaults the sample chooser to ""Analyze a spreadsheet""",MAPPED,D-16-004,spreadsheet sample preselected
+sample,feature-wall/feature-wall-setup-checklist-localized-copy.test.ts :: has valid Korean and English catalog entries for all setup checklist steps,MAPPED,D-16-014,English and Korean step copy
+sample,contextual-tours/use-contextual-tour.test.ts :: waits for persisted seen ids before allowing a tour request,MAPPED,D-16-032,no tour before saved seen ids load
+sample,contextual-tours/contextual-tour-overlay-measurement.test.ts :: renders the automation tour copy in Korean when the UI locale is Korean,MAPPED,D-16-031,tour copy localized (automations tour)
+sample,star-nag/StarNagToastHost.test.tsx :: does not dismiss the current main session when replacing an active toast,MAPPED,D-16-038,replacing the toast is not a user dismissal
+sample,feature-wall/newcomer-setup-checklist-items.test.ts :: marks every item undone with no signals,MAPPED,D-16-013,"no signals, nothing ticked (H)"
+sample,src/shared/feature-tips.test.ts :: describes the CLI tip as an install action with concrete workflows,MAPPED,D-16-028,CLI tip names concrete workflows
+sample,setup-guide/use-setup-guide-progress.test.ts :: waits for Computer Use permission status when the skill is installed,DROP,D-16-040,waits for Computer Use permission status; cut with computer use
+sample,contextual-tours/workspace-creation-tour-handoff.test.ts :: hands off from the agent sessions create-worktree step to the workspace-creation tour,MAPPED,D-16-033,parallel-agents create step hands off to workspace-creation tour
+sample,star-nag/StarNagAgentValueMomentObserver.test.tsx :: does not scan 500 agent statuses on 50 same-state working pings,NOT-USER-FACING,,performance guard on repeated same-state status pings
+sample,setup-guide/use-setup-guide-progress.test.ts :: settles setup-script failures as ready with no setup script,MAPPED,D-16-015,failed setup-script probe settles as no script
+sample,feature-wall/use-integration-connection-status.test.ts :: treats current preflight errors as settled without exposing cached auth,MAPPED,D-16-018,stale or errored checks do not show cached sign-in as connected
+sample,onboarding/onboarding-feature-setup.test.ts :: leaves the copied command bare for a host runtime,MAPPED,D-16-017,copied command left bare for a host runtime
+sample,feature-wall/ConnectIntegrationsList.test.tsx :: auto-resolves the task step from a connected code host but keeps it open for trackers,MAPPED,D-16-018,connected code host resolves the task step; tracker part cut (D-16-019)
+registry:settings-sections.tsv,setup-guide (Onboarding checklist),DROP,D-16-021,"table 1b: section cut, guide keeps its dialog"
+registry:menu-items.tsv,Help > Explore Kolux,MAPPED,D-16-022,register-app-menu.ts:128
+registry:menu-items.tsv,Help > Getting Started with Kolux,MAPPED,D-16-014,register-app-menu.ts:133
+registry:e2e/spec-names.txt,feature-wall.spec.ts,MAPPED,D-16-022,also D-16-023
+registry:e2e/spec-names.txt,onboarding.spec.ts (mapped to 05),MAPPED,D-16-041,drives the retired five-step wizard
+registry:e2e/spec-names.txt,setup-guide-sidebar.spec.ts (mapped to 05),MAPPED,D-16-020,"sidebar entry, no flash while checks load"
+handoff,line 15: 2026-10-05 originality cleanup ... upstream names scrubbed,OTHER-AREA:21,,feature-tile recordings and captions still upstream: D-16-026 (X)
+handoff,line 18: 2026-10-05 trimmed features ... desktop Voice/dictation removed,OTHER-AREA:21,,voice feature tip retired with it: D-16-030 (H)
+triage,StarNagCard (src/renderer/src/components/StarNagCard.test.tsx),MAPPED,D-16-038,card fallback after failed direct star
+triage,createUISlice feature interactions (src/renderer/src/store/slices/ui-feature-interactions.test.ts),MAPPED,D-16-042,local feature-use record (card written in r1)
+triage,createUISlice feature tips (src/renderer/src/store/slices/ui-notice-dismissals.test.ts),MAPPED,D-16-027,"seen ids saved once, unknown dropped"
+triage,createUISlice setup guide sidebar dismissal (src/renderer/src/store/slices/ui-notice-dismissals.test.ts),MAPPED,D-16-020,only explicit hide loads as hidden
+triage,feature interactions (src/shared/feature-interactions.test.ts),MAPPED,D-16-042,feature-use semantics
+triage,New-user golden core flow (tests/e2e/golden-core-flows.spec.ts),MAPPED,D-16-033,parallel-agents tour handoff; onboarding part drives the retired wizard (D-16-041)

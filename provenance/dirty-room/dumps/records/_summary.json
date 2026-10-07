@@ -1,0 +1,39 @@
+{
+ "generated": "2026-10-06",
+ "commits_total": 360,
+ "commits_excluded": 8,
+ "commits_kept": 352,
+ "churn_area_commit_sum": 862,
+ "churn_gap_explanation": "a commit touching N areas counts once per area; zero-file merge commits count in no area",
+ "churn_rows": 23,
+ "churn_by_week_rows": 97,
+ "commits_by_theme_rows": 11,
+ "tags": 14,
+ "annotated_tags": 6,
+ "lightweight_tags": 8,
+ "history_rows": 35,
+ "history_undated_subheadings": 6,
+ "research_docs_files": 84,
+ "improvement_cards": 69,
+ "cards_with_marker": 17,
+ "business_frame_files": 7,
+ "map_table_rows": 8,
+ "package": {
+  "deps": 25,
+  "devDeps": 102,
+  "scripts": 148
+ },
+ "not_found": [
+  "productName: absent from package.json top level and build block",
+  "Node/pnpm pins: only engines.node=24 and packageManager pnpm@12.0.0; no .nvmrc/.node-version",
+  "Repo-doc card markers: none; shipped markers only in vault page (table and card sections) and HANDOFF.md",
+  "Redesign design source not on disk: external claude.ai artifact, only canvas.json index read, board contents not fetched",
+  "HANDOFF-HISTORY reference is at line 88 not 71",
+  "v0.12.0 and other tags lightweight: no tag message, commit message used",
+  "Unshipped markers: none exist anywhere; 52 cards have no marker, meaning unshipped or unrecorded"
+ ],
+ "notes": [
+  "theme regexes are substring matches over subjects (tab matches table, run matches truncate, ci matches decision)",
+  "excluded: 7f3326473, 7c01321e4, 0a6585a51 treated as rename commits by subject; a4ea33c71 excluded for 580 files"
+ ]
+}

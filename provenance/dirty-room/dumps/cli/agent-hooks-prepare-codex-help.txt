@@ -1,0 +1,13 @@
+﻿kolux agent hooks prepare-codex
+
+Usage: kolux agent hooks prepare-codex
+
+Repair Kolux-managed Codex hook trust before a shell launch
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --page <id>            Stable browser page id from `kolux tab list --json`
+

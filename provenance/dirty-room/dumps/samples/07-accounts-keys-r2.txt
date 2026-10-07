@@ -1,0 +1,101 @@
+# 07-accounts-keys random sample round 2 (100 of 2134): file	title
+src/main/providers/local-pty-utils.test.ts	preserves non-absolute shells for execvp PATH and cwd resolution
+src/main/codex-accounts/legacy-shared-config-compatibility.test.ts	does not overwrite trust appended by a retained Codex during the mirror
+src/main/providers/ssh-pty-provider-terminal-repair.test.ts	routes a repairable cause into recovery and retries once on the repaired provider
+src/main/providers/windows-powershell-executable.test.ts	prefers ComSpec when set
+src/main/codex-accounts/legacy-wsl-runtime-auth-drain-apply-script.test.ts	bridges retired sessions while a legacy pane still owns the source
+src/renderer/src/components/ai-connections/ConnectCardGrid.test.tsx	shows a neutral loading skeleton, never a "not installed" guess, before getStatuses resolves
+src/main/ipc/worktrees-authoritative-local-metadata-pruning.test.ts	keeps prunable Git registrations live and does not probe their paths
+src/main/kolux-profiles/profile-cloud-service-auth-retry.test.ts	requires reconnect when a retried capability refresh is still unauthorized
+src/main/providers/agent-foreground-process.test.ts	treats a Windows snapshot missing the requested shell as unavailable
+src/renderer/src/components/ai-connections/connect-card-state-connecting.test.tsx	submits the pasted code
+src/main/claude-accounts/oauth-refresh.test.ts	is true when already expired
+src/main/codex-accounts/runtime-home-real-home-lane-routing.test.ts	resolves only Kolux-owned homes used by live retained host shells
+src/renderer/src/components/ai-connections/ConnectCard.test.tsx	re-enables 30s after a claude-account connect() call that never settles
+src/main/ai-connections/codex-connection-status.test.ts	does not treat an api-key-only system default as a ChatGPT connection
+src/main/codex-accounts/runtime-home-legacy-migration.test.ts	does not create a legacy active host pointer for fresh shared-home users
+src/main/providers/ssh-filesystem-doc-preview.test.ts	fails closed when the relay predates scoped preview reads
+src/main/kolux-profiles/profile-index-store.test.ts	creates the default local profile and copies legacy state without deleting it
+src/main/codex-accounts/legacy-shared-auth-migration.test.ts	carries the shared MCP .credentials.json into the identity-proven home with 0600 perms
+src/renderer/src/lib/codex-stale-pane-account-identity.test.ts	distinguishes same-email accounts even without workspace names
+src/renderer/src/store/slices/agent-status-provider-session.test.ts	keeps the provider session across repeated metadata-less done pings
+src/renderer/src/lib/workspace-terminal-host-authority.test.ts	keeps a hydrated target on none even if a later sync errors
+src/main/providers/local-pty-provider-foreground-process.test.ts	does not refresh the agent age after a degraded revalidation scan
+src/main/claude-accounts/claude-account-service-login-process.test.ts	uses taskkill to cancel the Windows Claude login process tree
+src/main/providers/ssh-pty-provider.test.ts	shutdown bounds the relay RPC by the teardown deadline
+src/main/providers/local-pty-provider-shell-readiness.test.ts	releases held marker-prefix bytes when local shell exits before readiness
+src/main/providers/agent-foreground-process.test.ts	refuses WSL shells: wsl.exe is not a provable shell identity
+src/main/providers/ssh-pty-provider-process-events.test.ts	rejects recovered claimed owners without PTY incarnation proof
+src/main/providers/local-pty-provider-windows-shell-launch.test.ts	awaits PowerShell availability before resolving an automatic Windows shell
+src/main/kolux-profiles/profile-project-session-state.test.ts	rekeys document-preview ownership during project transfer
+src/renderer/src/components/accounts/AccountReauthNotice.test.tsx	renders nothing when no managed account needs re-authentication
+src/main/claude-accounts/runtime-selection.test.ts	drops selections whose account belongs to another runtime
+src/main/providers/ssh-filesystem-provider.test.ts	listFiles sends a streamable fs.listFiles request
+src/main/providers/ssh-git-worktree-list-dedupe.test.ts	shares a failed listing with its joiners and re-requests afterwards
+src/main/providers/ssh-pty-provider-spawn.test.ts	reattaches an existing session and returns attach replay separately from snapshot
+src/main/claude-accounts/runtime-paths.test.ts	refuses an inherited CLAUDE_CONFIG_DIR outside the E2E/bench home and falls back to the isolated home
+src/main/providers/ssh-pty-provider-spawn.test.ts	forwards shell, WSL, and scoped-history options to the relay mux
+src/main/claude-accounts/oauth-refresh.test.ts	reads a present token
+src/main/codex-accounts/runtime-home-resume-selection-gate.test.ts	refuses the resume while the selected account marker is locked, instead of reporting no selection
+src/main/claude-accounts/claude-structured-auth-policy.test.ts	folds case on win32, where the OS does
+src/main/providers/ssh-filesystem-provider.test.ts	sends fs.stat request
+src/main/providers/posix-pane-foreground-fingerprint.test.ts	Ctrl-Z: the agent stops and the shell takes the terminal back
+src/main/providers/ssh-git-provider-commit-message.test.ts	keeps SSH commit-message and pull-request execution lanes separate
+src/main/codex-accounts/service-wsl-accounts.test.ts	keeps Linux-relative config paths when a WSL home is under a mounted drive
+src/main/providers/ssh-git-provider-worktree.test.ts	forceDeletePreservedBranch sends the preserved-branch delete request
+src/main/claude-accounts/oauth-refresh.test.ts	posts a form-urlencoded refresh grant and persists the rotation
+src/main/kolux-profiles/profile-cloud-pkce.test.ts	rejects a provider error that matches the flow state
+src/main/ai-connections/claude-connection-status.test.ts	reports connected with the active managed account email
+src/main/ipc/worktrees/listing/detected-scan-failure-authority.test.ts	reports a failed scan as non-authoritative and prunes nothing
+src/main/ipc/pty-daemon-spawn-codex-auth.test.ts	injects the selected Codex home on the daemon path
+src/main/providers/ssh-filesystem-provider.test.ts	sends fs.createDirNoClobber request
+src/main/providers/ssh-pty-provider-spawn.test.ts	sends pty.spawn request through multiplexer
+src/main/ai-connections/claude-connection-status.test.ts	threads remoteNote through to the status
+src/main/claude-accounts/runtime-auth-service-keychain-snapshots.test.ts	restores scoped keychain after legacy runtime keychain write fails
+src/main/providers/ssh-pty-provider.test.ts	resize sends pty.resize notification
+src/main/codex-accounts/service-reset-credit-durability.test.ts	fails only reset operations closed when the durable ledger is corrupt
+src/main/providers/local-pty-provider-spawn-session.test.ts	keeps a native UNC session native on a conflicting WSL reattach
+src/main/claude-accounts/claude-duplicate-account.test.ts	returns the existing account on an exact host match
+src/renderer/src/store/slices/agent-pane-authority.test.ts	clears the alias when a pane moves back to a key it previously left
+src/main/providers/ssh-git-provider-remote-sync.test.ts	getUpstreamStatus forwards an explicit push target
+src/renderer/src/store/slices/agent-pane-authority.test.ts	does not lift a closed-tab tombstone on re-attach
+src/main/claude-accounts/claude-structured-auth-policy.test.ts	a token connection wins over any managed-account selection and carries the token as an envPatch
+src/main/ai-connections/winget-exit-codes.test.ts	still recognizes the signed form of a known code (regression guard)
+src/main/providers/ssh-git-provider-status.test.ts	getStatus forwards line-stat reuse and cancellation to the relay
+src/main/codex-accounts/service-account-add-login.test.ts	rejects OAuth account add when canonical config pins a custom provider
+src/main/codex-accounts/codex-auth-workspace-identity.test.ts	does not treat a matching plan label as proof of account ownership
+src/main/claude-accounts/runtime-auth-service-wsl-runtime.test.ts	uses account WSL runtime for untargeted Claude preparation instead of stale terminal WSL settings
+src/main/providers/local-pty-utils.test.ts	accepts a WSL UNC worktree that exists inside the distro even when fs.statSync would fail
+src/main/providers/windows-cached-agent-revalidation.test.ts	retires any identity when the shell stands alone
+src/main/ipc/pty-daemon-spawn-codex-auth.test.ts	does not materialize agent homes when another daemon agent mentions OMP
+src/renderer/src/runtime/runtime-provider-accounts-client.test.ts	deduplicates concurrent local reads but does not cache completed snapshots
+src/main/providers/ssh-filesystem-provider-capabilities.test.ts	retries when the fetch fails after its only waiter aborts
+src/renderer/src/components/provider-check-classification-parity.test.ts	labels a green PR carrying one neutral check as passing
+src/main/grok-accounts/grok-login-session-device-auth.test.ts	strips ANSI noise before matching
+src/main/claude-accounts/runtime-auth-service-launch-refresh.test.ts	leaves host system-default credentials untouched before launch
+src/main/kolux-profiles/profile-cloud-org-members-client.test.ts	percent-encodes the org id in the request URL
+src/main/providers/windows-powershell-executable.test.ts	always ends with cmd.exe even when no PowerShell resolves
+src/main/ai-connections/claude-token-connect.test.ts	surfaces the paste-code prompt as an enter-code pending action
+src/renderer/src/runtime/host-session-snapshot-authority-client-hosted.test.ts	does not affirm the unpublished-worktree placeholder frame
+src/main/providers/local-pty-provider-io-events.test.ts	notifies data listeners when PTY produces output
+src/main/providers/agent-foreground-process.test.ts	does not report a suspended agent when a non-agent holds the foreground
+src/main/providers/ssh-git-provider-commit-message.test.ts	cancelGenerateCommitMessage sends best-effort relay cancellation
+src/main/providers/local-pty-provider-spawn-cwd-safety.test.ts	falls back to the safe default cwd for automatic agent startup without an explicit cwd
+src/main/claude-accounts/claude-account-service-reauth-rollback.test.ts	restores previous managed auth when reauth materialization fails
+src/main/ai-connections/ai-connections-disconnect.test.ts	broadcasts once the disconnect settles
+src/main/codex-accounts/runtime-home-system-resource-materialization.test.ts	does not replace runtime-owned Codex files while linking user resources
+src/main/providers/posix-pane-foreground-fingerprint.test.ts	root shell missing from the capture
+src/main/ai-connections/winget-install.test.ts	maps a nonzero exit code to install-failed with detail
+src/main/providers/ssh-git-provider-worktree.test.ts	retries the preferred clean RPC after a transport failure
+src/main/kolux-profiles/profile-cloud-service-refresh.test.ts	refreshes an expired access token before creating cloud profiles
+src/main/ipc/minimax-credentials.test.ts	does not throw when saveCookie runs without a rate-limit service
+src/main/codex-accounts/runtime-home-wsl-managed-accounts.test.ts	waits for the legacy drain before completing direct-home launch preparation
+src/main/claude-accounts/oauth-refresh.test.ts	rotates access + refresh token and recomputes expiry
+src/main/providers/ssh-git-provider-status-lease.test.ts	cancels the underlying status RPC after its last live lease aborts
+src/main/codex-accounts/runtime-home-system-default-mirror-readback.test.ts	clears refreshed runtime auth after a pre-provenance external logout
+src/main/codex-accounts/legacy-shared-auth-migration.test.ts	is a no-op when the shared mirror has no MCP .credentials.json
+src/main/kolux-profiles/profile-cloud-auth-config.test.ts	rejects loopback HTTP endpoints in packaged builds
+src/main/ai-connections/grok-connection-status.test.ts	threads remoteNote through to the status
+src/main/providers/provider-dispatch.test.ts	routes to SSH provider when connectionId is set
+src/main/claude-accounts/runtime-auth-service-snapshot-validation.test.ts	preserves an unreadable sealed system-default snapshot instead of deleting it
+src/main/codex-accounts/codex-runtime-metadata-encryption-migration.test.ts	keeps plaintext and reports unavailable when the OS cannot seal

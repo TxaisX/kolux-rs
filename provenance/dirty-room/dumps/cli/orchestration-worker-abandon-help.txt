@@ -1,0 +1,17 @@
+﻿kolux orchestration worker-abandon
+
+Usage: kolux orchestration worker-abandon --dispatch <dispatch_id> [--retry-request <id>] [--json]
+
+Fence a worker without claiming its process stopped
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --dispatch
+  --retry-request
+
+Notes:
+  Retains all possibly-live resources and performs no process or filesystem action.
+

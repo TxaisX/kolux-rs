@@ -1,0 +1,17 @@
+# 99-tooling random sample round 2 (16 of 16): file	title
+tests/tools/windows-pty-native-capability-smoke/packaged-node-pty-capability-oracle.test.mjs	accepts exact target teardown while the unrelated canary remains live
+tests/tools/windows-pty-native-capability-smoke/packaged-node-pty-capability-probe.test.mjs	closes one-shot fixture observations before server teardown
+tests/tools/benchmarks/startup-bench-isolated-env.test.mjs	removes the real Claude config dir and pi-agent source dir, leaving everything else
+tests/tools/windows-pty-native-capability-smoke/run.test.mjs	keeps timeout evidence bounded and preserves both output channels
+tests/tools/windows-pty-native-capability-smoke/packaged-node-pty-capability-probe.test.mjs	uses the hidden WScript launcher without cmd or start/b
+tests/tools/win-update-e2e/app-driver.test.mjs	submits within the composer without dismissing and reopening it
+tests/tools/benchmarks/startup-bench-isolated-env.test.mjs	is a no-op when neither key is set
+tests/tools/win-update-e2e/app-driver.test.mjs	dismisses a dialog without clicking the desktop window Close button
+tests/tools/win-update-e2e/app-driver.test.mjs	dismisses the CLI tip without sending Escape into an already-restored terminal
+tests/tools/windows-pty-native-capability-smoke/packaged-node-pty-capability-probe.test.mjs	flushes one-shot evidence and exits despite a referenced handle
+tests/tools/windows-pty-native-capability-smoke/run.test.mjs	does not import child_process or resolve the runner from the artifact
+tests/tools/win-update-e2e/app-driver.test.mjs	bounds a blocked create submission by the remaining budget after a fast first click
+tests/tools/benchmarks/startup-bench-isolated-env.test.mjs	points APPDATA at AppData/Roaming under the isolated home
+tests/tools/win-update-e2e/app-driver.test.mjs	pins fresh harness profiles to a blank terminal
+tests/tools/windows-pty-native-capability-smoke/run.test.mjs	uses one checkout-owned runner for current and affected package paths
+tests/tools/win-update-e2e/app-driver.test.mjs	keeps overlay retries within the caller timeout budget

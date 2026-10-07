@@ -1,0 +1,17 @@
+﻿kolux linear team labels
+
+Usage: kolux linear team labels --team <key|id> [--workspace <id>] [--json]
+
+List Linear team labels
+
+Options:
+  --help                 Show this help message
+  --json                 Emit machine-readable JSON
+  --pairing-code
+  --environment
+  --team
+  --workspace <id>      Connected Linear workspace id
+
+Examples:
+  $ kolux linear team labels --team ENG --json
+

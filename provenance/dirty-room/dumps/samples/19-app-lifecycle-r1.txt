@@ -1,0 +1,101 @@
+# 19-app-lifecycle random sample round 1 (100 of 3428): file	title
+src/main/persistence-cohort-and-identity-migration.test.ts	marks a pre-existing install pending so the legacy chords get seeded
+src/main/window/createMainWindow-close-confirmation.test.ts	requests confirmation for a hung-but-alive renderer instead of bypassing
+src/main/window/renderer-recovery-prompt.test.ts	names the install-permission cause and keeps the driver hint
+src/main/crash-reporting/process-gone-diagnostics.test.ts	keeps the first-enumerated process as Largest on an exact working-set tie
+src/main/window/createMainWindow-renderer-crash-recovery.test.ts	bounds renderer launch-failed recovery with the crash-loop breaker
+src/renderer/src/components/UpdateCard.test.ts	defaults updateReassuranceSeen to false when absent from persisted UI
+src/main/memory/collector.test.ts	returns only pids that exist in byPid
+src/main/ipc/feedback.test.ts	includes the app version and platform in the issue body
+src/main/windows/windows-process-table.test.ts	refuses a staged relay addon still built from unpatched source
+src/main/persistence/applying-settings/settings-update-terminal-contrast.test.ts	clears the override so the automatic floor comes back
+src/main/startup/serve-mode-argv.test.ts	leaves already-normalized argv unchanged
+src/main/startup/windows-shell-path-hydration.test.ts	coalesces queued shell changes to the latest configured shell
+src/main/persistence-async-write-syscalls.test.ts	produces a .bak ring byte-identical to the sync path, at capacity and with ring holes
+src/main/macos-system-sleep-assertion.test.ts	does not start a second caffeinate process while one is live
+src/shared/windows-lane-tree-removal-boundary.test.ts	actually detects a raw recursive removal
+src/main/persistence-host-partitioned-sessions.test.ts	schedules a save for salvaged host partitions
+src/main/persistence-ui-state.test.ts	preserves explicit rightSidebarExplorerView in persisted UI
+src/main/crash-reporting/process-gone-classification.test.ts	still records renderer launch failures for diagnostics
+src/main/telemetry/validator.test.ts	rejects non-boolean is_git_repo on repo_added
+src/main/memory/collector.test.ts	starts a fresh sweep after the prior one resolves
+src/renderer/src/lib/agent-startup-delayed-delivery-perf.test.ts	delivers when launch registration, PTY ownership, and layout binding arrive
+src/main/window/attach-main-window-services.test.ts	keeps a newer runtime notifier when an older window closes late
+src/shared/windows-security-descriptor.test.ts	builds the machine-relative aliases from the supplied machine SID
+src/main/ipc/telemetry.test.ts	routes banner ✕ through persistBannerAcknowledgeWithoutEmitting without invoking setOptIn
+src/main/linux-package-update-recovery.test.ts	refuses a missing or non-array file list
+src/main/observability/tracer.test.ts	keeps sink handoff failures from escaping instrumented operations
+src/main/startup/pre-kolux-userdata-migration.test.ts	never migrates into a dev or E2E root, including ~/.nightshift
+src/main/appimage-runtime-identity.test.ts	requires the AppImage file path before treating the runtime as verifiable
+src/main/macos-tcc-prompt-notice.test.ts	invalidates deferred starts across repeated init and stop
+src/main/observability/bundle.test.ts	does not include token endpoint response bodies in thrown errors
+src/main/window/main-window-webview-security.test.ts	denies a preview URL whose grant is unknown or revoked
+src/main/window/createMainWindow-system-resume-relay.test.ts	does not send the resume event once webContents is destroyed
+src/main/linux-package-update-recovery.test.ts	returns missing without a retained artifact
+src/main/updater.check-settlement.test.ts	keeps a silent background settle user-initiated after menu promotion
+src/shared/network/manual-address.test.ts	accepts boundary port values
+src/main/persistence/restoring-sessions/terminal-layout-normalization.test.ts	still adopts an unclaimed preferred id for a legacy leaf
+src/main/persistence-async-write-syscalls.test.ts	the throwing async barrier drains mutations made during its write
+src/renderer/src/lib/typing-latency/diagnostic-lifecycle.test.ts	does not count a stale prevented IME commit
+src/main/crash-reporting/minidump-crash-signature.test.ts	resolves the faulting module from the exception address
+src/main/persistence/applying-settings/terminal-settings-migrations.test.ts	drops the retired OpenCode fields from an old profile while keeping the rest
+src/main/ipc/diagnostics.test.ts	pins official builds to the compile-time diagnostics endpoint
+src/preload/app-restart-checkpoint-routing.test.ts	refuses ${action} when the durable checkpoint fails
+src/shared/network/server-share-address.test.ts	trims surrounding whitespace
+src/main/window/macos-tahoe-release.test.ts	treats unparseable releases as pre-Tahoe
+src/main/crash-reporting/crash-report-store.test.ts	allows a pending report to reach one terminal status only
+src/main/window/attach-main-window-services.test.ts	removes the app reload IPC handler when the owning window closes
+src/main/linux-package-install-command.test.ts	ignores a package manager outside the trusted directories
+src/renderer/src/components/error-boundaries/RecoverableRenderErrorBoundary.lazy-chunk.test.tsx	renders the fallback without reporting after guarded dynamic import exhaustion
+src/main/crash-reporting/crash-breadcrumb-store.test.ts	does not collapse the coalescing window after a forward wall-clock step
+src/main/memory/host-memory.test.ts	uses macOS memory-pressure availability instead of immediate free pages
+src/main/windows/windows-process-table.test.ts	rejects a scan missing our own pid instead of reporting an idle machine
+src/main/startup/configure-process.test.ts	opts hidden pages out of intensive wake-up throttling
+src/renderer/src/lib/typing-latency/diagnostic-summary.test.ts	preserves case-distinct remote POSIX worktree paths
+src/main/startup/single-instance-lock.test.ts	stays 3 because the documented systemd unit keys RestartPreventExitStatus off it
+src/main/ipc/feedback-image-attachments.test.ts	accepts %s
+src/main/network/proxy-settings-session.test.ts	coalesces concurrent writes of the same config
+src/main/persistence/loading-store/store-prune-gate-signals.test.ts	re-arms the gate when a session releases its claim on a worktree
+src/main/memory/hydrate-local-pty-registry.test.ts	skips SSH repos before enumerating worktrees
+src/main/hang-watchdog/hang-watchdog-detection-loop.test.ts	fires once when heartbeats stop for longer than the timeout
+src/shared/windows-environment-expansion.test.ts	preserves exact casing authority and first fallback keys including undefined values
+src/main/startup/serve-options.test.ts	rejects a security-shaped typo while allowing Chromium switches
+src/shared/network/manual-address.test.ts	rejects hostnames with characters outside the RFC 1123 grammar
+src/renderer/src/lib/http-link-modifier-routing.test.ts	still reaches the system browser when inverting and links open in Kolux
+src/main/linux-package-update-recovery.test.ts	revalidates once the in-flight pass settles
+src/shared/setup-script-telemetry-events.test.ts	rejects candidate prompt exposure without a provider
+src/shared/update-install-attempt.test.ts	expires a record older than 7 days and reports none
+src/main/crash-reporting/process-gone-recorder.test.ts	sanitizes dump annotations before writing the diagnostic span
+src/main/linux-package-update-recovery.test.ts	rejects a package whose parent symlink escapes the cache
+src/main/hang-watchdog/main-thread-hang-watchdog-entry.test.ts	overwrites the marker when the stall clears, keeping one observation per stall
+src/main/window/createMainWindow-recovery-reload-watchdog.test.ts	clears the watchdog when the recovery reload finishes loading
+src/main/startup/startup-diagnostics.test.ts	writes directly to stderr fd 2 with a newline
+src/renderer/src/lib/window-label-formatter.test.ts	returns "wk" for 10080 minutes (7 days)
+src/main/windows/windows-pty-job.test.ts	reports whether the host process is now kill-on-close
+src/main/updater.prerelease-fallback.test.ts	ignores a delayed primary error after a promise-launched prerelease fallback
+src/main/persistence/loading-store/corrupt-primary-copy-failure.test.ts	freezes saves when the primary is unreadable and cannot be copied aside
+src/main/persistence-proxy-secret-recovery.test.ts	seals an undecryptable httpProxyUrl without destroying its ciphertext
+src/main/startup/os-opened-markdown-files.test.ts	accepts win32 drive-letter and UNC paths
+src/main/startup/windows-install-dir-acl-recovery.test.ts	re-runs icacls when a fresh probe verdict contradicts the repaired marker
+src/main/macos-tcc-prompt-notice.test.ts	retains the threshold and stops watching when renderer delivery throws
+src/main/crash-reporting/process-gone-recorder.test.ts	allows the same renderer crash to retry after persistence fails
+src/main/asar-transparent-fs.test.ts	removes a tree recursively where `original-fs` is unresolvable
+src/main/startup/windows-install-dir-acl-recovery.test.ts	releases once the wait exceeds the grace window, so a silent probe cannot pin it
+src/main/macos-press-and-hold-default.defaults-domain.test.ts	leaves an explicit value untouched, in either direction
+src/renderer/src/lib/feedback-image-attachments.test.ts	reports an empty image instead of deferring rejection until submit
+src/main/ipc/diagnostics.test.ts	reports uploadConfigured so the Privacy pane can hide the send action
+src/main/updater-test-harness.leaked-timers.test.ts	cancels a real timer armed before the reset
+src/main/crash-reporting/renderer-recovery-circuit-breaker.test.ts	reset() clears history so the next recovery is allowed
+src/main/startup/main-process-ready-phase-ordering.test.ts	parks the default-session proxy apply instead of blocking window creation on it
+src/main/updater.prerelease-fallback.test.ts	keeps user prerelease fallback available on the short retry cadence
+src/main/persistence/tracking-repos/probeable-local-worktree-metadata-candidates.test.ts	drops a row a persisted session still pins
+src/main/crash-reporting/gpu-fallback-recovered-launch.test.ts	defaults dismissal to the stable safe-graphics choice
+src/main/windows-live-tree-kill.win32.test.ts	signalProcessTree admitted: the whole tree goes and the barrier reports verified
+src/main/startup/configure-process.test.ts	honors explicit Linux X11 Ozone overrides even when Wayland env vars are present
+src/main/persistence-loading-store-extraction.test.ts	reports the unchanged workspace-session byte count when startup diagnostics are enabled
+src/main/window/createMainWindow-close-confirmation.test.ts	allows close after the renderer process is gone
+src/main/updater.check-settlement.test.ts	keeps background checks event-driven before checking-for-update fires
+src/shared/child-process/windows-cmd-shim-resolution.test.ts	still routes an unrecognised .cmd through cmd.exe
+src/main/startup/serve-mode-argv.test.ts	does not treat a later positional serve as the subcommand after another command
+src/main/window/history-gc-profile-worktree-ids.test.ts	collects worktrees and folder workspaces from the inactive profiles
+src/main/startup/cli-launch-redirect.test.ts	does not apply the command form on macOS or Windows
