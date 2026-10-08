@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Kolux RS placeholder icon: own work, 2026-10-07. A rounded square with a plain K. -->
+  <rect x="64" y="64" width="896" height="896" rx="192" fill="#1f2a44"/>
+  <rect x="64" y="64" width="896" height="896" rx="192" fill="none" stroke="#5aa9ff" stroke-width="32"/>
+  <path d="M328 256 h112 v212 l228 -212 h148 l-268 248 288 264 h-152 l-244 -232 v232 h-112 z" fill="#ffffff"/>
+</svg>

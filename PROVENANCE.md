@@ -327,3 +327,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 ## 5. Source log
 
 > 2026-10-06 Â· Phase 1 Â· dirty room Â· the old repository, its test titles and group names, nine registries, the installed command-line help, release and handoff records, the owner's vault notes, the owner's shortcuts file and the top-level key names of his saved data Â· areas 01-21 Â· this file's sections 1 to 3
+
+> 2026-10-07 · Phase 3 · T-001 · public Tauri 2 documentation and the create-tauri-app React/TypeScript template (config file shapes, capability file, Vite dev-server settings), the rusqlite and cargo-deny public docs · own icon art in `app-icon.svg` · src-tauri/, src/, package.json, vite.config.ts, deny.toml, scripts/license-check.mjs

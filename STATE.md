@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 1, date: 2026-10-07)
-Next task: T-001 · Tauri 2 shell: one window, state store, license policy, all checks green on an empty app
-Done: 0 / 338 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 2, date: 2026-10-07)
+Next task: T-002 · One terminal pane: PowerShell through a Rust PTY, rendered by xterm.js with WebGL and a fallback
+Done: 1 / 338 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 338 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -49,6 +49,13 @@ recorded default until told otherwise; nothing here blocks a pass.
   backticked commands; none is an old-code identifier. Recorded here rather than weakening the script.
 - 2026-10-07 · No new source was used in this pass (spec files in this repo only), so PROVENANCE.md
   section 5 gets no line.
+- 2026-10-07 � T-001: the app identifier is `com.txaisxiong.kolux-rs`, so the profile folder is
+  `%APPDATA%\com.txaisxiong.kolux-rs` and never collides with the old app's `%APPDATA%\kolux`.
+  State store = `state.db` (SQLite, WAL) plus `settings.json` written atomically; both open at
+  startup. Our own crate carries `license-file` and `publish = false`; cargo-deny ignores private
+  crates, the allow-list applies to dependencies only. Window evidence is captured with
+  PrintWindow (renders the window itself), because a screen grab caught the game Txais was
+  playing instead; that image was deleted before anything was committed.
 
 ## Last 10 passes  (date · task · result · evidence)
 
