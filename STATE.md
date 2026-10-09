@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 17, date: 2026-10-09)
-Next task: T-018 · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
-Done: 23 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 18, date: 2026-10-09)
+Next task: T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
+Done: 24 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -243,6 +243,24 @@ order stay byte for byte; an already-trusted folder changes nothing; a file that
 TOML is left alone. Same batch rules and the same one lock as Claude (`checked_keys`,
 `write_whole` shared by both). Cursor and Copilot still get nothing (T-017-c).
 
+**Source Control (T-018-a, GIT-002 / GIT-004).** Mod+Shift+G, Mod+L or the top bar's right panel
+button opens a 320 px card right of the content with the workspace in front's changes under
+Conflicts, Staged, Changes and Untracked, each with its count and a stage-all / unstage-all
+control, plus or minus on every row (renames show `from → to`; names such as `docs/c d.md` and
+`a[1].txt` stay whole), and a commit box. Commit, and Ctrl+Enter anywhere in the card, is live
+only with staged work, a non-blank message and no conflict; it commits the message exactly as
+typed, shows `Committed <short id>` and refreshes. A failed commit shows `Commit failed`, or
+`Commit blocked by a hook` when a pre-commit / prepare-commit-msg / commit-msg /
+pre-merge-commit hook exists, with git's and the hook's own output behind a disclosure and a
+`Fix with AI` button that starts the default agent in that workspace with the output as its
+prompt. The draft message is kept per worktree for the window's life, through closing the card
+and switching workspaces. Back end `scm.rs`: `scm_status` (porcelain v2, `--untracked-files=all`,
+NUL-separated), `scm_stage` (one `git add` / `git restore --staged` fed NUL-separated paths on
+stdin with `--literal-pathspecs`, paths checked to stay inside the worktree, 2 000 files in one
+call), `scm_commit` (`-F -`). The list refreshes after each action and every 4 s while the card
+is open; the watcher is GIT-001's (T-033), the multi-row bulk bar is T-018-c and folder rows are
+T-033's tree view.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -339,6 +357,23 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-018-a: the stage card's batching rule is met by one git process fed
+  NUL-separated paths on stdin (`--pathspec-from-file=- --pathspec-file-nul`, any count) rather
+  than several argv batches; `--literal-pathspecs` so `[`, `*` and `?` in names match only
+  themselves; untracked files are listed one by one (`--untracked-files=all`) so a new folder's
+  files each get a row. "Blocked" means the commit failed while a pre-commit, prepare-commit-msg,
+  commit-msg or pre-merge-commit hook file exists in the repo's hooks dir; anything else reads
+  "failed". The right sidebar is a bare 320 px card holding only Source Control until
+  VIEW-056/057 (T-146); Mod+L toggles it too. Ctrl+Enter also accepts Cmd. Section letters:
+  U untracked, X unmerged. The multi-row bulk bar went to T-018-c and the folder rows (stage
+  everything beneath) to T-033's tree view, both named in PLAN.md. Status is polled every 4 s
+  while the card is open until GIT-001's watcher. The draft lives in the window per worktree,
+  not on disk. Evidence note: another lane's dev app was open during this pass, so `keys.ps1`
+  (first window titled "Kolux RS") captured the wrong app once; the shots were retaken with a
+  copy bound to this app's window handle. A `SendKeys` experiment typed "Add the docs folder"
+  into whatever window was in front (Txais's Chrome, a YouTube tab) because `AppActivate` did
+  not bring the app forward: never use `SendKeys`; `cdp.mjs type` / `key <name> <mods>` are the
+  only typing paths.
 - 2026-10-09 · T-017-b: Codex's key is the real path, lower-cased on Windows, exactly as the
   public Codex source resolves and writes it; both the worktree and the project root are
   trusted because Codex looks a linked worktree's trust up on the main checkout. `CODEX_HOME` is
@@ -608,6 +643,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-018-a · done: `scm.rs` (status / stage / commit, 4 Rust tests, 57 total), `src/scm/model.ts` + `SourceControlPanel.tsx` (2 front-end tests, 73 total), right card on Mod+Shift+G / Mod+L / the top bar button; live in the dev app on a throwaway repo: 1 edit + 4 new files listed as Changes 1 / Untracked 4, the three `docs/` rows staged by row, Ctrl+Enter in the box made commit 66f5f87 `Add the docs folder` (git log 2 → 3), the draft survived a switch to zeta and back, a refusing pre-commit hook gave `Commit blocked by a hook` + `nope, said the hook: README needs a title` + Fix with AI with no commit made, the Staged section's minus unstaged it; build / clippy / 57 Rust tests / 73 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-a-sections.png, -staged.png, -committed.png, -blocked.png
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
 - 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png
 - 2026-10-09 · T-016 · done: `terminal.rs` marks program sessions (start time, last output) and `program_in(dir, since)`; `projects::create_fresh` shared by the UI command and the CLI; `cli.rs` `orchestration worker-start` parse (`WORKER_FLAGS`, `check_worker_start` with every refusal from CLI-035/ORCH-016/018/019), `worker_start` dispatch (task made/found under `orchestration.tasks`, worktree made or picked, `created` + `start` notify, readiness wait, receipt, `orchestration.dispatches`), `text_of` worker line, help text; front end `CliWorkspace` `start` kind → `startIn` with extra args and a pane title; 2 Rust tests (49 total; dispatch test runs the full flow with a 1 ms timeout); live in the throwaway "repo": `worker-start --spec "add a test" --agent claude --json` → `status: ready` in 1.8 s, `dispatch-1`/`task-1`, worktree hazel-otter, terminal 2; sidebar row hazel-otter + background tab "add a test" (Claude, Running) while the view stayed on main; opening the row shows one tab with Claude's trust prompt; `claude.exe --permission-mode auto "add a test"` under the app; `--worktree current --base-branch main` refused with exit 1 before anything was made; `worktree rm --worktree path:… --force` took the row, tab, process and folder away; build / clippy / 49 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-016-ready.png, evidence/T-016-one-tab.png

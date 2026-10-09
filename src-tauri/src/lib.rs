@@ -6,6 +6,7 @@ mod git;
 mod keybindings;
 mod names;
 mod projects;
+mod scm;
 mod pty;
 mod state;
 mod sysmem;
@@ -87,6 +88,9 @@ pub fn run() {
             agents::agent_list,
             agents::agent_start_line,
             trust::trust_folders_cmd,
+            scm::scm_status,
+            scm::scm_stage,
+            scm::scm_commit,
             keybindings::keybindings_read,
             projects::workspaces_place_get,
             projects::workspaces_place_set,

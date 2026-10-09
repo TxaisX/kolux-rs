@@ -16,9 +16,9 @@ export const screens: Array<{ id: Screen; label: string }> = [
   { id: "terminals", label: "Terminals" },
 ];
 
-type Props = { screen: Screen; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void };
+type Props = { screen: Screen; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
 
-export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar }: Props) {
+export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -63,7 +63,7 @@ export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar 
       </nav>
 
       <div className="topbar-right">
-        <button className="ib panel" title="Right panel (not built yet)">
+        <button className="ib panel" title={rightOpen ? "Hide Source Control" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
           <PanelRight />
         </button>
         <button className="searchbox" title="Search (not built yet)">

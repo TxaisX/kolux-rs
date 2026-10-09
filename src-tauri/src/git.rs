@@ -22,7 +22,7 @@ pub struct Worktree {
     pub name: Option<String>,
 }
 
-fn command(args: &[&str], cwd: Option<&Path>) -> Command {
+pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args);
     if let Some(dir) = cwd {
@@ -38,7 +38,7 @@ fn command(args: &[&str], cwd: Option<&Path>) -> Command {
 }
 
 /// Runs git and returns its stdout, trimmed; a non-zero exit becomes an error carrying stderr.
-fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+pub(crate) fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -49,7 +49,7 @@ fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 }
 
 /// Git's own path spelling (forward slashes, no `\\?\` prefix) turned back into a native path.
-fn native(path: &str) -> String {
+pub(crate) fn native(path: &str) -> String {
     if cfg!(windows) {
         path.replace('/', "\\")
     } else {

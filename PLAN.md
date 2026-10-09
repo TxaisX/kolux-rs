@@ -60,7 +60,9 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-017-a · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost (Claude Code) · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts
 - [x] T-017-b · Pre-trust for Codex in its own configuration file (the rest of the card on T-017-a)
 - [ ] T-017-c · Pre-trust for Cursor and Copilot in their own configuration files (the rest of the card on T-017-a; their file formats are not public)
-- [ ] T-018 · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
+- [x] T-018-a · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message
+- [ ] T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
+- [ ] T-018-c · Source Control bulk bar: select several rows and stage or unstage them together (the rest of the stage card on T-018-a)
 - [ ] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
 - [ ] T-020 · SET-032 [compat] Pick the folder new worktrees go into
 - [ ] T-021 · CLI-018 [compat] kolux worktree create, with an optional agent started inside
@@ -78,7 +80,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-030 · ORCH-007 An idle agent gets a one-line pointer typed in when mail arrives · ORCH-015 [compat] Workers report done and send heartbeats · ORCH-020 [compat] See a worker's live state, including when it waits on a person · ORCH-021 [compat] Read what a worker has written, from its transcript or its terminal
 - [ ] T-031 · AUTO-013 Numbered run history for each automation
 - [ ] T-032 · SAFE-001 [compat] Pane header offers a plan-review button while Claude waits for plan approval · SAFE-002 The review sheet breaks the plan into sections that each take comments · SAFE-003 Approving from the sheet lets Claude carry out the plan · SAFE-004 Request changes returns the plan to Claude with the user's comments
-- [ ] T-033 · GIT-001 [compat] Source Control lists a workspace's changes by section · GIT-016 Review changes: an agent checks the branch before it ships · GIT-037 [compat] Open a changed file as a diff · GIT-038 Every change in one scrolling view
+- [ ] T-033 · GIT-001 [compat] Source Control lists a workspace's changes by section · GIT-016 Review changes: an agent checks the branch before it ships · GIT-037 [compat] Open a changed file as a diff · GIT-038 Every change in one scrolling view · folder rows stage and unstage everything beneath them (the folder rule of the stage card on T-018-a; the back end takes folder paths already)
 - [ ] T-034 · GIT-040 [compat] Review notes on diff lines · GIT-041 [compat] Gather review notes and send them to the agent
 - [ ] T-035 · EDIT-041 [compat] Open in Code and Answer in Code jump to the agent's pane
 - [ ] T-036 · SET-027 [compat] Agents page: which agents, the default one, and how they start

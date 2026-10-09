@@ -119,6 +119,11 @@ export const FolderPlus = (p: P) => (
     <path d="M8 7v4M6 9h4" />
   </Glyph>
 );
+export const Minus = (p: P) => (
+  <Glyph {...p}>
+    <path d="M3 8h10" />
+  </Glyph>
+);
 export const Plus = (p: P) => (
   <Glyph {...p}>
     <path d="M8 3v10M3 8h10" />

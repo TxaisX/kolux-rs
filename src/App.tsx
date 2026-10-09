@@ -10,6 +10,9 @@
 // focused pane, started in the workspace folder (T-010). A browser tab is a pane whose page is
 // a child web view laid over its body by the back end (T-012-a, src/browser/BrowserPane.tsx);
 // its shortcuts (bar, back, forward, reload) apply while a browser pane is focused (T-012-b).
+// Source Control is a card on the right (Mod+Shift+G, Mod+L or the top bar's panel button): the
+// workspace in front's changes, staging and a commit box; its draft message is kept here per
+// worktree (T-018-a, src/scm/SourceControlPanel.tsx).
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -22,6 +25,7 @@ import StatusBar from "./chrome/StatusBar";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
+import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
@@ -64,6 +68,9 @@ function Window() {
   const [screen, setScreen] = useState<Screen>("terminals");
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [scmOpen, setScmOpen] = useState(false);
+  // GIT-004: a half-written commit message per worktree, kept through closing the panel.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -148,6 +155,12 @@ function Window() {
           break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
+          break;
+        case "sidebar.sourceControl.toggle":
+        case "sidebar.right.toggle":
+          // ponytail: the right sidebar holds only Source Control until VIEW-056/057 (T-146).
+          setScreen("terminals");
+          setScmOpen((o) => !o);
           break;
         case "workspace.create":
           setScreen("terminals");
@@ -400,6 +413,16 @@ function Window() {
       console.warn(`trust: ${String(err)}`);
     }
   };
+  // GIT-004: a refused commit can be handed to the default agent with the hook's own words.
+  const fixWithAI = (output: string) => {
+    const a = agents.find((x) => x.id === defaultId && x.installed);
+    if (!a || activeDir === null) {
+      setNotice(`The default agent (${defaultId}) is not installed.`);
+      return;
+    }
+    const prompt = `A git commit in this workspace was refused. Find the cause, fix it, and commit again with the same message.\n\nGit said:\n${output}`;
+    void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
+  };
   const projectOf = (cwd: string | null): string | null => (cwd ? (Object.entries(owner).find(([dir]) => sameDir(dir, cwd))?.[1] ?? null) : null);
   const projectFor = (projectId: string | null): string | null => projectId ?? projectOf(panes.find((p) => p.key === focused)?.cwd ?? null) ?? projects[0]?.id ?? null;
 
@@ -457,7 +480,7 @@ function Window() {
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
   return (
     <div className="app">
-      <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
+      <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
       <div className="body">
         {terminals && sidebarOpen && (
           <ProjectsPanel
@@ -601,6 +624,9 @@ function Window() {
             })}
           </div>
         </div>
+        {terminals && scmOpen && (
+          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} />
+        )}
       </div>
       <StatusBar terminals={live.length} agents={live.filter((p) => p.agent !== "shell").length} />
     </div>
