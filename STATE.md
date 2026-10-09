@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 21, date: 2026-10-09)
-Next task: T-021 · CLI-018 [compat] kolux worktree create, with an optional agent started inside
-Done: 27 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 22, date: 2026-10-09)
+Next task: T-022 · PROJ-045 / PROJ-050 / PROJ-063
+Done: 28 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -308,6 +308,20 @@ replaces the default folder without opening Settings; a saved folder still wins 
 field's label says "(from KOLUX_WORKSPACES_DIR)" while the variable is what supplies the folder.
 Back end: `projects::resolve_workspaces_dir`, `PlaceInfo.fromEnv`, `set_place`.
 
+**Worktree create from the command line, with lineage (T-021, CLI-018).** On top of T-014-b,
+`kolux-dev worktree create` records how the workspace came to be: made by the CLI, the folder the
+call was made in, the parent worktree (the one the call was made from, the main checkout
+included; `--parent-worktree <selector>` names another in the same project, `--no-parent` records
+none, and a call from outside every worktree has none), `--issue <number>` and `--comment
+<text>`. The record lives in the store under `workspaceOrigins` (`projects::set_origin` /
+`origin`), is echoed in the result and goes when the worktree is removed from either the CLI or
+the sidebar. Refused before the app is asked: `--parent-workspace` (retired; the message names
+`--parent-worktree`), a parent flag with no or an empty value, `--issue` that is not a positive
+whole number, and the earlier refusals (prompt without agent, empty agent/prompt/setup,
+disagreeing parent flags, `--run-hooks` with `--setup skip`). A parent selector that matches
+nothing fails before anything is created. The sidebar does not draw lineage yet (PROJ-047,
+T-077).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -404,6 +418,16 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-021: the parent is recorded as the worktree's path (the store key the names use),
+  not an id, since worktrees have no id of their own yet; the main checkout counts as a parent
+  when the call is made from it (the card says "the worktree the command was called from" and
+  the sidebar already groups the rest under main), and a call from outside every worktree (a
+  plain shell with `--repo`) records no parent rather than failing. `--parent-worktree` must be
+  in the same project; another project's worktree is refused. The calling terminal is recorded
+  as its folder for now: the terminal handle and pane key the CLI will read from its environment
+  are CLI-007's (T-088, in the orchestration lane; its line now names the hand-off), and the
+  folder-workspace parent is PROJ-086's (T-218). `--issue` is validated as a number only; the
+  lookup is PROJ-037's (T-107). `--setup` values are still only echoed (PROJ-033, T-107).
 - 2026-10-09 · T-020: the saved folder wins over `KOLUX_WORKSPACES_DIR`, which only moves the
   default (PROJ-026's acceptance says "no folder setting"); so with a folder saved the variable
   does nothing, and the field says where its value comes from only while the variable supplies it.
@@ -731,6 +755,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-021 · done: `cli.rs` (parse refuses the retired `--parent-workspace`, an empty `--parent-worktree`, a non-numeric or zero `--issue`; dispatch works out the parent from the calling folder, `--parent-worktree` in the same project or `--no-parent`, records the origin and echoes it; `calling_worktree`), `projects.rs` (`set_origin` / `origin` under `workspaceOrigins`, forgotten on removal), tests extended (65 Rust tests); live with `kolux-dev` rebuilt and the dev app up: from inside zeta `worktree create --name b --agent claude --prompt hi --issue 7 --comment "from zeta" --json` → envelope with parent = zeta's path, madeBy cli, issue 7, comment; row b appeared with zeta still selected and claude.exe running "hi" under the app; `--name c --activate` → c selected; `--name d --prompt hi`, `--parent-workspace name:zeta`, `--issue nope` → exit 1 with their messages; `rm --worktree name:b --force` and c → rows back to zeta, the Claude process gone; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-021-background.png, T-021-activate.png
 - 2026-10-09 · T-020 · done: `projects.rs` (`resolve_workspaces_dir(env, setting)`, `KOLUX_WORKSPACES_DIR` read there, `PlaceInfo.fromEnv`, `set_place` makes an absolute folder and fails when it cannot; 2 tests, 65 Rust tests), `model.ts` (`placeFieldAction`; 1 test, 76 front-end tests), `ProjectsPanel.tsx` (Enter/Escape/composing, blur retry, Browse… for the folder, env label); live in the dev app started with the variable padded with spaces: Use default + Save showed the variable's folder with the "(from KOLUX_WORKSPACES_DIR)" label and env-proof was created at `<env>\repo\env-proof`; a folder under a file failed with "cannot be made" and kept the typed text, leaving the field after the blocker was removed saved it; Escape put the saved folder back; a typed folder + Enter put typed-proof at `<folder>\repo\typed-proof`; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-020-env.png, T-020-failed.png, T-020-folder.png
 - 2026-10-09 · T-019 · done: `include.rs` (new: include-file lines, kolux.yaml shared list, tidy rules, copy, junction link, unlink; 3 tests), `git.rs` (`worktree_remove` keeps a branch in use elsewhere and reports its commit, `worktree_move`, `delete_branch_if_at`, `dirty` sees submodule work, `ref_ok` guard; 1 test), `projects.rs` (per-repo turn, `Created.warnings`, `remove_workspace(force)`; 1 test), 63 Rust tests; sidebar form asks "Discard and remove" after a refusal, warnings join the created note; live in the dev app on the throwaway repo with `.gitignore`, `.worktreeinclude` (`.env`, `*.log`) and kolux.yaml (`node_modules/`, `src`): Remove on the dirty zeta → "zeta has uncommitted changes. Remove it anyway? That work is lost." with work.txt still there; New workspace "bring along" → created from origin/main, note names `*.log` and `src`, `.env` copied, `node_modules` a junction to the main checkout showing its dep.js, `git status --porcelain` empty on branch bring-along; removal of a worktree with untracked files took the two-step path, of a clean one the one-step path, the main checkout's node_modules/dep.js survived both; build / clippy / 63 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-019-dirty.png, T-019-created.png
 - 2026-10-09 · T-018-b · done: `scm.rs` gains `Status.rewritten` / `Status.base`, `remote()` and `scm_remote` (push, pull, sync, fetch, ff, force --force-with-lease, publish --set-upstream origin, rebase after fetch); 1 Rust test over a bare remote (58 total); `nextStep` and `remoteItems` in `src/scm/model.ts` with 2 tests (75 total); panel: main button + Remote menu; live in the dev app on the throwaway repo with a bare origin: edit → "Stage all" → "Commit" held with "Write a message first" → typed → commit 6495041 → "Push 1"; menu read "Push 1 commit" on, "Pull · Nothing to pull", "Sync ↓0 ↑1", "Fast-forward · Already current", "Publish branch · Already published", "Rebase from origin/main · This is the base branch"; push → "Create pull request"; `feat` branch with a commit → "Publish branch" → published (`feat...origin/feat`); main moved from a second clone, menu Rebase from origin/main → `[ahead 2, behind 1]`, `git cherry HEAD @{u}` one `-`, button "Force push with lease" → pushed, counts 0; build / clippy / 58 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-b-menu.png, T-018-b-lease.png

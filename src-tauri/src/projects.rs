@@ -61,6 +61,9 @@ const PROJECTS_KEY: &str = "projects";
 /// Typed workspace names by folder (PROJ-021): the branch and folder carry the cleaned form,
 /// the row shows exactly what was typed.
 const NAMES_KEY: &str = "workspaceNames";
+/// How each workspace came to be (CLI-018): who made it, its parent worktree, the calling folder,
+/// an issue number and a comment, keyed like the names. Lineage views (PROJ-047) read it.
+const ORIGINS_KEY: &str = "workspaceOrigins";
 const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 /// "nested" (the default) or "flat" (PROJ-025).
 const LAYOUT_SETTING: &str = "workspacesLayout";
@@ -97,6 +100,26 @@ pub fn set_name(store: &Store, path: &str, name: Option<&str>) -> Result<(), Str
         None => names.remove(&name_key(path)),
     };
     store.set(NAMES_KEY, &serde_json::Value::Object(names).to_string()).map_err(|e| e.to_string())
+}
+
+fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
+    store.get(ORIGINS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// Records (or with `None`, forgets) how the workspace at `path` came to be.
+pub fn set_origin(store: &Store, path: &str, origin: Option<&serde_json::Value>) -> Result<(), String> {
+    let mut all = load_origins(store);
+    match origin {
+        Some(o) => all.insert(name_key(path), o.clone()),
+        None => all.remove(&name_key(path)),
+    };
+    store.set(ORIGINS_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
+}
+
+/// ponytail: read by tests only until the sidebar draws lineage (PROJ-047, T-077).
+#[cfg(test)]
+pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
+    load_origins(store).remove(&name_key(path))
 }
 
 /// The workspaces of a project as the sidebar lists them (PROJ-007): Git's list with the typed
@@ -436,6 +459,7 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     terminals.kill_under(Path::new(&path));
     remove_workspace(&git, &project, &path, force)?;
     let store = store.lock().map_err(|e| e.to_string())?;
+    set_origin(&store, &path, None)?;
     set_name(&store, &path, None)
 }
 
