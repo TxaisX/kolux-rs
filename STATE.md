@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 2, date: 2026-10-09)
-Next task: T-007-b · SESS-007 An empty pane asks what to run · SESS-013 Choose how many sessions to start
-Done: 8 / 340 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 3, date: 2026-10-09)
+Next task: T-008 · SESS-015 Every seat needs an AI and a model the user chose; nothing is guessed · SESS-024 Launched sessions land one per pane, titled by seat · SESS-051 Each catalogue agent's program, start line and opening-prompt route
+Done: 9 / 340 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 340 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -72,6 +72,21 @@ shortcut beside it when one is bound, and every other row has a "default" button
 saved as `defaultAgent` in `settings.json` and the bound shortcut (`tab.newAgent`) starts the
 default agent. An npm-installed agent whose entry is a `.cmd` shim (Codex) now starts through
 `cmd.exe /d /c`, as the command line would.
+
+T-007-b adds the chooser pane (SESS-007): the plus menu (sidebar "New session" and a pane's "+")
+has a "Choose what to run…" item, and an empty workspace offers a "Choose what to run" button;
+either opens a pane titled "Session N · Choose what to run" in which nothing runs yet. Each seat is
+a radio group of the installed agents plus Terminal, and once an AI is picked a second radio group
+asks for the model (Claude Opus/Sonnet/Haiku, Codex GPT-5 Codex/GPT-5, Gemini, Cursor, Grok lists,
+plus "Program default" for every agent, which adds no flag); Start stays disabled until every seat
+has both picks, Terminal counts as ready at once. A count row (SESS-013) offers 1, 2, 3, 4, 6, 8
+and a free number field (applied on Enter, blur or the spinner, so typing "15" never passes
+through a one-seat moment): new seats arrive empty, shrinking drops seats from the bottom and keeps
+the rest untouched, 15 gives fifteen seat blocks in a scrolling body. Start replaces the chooser
+with one pane per seat in the same grid position: agent seats run in the chooser's workspace (or in
+one fresh worktree when the chooser sits outside any workspace) with `--model <id>` appended to
+the start line, terminal seats open a shell in the same folder. The chooser's close button is
+absent when it is the only pane shown.
 
 ## Needs Txais
 
@@ -169,6 +184,16 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-007-b: the model lists are built in (`src/launch/seats.ts`) until SESS-029 (P1)
+  asks each installed program for its live list; "Program default" is the explicit no-flag pick so
+  SESS-015's "nothing is guessed" still holds. The quick counts settled on 1 · 2 · 3 · 4 · 6 · 8 plus
+  the free field. The chooser's entry points are the plus-menu item and the empty-workspace button;
+  the New session page (SESS-018) is T-046. One chooser's seats share a workspace: the chooser's
+  own, or one fresh worktree for all of them when it was opened outside a workspace (a worktree per
+  seat would scatter one Start across the sidebar; SESS-024 in T-008 decides the final rule).
+  `--model <id>` is passed to every agent that has a list; agents without one only offer the
+  program default. The free field applies on Enter/blur/spinner, not per keystroke (typing "15"
+  from 2 would otherwise shrink to 1 and lose seat 2's picks).
 - 2026-10-09 · T-007-a: T-007 was split in place (SESS-001 + SESS-004 as T-007-a, SESS-007 +
   SESS-013 as T-007-b); PLAN.md now has 340 tasks. SESS-004's "one item opens agent settings"
   waits for the Settings page (area 17); in its place each non-default row carries a "default"
@@ -250,6 +275,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-007-b · done: chooser pane with per-seat AI and model radio groups, Start gated on every seat, count row 1/2/3/4/6/8 + free field, Start replaces the chooser with one pane per seat (`--model` appended, terminals in the same folder), close button hidden when it is the only pane; 4 seats tests + 3 chooser tests + 1 plus-menu test; live: menu item opened the chooser, Claude without a model kept Start disabled, Haiku enabled it, 3 → 2 kept seat 1, typing 15 + Enter gave fifteen seats with seats 1-2 untouched, 2 + Terminal + Start opened worktree `dusky-shrimp` with Claude (trust prompt) beside a PowerShell pane, a lone chooser had no close button; build / clippy / 31 Rust tests / 50 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-007-b.png, evidence/T-007-b-disabled.png, evidence/T-007-b-enabled.png, evidence/T-007-b-15.png, evidence/T-007-b-started.png
 - 2026-10-09 · T-007-a · done: 34-agent catalogue with install detection on the PATH and the usual install folders (runnable files only), plus menu lists only installed agents with the default first and a "default" button on the others, `defaultAgent` saved in settings.json, `tab.newAgent` shortcut starts the default agent, `.cmd` shims start through cmd.exe; 4 Rust tests (find_in, catalogue order and start lines, newest nvm version, cmd shim start line) and 3 new front-end tests (menu ordering, default-agent setting, default-first rendering); live: menu showed only Claude Code and Codex of the 34 with Claude first and its Ctrl+Shift+K chip, "default" on Codex moved Codex to the top with the chip and wrote settings.json, clicking Codex opened worktree `ivory-crab` with Codex running through its npm `.cmd` shim; build / clippy / 31 Rust tests / 42 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-007-a.png, evidence/T-007-a-default.png, evidence/T-007-a-codex.png
 - 2026-10-09 · T-006 · done: workspace switching (sidebar row click shows that workspace, panes of the others kept hidden, remove drops every pane inside the folder, empty-workspace placeholder) with 4 new front-end tests on the pure helpers; live: worktrees alpha and beta each got a shell, `echo alpha-one` / `echo beta-one`, switching back to alpha showed its earlier output unchanged with the row selected, removing beta dropped its pane (terminal count 3 to 2) and left alpha as it was; build / clippy / 28 Rust tests / 39 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-006.png, evidence/T-006-removed.png
 - 2026-10-08 · T-006 · cut short by the usage limit before the live check: workspace switching code (pure helpers + 4 tests, hidden panes, sidebar selection, remove hook) passed tsc and 39 front-end tests but the live proof and the Rust gates had not run, so the work was reverted and the task stays unticked; the diff and the two new files are kept in the session scratchpad (t006-saved/) to re-apply next pass

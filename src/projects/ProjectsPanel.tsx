@@ -27,13 +27,14 @@ type Props = {
   onLaunch: (agent: AgentInfo, projectId: string | null) => void;
   defaultId: string;
   onSetDefault: (id: string) => void;
+  onChoose: () => void;
   /** Bump to reload the list after something outside the sidebar made a workspace. */
   refresh: number;
   /** Hands the window the project list and which project owns each workspace folder. */
   onIndex: (projects: Project[], owner: Record<string, string>) => void;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, refresh, onIndex }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -346,6 +347,10 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
             agents={agents}
             defaultId={defaultId}
             onSetDefault={onSetDefault}
+            onChoose={() => {
+              setPlusOpen(false);
+              onChoose();
+            }}
             busy={launching}
             style={{ left: 16, bottom: 56 }}
             onClose={() => setPlusOpen(false)}

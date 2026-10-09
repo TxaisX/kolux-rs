@@ -27,12 +27,14 @@ type Props = {
   defaultId?: string;
   onPick: (agent: AgentInfo) => void;
   onSetDefault?: (id: string) => void;
+  /** Opens a chooser pane instead (SESS-007). */
+  onChoose?: () => void;
   onClose: () => void;
   busy?: boolean;
   style?: CSSProperties;
 };
 
-export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDefault, onClose, busy = false, style }: Props) {
+export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDefault, onChoose, onClose, busy = false, style }: Props) {
   const shown = menuAgents(agents, defaultId);
   const bound = useLabel("tab.newAgent").length > 0;
   return (
@@ -60,6 +62,14 @@ export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDe
             )}
           </div>
         ))}
+        {onChoose && (
+          <button role="menuitem" className="menu-item" onClick={onChoose} title="Open a pane that asks which AI, model or terminal to run, and how many">
+            <span className="agent-mark" aria-hidden="true">
+              ?
+            </span>
+            <span className="name">Choose what to run…</span>
+          </button>
+        )}
         <button role="menuitem" className="menu-item muted" onClick={onClose}>
           Cancel
         </button>

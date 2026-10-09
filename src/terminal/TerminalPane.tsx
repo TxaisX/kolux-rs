@@ -39,9 +39,10 @@ type Props = {
   onLaunch?: (agent: AgentInfo) => void;
   defaultId?: string;
   onSetDefault?: (id: string) => void;
+  onChoose?: () => void;
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -206,6 +207,13 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           onSetDefault={onSetDefault}
           busy={launching}
           style={{ top: plusAt.top, right: plusAt.right }}
+          onChoose={
+            onChoose &&
+            (() => {
+              setPlusAt(null);
+              onChoose();
+            })
+          }
           onClose={() => setPlusAt(null)}
           onPick={(a) => {
             setPlusAt(null);

@@ -70,3 +70,8 @@ test("agent ids map to vendor marks and header words", () => {
   expect(programWord("codex")).toBe("Codex");
   expect(programWord("shell")).toBe("PowerShell");
 });
+
+test("SESS-007: the chooser item appears only when a handler is given", () => {
+  expect(render({ onChoose: () => {} })).toContain("Choose what to run…");
+  expect(render({})).not.toContain("Choose what to run…");
+});

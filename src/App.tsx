@@ -16,6 +16,8 @@ import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
 import { markFor, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
+import ChooserPane from "./launch/ChooserPane";
+import { emptySeat, modelArgs, TERMINAL, type Seat } from "./launch/seats";
 import { folderName, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -23,7 +25,8 @@ import { matchEvent } from "./keys/keymap";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[] };
+/** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[] };
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
 export function columnsFor(count: number): number {
@@ -120,6 +123,51 @@ function Window() {
     setFocused(key);
   };
 
+  // SESS-007: a pane that asks what to run, in the workspace in front.
+  const addChooser = () => {
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }]);
+    setFocused(key);
+  };
+  const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
+
+  // Start replaces the chooser with one pane per seat (SESS-013). Agent seats run in the chooser's
+  // workspace; when the chooser sits outside any workspace they get one fresh worktree together,
+  // so the seats land side by side in the grid.
+  const startSeats = async (key: number, seats: Seat[]) => {
+    const chooser = panes.find((p) => p.key === key);
+    if (!chooser) return;
+    setLaunching(true);
+    try {
+      let dir = chooser.cwd;
+      let branch = chooser.branch;
+      const picked = seats.map((s) => (s.agent === TERMINAL ? null : agents.find((a) => a.id === s.agent && a.installed) ?? null));
+      const missing = seats.find((s, i) => s.agent !== TERMINAL && !picked[i]);
+      if (missing) throw new Error(`${missing.agent} is not installed.`);
+      if (dir === null && picked.some((a) => a !== null)) {
+        const pid = projectFor(null);
+        if (!pid) throw new Error("Add a project first: an agent needs a repository to work in.");
+        const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
+        dir = wt.path;
+        branch = wt.branch;
+      }
+      const made: Pane[] = seats.map((s, i) => {
+        const a = picked[i];
+        const k = nextKey.current++;
+        return a ? { key: k, cwd: dir, branch, agent: markFor(a.id), program: a.program, args: [...a.args, ...modelArgs(s.model)] } : { key: k, cwd: dir, branch, agent: "shell", program: null, args: [] };
+      });
+      setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
+      setActiveDir(dir);
+      setFocused(made[0].key);
+      setRefresh((n) => n + 1);
+      setNotice(null);
+    } catch (err) {
+      setNotice(String(err));
+    } finally {
+      setLaunching(false);
+    }
+  };
+
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
   const select = (dir: string, branch: string | null) => {
@@ -203,6 +251,7 @@ function Window() {
             onSetDefault={setDefault}
             launching={launching}
             onLaunch={launch}
+            onChoose={addChooser}
             refresh={refresh}
             onIndex={(list, dirs) => {
               setProjects(list);
@@ -227,31 +276,54 @@ function Window() {
                   <div className="empty">
                     <h2>{activeDir ? folderName(activeDir) : "Terminal"}</h2>
                     <p>No terminal open here.</p>
-                    <button className="btn" onClick={() => addShell(activeDir, null)}>
-                      Open a shell
-                    </button>
+                    <div className="btn-row">
+                      <button className="btn" onClick={() => addShell(activeDir, null)}>
+                        Open a shell
+                      </button>
+                      <button className="btn" onClick={addChooser}>
+                        Choose what to run
+                      </button>
+                    </div>
                   </div>
                 )}
-                {panes.map((p) => (
-                  <TerminalPane
-                    key={p.key}
-                    hidden={!sameDir(p.cwd, activeDir)}
-                    cwd={p.cwd}
-                    branch={p.branch}
-                    agent={p.agent}
-                    program={p.program}
-                    args={p.args}
-                    focused={p.key === focused}
-                    onFocus={() => setFocused(p.key)}
-                    onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
-                    onClose={() => closePane(p.key)}
-                    agents={agents}
-                    defaultId={defaultId}
-                    onSetDefault={setDefault}
-                    launching={launching}
-                    onLaunch={(a) => launch(a, null)}
-                  />
-                ))}
+                {panes.map((p) =>
+                  p.seats ? (
+                    <ChooserPane
+                      key={p.key}
+                      number={p.key}
+                      hidden={!sameDir(p.cwd, activeDir)}
+                      focused={p.key === focused}
+                      onFocus={() => setFocused(p.key)}
+                      agents={agents.filter((a) => a.installed)}
+                      seats={p.seats}
+                      onSeats={(s) => setSeats(p.key, s)}
+                      onStart={(s) => void startSeats(p.key, s)}
+                      busy={launching}
+                      closable={shown.length > 1}
+                      onClose={() => closePane(p.key)}
+                    />
+                  ) : (
+                    <TerminalPane
+                      key={p.key}
+                      hidden={!sameDir(p.cwd, activeDir)}
+                      cwd={p.cwd}
+                      branch={p.branch}
+                      agent={p.agent}
+                      program={p.program}
+                      args={p.args}
+                      focused={p.key === focused}
+                      onFocus={() => setFocused(p.key)}
+                      onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                      onClose={() => closePane(p.key)}
+                      agents={agents}
+                      defaultId={defaultId}
+                      onSetDefault={setDefault}
+                      launching={launching}
+                      onLaunch={(a) => launch(a, null)}
+                      onChoose={addChooser}
+                    />
+                  ),
+                )}
               </div>
             </>
           ) : (
