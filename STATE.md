@@ -1,13 +1,18 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 2, date: 2026-10-07)
-Next task: T-002 · One terminal pane: PowerShell through a Rust PTY, rendered by xterm.js with WebGL and a fallback
-Done: 1 / 338 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 1, date: 2026-10-08)
+Next task: T-003 · One project and one worktree: pick a git folder as a project, create a workspace on a new branch in its own folder, remove it again
+Done: 2 / 338 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 338 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
+
+What works today: the window opens with one terminal pane running Windows PowerShell. Typing
+reaches the shell, output comes back, the pane follows the window size, the header says whether
+the GPU (WebGL) or the plain renderer is drawing, and Close ends the shell and shows "ended".
+Closing the window kills every shell it started.
 
 ## Needs Txais
 
@@ -49,14 +54,29 @@ recorded default until told otherwise; nothing here blocks a pass.
   backticked commands; none is an old-code identifier. Recorded here rather than weakening the script.
 - 2026-10-07 · No new source was used in this pass (spec files in this repo only), so PROVENANCE.md
   section 5 gets no line.
-- 2026-10-07 � T-001: the app identifier is `com.txaisxiong.kolux-rs`, so the profile folder is
+- 2026-10-07 · T-001: the app identifier is `com.txaisxiong.kolux-rs`, so the profile folder is
   `%APPDATA%\com.txaisxiong.kolux-rs` and never collides with the old app's `%APPDATA%\kolux`.
   State store = `state.db` (SQLite, WAL) plus `settings.json` written atomically; both open at
   startup. Our own crate carries `license-file` and `publish = false`; cargo-deny ignores private
   crates, the allow-list applies to dependencies only. Window evidence is captured with
   PrintWindow (renders the window itself), because a screen grab caught the game Txais was
   playing instead; that image was deleted before anything was committed.
+- 2026-10-08 · T-002: the pane runs Windows PowerShell 5.1 (`powershell.exe -NoLogo`, the one every
+  Windows install has) starting in the user's home folder; PowerShell 7 (`pwsh`) is not on this PC's
+  path, so picking between them waits for the shell-choice card. Shell output crosses to the
+  page base64-encoded so a character split across two chunks is never garbled. The renderer choice
+  is GPU first, plain on any failure (TERM-103's "Auto"); the on/off override and the six-context cap
+  come with the grid task (T-009), when there is more than one pane. Closing a pane ends its shell
+  at once; the "ask first when a program is running" rule from TERM-014 is built with the pane
+  header and the close keybinding, not here. The Close button shows the exit code when it is not
+  zero (a killed shell reports 1), so a crash is never mistaken for a clean exit.
+- 2026-10-08 · Proof routine for typing into the window: keystrokes are posted straight to the
+  app's own web view window, never through the shared keyboard, so a check never types into
+  whatever Txais has in front of him. (One early attempt used the shared keyboard route; the
+  window was not in front, so the text "echo kolux-rs-ok" may have landed in another program.)
 
 ## Last 10 passes  (date · task · result · evidence)
 
 - 2026-10-07 · Phase 2: write PLAN.md · done: 338 tasks covering 1,030 cards (228 P0, 564 P1, 199 P2, 27 H marked build, 12 X), no dropped card · `node scripts/plan-check.mjs` prints OK
+- 2026-10-07 · T-001 · done: Tauri 2 window opens, SQLite state store and JSON settings under the profile folder, cargo-deny and JS license gates green, build/clippy/test/vitest green · evidence/T-001.png
+- 2026-10-08 · T-002 · done: one PowerShell pane through a Rust PTY, drawn by xterm.js on the GPU with a plain fallback; typing, resize (shell reports 166x54 after the window grew) and Close all proven live; no shell left behind after Close or after closing the window; 4 Rust tests and 9 front-end tests green · evidence/T-002.png

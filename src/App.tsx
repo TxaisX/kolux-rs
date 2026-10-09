@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { windowTitle, type AppInfo } from "./app-info";
+import TerminalPane from "./terminal/TerminalPane";
 
 export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -8,11 +9,11 @@ export default function App() {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
   }, []);
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: 24, color: "#e6e6e6", background: "#1f2a44", minHeight: "100vh", boxSizing: "border-box" }}>
-      <h1 style={{ margin: 0, fontSize: 20 }}>{windowTitle(info)}</h1>
-      <p style={{ opacity: 0.8 }}>
-        {info ? `Profile folder: ${info.profileDir} · start number ${info.startCount}` : "Waiting for the Rust side…"}
-      </p>
+    <main style={{ fontFamily: "system-ui, sans-serif", color: "#e6e6e6", background: "#1f2a44", height: "100vh", display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
+      <h1 style={{ margin: 0, padding: "8px 12px", fontSize: 16 }}>{windowTitle(info)}</h1>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <TerminalPane />
+      </div>
     </main>
   );
 }

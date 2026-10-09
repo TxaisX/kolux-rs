@@ -1,8 +1,11 @@
+mod pty;
 mod state;
+mod terminal;
 
 use state::Store;
 use std::sync::Mutex;
 use tauri::Manager;
+use terminal::Terminals;
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,9 +42,29 @@ pub fn run() {
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
+            app.manage(Terminals::default());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_info, get_settings, save_settings])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .on_window_event(|window, event| {
+            // The window is gone: no shell may outlive it.
+            if let tauri::WindowEvent::Destroyed = event {
+                window.state::<Terminals>().kill_all();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            get_settings,
+            save_settings,
+            terminal::terminal_spawn,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_kill
+        ])
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<Terminals>().kill_all();
+            }
+        });
 }
