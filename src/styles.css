@@ -48,6 +48,9 @@ input { font: inherit; }
 .kbd-part { display: inline-flex; align-items: center; gap: 6px; }
 .kbd-none { font-size: 11px; color: var(--fg-faint); }
 .topbar-right .bell { margin-right: 8px; }
+/* the Codex half of the pill (USAGE-022); warn yellow from DESIGN.md section 3 */
+.usage-part { display: inline-flex; align-items: center; gap: 6px; }
+.usage-part.warn { color: #fdc030; }
 .usage { display: inline-flex; align-items: center; gap: 6px; height: 23px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg-muted); font-size: 12px; margin-right: 14px; white-space: nowrap; }
 
 .wc { display: flex; height: 100%; }

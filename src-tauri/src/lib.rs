@@ -1,6 +1,7 @@
 mod agents;
 mod browser;
 pub mod cli;
+mod codex_usage;
 mod creatures;
 mod git;
 mod keybindings;
@@ -107,7 +108,8 @@ pub fn run() {
             browser::browser_close,
             secrets::secret_status,
             secrets::secret_set,
-            secrets::secret_clear
+            secrets::secret_clear,
+            codex_usage::codex_usage
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

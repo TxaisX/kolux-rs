@@ -8,6 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
 import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
+import CodexPill from "../usage/CodexPill";
 
 export type Screen = "agents" | "board" | "terminals";
 export const screens: Array<{ id: Screen; label: string }> = [
@@ -74,11 +75,10 @@ export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar 
         <button className="ib bell" title="Inbox (not built yet)">
           <Bell />
         </button>
-        <div className="usage" title="Usage is read from running sessions once accounts are built">
+        <div className="usage" title="Claude usage is read from running sessions once T-041 is built">
           <VendorMark agent="claude" size={13} />
           <span>Claude · unknown</span>
-          <VendorMark agent="codex" size={13} />
-          <span>Codex · unknown</span>
+          <CodexPill />
         </div>
         <div className="wc">
           <button title="Minimize" onClick={() => win().minimize()}>
