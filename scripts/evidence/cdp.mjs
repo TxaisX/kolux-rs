@@ -5,7 +5,8 @@
 // usage: node cdp.mjs list
 //        node cdp.mjs <targetMatch> eval "<js>"
 //        node cdp.mjs <targetMatch> type "<text>" [enter]   (focus must already be in a field)
-//        node cdp.mjs <targetMatch> key <Enter|Escape|...>
+//        node cdp.mjs <targetMatch> insert "<text>" [enter]   (one edit, emoji safe)
+//        node cdp.mjs <targetMatch> key <Enter|Escape|...> [mods: Alt=1 Ctrl=2 Shift=8]
 //        node cdp.mjs <targetMatch> focus "<css selector>"
 // targetMatch is a substring of the target's url or title; "main" = the localhost dev page.
 const PORT = process.env.CDP_PORT || "9222";
@@ -48,6 +49,11 @@ if (cmd === "eval") {
   }
   if (rest[1] === "enter") await key("Enter");
   console.log("typed", rest[0].length, "chars", rest[1] === "enter" ? "+ Enter" : "");
+} else if (cmd === "insert") {
+  // Pastes text as one edit (emoji included); the field must already have the cursor.
+  await send("Input.insertText", { text: rest[0] });
+  if (rest[1] === "enter") await key("Enter");
+  console.log("inserted", rest[0]);
 } else if (cmd === "key") {
   // mods: Alt=1, Ctrl=2, Meta=4, Shift=8
   await key(rest[0], Number(rest[1] || 0));

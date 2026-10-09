@@ -2,7 +2,7 @@
 // sidebar draws from. No Tauri calls here, so it can be tested on its own.
 
 export type Project = { id: string; name: string; path: string };
-export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean };
+export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null };
 
 /** The last folder name of a path, whichever slash style it uses. */
 export function folderName(path: string): string {
@@ -10,8 +10,9 @@ export function folderName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-/** What a workspace row says: the branch, or the short commit when the head is detached. */
+/** What a workspace row says (PROJ-021): the name as typed, else the branch, else the short commit of a detached head. */
 export function worktreeLabel(w: Worktree): string {
+  if (w.name) return w.name;
   if (w.branch) return w.branch;
   return `detached at ${w.head.slice(0, 7)}`;
 }

@@ -18,6 +18,8 @@ pub struct Worktree {
     pub branch: Option<String>,
     pub head: String,
     pub is_main: bool,
+    /// The name the user typed when creating it (PROJ-021); the branch is shown when there is none.
+    pub name: Option<String>,
 }
 
 fn command(args: &[&str], cwd: Option<&Path>) -> Command {
@@ -110,8 +112,9 @@ impl Git {
         Ok(())
     }
 
-    pub fn branch_exists(&self, repo: &Path, branch: &str) -> bool {
-        run(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")], Some(repo)).is_ok()
+    /// Is the name a local branch, or a branch on any remote (PROJ-021: a taken name gets a number)?
+    pub fn branch_taken(&self, repo: &Path, branch: &str) -> bool {
+        run(&["for-each-ref", "--format=%(refname)", &format!("refs/heads/{branch}"), &format!("refs/remotes/*/{branch}")], Some(repo)).is_ok_and(|s| !s.is_empty())
     }
 }
 
@@ -134,7 +137,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0 });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None });
         }
     }
     out
@@ -188,7 +191,7 @@ mod tests {
         let _ = fs::remove_dir_all(dest.parent().unwrap());
         git.worktree_add(&repo, &dest, "fix-login", "HEAD").unwrap();
         assert!(dest.join("README.md").is_file(), "worktree folder has the files");
-        assert!(git.branch_exists(&repo, "fix-login"));
+        assert!(git.branch_taken(&repo, "fix-login"));
         let list = git.worktrees(&repo).unwrap();
         assert_eq!(list.len(), 2);
         let added = list.iter().find(|w| !w.is_main).unwrap();
@@ -197,7 +200,7 @@ mod tests {
 
         git.worktree_remove(&repo, &dest, Some("fix-login")).unwrap();
         assert!(!dest.exists(), "folder is gone");
-        assert!(!git.branch_exists(&repo, "fix-login"), "branch is gone");
+        assert!(!git.branch_taken(&repo, "fix-login"), "branch is gone");
         assert_eq!(git.worktrees(&repo).unwrap().len(), 1);
 
         fs::remove_dir_all(dest.parent().unwrap()).unwrap();

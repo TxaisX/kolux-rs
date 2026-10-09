@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 10, date: 2026-10-09)
-Next task: T-013 · PROJ-001 Add a project by choosing a folder; nothing else is pulled in · PROJ-007 After adding a project its main checkout opens, with existing worktrees listed · PROJ-020 [compat] Create a workspace: a new branch in a folder of its own · PROJ-021 Workspace names become safe branch and folder names
-Done: 16 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 11, date: 2026-10-09)
+Next task: T-014 · PROJ-025 [compat] Choose where workspace folders live · PROJ-028 Choose what a new workspace starts from (base ref) · PROJ-038 A new workspace can start an agent with a first prompt · PROJ-077 [compat] `kolux worktree` create and remove
+Done: 17 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -165,6 +165,17 @@ view does not say whether it can go back. The harness now drives the app through
 own debugging port (`scripts/evidence/cdp.mjs`), so chords and typing land even while another
 window holds the foreground.
 
+T-013 finishes the project and workspace flow (PROJ-001, PROJ-007, PROJ-020, PROJ-021). Adding a
+project, whichever worktree was picked, registers its main checkout, opens that checkout with a
+shell and lists its worktrees, minus a coding tool's scratch worktrees (any worktree under a
+dot-folder inside the checkout, such as Claude Code's `.claude/worktrees/`). Mod+N or the
+header's plus opens the name field for the project in front; the preview shows the branch and
+folder the name becomes, a name with no usable letters is refused in the field, and a taken
+branch or folder name gets `-2`, `-3`, counting local and remote branches. Create shows a
+stand-in row at once; the new workspace then opens with its own shell unless the user moved to
+another workspace meanwhile. The row shows the name as typed (emoji included), the branch and
+folder carry the cleaned form; typed names live in the state store under `workspaceNames`.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -261,6 +272,20 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-013: a project's folder is its main checkout whichever worktree the user
+  picked (PROJ-007 "chosen on purpose"). A worktree under a dot-folder inside the main checkout
+  (Claude Code's `.claude/worktrees/*`) is a tool's scratch worktree and is not listed; nothing
+  else is filtered. A taken branch or folder name (local branch, any remote's branch, or an
+  existing folder) gets `-2`, `-3` instead of an error (PROJ-021). Typed names are stored in the
+  state store under `workspaceNames`, keyed by the lower-cased folder path, and forgotten on
+  remove; Git never sees them. Until a settings page exists the sidebar header's plus is New
+  workspace and the footer gear opens the add-by-path / workspaces-folder form. One create at a
+  time: the field is closed while Git works and a second Mod+N waits; cancelling an overtaken
+  create (and removing its half-made checkout) and the stand-in *tab* are not built, only the
+  stand-in sidebar row. Folder projects without Git are PROJ-005, not built. There is no
+  project-remove command yet, so the throwaway "repo" project from the live proof stays
+  registered in the dev profile's store (its folder under the scratchpad may vanish; the row
+  will then show an error until a remove exists).
 - 2026-10-09 · T-012-b: the default search engine is Google (OD-18 said "a fixed standard web
   search"; DuckDuckGo, Bing and Kagi addresses are in `src/browser/address.ts` for the day a
   setting chooses one; the Kagi session link is not built). Back / forward availability is
@@ -434,6 +459,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-013 · done: add-project resolves to the main checkout and opens it with a shell, scratch worktrees hidden, Mod+N / header plus open the name field with a branch + folder preview, stand-in row while Git works, taken names numbered (local and remote), typed name shown on the row and kept in the store; 2 Rust tests changed / added (43 total), model test updated (69 front-end tests); live over the debugging port: Mod+N with no project → "Add a project first.", Create disabled; gear form + a linked worktree's path → project "repo" at the main checkout, rows main + zeta (scratch hidden), main selected with a shell "repo main"; Mod+N + "Fix login 🔥" → preview "branch fix-login-fire · folder …\workspaces\repo\fix-login-fire", stand-in row at once, then the row selected with its own shell and the note "created Fix login 🔥 in …"; a second "fix login fire" while clicking back to main → `fix-login-fire-2` created, main stayed selected, no focus pull; "???" → "That name leaves nothing usable for a branch; use some letters or digits", Create disabled; both rows removed through × / Remove; build / clippy / 43 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-013-noproject.png, evidence/T-013-added.png, evidence/T-013-pending.png, evidence/T-013-created.png, evidence/T-013-background.png, evidence/T-013-refused.png
 - 2026-10-09 · T-012-b · done: the bar resolves sites, local hosts, file paths and searches (Google), refuses other schemes with a notice; back / forward / reload / stop toolbar with dimming and a loading spinner; Ctrl+L, Alt+Left / Right, Ctrl+R wired in the browser key scope; 1 Rust test, 4 front-end tests; live over the web view's debugging port: Ctrl+Shift+B opened the tab, "example.com" + Enter loaded https://example.com/ (tab "Example Domain", back lit), Ctrl+L selected the bar, "rust ownership" + Enter loaded Google results, Stop + spinner showed 116 ms into a reload and cleared at 1.3 s, "javascript:alert(1)" gave the red notice and left the page, Back returned to example.com with forward lit, Forward returned to the results; build / clippy / 42 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-012-b-fresh.png, evidence/T-012-b-site.png, evidence/T-012-b-search.png, evidence/T-012-b-invalid.png, evidence/T-012-b-back.png, evidence/T-012-b-forward.png
 - 2026-10-09 · T-012-a · done: Browser item in the New tab menu (Ctrl+Shift+B) opens a "New Tab" pane with an address bar focused over a blank page, the page is a child web view moved with the pane body and hidden while its tab / screen is away, tab named after the page title; 1 Rust test, 1 front-end test; live: "typed-in-bar" landed in the bar with no click, a local form page loaded from the bar and "kept-text" typed into its field survived a switch to Terminal 1 and back, a page calling `window.close()` left the tab in place, the Board showed no page; build / clippy / 41 Rust tests / 65 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-012-a-newtab.png, evidence/T-012-a-form.png, evidence/T-012-a-back.png, evidence/T-012-a-close.png
 - 2026-10-09 · T-011 · done: Board screen lists every pane as a card (same cells as the grid, `.board` styling), expand shows the live terminal inside the card and collapses again, panes stay mounted across Agents / Board / Terminals; 1 grid test; live: `echo t011-ok` typed in the grid pane, Board showed the card collapsed, expand showed the same scrollback and `echo expanded-ok` typed into the card ran there, collapse + Terminals showed both lines in the grid pane in its old slot with the shell still at its prompt; build / clippy / 40 Rust tests / 64 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-011-grid.png, evidence/T-011-board.png, evidence/T-011-expanded.png, evidence/T-011-back.png

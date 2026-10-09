@@ -19,6 +19,9 @@ pub struct Project {
 }
 
 const PROJECTS_KEY: &str = "projects";
+/// Typed workspace names by folder (PROJ-021): the branch and folder carry the cleaned form,
+/// the row shows exactly what was typed.
+const NAMES_KEY: &str = "workspaceNames";
 const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 
 /// Compares two folders the way Windows does: same canonical path, letter case ignored.
@@ -35,10 +38,48 @@ fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
     store.set(PROJECTS_KEY, &serde_json::to_string(projects).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
+fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
+    store.get(NAMES_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+fn name_key(path: &str) -> String {
+    path.replace('/', "\\").trim_end_matches('\\').to_lowercase()
+}
+
+/// Remembers (or with `None`, forgets) the typed name of the workspace at `path`.
+pub fn set_name(store: &Store, path: &str, name: Option<&str>) -> Result<(), String> {
+    let mut names = load_names(store);
+    match name {
+        Some(n) => names.insert(name_key(path), serde_json::Value::String(n.to_string())),
+        None => names.remove(&name_key(path)),
+    };
+    store.set(NAMES_KEY, &serde_json::Value::Object(names).to_string()).map_err(|e| e.to_string())
+}
+
+/// The workspaces of a project as the sidebar lists them (PROJ-007): Git's list with the typed
+/// names laid over, minus scratch worktrees a coding tool keeps for its own sub-agents, which
+/// live under a dot-folder inside the main checkout (Claude Code's `.claude/worktrees/`).
+pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
+    let names = load_names(store);
+    let main = Path::new(&project.path);
+    Ok(git
+        .worktrees(main)?
+        .into_iter()
+        .filter(|w| !Path::new(&w.path).strip_prefix(main).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))))
+        .map(|mut w| {
+            w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
+            w
+        })
+        .collect())
+}
+
 /// Registers the repository that holds `path`; an already-registered one is handed back, not
-/// added again. New projects go first (the Recent order).
+/// added again. New projects go first (the Recent order). The project's folder is the main
+/// checkout, whichever of its worktrees was picked (PROJ-007: chosen on purpose, never the
+/// first one listed by chance; Git lists the main checkout first).
 pub fn add_project(git: &Git, store: &Store, path: &Path) -> Result<Project, String> {
-    let top = git.toplevel(path)?;
+    let picked = git.toplevel(path)?;
+    let top = git.worktrees(&picked)?.into_iter().find(|w| w.is_main).map(|w| PathBuf::from(w.path)).unwrap_or(picked);
     let mut projects = load_projects(store);
     if let Some(existing) = projects.iter().find(|p| same_folder(Path::new(&p.path), &top)) {
         return Ok(existing.clone());
@@ -71,15 +112,17 @@ pub fn workspace_path(root: &Path, project: &Project, safe: &str) -> PathBuf {
 }
 
 pub fn create_workspace(git: &Git, root: &Path, project: &Project, typed_name: &str) -> Result<Worktree, String> {
-    let safe = safe_name(typed_name).ok_or_else(|| format!("\"{}\" leaves nothing usable for a branch name; use some letters or digits", typed_name.trim()))?;
-    let dest = workspace_path(root, project, &safe);
-    if dest.exists() {
-        return Err(format!("the folder {} already exists", dest.display()));
-    }
+    let base = safe_name(typed_name).ok_or_else(|| format!("\"{}\" leaves nothing usable for a branch name; use some letters or digits", typed_name.trim()))?;
     let repo = Path::new(&project.path);
-    if git.branch_exists(repo, &safe) {
-        return Err(format!("a branch named {safe} already exists in {}", project.name));
-    }
+    // PROJ-021: a name taken by a branch (local or on a remote) or a folder gets a number.
+    let (safe, dest) = (1..)
+        .map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") })
+        .map(|s| {
+            let d = workspace_path(root, project, &s);
+            (s, d)
+        })
+        .find(|(s, d)| !d.exists() && !git.branch_taken(repo, s))
+        .ok_or("no free name")?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
@@ -152,7 +195,7 @@ pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> 
 pub fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = find_project(&store, &project_id)?;
-    git.worktrees(Path::new(&project.path))
+    list_workspaces(&git, &store, &project)
 }
 
 #[tauri::command]
@@ -166,7 +209,14 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
         let store = store.lock().map_err(|e| e.to_string())?;
         (find_project(&store, &project_id)?, workspaces_dir(&store))
     };
-    create_workspace(&git, &root, &project, &name)
+    let mut wt = create_workspace(&git, &root, &project, &name)?;
+    let typed = name.trim();
+    if typed != wt.branch.as_deref().unwrap_or_default() {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        set_name(&store, &wt.path, Some(typed))?;
+        wt.name = Some(typed.to_string());
+    }
+    Ok(wt)
 }
 
 #[tauri::command]
@@ -186,7 +236,9 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     };
     // A shell still sitting in the folder would keep Windows from deleting it.
     terminals.kill_under(Path::new(&path));
-    remove_workspace(&git, &project, &path)
+    remove_workspace(&git, &project, &path)?;
+    let store = store.lock().map_err(|e| e.to_string())?;
+    set_name(&store, &path, None)
 }
 
 #[tauri::command]
@@ -271,12 +323,23 @@ mod tests {
         assert_eq!(wt.branch.as_deref(), Some("fix-login-fire"));
         let expected = workspace_path(&root, &project, "fix-login-fire");
         assert!(expected.join("a.txt").is_file());
-        assert!(create_workspace(&git, &root, &project, "fix login fire").unwrap_err().contains("already exists"));
+        let again = create_workspace(&git, &root, &project, "fix login fire").unwrap();
+        assert_eq!(again.branch.as_deref(), Some("fix-login-fire-2"), "a taken name gets a number");
+        git_in(&repo, &["update-ref", "refs/remotes/origin/fix-login-fire-3", "HEAD"]);
+        let third = create_workspace(&git, &root, &project, "fix login fire").unwrap();
+        assert_eq!(third.branch.as_deref(), Some("fix-login-fire-4"), "a name on a remote counts as taken");
+        set_name(&store, &wt.path, Some("Fix login \u{1F525}")).unwrap();
+        let listed = list_workspaces(&git, &store, &project).unwrap();
+        assert_eq!(listed.iter().find(|w| w.path == wt.path).unwrap().name.as_deref(), Some("Fix login \u{1F525}"), "the typed name is shown");
+        assert_eq!(listed.iter().find(|w| w.path == again.path).unwrap().name, None);
+        for w in [&again, &third] {
+            remove_workspace(&git, &project, &w.path).unwrap();
+        }
 
         assert!(remove_workspace(&git, &project, &project.path).unwrap_err().contains("main checkout"));
         remove_workspace(&git, &project, &wt.path).unwrap();
         assert!(!expected.exists());
-        assert!(!git.branch_exists(&repo, "fix-login-fire"));
+        assert!(!git.branch_taken(&repo, "fix-login-fire"));
         drop(store);
         for d in [profile, repo, root] {
             fs::remove_dir_all(d).unwrap();
@@ -308,6 +371,31 @@ mod tests {
 
         drop(store);
         for d in [profile, repo, root] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_picked_worktree_registers_its_main_checkout_and_scratch_worktrees_stay_hidden() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile5");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("repo5");
+        let side = temp("side5");
+        let zeta = side.join("zeta");
+        git.worktree_add(&repo, &zeta, "zeta", "HEAD").unwrap();
+        let scratch = repo.join(".claude").join("worktrees").join("scratch");
+        git.worktree_add(&repo, &scratch, "scratch", "HEAD").unwrap();
+
+        let project = add_project(&git, &store, &zeta).unwrap();
+        assert!(same_folder(Path::new(&project.path), &repo), "picked a linked worktree, got the main checkout: {}", project.path);
+        let names: Vec<_> = list_workspaces(&git, &store, &project).unwrap().into_iter().map(|w| (w.branch.unwrap_or_default(), w.is_main)).collect();
+        assert_eq!(names, vec![("main".to_string(), true), ("zeta".to_string(), false)], "a tool's scratch worktree is not listed");
+
+        drop(store);
+        git.worktree_remove(&repo, &scratch, Some("scratch")).unwrap();
+        git.worktree_remove(&repo, &zeta, Some("zeta")).unwrap();
+        for d in [profile, repo, side] {
             fs::remove_dir_all(d).unwrap();
         }
     }

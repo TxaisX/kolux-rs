@@ -84,6 +84,7 @@ function Window() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [owner, setOwner] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
+  const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
@@ -147,6 +148,11 @@ function Window() {
           break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
+          break;
+        case "workspace.create":
+          setScreen("terminals");
+          setSidebarOpen(true);
+          setCreateRequest((n) => n + 1);
           break;
         case "view.cycleWorkspaceView":
           setScreen((s) => nextScreen(s));
@@ -403,6 +409,7 @@ function Window() {
             onLaunch={launch}
             onChoose={addChooser}
             refresh={refresh}
+            createRequest={createRequest}
             onIndex={(list, dirs) => {
               setProjects(list);
               setOwner(dirs);

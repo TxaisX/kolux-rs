@@ -96,6 +96,8 @@ input { font: inherit; }
 .sess:hover { background: #1f1f1f; }
 .sess:hover .ib { opacity: 1; }
 .sess.sel { background: var(--row-selected); color: var(--fg); }
+.sess.pending { opacity: 0.6; }
+.sess .hint { font-size: 11px; color: var(--fg-muted); }
 .sb-form { margin: 4px 4px 6px; padding: 8px; border: 1px solid var(--line-focus); border-radius: 8px; font-size: 12px; color: var(--fg-muted); display: flex; flex-direction: column; gap: 6px; }
 .sb-form.warn { border-color: #7a3b1e; }
 .sb-form label { font-weight: 500; color: var(--fg-label); }

@@ -4,6 +4,9 @@
 // T-003's: add a Git folder as a project (type or browse), set where workspace folders live,
 // create a workspace (a new branch in its own folder), open a shell in one, remove one again.
 // Every action goes to the Rust side; this file only draws the state it gets back.
+// T-013: adding a project opens its main checkout (PROJ-007); Mod+N or the header's plus opens
+// the name field for the project in front, a stand-in row shows while Git works, and the new
+// workspace opens with a shell of its own unless the user moved on meanwhile (PROJ-020).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -32,9 +35,11 @@ type Props = {
   refresh: number;
   /** Hands the window the project list and which project owns each workspace folder. */
   onIndex: (projects: Project[], owner: Record<string, string>) => void;
+  /** Bumped by Mod+N (workspace.create): opens the name field for the project in front. */
+  createRequest: number;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -44,7 +49,10 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   const [rootDraft, setRootDraft] = useState("");
   const [pathDraft, setPathDraft] = useState("");
   const [showAdd, setShowAdd] = useState(false);
-  const [creating, setCreating] = useState<string | null>(null); // project id whose name field is open
+  const [creating, setCreating] = useState<string | null>(null); // project id whose name field is open; "" with no project yet
+  const [pending, setPending] = useState<{ projectId: string; name: string } | null>(null); // the stand-in row while Git works
+  const shown = useRef(activeDir); // the workspace in front, read when a create finishes
+  shown.current = activeDir;
   const [name, setName] = useState("");
   const [safe, setSafe] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string } | null>(null);
@@ -102,6 +110,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
     };
   }, [name]);
 
+  // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
   const addPath = async (path: string) => {
     if (!path.trim()) return;
     setBusy("adding");
@@ -111,6 +120,8 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
       setPathDraft("");
       setShowAdd(false);
       await reload();
+      const main = (await invoke<Worktree[]>("workspace_list", { projectId: p.id })).find((w) => w.isMain);
+      if (main) onSelect(main.path, main.branch);
     } catch (err) {
       fail(err);
     } finally {
@@ -139,21 +150,49 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
     }
   };
 
+  // PROJ-020: a stand-in row at once, then the workspace opens with a shell of its own; if the
+  // user moved to another workspace meanwhile the create finishes without pulling focus back.
+  // ponytail: one create at a time (the field is disabled while Git works); cancelling an
+  // overtaken create and removing its half-made checkout waits for a card that needs it.
   const create = async (project: Project) => {
-    if (!name.trim()) return;
+    if (!name.trim() || safe === null) return;
+    const from = shown.current;
     setBusy("creating");
+    setPending({ projectId: project.id, name });
+    setName("");
+    setCreating(null);
     try {
       const wt = await invoke<Worktree>("workspace_create", { projectId: project.id, name });
       say("ok", `created ${worktreeLabel(wt)} in ${wt.path}`);
-      setName("");
-      setCreating(null);
       await reload();
+      if (shown.current === from) onSelect(wt.path, wt.branch);
     } catch (err) {
       fail(err);
     } finally {
+      setPending(null);
       setBusy("");
     }
   };
+
+  // The project in front: the one whose workspace is shown, else the first; "" with none yet.
+  const projectInFront = () => projects.find((p) => (worktrees[p.id] ?? []).some((w) => activeDir !== null && same(activeDir, w.path)))?.id ?? projects[0]?.id ?? "";
+  useEffect(() => {
+    if (createRequest > 0) setCreating(projectInFront());
+  }, [createRequest]);
+  const nameField = (p: Project | null) => (
+    <div className="sb-form" data-create={p?.id ?? ""}>
+      <input aria-label="workspace name" className="field" placeholder="name, e.g. Fix login" value={name} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
+      <div className="preview">{previewSentence(name, safe, root, p)}</div>
+      <div className="btn-row">
+        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || safe === null || !p}>
+          Create
+        </button>
+        <button className="btn" onClick={() => setCreating(null)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 
   const remove = async () => {
     if (!confirm) return;
@@ -206,7 +245,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
             <button className="ib" title="Add a project: choose folders that hold a Git repository" onClick={browse} disabled={busy !== ""}>
               <FolderPlus size={13} />
             </button>
-            <button className="ib" title="Add a project by path, or change the workspaces folder" aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
+            <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => setCreating(creating === null ? projectInFront() : null)}>
               <Plus size={13} />
             </button>
             <button className="ib" title="Launch (not built yet)">
@@ -250,6 +289,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
             </div>
           )}
 
+          {creating === "" && nameField(null)}
           {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add one that holds a Git repository.</div>}
 
           {projects.map((p) => {
@@ -274,18 +314,12 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
                     </span>
                   </button>
                 )}
-                {opening && (
-                  <div className="sb-form">
-                    <input aria-label="workspace name" className="field" placeholder="name, e.g. Fix login" value={name} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create(p)} />
-                    <div className="preview">{previewSentence(name, safe, root, p)}</div>
-                    <div className="btn-row">
-                      <button className="btn" onClick={() => create(p)} disabled={busy !== "" || safe === null}>
-                        {busy === "creating" ? "Creating…" : "Create"}
-                      </button>
-                      <button className="btn" onClick={() => setCreating(null)}>
-                        Cancel
-                      </button>
-                    </div>
+                {opening && nameField(p)}
+                {pending?.projectId === p.id && (
+                  <div className="sess pending" data-pending={pending.name} aria-busy="true">
+                    <span className="dot" role="img" aria-label="creating" />
+                    <span className="name">{pending.name}</span>
+                    <span className="hint">creating…</span>
                   </div>
                 )}
                 {others.map((w) => {
@@ -361,7 +395,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
           />
         )}
         <div className="sb-foot">
-          <button className="ib" title={gitVersion ? `Settings (not built yet) · ${gitVersion}` : "Settings (not built yet)"}>
+          <button className="ib" title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`} aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
             <Gear />
           </button>
           <button className="ib" title="Help (not built yet)">

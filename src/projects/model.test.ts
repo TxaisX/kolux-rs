@@ -6,7 +6,8 @@ const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbb
 const fix: Worktree = { path: "C:\\ws\\app\\fix-login", branch: "fix-login", head: "ccccccc3", isMain: false };
 const loose: Worktree = { path: "C:\\ws\\app\\loose", branch: null, head: "ddddddd4ddd", isMain: false };
 
-test("rows say the branch, or the short commit when detached", () => {
+test("rows say the typed name, else the branch, else the short commit when detached", () => {
+  expect(worktreeLabel({ ...fix, name: "Fix login \u{1F525}" })).toBe("Fix login \u{1F525}");
   expect(worktreeLabel(fix)).toBe("fix-login");
   expect(worktreeLabel(loose)).toBe("detached at ddddddd");
 });
