@@ -112,6 +112,11 @@ impl Git {
         Ok(())
     }
 
+    /// Does the checkout hold changes Git does not have yet (modified or untracked files)?
+    pub fn dirty(&self, worktree: &Path) -> Result<bool, String> {
+        run(&["status", "--porcelain"], Some(worktree)).map(|s| !s.is_empty())
+    }
+
     /// Does `rev` name a commit here: a branch, tag, remote branch or id?
     pub fn rev_exists(&self, repo: &Path, rev: &str) -> bool {
         run(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")], Some(repo)).is_ok()

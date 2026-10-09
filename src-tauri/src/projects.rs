@@ -1,7 +1,8 @@
 //! Projects and workspaces (PROJ-001, PROJ-007, PROJ-020, PROJ-021, PROJ-025, PROJ-028). A
 //! project is a Git repository the user chose; a workspace is one of its worktrees. Projects are
 //! saved in the state store; the workspaces folder and layout are user settings, and a project
-//! may carry its own folder and base ref.
+//! may carry its own folder and base ref. The command line (PROJ-077) creates and removes
+//! workspaces through the same functions.
 
 use crate::creatures::creature_name;
 use crate::git::{Git, Worktree};
@@ -312,15 +313,16 @@ pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option
     Ok(Some(Preview { branch, folder }))
 }
 
-#[tauri::command]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>) -> Result<Created, String> {
+/// Makes a workspace in a registered project and keeps the typed name (the sidebar's Create and
+/// `kolux-dev worktree create` both come through here).
+pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>) -> Result<Created, String> {
     let (project, place) = {
         let store = store.lock().map_err(|e| e.to_string())?;
-        let project = find_project(&store, &project_id)?;
+        let project = find_project(&store, project_id)?;
         let place = place_for(&store, &project);
         (project, place)
     };
-    let mut made = create_workspace(&git, &place, &project, &name, base.as_deref())?;
+    let mut made = create_workspace(git, &place, &project, name, base)?;
     let typed = name.trim();
     if typed != made.worktree.branch.as_deref().unwrap_or_default() {
         let store = store.lock().map_err(|e| e.to_string())?;
@@ -328,6 +330,11 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
         made.worktree.name = Some(typed.to_string());
     }
     Ok(made)
+}
+
+#[tauri::command]
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>) -> Result<Created, String> {
+    create_named(&git, &store, &project_id, &name, base.as_deref())
 }
 
 #[tauri::command]

@@ -26,7 +26,7 @@ import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, emptySeat, modelArgs, TERMINAL, withoutFailed, type Seat } from "./launch/seats";
-import { folderName, type Project, type Worktree } from "./projects/model";
+import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { matchEvent } from "./keys/keymap";
@@ -343,6 +343,27 @@ function Window() {
     setActiveDir(next);
     setFocused((f) => focusIn(left, next, f));
   };
+
+  // PROJ-077: a workspace made or removed from the command line shows up like one made here;
+  // the handlers are read through a ref so the one listener never goes stale.
+  const cli = useRef({ startIn, select, removed });
+  cli.current = { startIn, select, removed };
+  useEffect(() => {
+    const off = listen<CliWorkspace>("cli-workspace", (e) => {
+      const p = e.payload;
+      setRefresh((n) => n + 1);
+      if (p.kind === "removed") {
+        cli.current.removed(p.path);
+        return;
+      }
+      const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
+      if (a) void cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate);
+      else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
+    });
+    return () => {
+      off.then((f) => f()).catch(() => undefined);
+    };
+  }, [agents]);
 
   // Which project a launch belongs to: the one asked for, else the one that owns the focused
   // pane's folder, else the first in the list.

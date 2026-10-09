@@ -38,3 +38,8 @@ export function previewSentence(typed: string, preview: Preview | null, project:
   if (preview === null) return "That name leaves nothing usable for a branch; use some letters or digits.";
   return `branch ${preview.branch} · folder ${preview.folder}`;
 }
+
+/** What the command line tells the window after `worktree create` or `worktree rm` (PROJ-077). */
+export type CliWorkspace =
+  | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean }
+  | { kind: "removed"; path: string };

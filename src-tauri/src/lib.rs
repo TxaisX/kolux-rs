@@ -1,5 +1,6 @@
 mod agents;
 mod browser;
+pub mod cli;
 mod creatures;
 mod git;
 mod keybindings;
@@ -54,6 +55,8 @@ pub fn run() {
             app.manage(Terminals::default());
             // Git is checked once here; every project and workspace action runs through it.
             app.manage(git::Git::detect()?);
+            // The command line reaches the app through a loopback port (PROJ-077).
+            cli::serve(app.handle().clone(), &dir)?;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -96,6 +99,9 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 app.state::<Terminals>().kill_all();
+                if let Ok(dir) = app.path().app_data_dir() {
+                    let _ = std::fs::remove_file(dir.join(cli::FILE));
+                }
             }
         });
 }

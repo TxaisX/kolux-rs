@@ -6,10 +6,15 @@ authors = ["Txais Xiong"]
 license-file = "../LICENSE"
 publish = false
 edition = "2021"
+default-run = "kolux-rs"
 
 [lib]
 name = "kolux_rs_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "kolux-dev"
+path = "src/bin/kolux-dev.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
