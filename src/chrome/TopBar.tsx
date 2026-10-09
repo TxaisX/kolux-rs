@@ -1,0 +1,99 @@
+// The 36 px top bar (DESIGN.md section 4): app mark, overflow, sidebar toggle, back/forward on
+// the left; the centred Agents / Board / Terminals switcher; panel toggle, search hint, bell,
+// usage pill and the window's own minimize / maximize / close on the right. The bar is the
+// window's drag region (the window has no OS title bar).
+import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
+import VendorMark from "./VendorMark";
+
+export type Screen = "agents" | "board" | "terminals";
+export const screens: Array<{ id: Screen; label: string }> = [
+  { id: "agents", label: "Agents" },
+  { id: "board", label: "Board" },
+  { id: "terminals", label: "Terminals" },
+];
+
+type Props = { screen: Screen; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void };
+
+export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar }: Props) {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let stop = () => {};
+    win.isMaximized().then(setMaximized).catch(() => {});
+    win
+      .onResized(() => {
+        win.isMaximized().then(setMaximized).catch(() => {});
+      })
+      .then((un) => (stop = un))
+      .catch(() => {});
+    return () => stop();
+  }, []);
+  const win = () => getCurrentWindow();
+
+  return (
+    <header className="topbar" data-tauri-drag-region>
+      <div className="topbar-left">
+        <button className="ib mark" title="Kolux RS" disabled>
+          <Mark />
+        </button>
+        <button className="ib dots" title="Menu (not built yet)">
+          <Dots />
+        </button>
+        <button className="ib panel" title={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-pressed={sidebarOpen} onClick={onToggleSidebar}>
+          <PanelLeft />
+        </button>
+        <button className="ib back" title="Back" disabled>
+          <ArrowLeft size={12} />
+        </button>
+        <button className="ib fwd" title="Forward" disabled>
+          <ArrowRight size={12} />
+        </button>
+      </div>
+
+      <nav className="switcher" aria-label="Screen">
+        {screens.map((s) => (
+          <button key={s.id} aria-pressed={screen === s.id} onClick={() => onScreen(s.id)}>
+            {s.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="topbar-right">
+        <button className="ib panel" title="Right panel (not built yet)">
+          <PanelRight />
+        </button>
+        <button className="searchbox" title="Search (not built yet)">
+          <Search />
+          <span className="ph">Search</span>
+          <span className="kbd">Ctrl</span>
+          <span className="kbd-plus">+</span>
+          <span className="kbd">Shift</span>
+          <span className="kbd-plus">+</span>
+          <span className="kbd">J</span>
+        </button>
+        <button className="ib bell" title="Inbox (not built yet)">
+          <Bell />
+        </button>
+        <div className="usage" title="Usage is read from running sessions once accounts are built">
+          <VendorMark agent="claude" size={13} />
+          <span>Claude · unknown</span>
+          <VendorMark agent="codex" size={13} />
+          <span>Codex · unknown</span>
+        </div>
+        <div className="wc">
+          <button title="Minimize" onClick={() => win().minimize()}>
+            <Minimize size={16} />
+          </button>
+          <button title={maximized ? "Restore" : "Maximize"} onClick={() => win().toggleMaximize()}>
+            {maximized ? <Restore size={16} /> : <Maximize size={16} />}
+          </button>
+          <button className="close" title="Close" onClick={() => win().close()}>
+            <Close size={16} />
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}

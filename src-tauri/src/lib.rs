@@ -3,6 +3,7 @@ mod names;
 mod projects;
 mod pty;
 mod state;
+mod sysmem;
 mod terminal;
 
 use state::Store;
@@ -61,6 +62,7 @@ pub fn run() {
             app_info,
             get_settings,
             save_settings,
+            sysmem::process_memory,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_resize,

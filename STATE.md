@@ -1,17 +1,27 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 2, date: 2026-10-08; Txais lifted the cap for today)
+Budget: 6 passes per day   (today: 3, date: 2026-10-08; Txais lifted the cap for today)
 Next task: T-004 · One agent in its own worktree: the plus menu starts Claude Code in a new pane inside a fresh worktree with a creature name; the pane header shows the agent and the branch
-Done: 3 / 338 tasks  ·  P0 parity: 0/228 cards
+Done: 4 / 339 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 338 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 339 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
-What works today: the window opens with one terminal pane running Windows PowerShell. Typing
-reaches the shell, output comes back, the pane follows the window size, the header says whether
-the GPU (WebGL) or the plain renderer is drawing, and Close ends the shell and shows "ended".
+What works today: the window has no Windows title bar; Kolux draws its own 36 px top bar with the
+six-spoke mark, a sidebar toggle, the centred Agents / Board / Terminals switcher (Terminals is the
+screen with content; the other two show their name and "nothing here yet"), a search box with the
+Ctrl+Shift+J chips, a bell, a usage pill with the Claude and Codex marks, and its own minimize,
+maximize and close. The sidebar is a floating rounded card; the pane sits in a rounded card with
+the header composition from the design (status icon, agent mark, folder name, `main` branch chip,
+"PowerShell", status word, gauge, menu, expand, split, close); a Layout 1/2/4/6 strip sits above
+it (only 1 works) and a 24 px status bar below shows On, the app's memory use (from a Tauri
+command), the shell count and the plug count. Colours, sizes and type come from design/DESIGN.md
+through CSS custom properties in src/theme.ts; evidence/T-003b-compare.png is the pixel
+comparison with the reference. The window opens with one terminal pane running Windows PowerShell. Typing
+reaches the shell, output comes back, the pane follows the window size, the status icon's tooltip
+says whether the GPU (WebGL) or the plain renderer is drawing, and Close ends the shell and shows "Ended".
 Closing the window kills every shell it started.
 
 A sidebar on the left lists projects. Add one by typing or browsing to a folder that holds a Git
@@ -43,6 +53,8 @@ recorded default until told otherwise; nothing here blocks a pass.
 | OD-18 | Browser knobs after the browser settings page cut | Fixed defaults with toolbar-menu controls |
 | OD-20 | Does the old app's update feed hand users over to Kolux RS? | No; own feed, manual first install, importer on first launch |
 | OD-21 | Bundle the 24 department agents as default suggestions? | Not bundled; suggestions load from a folder the user points Kolux at |
+| LOOK-1 | Bundle the UI and terminal fonts (Inter, JetBrains Mono / Cascadia Mono)? Their licence (SIL OFL 1.1) is not on the LOOP.md licence list | Not bundled; system font stacks only (Segoe UI, Cascadia Mono / Consolas), so the look depends on the fonts installed on the PC |
+| LOOK-2 | Vendor marks: keep Anthropic's Claude Spark (from its public press kit, no terms shipped) and the hand-redrawn OpenAI knot (openai.com/brand refused every fetch, terms unread) as model indicators in a public release? | Kept, as nominative use; see src/assets/vendors/NOTICE.md |
 
 ## Decisions made for Txais
 
@@ -104,9 +116,36 @@ recorded default until told otherwise; nothing here blocks a pass.
   with a README. Characters are posted to the web view one every 120 ms; faster loses keystrokes
   while the page re-renders (seen live twice).
 
+- 2026-10-08 · Txais: the look is pulled forward. After seeing evidence/T-002.png he asked that the
+  app "look exactly like what we have running these sessions right now", so T-003b (the visual
+  shell) was inserted after T-003 ahead of theme 7, built from design/DESIGN.md, a pixel-measured
+  description of the running 0.15.0 window written by a designer who only photographed it (no old
+  code read). Later theme-7 tasks finish each card properly; T-003b only sets the look.
+- 2026-10-08 · Txais: vendor marks are used as model indicators (nominative use), sourced from
+  public brand kits, never from the old app; X cards SESS-044/TERM-131/VIEW-104/SET-048/HID-040 are
+  reinterpreted accordingly (coordinator will reword PLAN.md T-335 after this pass).
+- 2026-10-08 · Kolux's own mark stays the six-spoke asterisk (vertical plus two diagonals, `#c5c5c5`)
+  drawn inline in src/chrome/icons.tsx; app-icon.svg is untouched.
+- 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
+  LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
+  text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-08 · Default screen is Terminals, although VIEW-001 says Board when none was chosen;
+  Terminals is the only screen with content until the Board task, and VIEW-001's own task will
+  flip the default. Layout 2/4/6 buttons draw but do nothing until T-009.
+- 2026-10-08 · The renderer note ("GPU renderer" / "plain renderer") moved from header text to the
+  tooltip of the pane's status icon so the header matches the design's composition.
+- 2026-10-08 · Usage pill reads "Claude · unknown  Codex · unknown" with each vendor's mark until
+  accounts and usage reading are built; its tooltip says so.
+- 2026-10-08 · Memory in the status bar is this process's working set (K32GetProcessMemoryInfo),
+  formatted by src/status/memory.ts ("717.9 MB", "1.50 GB"); the old app's exact source for that
+  number is unknown and was not looked up.
+- 2026-10-08 · Pane and sidebar corners are 12 px as DESIGN.md says; the reference's curve runs one
+  pixel longer (about 13 px). Left as is, within the 2 px tolerance.
+
 ## Last 10 passes  (date · task · result · evidence)
 
 - 2026-10-07 · Phase 2: write PLAN.md · done: 338 tasks covering 1,030 cards (228 P0, 564 P1, 199 P2, 27 H marked build, 12 X), no dropped card · `node scripts/plan-check.mjs` prints OK
 - 2026-10-07 · T-001 · done: Tauri 2 window opens, SQLite state store and JSON settings under the profile folder, cargo-deny and JS license gates green, build/clippy/test/vitest green · evidence/T-001.png
 - 2026-10-08 · T-002 · done: one PowerShell pane through a Rust PTY, drawn by xterm.js on the GPU with a plain fallback; typing, resize (shell reports 166x54 after the window grew) and Close all proven live; no shell left behind after Close or after closing the window; 4 Rust tests and 9 front-end tests green · evidence/T-002.png
 - 2026-10-08 · T-003 · done: projects sidebar; a throwaway repository added as a project, "Fix login" created as branch `fix-login` in its own folder (confirmed with `git worktree list`), the pane opened inside it, then removed with a confirm step and both branch and folder gone on disk; 15 Rust tests (git runner round trip, name cleaner, project store) and 13 front-end tests green · evidence/T-003.png, evidence/T-003-removed.png
+- 2026-10-08 · T-003b · done: frameless window with its own top bar, switcher, search box, usage pill and window controls; floating sidebar card; layout strip; rounded pane card with the design's header; status bar with live memory; palette from DESIGN.md as CSS custom properties; measured against the reference at 1920x1032: top bar 36 px, sidebar x 8..296, pane card from y 84, status bar from y 1008, all six background hexes exact, corners 1 px tighter; 16 Rust tests and 18 front-end tests green · evidence/T-003b.png, evidence/T-003b-compare.png
