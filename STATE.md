@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 14, date: 2026-10-09)
-Next task: T-016 · ORCH-016 [compat] One command starts a worker agent in a worktree of its own
-Done: 20 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 15, date: 2026-10-09)
+Next task: T-017 · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts
+Done: 21 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -210,6 +210,21 @@ the same name; a terminal seat stays in the chooser's folder. Every creature nam
 out is kept under `creatureNamesUsed` in the store, so a removed worktree's name never comes
 back.
 
+T-016 adds `kolux-dev orchestration worker-start` (ORCH-016): `--spec <text>` makes a task
+(`task-N`, title from `--task-title` or the brief's first line) or `--task <id>` takes an
+existing one; `--agent <id>` names who runs it, or `--tier major|deep|build|light` picks the
+model and effort from the shipped routing (Claude: fable/high, opus/high, sonnet/medium,
+haiku; Codex: gpt-5.6-sol/high, gpt-5.6-terra/high, gpt-5.6-terra/medium, gpt-5.6-luna/low).
+`--worktree` defaults to `new-top-level`: a fresh creature-named worktree (or `--name`/
+`--base-branch`/`--display-name` for a shaped one); `current` or a selector reuses one. The app
+opens the worker as a background tab named after the task, with the brief as the first prompt,
+and the command waits (default 60 s, `--timeout-ms`) until the agent has written and is still
+there a second later, then prints a receipt (dispatch id, task id, worktree, terminal id, model,
+effort, `setup: not_configured`); a timeout answers `timeout` with the same receipt in `data`.
+Every flag mix the spec refuses is refused before the app is asked; `--terminal` answers
+`unsupported` until terminal handles exist. Tasks and dispatches live under
+`orchestration.tasks` / `orchestration.dispatches` in the store.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -306,6 +321,17 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-016: tasks and dispatches are JSON lists under two store keys (no tables
+  yet); the Board (STAT/ORCH cards) reads them later. Readiness = the worker's terminal has
+  written something and is still running one second after; the spec's idle detector comes with
+  the status cards. `new-child` is placed like `new-top-level` for now (lineage waits for parent
+  cards). `--setup` is accepted but always answers `not_configured` (no setup hooks built).
+  Tier routing is the shipped table in `cli.rs::route`; the per-provider routing page in
+  Settings (ORCH-018) is not built, so `--tier` with an agent other than Claude or Codex answers
+  `no_route`. A worker started from the command line stays a background tab: the view does not
+  jump to it. The `kolux-dev` CLI binary is not rebuilt by `pnpm tauri dev`; after a Rust change
+  run `cargo build --bin kolux-dev` before a live CLI proof. Seen again live: Claude's "Quick
+  safety check … trust this folder?" prompt in the new worktree, which T-017 (SAFE-023) removes.
 - 2026-10-09 · T-015: the copies choice lives on the chooser pane and defaults from the seat
   count and the Git state (separate for 2+ seats in Git, shared otherwise). Separate copies are
   made sequentially under the store lock (`workspace_create_fresh`), so parallel seats cannot
@@ -531,6 +557,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-016 · done: `terminal.rs` marks program sessions (start time, last output) and `program_in(dir, since)`; `projects::create_fresh` shared by the UI command and the CLI; `cli.rs` `orchestration worker-start` parse (`WORKER_FLAGS`, `check_worker_start` with every refusal from CLI-035/ORCH-016/018/019), `worker_start` dispatch (task made/found under `orchestration.tasks`, worktree made or picked, `created` + `start` notify, readiness wait, receipt, `orchestration.dispatches`), `text_of` worker line, help text; front end `CliWorkspace` `start` kind → `startIn` with extra args and a pane title; 2 Rust tests (49 total; dispatch test runs the full flow with a 1 ms timeout); live in the throwaway "repo": `worker-start --spec "add a test" --agent claude --json` → `status: ready` in 1.8 s, `dispatch-1`/`task-1`, worktree hazel-otter, terminal 2; sidebar row hazel-otter + background tab "add a test" (Claude, Running) while the view stayed on main; opening the row shows one tab with Claude's trust prompt; `claude.exe --permission-mode auto "add a test"` under the app; `--worktree current --base-branch main` refused with exit 1 before anything was made; `worktree rm --worktree path:… --force` took the row, tab, process and folder away; build / clippy / 49 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-016-ready.png, evidence/T-016-one-tab.png
 - 2026-10-09 · T-015 · done: `Copies` type, `defaultCopies` and `sharedWarning` in seats.ts; "Folders" radiogroup + warn note with the "Give each its own copy" fix on ChooserPane; App.tsx `startSeats` places each seat (terminal → chooser folder, agent → fresh worktree each when separate, shared folder or one fresh worktree otherwise); Rust `creatureNamesUsed` store key, `retired_names` / `remember_retired` / `fresh_name`, `workspace_create_fresh` holds the store lock; Rust test extended (48 total), 2 front-end tests added (71); live in the throwaway "repo" project: chooser from New session with 3 seats → "Separate copy for each AI" checked; "Same folder for all" → warn note + fix button, the fix re-selects separate; Claude + Claude + Terminal, Start → rows tidal-walrus and nimble-squid appeared, `git worktree list` shows both under workspaces/repo, Claude's trust prompt in nimble-squid's folder, the terminal seat in the chooser's folder; both removed through the sidebar (branches gone); one more Claude from New session → silver-narwhal; store key `creatureNamesUsed` = ["tidal-walrus","nimble-squid","silver-narwhal"]; build / clippy / 48 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-015-default.png, evidence/T-015-warning.png, evidence/T-015-started.png, evidence/T-015-retired.png
 - 2026-10-09 · T-014-b · done: loopback listener + `cli.json` in the app, `kolux-dev` program with the parser, the JSON envelope and exit codes, `worktree create` (name, repo selector or the shell's folder, base branch, agent + prompt, activate) and `worktree rm` / remove / delete (selectors current, name:, branch:, path:, id:; dirty refusal; --force), the window picks the change up over a `cli-workspace` event; 3 Rust tests added (48 total), 69 front-end tests; live: with the app closed `--help` exits 0, create says "Kolux is not running; start it first" (exit 1, JSON envelope with app_unreachable), a prompt without --agent is refused (exit 1); with the app up, from the repo folder `worktree create --name "cli test" --agent claude --prompt hello --json` → envelope with the path, the row "cli test" appeared, a hidden pane "cli-test Claude Running" with claude.exe started on "hello", the shown pane untouched; `--name quiet --activate --setup skip` → "created quiet at … (from main)", row selected with a shell; `rm --worktree name:quiet` → removed; junk file in cli test → `remove` exits 1 "cli test has uncommitted changes" + the --force hint; `delete --worktree branch:cli-test --force --json` → success envelope, rows back to main + zeta, the Claude pane and process gone, worktrees and folders gone; build / clippy / 48 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; `cli.json` gone after closing · evidence/T-014-b-created.png, evidence/T-014-b-removed.png
 - 2026-10-09 · T-014-a · done: global workspaces folder + nested/flat layout behind the footer gear, per-project folder + base ref behind the project row's gear with a used-folders list, create starts from the typed ref / saved base / default branch with a fetch for remote-tracking bases and a fallback note when the saved base is gone, agent + first prompt on the create form; 2 Rust tests added (45 total), model test updated (69 front-end tests); live over the debugging port: project gear → folder `…\t014\ws` + base `origin/feature` saved; after the remote branch was deleted, Mod+N "fallback test" → preview `…\t014\ws\repo\fallback-test`, created from main with the warn note "the saved base origin/feature no longer exists in repo; this workspace started from main instead", row selected with a shell; "pinned" + start from = a full commit id → worktree HEAD on that commit, no fetch; "agent run" + claude + prompt "hello" → one pane "agent-run Claude Running", claude.exe started with the prompt, no shell; layout flat → "flat one" at `…\t014\ws\flat-one`; all four removed through × / Remove (the agent process gone), settings reset; build / clippy / 45 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-014-a-settings.png, evidence/T-014-a-fallback.png, evidence/T-014-a-form.png, evidence/T-014-a-agent.png, evidence/T-014-a-flat.png

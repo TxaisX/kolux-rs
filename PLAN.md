@@ -56,7 +56,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-014-a · PROJ-025 [compat] Choose where workspace folders live · PROJ-028 Choose what a new workspace starts from (base ref) · PROJ-038 A new workspace can start an agent with a first prompt
 - [x] T-014-b · PROJ-077 [compat] `kolux worktree` create and remove
 - [x] T-015 · SESS-014 Separate copy per agent, or one shared folder · SESS-023 Each launched agent gets its own worktree with a creature name
-- [ ] T-016 · ORCH-016 [compat] One command starts a worker agent in a worktree of its own
+- [x] T-016 · ORCH-016 [compat] One command starts a worker agent in a worktree of its own
 - [ ] T-017 · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts
 - [ ] T-018 · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
 - [ ] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees

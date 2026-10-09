@@ -324,11 +324,11 @@ function Window() {
 
   // PROJ-038: the agent is the new workspace's first tab, started with its prompt; nothing else
   // opens there. Shown only when the sidebar says the user has not moved on.
-  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => {
+  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string) => {
     try {
-      const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra: [], prompt });
+      const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
       const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: agent.program, args: line.args, typed: line.typed ?? undefined }]);
+      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: agent.program, args: line.args, title, typed: line.typed ?? undefined }]);
       if (show) {
         setActiveDir(dir);
         setFocused(key);
@@ -366,6 +366,12 @@ function Window() {
       setRefresh((n) => n + 1);
       if (p.kind === "removed") {
         cli.current.removed(p.path);
+        return;
+      }
+      // ORCH-016: a worker starts as a background tab in its worktree, named after its task.
+      if (p.kind === "start") {
+        const a = agents.find((x) => x.id === p.agent);
+        if (a) void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined);
         return;
       }
       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;

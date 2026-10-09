@@ -360,13 +360,18 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
     create_named(&git, &store, &project_id, &name, base.as_deref())
 }
 
+/// A fresh creature-named workspace in project `project_id`. The store stays locked while Git
+/// works so two launches at once never pick one name.
+pub fn create_fresh(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<Worktree, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let project = find_project(&store, project_id)?;
+    let place = place_for(&store, &project);
+    create_fresh_workspace(git, &store, &place, &load_projects(&store), &project)
+}
+
 #[tauri::command]
 pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Worktree, String> {
-    // The store stays locked while Git works so two seats launched together never pick one name.
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    let place = place_for(&store, &project);
-    create_fresh_workspace(&git, &store, &place, &load_projects(&store), &project)
+    create_fresh(&git, &store, &project_id)
 }
 
 /// PROJ-025 / PROJ-028: a project's own workspaces folder and base ref; empty clears either.

@@ -5,6 +5,7 @@ use crate::pty::{program_command, shell_command, start_dir, PtySession};
 use base64::Engine as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter};
 
 pub const OUTPUT_EVENT: &str = "terminal-output";
@@ -22,6 +23,15 @@ struct Inner {
     /// The folder each session was started in, so a workspace can close its shells before its
     /// folder is deleted.
     dirs: HashMap<u32, String>,
+    /// When each program session started and last wrote, so a worker start can tell when its
+    /// agent has come up (ORCH-016). Shells are not marked.
+    marks: HashMap<u32, Mark>,
+}
+
+#[derive(Clone, Copy)]
+struct Mark {
+    started: Instant,
+    last_output: Option<Instant>,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -47,6 +57,8 @@ impl Terminals {
         let out_app = app.clone();
         let exit_app = app;
         let registry = self.inner.clone();
+        let out_registry = self.inner.clone();
+        let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty());
         let command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => program_command(p, &args, cwd.as_deref()),
             None => shell_command(cwd.as_deref()),
@@ -58,17 +70,28 @@ impl Terminals {
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                 let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data });
+                if is_program {
+                    if let Ok(mut inner) = out_registry.lock() {
+                        if let Some(m) = inner.marks.get_mut(&id) {
+                            m.last_output = Some(Instant::now());
+                        }
+                    }
+                }
             },
             move |code| {
                 // Drop the session so the PTY closes and the reader thread can finish.
                 if let Ok(mut inner) = registry.lock() {
                     inner.sessions.remove(&id);
                     inner.dirs.remove(&id);
+                    inner.marks.remove(&id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
         )?;
         inner.sessions.insert(id, session);
+        if is_program {
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None });
+        }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
         }
@@ -89,10 +112,19 @@ impl Terminals {
     pub fn kill(&self, id: u32) -> Result<(), String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.dirs.remove(&id);
+        inner.marks.remove(&id);
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
         Ok(())
+    }
+
+    /// The program session started in `dir` itself since `since`, with when it last wrote, so a
+    /// worker start can wait for its agent (ORCH-016).
+    pub fn program_in(&self, dir: &std::path::Path, since: Instant) -> Option<(u32, Option<Instant>)> {
+        let inner = self.inner.lock().ok()?;
+        let same = |d: &str| std::path::Path::new(d).canonicalize().ok() == dir.canonicalize().ok();
+        inner.marks.iter().filter(|(id, m)| m.started >= since && inner.dirs.get(id).is_some_and(|d| same(d))).map(|(id, m)| (*id, m.last_output)).next()
     }
 
     /// Ends every session that was started in `dir` or a folder under it, and waits (briefly) for
