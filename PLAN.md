@@ -63,7 +63,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-018-a · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message
 - [x] T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
 - [ ] T-018-c · Source Control bulk bar: select several rows and stage or unstage them together (the rest of the stage card on T-018-a)
-- [ ] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
+- [x] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
 - [ ] T-020 · SET-032 [compat] Pick the folder new worktrees go into
 - [ ] T-021 · CLI-018 [compat] kolux worktree create, with an optional agent started inside
 
@@ -328,7 +328,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-215 · PROJ-011 [compat] The `kolux project list` command · PROJ-012 Scan a parent folder for the repositories inside it · PROJ-013 Import found repositories as one group or as separate projects · PROJ-014 Project groups organise the sidebar · PROJ-015 Delete a project group, with or without its projects
 - [ ] T-216 · PROJ-016 Drag project and group headers into order · PROJ-046 Pin workspaces to a pinned section · PROJ-049 Manual order: drag workspaces into a custom order · PROJ-051 Recent sort orders by last activity · PROJ-052 Filter the workspace list
 - [ ] T-217 · PROJ-053 [compat] Put a workspace to sleep · PROJ-056 [compat] Back and forward through visited workspaces · PROJ-059 [compat] Rename a workspace inline · PROJ-060 Workspace details: name, linked item and notes · PROJ-065 Workspace context menu · also passes: VIEW-053 Show or hide sleeping workspaces
-- [ ] T-218 · PROJ-071 Delete many workspaces at once · PROJ-076 Forget a workspace locally without touching disk · PROJ-083 Space view: what each workspace costs on disk · PROJ-084 Workspace statuses form a workflow · PROJ-086 Folder workspaces for projects without Git · also passes: VIEW-014 Space view: disk use per worktree and bulk delete
+- [ ] T-218 · PROJ-071 Delete many workspaces at once · PROJ-076 Forget a workspace locally without touching disk · PROJ-083 Space view: what each workspace costs on disk · PROJ-084 Workspace statuses form a workflow · PROJ-086 Folder workspaces for projects without Git · also passes: VIEW-014 Space view: disk use per worktree and bulk delete · the remove form's keep-the-branch choice and the later delete of a kept branch through `Git::delete_branch_if_at` (the kept-branch rule of the worktree card on T-019)
 - [ ] T-219 · TERM-037 Fork or continue an agent session · TERM-042 Type a URL or path in the new tab box · TERM-043 Choose the Windows shell for a new terminal · TERM-050 [compat] Switch to the recent tab with Ctrl+Tab · TERM-051 [compat] Cycle tabs by type
 - [ ] T-220 · TERM-052 [compat] Go to a tab by number · TERM-059 [compat] Floating workspace panel · TERM-060 [compat] Move, resize and maximize the floating panel · TERM-061 Floating panel tabs and close behaviour · TERM-070 Paste a screenshot as a file path
 - [ ] T-221 · TERM-074 Drop files onto a terminal · TERM-075 Programs can copy to the clipboard (OSC 52) · TERM-076 [compat] Clear the screen · TERM-077 [compat] Find text in a terminal · TERM-079 Kolux shortcuts versus shell keys

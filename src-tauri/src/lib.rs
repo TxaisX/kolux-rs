@@ -3,6 +3,7 @@ mod browser;
 pub mod cli;
 mod creatures;
 mod git;
+mod include;
 mod keybindings;
 mod names;
 mod projects;

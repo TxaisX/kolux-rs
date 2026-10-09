@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 19, date: 2026-10-09)
-Next task: T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
-Done: 25 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 20, date: 2026-10-09)
+Next task: T-020 · SET-032 [compat] Pick the folder new worktrees go into
+Done: 26 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -278,6 +278,25 @@ the network: ahead / behind come from the refs git has, so an unpublished branch
 against the remote; only an explicit menu action does. Back end: `scm_remote` in `scm.rs`,
 `Status.rewritten` (`git cherry HEAD @{upstream}` all `-`) and `Status.base`.
 
+**Worktree create, move and remove on the Git side (T-019, GIT-067).** A new workspace brings
+along what the repository says: git-ignored files named in `.worktreeinclude` at the repo root
+(one literal path per line, `#` comments; wildcard and negation lines are skipped with a warning)
+are copied from the main checkout, and git-ignored folders under `worktree.sharedDirectories` in
+`kolux.yaml` are linked (a junction on Windows, so no privilege is needed and git sees a folder),
+so every workspace shares one `node_modules`. Entries are tidied before anything on disk changes:
+absolute paths, paths with `..`, paths into `.git`, duplicates and trailing slashes; a folder that
+is not ignored, a file missing from the main checkout or a link that could not be made comes back
+as a warning in the sidebar's "created …" note, never as a failed create. A tracked file is never
+copied over. Creations in one repository take turns (a failed one hands the turn on). Removing a
+workspace with uncommitted work (submodule work included) is refused; the sidebar form then asks
+again with "Discard and remove", and nothing is lost until that click. The shared-folder links are
+taken out first, so removal never touches the folders behind them. The branch is deleted only
+when no other worktree has it checked out; otherwise the commit it stood at is recorded so
+`Git::delete_branch_if_at` can delete it later only while unmoved (the form's keep-branch choice
+is T-218). `Git::worktree_move` goes through `git worktree move`. A base ref that could read as a
+git option or range (leading dash, blanks, `..`) is refused before any git command runs. Back end:
+`include.rs` (new), `git.rs`, `projects.rs`; `workspace_remove` takes `force`.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -374,6 +393,22 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-019: shared folders are junctions on Windows, not symlinks: a symlink needs a
+  privilege most accounts lack and git treats it as a file, so a `node_modules/` ignore line
+  would not match it and the new worktree would start dirty (seen in the test); a junction
+  needs nothing and git sees a folder. `git worktree remove --force` leaves a junction (and so
+  the folder) in place, so the links are removed first, which also keeps the shared folders
+  safe. A folder-only ignore pattern is checked with a trailing slash so it matches before the
+  folder exists in the main checkout. "Ignored" is `git check-ignore`, so a tracked file named
+  in the include file is skipped rather than copied over. The kolux.yaml shared list is read by
+  a small line scanner (block list or inline list under `worktree:`), not a YAML parser; the
+  rest of the file is PROJ-034 (T-149). The pre-rename twin of kolux.yaml (COMPAT.md 5.6, HID-037)
+  is not read: its name is not in the clean-room sources and HID-037 is retired, default skip;
+  Txais names the file if he wants it read. The include-file copy budget and interrupted-copy
+  warning are PROJ-032's (T-106). The dirty check is the removal's own refusal, so the sidebar
+  form asks twice only when there is something to lose; the CLI keeps its `--force` flow and
+  passes force on. The one-at-a-time rule is a per-repository mutex keyed by the main checkout's
+  path; a poisoned lock is taken over, so a panic in one create never blocks the next.
 - 2026-10-09 · T-018-b: "differs from its remote only by commits with identical patches" is read
   as `git cherry HEAD @{upstream}` marking every upstream-only commit `-`, checked only when the
   branch is behind, so the common path costs no extra git call. The base branch is
@@ -675,6 +710,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-019 · done: `include.rs` (new: include-file lines, kolux.yaml shared list, tidy rules, copy, junction link, unlink; 3 tests), `git.rs` (`worktree_remove` keeps a branch in use elsewhere and reports its commit, `worktree_move`, `delete_branch_if_at`, `dirty` sees submodule work, `ref_ok` guard; 1 test), `projects.rs` (per-repo turn, `Created.warnings`, `remove_workspace(force)`; 1 test), 63 Rust tests; sidebar form asks "Discard and remove" after a refusal, warnings join the created note; live in the dev app on the throwaway repo with `.gitignore`, `.worktreeinclude` (`.env`, `*.log`) and kolux.yaml (`node_modules/`, `src`): Remove on the dirty zeta → "zeta has uncommitted changes. Remove it anyway? That work is lost." with work.txt still there; New workspace "bring along" → created from origin/main, note names `*.log` and `src`, `.env` copied, `node_modules` a junction to the main checkout showing its dep.js, `git status --porcelain` empty on branch bring-along; removal of a worktree with untracked files took the two-step path, of a clean one the one-step path, the main checkout's node_modules/dep.js survived both; build / clippy / 63 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-019-dirty.png, T-019-created.png
 - 2026-10-09 · T-018-b · done: `scm.rs` gains `Status.rewritten` / `Status.base`, `remote()` and `scm_remote` (push, pull, sync, fetch, ff, force --force-with-lease, publish --set-upstream origin, rebase after fetch); 1 Rust test over a bare remote (58 total); `nextStep` and `remoteItems` in `src/scm/model.ts` with 2 tests (75 total); panel: main button + Remote menu; live in the dev app on the throwaway repo with a bare origin: edit → "Stage all" → "Commit" held with "Write a message first" → typed → commit 6495041 → "Push 1"; menu read "Push 1 commit" on, "Pull · Nothing to pull", "Sync ↓0 ↑1", "Fast-forward · Already current", "Publish branch · Already published", "Rebase from origin/main · This is the base branch"; push → "Create pull request"; `feat` branch with a commit → "Publish branch" → published (`feat...origin/feat`); main moved from a second clone, menu Rebase from origin/main → `[ahead 2, behind 1]`, `git cherry HEAD @{u}` one `-`, button "Force push with lease" → pushed, counts 0; build / clippy / 58 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-b-menu.png, T-018-b-lease.png
 - 2026-10-09 · T-018-a · done: `scm.rs` (status / stage / commit, 4 Rust tests, 57 total), `src/scm/model.ts` + `SourceControlPanel.tsx` (2 front-end tests, 73 total), right card on Mod+Shift+G / Mod+L / the top bar button; live in the dev app on a throwaway repo: 1 edit + 4 new files listed as Changes 1 / Untracked 4, the three `docs/` rows staged by row, Ctrl+Enter in the box made commit 66f5f87 `Add the docs folder` (git log 2 → 3), the draft survived a switch to zeta and back, a refusing pre-commit hook gave `Commit blocked by a hook` + `nope, said the hook: README needs a title` + Fix with AI with no commit made, the Staged section's minus unstaged it; build / clippy / 57 Rust tests / 73 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-a-sections.png, -staged.png, -committed.png, -blocked.png
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png

@@ -67,7 +67,8 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   shown.current = activeDir;
   const [name, setName] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string } | null>(null);
+  // GIT-067: `dirty` is set once the back end refused because of uncommitted work; the form then asks again.
+  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; dirty?: boolean } | null>(null);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
@@ -203,7 +204,8 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
     setCreating(null);
     try {
       const wt = await invoke<Created>("workspace_create", { projectId: project.id, name, base: base || null });
-      say(wt.note ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${wt.note ? ` · ${wt.note}` : ""}`);
+      const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
+      say(extra ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${extra ? ` · ${extra}` : ""}`);
       await reload();
       // The agent's tab is the workspace's first; a shell is only opened when no agent runs.
       if (agent) onStartIn(agent, wt.path, wt.branch, prompt, shown.current === from);
@@ -250,13 +252,14 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
     if (!confirm) return;
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: confirm.projectId, path: confirm.path });
+      await invoke("workspace_remove", { projectId: confirm.projectId, path: confirm.path, force: confirm.dirty === true });
       onRemoved(confirm.path);
       say("ok", `removed ${confirm.branch} and its folder`);
       setConfirm(null);
       await reload();
     } catch (err) {
-      fail(err);
+      if (!confirm.dirty && String(err).includes("has uncommitted changes")) setConfirm({ ...confirm, dirty: true });
+      else fail(err);
     } finally {
       setBusy("");
     }
@@ -427,10 +430,18 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
                       </div>
                       {asking && (
                         <div className="sb-form warn">
-                          Delete branch <b>{confirm.branch}</b> and its folder? Uncommitted work there is lost.
+                          {confirm.dirty ? (
+                            <>
+                              <b>{confirm.branch}</b> has uncommitted changes. Remove it anyway? That work is lost.
+                            </>
+                          ) : (
+                            <>
+                              Delete branch <b>{confirm.branch}</b> and its folder?
+                            </>
+                          )}
                           <div className="btn-row">
                             <button className="btn danger" onClick={remove} disabled={busy !== ""}>
-                              {busy === "removing" ? "Removing…" : "Remove"}
+                              {busy === "removing" ? "Removing…" : confirm.dirty ? "Discard and remove" : "Remove"}
                             </button>
                             <button className="btn" onClick={() => setConfirm(null)}>
                               Keep
