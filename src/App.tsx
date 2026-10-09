@@ -15,6 +15,7 @@ import type { Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
 import { markFor, type AgentInfo } from "./launch/PlusMenu";
+import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import { folderName, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -54,6 +55,8 @@ function Window() {
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [settings, setSettings] = useState<Record<string, unknown>>({});
+  const defaultId = defaultAgentId(settings);
   const [projects, setProjects] = useState<Project[]>([]);
   const [owner, setOwner] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
@@ -64,7 +67,15 @@ function Window() {
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
     invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
+    invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
   }, []);
+
+  // SESS-004: the default agent is a settings key; the plus menu lists it first.
+  const setDefault = (id: string) => {
+    const next = { ...settings, [DEFAULT_AGENT_KEY]: id };
+    setSettings(next);
+    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+  };
   useEffect(() => {
     document.title = windowTitle(info);
   }, [info]);
@@ -87,6 +98,12 @@ function Window() {
         case "view.cycleWorkspaceView":
           setScreen((s) => nextScreen(s));
           break;
+        case "tab.newAgent": {
+          const a = agents.find((x) => x.id === defaultId && x.installed);
+          if (!a) setNotice(`The default agent (${defaultId}) is not installed.`);
+          else void launch(a, null);
+          break;
+        }
         default:
           return;
       }
@@ -95,7 +112,7 @@ function Window() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [keymap]);
+  });
 
   const addShell = (dir: string | null, branch: string | null) => {
     const key = nextKey.current++;
@@ -182,6 +199,8 @@ function Window() {
             onSelect={select}
             onRemoved={removed}
             agents={agents}
+            defaultId={defaultId}
+            onSetDefault={setDefault}
             launching={launching}
             onLaunch={launch}
             refresh={refresh}
@@ -227,6 +246,8 @@ function Window() {
                     onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onClose={() => closePane(p.key)}
                     agents={agents}
+                    defaultId={defaultId}
+                    onSetDefault={setDefault}
                     launching={launching}
                     onLaunch={(a) => launch(a, null)}
                   />

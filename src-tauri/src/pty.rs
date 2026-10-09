@@ -31,17 +31,38 @@ pub fn shell_command(cwd: Option<&str>) -> CommandBuilder {
 }
 
 /// A pane that runs one program (an agent such as `claude`) instead of a shell. `program` is
-/// resolved on the PATH the way a shell would (`claude` becomes `...\claude.exe`) so the
-/// process starts without a shell in between; a name that does not resolve is passed through
-/// unchanged and the spawn error says what was missing. Starts in `cwd` when that folder exists.
+/// resolved the way a shell would (`claude` becomes `...\claude.exe`) so the process starts
+/// without a shell in between; a name that does not resolve is passed through unchanged and the
+/// spawn error says what was missing. A Windows command-script shim (npm's `codex.cmd`) is run
+/// through `cmd.exe /d /c`, as the command line would (SESS-001). Starts in `cwd` when that
+/// folder exists.
 pub fn program_command(program: &str, args: &[String], cwd: Option<&str>) -> CommandBuilder {
-    let resolved = crate::agents::find_program(program).map(|p| p.into_os_string()).unwrap_or_else(|| program.into());
-    let mut cmd = CommandBuilder::new(resolved);
+    let resolved = crate::agents::find_program(program).unwrap_or_else(|| program.into());
+    let (exe, head) = start_line(&resolved);
+    let mut cmd = CommandBuilder::new(exe);
+    cmd.args(head);
     cmd.args(args);
     if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
         cmd.cwd(dir);
     }
     cmd
+}
+
+/// What is started for `resolved`: the file itself, or for a `.cmd` / `.bat` shim `cmd.exe` with
+/// `/d /c <shim>` in front of the program's own arguments.
+// ponytail: cmd.exe's quote rules bite when the shim's folder has a space AND an argument carries
+// quotes (both together); revisit with the opening-prompt arguments of SESS-051.
+pub fn start_line(resolved: &std::path::Path) -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
+    let shim = cfg!(windows)
+        && resolved
+            .extension()
+            .map(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"))
+            .unwrap_or(false);
+    if shim {
+        ("cmd.exe".into(), vec!["/d".into(), "/c".into(), resolved.as_os_str().to_owned()])
+    } else {
+        (resolved.as_os_str().to_owned(), Vec::new())
+    }
 }
 
 pub struct PtySession {
@@ -123,6 +144,21 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_cmd_shim_runs_through_the_command_shell_and_an_exe_runs_itself() {
+        let exe = std::path::Path::new("C:/Users/me/.local/bin/claude.exe");
+        assert_eq!(start_line(exe), (exe.as_os_str().to_owned(), vec![]));
+        let shim = std::path::Path::new("C:/Users/me/AppData/Roaming/npm/codex.CMD");
+        let (program, head) = start_line(shim);
+        if cfg!(windows) {
+            assert_eq!(program, "cmd.exe");
+            assert_eq!(head, vec!["/d", "/c", "C:/Users/me/AppData/Roaming/npm/codex.CMD"]);
+        } else {
+            assert_eq!(program, shim.as_os_str());
+            assert!(head.is_empty());
+        }
+    }
 
     /// The round trip every pane depends on: a real shell, a typed command, its output read back.
     #[test]

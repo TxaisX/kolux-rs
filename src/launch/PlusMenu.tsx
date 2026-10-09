@@ -1,10 +1,13 @@
 // The plus menu (SESS-001, SESS-004): which agent to start in a new pane. The list comes from the
-// Rust side, which looks each agent's program up on the PATH; only agents that were found can be
-// chosen, the rest stay greyed with "not installed" so the user sees what Kolux looked for. The
-// default agent (Claude Code) is listed first. Drawn as a fixed popover with a click-away
+// Rust side, which looks each agent's program up on the PATH and in the usual install folders;
+// only agents that were found are offered, the rest stay out of sight (SESS-001). The default
+// agent is listed first with its shortcut beside it, when one is bound; every other row has a
+// "default" button that makes that agent the default. Drawn as a fixed popover with a click-away
 // backdrop, so it is never clipped by the pane or sidebar card it opens from.
 import type { CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
+import { Kbd, useLabel } from "../keys/KeymapContext";
+import { menuAgents } from "./agents";
 
 export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null };
 
@@ -18,30 +21,44 @@ export function programWord(agent: Agent): string {
   return agent === "claude" ? "Claude" : agent === "codex" ? "Codex" : "PowerShell";
 }
 
-type Props = { agents: AgentInfo[]; onPick: (agent: AgentInfo) => void; onClose: () => void; busy?: boolean; style?: CSSProperties };
+type Props = {
+  agents: AgentInfo[];
+  /** The default agent's id: listed first, with the "new agent tab" shortcut beside it. */
+  defaultId?: string;
+  onPick: (agent: AgentInfo) => void;
+  onSetDefault?: (id: string) => void;
+  onClose: () => void;
+  busy?: boolean;
+  style?: CSSProperties;
+};
 
-export default function PlusMenu({ agents, onPick, onClose, busy = false, style }: Props) {
+export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDefault, onClose, busy = false, style }: Props) {
+  const shown = menuAgents(agents, defaultId);
+  const bound = useLabel("tab.newAgent").length > 0;
   return (
     <>
       <div className="menu-backdrop" onClick={onClose} aria-hidden="true" />
       <div className="menu" role="menu" aria-label="New session" style={style}>
         <div className="menu-title">New session</div>
         {agents.length === 0 && <div className="menu-hint">Looking for agents…</div>}
-        {agents.map((a) => (
-          <button
-            key={a.id}
-            role="menuitem"
-            className="menu-item"
-            disabled={!a.installed || busy}
-            onClick={() => onPick(a)}
-            title={a.installed ? `Start ${a.name} (${a.path}) in a new pane inside a fresh workspace` : `${a.program} was not found on the PATH`}
-          >
-            <span className="agent-mark">
-              <VendorMark agent={markFor(a.id)} size={13} />
-            </span>
-            <span className="name">{a.name}</span>
-            {!a.installed && <span className="muted">not installed</span>}
-          </button>
+        {agents.length > 0 && shown.length === 0 && (
+          <div className="menu-hint">No agent found. Kolux looked for {agents.map((a) => a.program).join(", ")} on the PATH and in the usual install folders.</div>
+        )}
+        {shown.map((a) => (
+          <div className="menu-row" key={a.id}>
+            <button role="menuitem" className="menu-item" disabled={busy} onClick={() => onPick(a)} title={`Start ${a.name} (${a.path}) in a new pane inside a fresh workspace`}>
+              <span className="agent-mark">
+                <VendorMark agent={markFor(a.id)} size={13} />
+              </span>
+              <span className="name">{a.name}</span>
+              {a.id === defaultId && bound && <Kbd id="tab.newAgent" />}
+            </button>
+            {a.id !== defaultId && onSetDefault && (
+              <button className="menu-default" title={`Make ${a.name} the default agent`} onClick={() => onSetDefault(a.id)}>
+                default
+              </button>
+            )}
+          </div>
         ))}
         <button role="menuitem" className="menu-item muted" onClick={onClose}>
           Cancel

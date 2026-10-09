@@ -37,9 +37,11 @@ type Props = {
   agents?: AgentInfo[];
   launching?: boolean;
   onLaunch?: (agent: AgentInfo) => void;
+  defaultId?: string;
+  onSetDefault?: (id: string) => void;
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -200,6 +202,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       {plusAt && (
         <PlusMenu
           agents={agents}
+          defaultId={defaultId}
+          onSetDefault={onSetDefault}
           busy={launching}
           style={{ top: plusAt.top, right: plusAt.right }}
           onClose={() => setPlusAt(null)}

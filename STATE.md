@@ -1,11 +1,11 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 1, date: 2026-10-09; the T-006 pass began 2026-10-08 as the 7th and finished after the usage-limit reset)
-Next task: T-007 · SESS-001 [compat] Launch choices list only agents that are really installed · SESS-004 One click on the plus menu starts an agent in a new pane · SESS-007 An empty pane asks what to run · SESS-013 Choose how many sessions to start
-Done: 7 / 339 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 2, date: 2026-10-09)
+Next task: T-007-b · SESS-007 An empty pane asks what to run · SESS-013 Choose how many sessions to start
+Done: 8 / 340 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 339 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 340 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
@@ -60,6 +60,18 @@ a workspace whose last pane was closed shows "No terminal open here" with an "Op
 button. A launch from the plus menu switches to the new worktree. Removing a workspace from the
 sidebar closes every pane inside it wherever it was, and the view falls back to the start-up
 PowerShell pane if the removed one was in front.
+
+T-007-a fills the agent catalogue: all 34 visible agents of SESS-001 in its order, each with its
+program name(s) from SESS-051 and its fixed start arguments (Kiro `chat --tui`, Command Code
+`--trust`, Hermes `--tui`). Detection walks the PATH and then the usual install folders (npm's
+global bin, nvm's current or newest version, `~\.local\bin`, cargo, bun, volta, WinGet links,
+scoop shims, `%LOCALAPPDATA%\Programs\*`) without spawning anything; only a runnable file with a
+PATHEXT ending counts, never a folder or a plain file. The plus menu now lists only the agents that
+were found (on this PC: Claude Code and Codex), the default agent first with the "new agent tab"
+shortcut beside it when one is bound, and every other row has a "default" button; the choice is
+saved as `defaultAgent` in `settings.json` and the bound shortcut (`tab.newAgent`) starts the
+default agent. An npm-installed agent whose entry is a `.cmd` shim (Codex) now starts through
+`cmd.exe /d /c`, as the command line would.
 
 ## Needs Txais
 
@@ -157,6 +169,18 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-007-a: T-007 was split in place (SESS-001 + SESS-004 as T-007-a, SESS-007 +
+  SESS-013 as T-007-b); PLAN.md now has 340 tasks. SESS-004's "one item opens agent settings"
+  waits for the Settings page (area 17); in its place each non-default row carries a "default"
+  button, so the acceptance "make Codex the default" can be done from the menu itself. "Detected
+  and switched on": there is no per-agent on/off switch yet (it belongs to the agent settings), so
+  every detected agent is on. The shortcut chip beside the default agent shows only when
+  `tab.newAgent` is bound (the built-in Windows default is unbound, as in COMPAT.md); Txais's own
+  keybindings bind it to Ctrl+Shift+K, which the evidence shows. SESS-001's "reads the search path
+  the user's shell would use" is covered on Windows by the usual-folder list (Explorer-launched
+  apps already see the registry PATH); the macOS login-shell PATH read is left for the macOS
+  pass. The missing-agent case keeps the agents out of sight (SESS-001 allows either), with one
+  hint line naming what was looked for when nothing at all was found.
 - 2026-10-09 · T-006: a row click now selects (shows) the workspace; it no longer restarts an
   ended shell there as T-003 had it (that was the only way to get a shell before there was a
   selection; an ended pane keeps showing "Ended" until its own restart card). Panes of the other
@@ -226,6 +250,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-007-a · done: 34-agent catalogue with install detection on the PATH and the usual install folders (runnable files only), plus menu lists only installed agents with the default first and a "default" button on the others, `defaultAgent` saved in settings.json, `tab.newAgent` shortcut starts the default agent, `.cmd` shims start through cmd.exe; 4 Rust tests (find_in, catalogue order and start lines, newest nvm version, cmd shim start line) and 3 new front-end tests (menu ordering, default-agent setting, default-first rendering); live: menu showed only Claude Code and Codex of the 34 with Claude first and its Ctrl+Shift+K chip, "default" on Codex moved Codex to the top with the chip and wrote settings.json, clicking Codex opened worktree `ivory-crab` with Codex running through its npm `.cmd` shim; build / clippy / 31 Rust tests / 42 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-007-a.png, evidence/T-007-a-default.png, evidence/T-007-a-codex.png
 - 2026-10-09 · T-006 · done: workspace switching (sidebar row click shows that workspace, panes of the others kept hidden, remove drops every pane inside the folder, empty-workspace placeholder) with 4 new front-end tests on the pure helpers; live: worktrees alpha and beta each got a shell, `echo alpha-one` / `echo beta-one`, switching back to alpha showed its earlier output unchanged with the row selected, removing beta dropped its pane (terminal count 3 to 2) and left alpha as it was; build / clippy / 28 Rust tests / 39 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-006.png, evidence/T-006-removed.png
 - 2026-10-08 · T-006 · cut short by the usage limit before the live check: workspace switching code (pure helpers + 4 tests, hidden panes, sidebar selection, remove hook) passed tsc and 39 front-end tests but the live proof and the Rust gates had not run, so the work was reverted and the task stays unticked; the diff and the two new files are kept in the session scratchpad (t006-saved/) to re-apply next pass
 
