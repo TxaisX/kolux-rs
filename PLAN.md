@@ -53,7 +53,8 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P0 · theme 2 · Isolation: one worktree per agent (20 cards)
 
 - [x] T-013 · PROJ-001 Add a project by choosing a folder; nothing else is pulled in · PROJ-007 After adding a project its main checkout opens, with existing worktrees listed · PROJ-020 [compat] Create a workspace: a new branch in a folder of its own · PROJ-021 Workspace names become safe branch and folder names
-- [ ] T-014 · PROJ-025 [compat] Choose where workspace folders live · PROJ-028 Choose what a new workspace starts from (base ref) · PROJ-038 A new workspace can start an agent with a first prompt · PROJ-077 [compat] `kolux worktree` create and remove
+- [x] T-014-a · PROJ-025 [compat] Choose where workspace folders live · PROJ-028 Choose what a new workspace starts from (base ref) · PROJ-038 A new workspace can start an agent with a first prompt
+- [ ] T-014-b · PROJ-077 [compat] `kolux worktree` create and remove
 - [ ] T-015 · SESS-014 Separate copy per agent, or one shared folder · SESS-023 Each launched agent gets its own worktree with a creature name
 - [ ] T-016 · ORCH-016 [compat] One command starts a worker agent in a worktree of its own
 - [ ] T-017 · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts

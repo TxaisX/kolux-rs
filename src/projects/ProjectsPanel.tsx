@@ -7,10 +7,13 @@
 // T-013: adding a project opens its main checkout (PROJ-007); Mod+N or the header's plus opens
 // the name field for the project in front, a stand-in row shows while Git works, and the new
 // workspace opens with a shell of its own unless the user moved on meanwhile (PROJ-020).
+// T-014-a: the name field also takes a start ref, an agent and a first prompt (PROJ-028,
+// PROJ-038); the footer gear sets the global workspaces folder and layout, a project's own gear
+// its folder and base ref (PROJ-025).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { orderWorktrees, previewSentence, worktreeLabel, type Project, type Worktree } from "./model";
+import { orderWorktrees, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
@@ -37,16 +40,25 @@ type Props = {
   onIndex: (projects: Project[], owner: Record<string, string>) => void;
   /** Bumped by Mod+N (workspace.create): opens the name field for the project in front. */
   createRequest: number;
+  /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
+  onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
-  const [root, setRoot] = useState("");
+  const [place, setPlace] = useState<PlaceInfo>({ dir: "", flat: false, used: [] });
   const [rootDraft, setRootDraft] = useState("");
+  const [flatDraft, setFlatDraft] = useState(false);
+  const [settingsFor, setSettingsFor] = useState<string | null>(null); // project id whose folder / base form is open
+  const [dirDraft, setDirDraft] = useState("");
+  const [projectBaseDraft, setProjectBaseDraft] = useState("");
+  const [baseDraft, setBaseDraft] = useState(""); // PROJ-028: the start ref for the workspace being made
+  const [agentDraft, setAgentDraft] = useState(""); // PROJ-038: agent id, "" for a shell
+  const [promptDraft, setPromptDraft] = useState("");
   const [pathDraft, setPathDraft] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [creating, setCreating] = useState<string | null>(null); // project id whose name field is open; "" with no project yet
@@ -54,13 +66,13 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   const shown = useRef(activeDir); // the workspace in front, read when a create finishes
   shown.current = activeDir;
   const [name, setName] = useState("");
-  const [safe, setSafe] = useState<string | null>(null);
+  const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string } | null>(null);
   const [busy, setBusy] = useState("");
-  const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
 
-  const say = (kind: "ok" | "error", text: string) => setMessage({ kind, text });
+  const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   const fail = (err: unknown) => say("error", String(err));
 
   const refreshWorktrees = useCallback(async (list: Project[]) => {
@@ -85,30 +97,31 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
     await refreshWorktrees(list);
   }, [refreshWorktrees]);
 
+  const loadPlace = useCallback(async () => {
+    const p = await invoke<PlaceInfo>("workspaces_place_get");
+    setPlace(p);
+    setRootDraft(p.dir);
+    setFlatDraft(p.flat);
+  }, []);
   useEffect(() => {
     invoke<string>("git_version").then(setGitVersion).catch(fail);
-    invoke<string>("workspaces_dir_get")
-      .then((d) => {
-        setRoot(d);
-        setRootDraft(d);
-      })
-      .catch(fail);
-  }, []);
+    loadPlace().catch(fail);
+  }, [loadPlace]);
   useEffect(() => {
     reload().catch(fail);
   }, [reload, refresh]);
 
   useEffect(() => {
     if (name.trim() === "") {
-      setSafe(null);
+      setPreview(null);
       return;
     }
     let live = true;
-    invoke<string | null>("workspace_preview", { name }).then((s) => live && setSafe(s)).catch(fail);
+    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null }).then((s) => live && setPreview(s)).catch(fail);
     return () => {
       live = false;
     };
-  }, [name]);
+  }, [name, creating]);
 
   // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
   const addPath = async (path: string) => {
@@ -141,10 +154,29 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
 
   const saveRoot = async () => {
     try {
-      const d = await invoke<string>("workspaces_dir_set", { path: rootDraft });
-      setRoot(d);
-      setRootDraft(d);
-      say("ok", `workspaces go under ${d}`);
+      const p = await invoke<PlaceInfo>("workspaces_place_set", { dir: rootDraft, flat: flatDraft });
+      setPlace(p);
+      setRootDraft(p.dir);
+      say("ok", `workspaces go under ${p.dir}, ${p.flat ? "side by side" : "a folder per project"}`);
+    } catch (err) {
+      fail(err);
+    }
+  };
+
+  // PROJ-025 / PROJ-028: a project's own workspaces folder (empty: the global one) and base ref
+  // (empty: the default branch Git reports).
+  const openSettings = (p: Project) => {
+    setSettingsFor(p.id);
+    setDirDraft(p.workspacesDir ?? "");
+    setProjectBaseDraft(p.base ?? "");
+  };
+  const saveProject = async (p: Project) => {
+    try {
+      const u = await invoke<Project>("project_set", { projectId: p.id, workspacesDir: dirDraft, base: projectBaseDraft });
+      say("ok", `${u.name}: workspaces ${u.workspacesDir ? `under ${u.workspacesDir}` : "in the global folder"}, starting from ${u.base ?? "the default branch"}`);
+      setSettingsFor(null);
+      await reload();
+      await loadPlace();
     } catch (err) {
       fail(err);
     }
@@ -154,18 +186,28 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   // user moved to another workspace meanwhile the create finishes without pulling focus back.
   // ponytail: one create at a time (the field is disabled while Git works); cancelling an
   // overtaken create and removing its half-made checkout waits for a card that needs it.
+  // PROJ-038: with a prompt and no agent picked, the default agent runs it, else the first installed.
+  const installed = agents.filter((a) => a.installed);
+  const fallbackAgent = installed.find((a) => a.id === defaultId) ?? installed[0] ?? null;
   const create = async (project: Project) => {
-    if (!name.trim() || safe === null) return;
+    if (!name.trim() || preview === null) return;
     const from = shown.current;
+    const prompt = promptDraft.trim();
+    const agent = agentDraft ? (installed.find((a) => a.id === agentDraft) ?? null) : prompt ? fallbackAgent : null;
+    const base = baseDraft.trim();
     setBusy("creating");
     setPending({ projectId: project.id, name });
     setName("");
+    setBaseDraft("");
+    setPromptDraft("");
     setCreating(null);
     try {
-      const wt = await invoke<Worktree>("workspace_create", { projectId: project.id, name });
-      say("ok", `created ${worktreeLabel(wt)} in ${wt.path}`);
+      const wt = await invoke<Created>("workspace_create", { projectId: project.id, name, base: base || null });
+      say(wt.note ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${wt.note ? ` · ${wt.note}` : ""}`);
       await reload();
-      if (shown.current === from) onSelect(wt.path, wt.branch);
+      // The agent's tab is the workspace's first; a shell is only opened when no agent runs.
+      if (agent) onStartIn(agent, wt.path, wt.branch, prompt, shown.current === from);
+      else if (shown.current === from) onSelect(wt.path, wt.branch);
     } catch (err) {
       fail(err);
     } finally {
@@ -182,9 +224,19 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   const nameField = (p: Project | null) => (
     <div className="sb-form" data-create={p?.id ?? ""}>
       <input aria-label="workspace name" className="field" placeholder="name, e.g. Fix login" value={name} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
-      <div className="preview">{previewSentence(name, safe, root, p)}</div>
+      <div className="preview">{previewSentence(name, preview, p)}</div>
+      <input aria-label="start from" className="field" placeholder={p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
+      <select aria-label="agent" className="field" value={agentDraft} onChange={(e) => setAgentDraft(e.target.value)}>
+        <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a shell"}</option>
+        {installed.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+      <textarea aria-label="first prompt" className="field multi" placeholder="first prompt for the agent (optional)" value={promptDraft} onChange={(e) => setPromptDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setCreating(null)} />
       <div className="btn-row">
-        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || safe === null || !p}>
+        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || preview === null || !p}>
           Create
         </button>
         <button className="btn" onClick={() => setCreating(null)}>
@@ -277,9 +329,14 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
                 </button>
               </div>
               <label>Workspaces folder</label>
-              <input aria-label="workspaces folder" className="field" value={rootDraft} onChange={(e) => setRootDraft(e.target.value)} />
+              <input aria-label="workspaces folder" className="field" list="used-dirs" value={rootDraft} onChange={(e) => setRootDraft(e.target.value)} />
+              <label>Layout</label>
+              <select aria-label="workspaces layout" className="field" value={flatDraft ? "flat" : "nested"} onChange={(e) => setFlatDraft(e.target.value === "flat")}>
+                <option value="nested">Nested: a folder per project</option>
+                <option value="flat">Flat: all side by side</option>
+              </select>
               <div className="btn-row">
-                <button className="btn" onClick={saveRoot} disabled={rootDraft === root}>
+                <button className="btn" onClick={saveRoot} disabled={rootDraft === place.dir && flatDraft === place.flat}>
                   Save
                 </button>
                 <button className="btn" onClick={() => setRootDraft("")} title="Empty means the default folder">
@@ -289,6 +346,11 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
             </div>
           )}
 
+          <datalist id="used-dirs">
+            {place.used.map((d) => (
+              <option key={d} value={d} />
+            ))}
+          </datalist>
           {creating === "" && nameField(null)}
           {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add one that holds a Git repository.</div>}
 
@@ -301,6 +363,9 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
               <div key={p.id}>
                 <div className="proj" title={p.path}>
                   <span className="name">{p.name}</span>
+                  <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
+                    <Gear />
+                  </button>
                   <button className={`ib${opening ? " on" : ""}`} title="New workspace: a branch in its own folder" aria-pressed={opening} onClick={() => setCreating(opening ? null : p.id)}>
                     <Plus size={13} />
                   </button>
@@ -313,6 +378,22 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
                       <ChevronDown size={12} />
                     </span>
                   </button>
+                )}
+                {settingsFor === p.id && (
+                  <div className="sb-form" data-project-settings={p.id}>
+                    <label>Workspaces folder for {p.name}</label>
+                    <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+                    <label>Base ref</label>
+                    <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+                    <div className="btn-row">
+                      <button className="btn" onClick={() => saveProject(p)}>
+                        Save
+                      </button>
+                      <button className="btn" onClick={() => setSettingsFor(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 )}
                 {opening && nameField(p)}
                 {pending?.projectId === p.id && (

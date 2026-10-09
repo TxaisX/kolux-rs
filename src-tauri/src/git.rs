@@ -112,6 +112,40 @@ impl Git {
         Ok(())
     }
 
+    /// Does `rev` name a commit here: a branch, tag, remote branch or id?
+    pub fn rev_exists(&self, repo: &Path, rev: &str) -> bool {
+        run(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")], Some(repo)).is_ok()
+    }
+
+    /// The branch new work starts from when nothing says otherwise (PROJ-028): origin's HEAD,
+    /// else main or master, else the branch the main checkout is on.
+    pub fn default_branch(&self, repo: &Path) -> Option<String> {
+        let short = |args: &[&str]| run(args, Some(repo)).ok().filter(|s| !s.is_empty());
+        short(&["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"])
+            .or_else(|| ["main", "master"].into_iter().find(|b| self.rev_exists(repo, b)).map(String::from))
+            .or_else(|| short(&["symbolic-ref", "-q", "--short", "HEAD"]))
+    }
+
+    /// Can a workspace start from `rev`? A ref that tracks a remote (`origin/x`, or a local
+    /// branch with an upstream) is fetched first so it is fresh, and one the remote no longer
+    /// has counts as gone; a full commit id is used as it is; being offline is not an error, the
+    /// local copy serves.
+    pub fn base_available(&self, repo: &Path, rev: &str) -> bool {
+        if rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return self.rev_exists(repo, rev);
+        }
+        let full = |r: &str| run(&["rev-parse", "--symbolic-full-name", r], Some(repo)).unwrap_or_default();
+        let tracking = Some(full(rev)).filter(|f| f.starts_with("refs/remotes/")).unwrap_or_else(|| full(&format!("{rev}@{{upstream}}")));
+        if let Some((remote, branch)) = tracking.strip_prefix("refs/remotes/").and_then(|r| r.split_once('/')) {
+            if let Err(e) = run(&["fetch", "--quiet", remote, branch], Some(repo)) {
+                if e.contains("couldn't find remote ref") {
+                    return false;
+                }
+            }
+        }
+        self.rev_exists(repo, rev)
+    }
+
     /// Is the name a local branch, or a branch on any remote (PROJ-021: a taken name gets a number)?
     pub fn branch_taken(&self, repo: &Path, branch: &str) -> bool {
         run(&["for-each-ref", "--format=%(refname)", &format!("refs/heads/{branch}"), &format!("refs/remotes/*/{branch}")], Some(repo)).is_ok_and(|s| !s.is_empty())

@@ -23,8 +23,8 @@ test("folder names come off either slash style", () => {
 
 test("the preview sentence explains the branch and folder, or the refusal", () => {
   const project = { id: "app-1", name: "app", path: "C:\\src\\app" };
-  expect(previewSentence("", null, "C:\\ws", project)).toMatch(/Type a name/);
-  expect(previewSentence("???", null, "C:\\ws", project)).toMatch(/nothing usable/);
-  expect(previewSentence("Fix login", "fix-login", "C:\\ws", project)).toBe("branch fix-login · folder C:\\ws\\app\\fix-login");
-  expect(previewSentence("x", "x", "C:\\ws", null)).toBe("Add a project first.");
+  expect(previewSentence("", null, project)).toMatch(/Type a name/);
+  expect(previewSentence("???", null, project)).toMatch(/nothing usable/);
+  expect(previewSentence("Fix login", { branch: "fix-login", folder: "C:\\ws\\app\\fix-login" }, project)).toBe("branch fix-login · folder C:\\ws\\app\\fix-login");
+  expect(previewSentence("x", { branch: "x", folder: "" }, null)).toBe("Add a project first.");
 });

@@ -111,7 +111,9 @@ input { font: inherit; }
 .btn-row { display: flex; gap: 6px; }
 .note { font-size: 12px; padding: 4px 9px; word-break: break-all; line-height: 1.4; }
 .note.ok { color: var(--done); }
+.note.warn { color: #e2c06a; }
 .note.error { color: #f0a07a; }
+.field.multi { height: auto; min-height: 44px; padding: 4px 8px; resize: vertical; font: inherit; font-size: 12px; }
 .preview { color: var(--fg-label); word-break: break-all; line-height: 1.4; }
 .sb-divider { height: 1px; background: var(--line); margin: 0 4px; flex: none; }
 .sb-next { display: flex; align-items: center; height: 32px; margin: 7px 4px 0; padding: 0 12px; font-size: 12px; color: #9b9b9b; }

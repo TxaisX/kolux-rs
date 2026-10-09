@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 11, date: 2026-10-09)
-Next task: T-014 · PROJ-025 [compat] Choose where workspace folders live · PROJ-028 Choose what a new workspace starts from (base ref) · PROJ-038 A new workspace can start an agent with a first prompt · PROJ-077 [compat] `kolux worktree` create and remove
-Done: 17 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 12, date: 2026-10-09)
+Next task: T-014-b · PROJ-077 [compat] `kolux worktree` create and remove
+Done: 18 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -176,6 +176,17 @@ stand-in row at once; the new workspace then opens with its own shell unless the
 another workspace meanwhile. The row shows the name as typed (emoji included), the branch and
 folder carry the cleaned form; typed names live in the state store under `workspaceNames`.
 
+T-014-a decides where a workspace goes and what it starts from (PROJ-025, PROJ-028, PROJ-038).
+The footer gear's form sets the global workspaces folder and the layout: nested (a folder per
+project, the project's folder name minus `.git`) or flat (every workspace side by side). The
+project row's gear sets that project's own folder (absolute, or relative to the project root)
+and base ref; folders used before are offered from a list. Create starts the branch from the
+typed ref, else the project's saved base, else the default branch (origin/HEAD, then
+main/master, then the current branch). A remote-tracking base is fetched first; a saved base
+that no longer exists falls back to the default branch and says so in the sidebar note; a full
+commit id is used as is. The create form also takes an agent and a first prompt: with an agent
+chosen the workspace opens with that agent running as its first tab and no shell.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -272,6 +283,19 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-014-a: the per-project workspaces folder and base ref live in the project
+  record, edited behind the project row's gear, until a per-repository settings page exists. A
+  relative folder resolves from the project root. Nested layout strips `.git` from the project
+  folder name; flat puts every workspace straight in the folder. Folders used before are kept
+  under `workspacesDirsUsed` (ten, newest first). A saved base that is gone falls back to the
+  default branch with a warn-coloured note in the sidebar, no dialog queue. A base that tracks a
+  remote is fetched on every create and a fetch that fails offline is ignored; a 40-hex commit id
+  is never fetched; refs are passed to Git untouched. A prompt with no agent chosen picks the
+  default agent, else the first installed one; the agent's tab is the first tab and no shell is
+  opened beside it. T-014-b (PROJ-077, `kolux worktree` create / remove) is split off: no CLI
+  binary or transport to the running app exists yet, and that foundation (transport, JSON
+  envelope, exit codes: T-076, T-097, T-185, T-197, T-250) has to come first. The throwaway
+  "repo" project from the live proof stays registered in the dev profile's store.
 - 2026-10-09 · T-013: a project's folder is its main checkout whichever worktree the user
   picked (PROJ-007 "chosen on purpose"). A worktree under a dot-folder inside the main checkout
   (Claude Code's `.claude/worktrees/*`) is a tool's scratch worktree and is not listed; nothing
@@ -459,6 +483,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-014-a · done: global workspaces folder + nested/flat layout behind the footer gear, per-project folder + base ref behind the project row's gear with a used-folders list, create starts from the typed ref / saved base / default branch with a fetch for remote-tracking bases and a fallback note when the saved base is gone, agent + first prompt on the create form; 2 Rust tests added (45 total), model test updated (69 front-end tests); live over the debugging port: project gear → folder `…\t014\ws` + base `origin/feature` saved; after the remote branch was deleted, Mod+N "fallback test" → preview `…\t014\ws\repo\fallback-test`, created from main with the warn note "the saved base origin/feature no longer exists in repo; this workspace started from main instead", row selected with a shell; "pinned" + start from = a full commit id → worktree HEAD on that commit, no fetch; "agent run" + claude + prompt "hello" → one pane "agent-run Claude Running", claude.exe started with the prompt, no shell; layout flat → "flat one" at `…\t014\ws\flat-one`; all four removed through × / Remove (the agent process gone), settings reset; build / clippy / 45 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-014-a-settings.png, evidence/T-014-a-fallback.png, evidence/T-014-a-form.png, evidence/T-014-a-agent.png, evidence/T-014-a-flat.png
 - 2026-10-09 · T-013 · done: add-project resolves to the main checkout and opens it with a shell, scratch worktrees hidden, Mod+N / header plus open the name field with a branch + folder preview, stand-in row while Git works, taken names numbered (local and remote), typed name shown on the row and kept in the store; 2 Rust tests changed / added (43 total), model test updated (69 front-end tests); live over the debugging port: Mod+N with no project → "Add a project first.", Create disabled; gear form + a linked worktree's path → project "repo" at the main checkout, rows main + zeta (scratch hidden), main selected with a shell "repo main"; Mod+N + "Fix login 🔥" → preview "branch fix-login-fire · folder …\workspaces\repo\fix-login-fire", stand-in row at once, then the row selected with its own shell and the note "created Fix login 🔥 in …"; a second "fix login fire" while clicking back to main → `fix-login-fire-2` created, main stayed selected, no focus pull; "???" → "That name leaves nothing usable for a branch; use some letters or digits", Create disabled; both rows removed through × / Remove; build / clippy / 43 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-013-noproject.png, evidence/T-013-added.png, evidence/T-013-pending.png, evidence/T-013-created.png, evidence/T-013-background.png, evidence/T-013-refused.png
 - 2026-10-09 · T-012-b · done: the bar resolves sites, local hosts, file paths and searches (Google), refuses other schemes with a notice; back / forward / reload / stop toolbar with dimming and a loading spinner; Ctrl+L, Alt+Left / Right, Ctrl+R wired in the browser key scope; 1 Rust test, 4 front-end tests; live over the web view's debugging port: Ctrl+Shift+B opened the tab, "example.com" + Enter loaded https://example.com/ (tab "Example Domain", back lit), Ctrl+L selected the bar, "rust ownership" + Enter loaded Google results, Stop + spinner showed 116 ms into a reload and cleared at 1.3 s, "javascript:alert(1)" gave the red notice and left the page, Back returned to example.com with forward lit, Forward returned to the results; build / clippy / 42 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-012-b-fresh.png, evidence/T-012-b-site.png, evidence/T-012-b-search.png, evidence/T-012-b-invalid.png, evidence/T-012-b-back.png, evidence/T-012-b-forward.png
 - 2026-10-09 · T-012-a · done: Browser item in the New tab menu (Ctrl+Shift+B) opens a "New Tab" pane with an address bar focused over a blank page, the page is a child web view moved with the pane body and hidden while its tab / screen is away, tab named after the page title; 1 Rust test, 1 front-end test; live: "typed-in-bar" landed in the bar with no click, a local form page loaded from the bar and "kept-text" typed into its field survived a switch to Terminal 1 and back, a page calling `window.close()` left the tab in place, the Board showed no page; build / clippy / 41 Rust tests / 65 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-012-a-newtab.png, evidence/T-012-a-form.png, evidence/T-012-a-back.png, evidence/T-012-a-close.png

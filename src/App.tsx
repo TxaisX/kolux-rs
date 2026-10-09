@@ -310,6 +310,22 @@ function Window() {
     }
   };
 
+  // PROJ-038: the agent is the new workspace's first tab, started with its prompt; nothing else
+  // opens there. Shown only when the sidebar says the user has not moved on.
+  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => {
+    try {
+      const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra: [], prompt });
+      const key = nextKey.current++;
+      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: agent.program, args: line.args, typed: line.typed ?? undefined }]);
+      if (show) {
+        setActiveDir(dir);
+        setFocused(key);
+      }
+    } catch (err) {
+      setNotice(String(err));
+    }
+  };
+
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
   const select = (dir: string, branch: string | null) => {
@@ -410,6 +426,7 @@ function Window() {
             onChoose={addChooser}
             refresh={refresh}
             createRequest={createRequest}
+            onStartIn={startIn}
             onIndex={(list, dirs) => {
               setProjects(list);
               setOwner(dirs);
