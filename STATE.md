@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 8, date: 2026-10-09)
-Next task: T-012 · BROW-001 [compat] Open a browser tab next to the terminals · BROW-002 Browser pages survive switching away and back · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
-Done: 14 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 9, date: 2026-10-09)
+Next task: T-012-b · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
+Done: 15 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -144,6 +144,16 @@ by expanding, collapsing or switching screens (a command typed in the card shows
 pane afterwards, and the other way round). Switching to Agents or Board no longer unmounts the
 terminals (it did before T-011).
 
+T-012-a adds browser tabs (BROW-001, BROW-002). The New tab menu's "Browser" item (Ctrl+Shift+B)
+opens a "New Tab" beside the focused pane: a pane whose header is a globe, the page title and an
+address bar that takes the cursor at once, over a blank page. The page is a real child web view
+of the window (Tauri `Window::add_child`, feature `unstable`), laid over the pane body and moved
+with it, so sites render exactly as in Edge, without the iframe limits. Away means hidden, never
+torn down: switching to another tab, to the Board or to Agents keeps the page's scroll, form
+fields and history, and a page's `window.close()` does nothing to the tab. The tab is named after
+the page's title. The bar takes a full address only until T-012-b (typed words, back / forward,
+reload / stop).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -240,6 +250,20 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-012-a: a browser tab is a native child web view (WebView2) of the main window,
+  not an iframe: iframes are refused by most sites' frame headers and give no history or
+  title. Consequences to live with until a card asks otherwise: the page sits above every
+  HTML overlay of the app (a menu or toast over a browser tab is covered; the page hides
+  while its tab is away so the Board and Agents are unaffected); browser tabs are not Board
+  cards (VIEW-023 / VIEW-024 own hiding editor / browser tabs); pages get no Tauri
+  capability (`capabilities/default.json` names the `main` web view only). Opening a page
+  moves the keyboard to it, so `browser_open` hands the keyboard back to the app's web view
+  and the address bar re-focuses itself. The Ctrl+Shift+B chord itself was not pressed by
+  the harness (it posts characters, not chords); the menu item and the key id are wired the
+  same way. Harness: `scripts/evidence/type.ps1` targets the first web view child; with a
+  browser tab open there are two, so T-012-a's proof used a scratch variant choosing the
+  largest (app) or smallest (page) child, to fold into type.ps1 when the next browser task
+  needs it.
 - 2026-10-09 · T-011: the Board card and the grid pane are one DOM element styled two ways
   (`.board` on the cells container, `card` / `expanded` on the pane), not a terminal moved
   between two homes: React cannot reparent a mounted xterm without remounting it, and the
@@ -385,6 +409,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-012-a · done: Browser item in the New tab menu (Ctrl+Shift+B) opens a "New Tab" pane with an address bar focused over a blank page, the page is a child web view moved with the pane body and hidden while its tab / screen is away, tab named after the page title; 1 Rust test, 1 front-end test; live: "typed-in-bar" landed in the bar with no click, a local form page loaded from the bar and "kept-text" typed into its field survived a switch to Terminal 1 and back, a page calling `window.close()` left the tab in place, the Board showed no page; build / clippy / 41 Rust tests / 65 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-012-a-newtab.png, evidence/T-012-a-form.png, evidence/T-012-a-back.png, evidence/T-012-a-close.png
 - 2026-10-09 · T-011 · done: Board screen lists every pane as a card (same cells as the grid, `.board` styling), expand shows the live terminal inside the card and collapses again, panes stay mounted across Agents / Board / Terminals; 1 grid test; live: `echo t011-ok` typed in the grid pane, Board showed the card collapsed, expand showed the same scrollback and `echo expanded-ok` typed into the card ran there, collapse + Terminals showed both lines in the grid pane in its old slot with the shell still at its prompt; build / clippy / 40 Rust tests / 64 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-011-grid.png, evidence/T-011-board.png, evidence/T-011-expanded.png, evidence/T-011-back.png
 - 2026-10-09 · T-010 · done: grid cells hold tabs (`group` on panes, `cellsOf` / `neighbourTab` / `insertBefore` in grid.ts), "New tab" menu in the layout strip with Terminal + every installed agent and their chords, Ctrl+T / `tab.newAgent` / `tab.newAgent.<id>` / `tab.close` wired, a tab strip above cells with two or more tabs, `start_dir` for a requested start folder (relative, absolute, missing → workspace), paste through the pane's own text area with the chords left to the browser and queued behind an owed opening prompt; 3 grid tests + 1 strip test + 1 Rust test; live: New tab → Terminal opened "Terminal 3" as a second tab in the t010-repo cell at `PS G:\Temp\t010-repo>`, New tab → Claude Code opened a "Claude" tab with Claude running in that folder, closing "Terminal 2" from its x left the other two tabs with Claude in front; paste and Ctrl+T not provable from the harness (see decision); build / clippy / 40 Rust tests / 63 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-010-tabs.png, evidence/T-010-agent.png, evidence/T-010-close-tab.png
 - 2026-10-09 · T-009 · done: pane grid 1..12 with balanced rows (`src/terminal/grid.ts`: clamp, columns / rows, resize plan, split index, insert), layout strip sets the count with the current count pressed, split button in every pane header, Ctrl+W / Ctrl+Shift+D / Alt+Shift+D wired through the keymap, close removes any pane including the last; 6 grid tests + strip test updated; live: "4" gave Terminal 1 plus three chooser panes 2x2, the split button opened Terminal 5 beside Terminal 1 in the same folder (3+2), "1" dropped the three unstarted panes and the second press showed the "started sessions" toast, the header close removed Terminal 5 and Terminal 1 took the full width; chords not provable from the harness (see decision); build / clippy / 39 Rust tests / 60 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-009-four.png, evidence/T-009-split.png, evidence/T-009-shrink.png, evidence/T-009-close.png

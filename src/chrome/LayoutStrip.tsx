@@ -3,18 +3,20 @@
 // count, so none is pressed at 3, 5 or above 6. On the right, "New tab" opens the tab create menu
 // (TERM-040 / TERM-041): a shell, or any installed agent, as a tab beside the focused pane.
 import { useState } from "react";
-import { Plus } from "./icons";
+import { Globe, Plus } from "./icons";
 import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import { markFor, type AgentInfo } from "../launch/PlusMenu";
 
 const choices = [1, 2, 4, 6];
 
-type Props = { count: number; onLayout: (n: number) => void; agents?: AgentInfo[]; onNewTab?: (agent: AgentInfo | null) => void };
+/** What a new tab runs: an agent, a shell (null) or the browser (BROW-001). */
+export type NewTab = AgentInfo | null | "browser";
+type Props = { count: number; onLayout: (n: number) => void; agents?: AgentInfo[]; onNewTab?: (what: NewTab) => void; open?: boolean };
 
-export default function LayoutStrip({ count, onLayout, agents = [], onNewTab }: Props) {
-  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
-  const pick = (a: AgentInfo | null) => {
+export default function LayoutStrip({ count, onLayout, agents = [], onNewTab, open = false }: Props) {
+  const [at, setAt] = useState<{ top: number; right: number } | null>(open ? { top: 0, right: 0 } : null);
+  const pick = (a: NewTab) => {
     setAt(null);
     onNewTab?.(a);
   };
@@ -63,6 +65,13 @@ export default function LayoutStrip({ count, onLayout, agents = [], onNewTab }: 
                 <Kbd id={`tab.newAgent.${a.id}`} />
               </button>
             ))}
+            <button role="menuitem" className="menu-item" onClick={() => pick("browser")}>
+              <span className="agent-mark">
+                <Globe size={14} />
+              </span>
+              <span className="name">Browser</span>
+              <Kbd id="tab.newBrowser" />
+            </button>
           </div>
         </>
       )}

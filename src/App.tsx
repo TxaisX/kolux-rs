@@ -7,12 +7,15 @@
 // finds every terminal as it was (T-006). The grid tiles 1..12 cells in balanced rows; the
 // layout strip sets the count, a pane splits right or down and closes (T-009, src/terminal/grid.ts).
 // A cell holds tabs: Ctrl+T or the strip's "New tab" menu adds a shell or an agent beside the
-// focused pane, started in the workspace folder (T-010).
+// focused pane, started in the workspace folder (T-010). A browser tab is a pane whose page is
+// a child web view laid over its body by the back end (T-012-a, src/browser/BrowserPane.tsx).
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
-import LayoutStrip from "./chrome/LayoutStrip";
+import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
+import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
@@ -30,10 +33,11 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; title?: string; batch?: number; typed?: string; group?: number };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
 
-/** What a tab is called: the seat's title, the agent, or "Terminal N". */
-function tabName(p: Pane): string {
+/** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
+function tabName(p: Pane, titles: Record<number, string>): string {
+  if (p.kind === "browser") return titles[p.key] || "New Tab";
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** SESS-051: a seat's start line as the back end builds it. */
@@ -71,6 +75,7 @@ function Window() {
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
+  const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const defaultId = defaultAgentId(settings);
@@ -105,6 +110,11 @@ function Window() {
   useEffect(() => {
     document.title = windowTitle(info);
   }, [info]);
+  // BROW-001: a browser tab is named after its page.
+  useEffect(() => {
+    const off = listen<{ id: number; title: string }>("browser-title", (e) => setTitles((t) => ({ ...t, [e.payload.id]: e.payload.title })));
+    return () => void off.then((u) => u());
+  }, []);
 
   // T-005: the shortcuts file is read at start; what it got wrong is said once, in the notice.
   useEffect(() => {
@@ -127,6 +137,9 @@ function Window() {
           break;
         case "tab.newTerminal":
           void newTab(null);
+          break;
+        case "tab.newBrowser":
+          void newTab("browser");
           break;
         case "tab.newAgent": {
           const a = agents.find((x) => x.id === defaultId && x.installed);
@@ -174,11 +187,18 @@ function Window() {
   // TERM-040 / TERM-041: a new tab joins the focused pane's cell (or opens its own cell) and
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
   // workspace an agent has no folder to work in, so it gets a fresh worktree instead (SESS-004).
-  const newTab = async (a: AgentInfo | null) => {
+  const newTab = async (what: NewTab) => {
+    const a = what === "browser" ? null : what;
     if (a && activeDir === null) return launch(a, null);
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
     const key = nextKey.current++;
     const base = { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined };
+    if (what === "browser") {
+      // BROW-001: a New Tab in the focused split, selected straight away.
+      setPanes((ps) => [...ps, { ...base, agent: "shell", program: null, args: [], kind: "browser" }]);
+      setFocused(key);
+      return;
+    }
     try {
       const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: [], prompt: "" }) : null;
       const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: a.program, args: line.args, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
@@ -432,8 +452,8 @@ function Window() {
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
                             <VendorMark agent={p.agent} size={12} />
-                            <span className="tab-name">{tabName(p)}</span>
-                            <button className="tab-x" aria-label={`Close ${tabName(p)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
+                            <span className="tab-name">{tabName(p, titles)}</span>
+                            <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
                             </button>
                           </div>
@@ -441,7 +461,9 @@ function Window() {
                       </div>
                     )}
                     {c.panes.map((p) =>
-                p.seats ? (
+                p.kind === "browser" ? (
+                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                ) : p.seats ? (
                   <ChooserPane
                     key={p.key}
                     number={p.key}

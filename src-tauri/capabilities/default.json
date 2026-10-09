@@ -5,6 +5,9 @@
   "windows": [
     "main"
   ],
+  "webviews": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-close",

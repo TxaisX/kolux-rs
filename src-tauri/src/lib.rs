@@ -1,4 +1,5 @@
 mod agents;
+mod browser;
 mod creatures;
 mod git;
 mod keybindings;
@@ -82,7 +83,11 @@ pub fn run() {
             agents::agent_start_line,
             keybindings::keybindings_read,
             projects::workspaces_dir_get,
-            projects::workspaces_dir_set
+            projects::workspaces_dir_set,
+            browser::browser_open,
+            browser::browser_bounds,
+            browser::browser_navigate,
+            browser::browser_close
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

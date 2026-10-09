@@ -187,6 +187,10 @@ input { font: inherit; }
 .pane-head .status.done { color: var(--done); }
 .pane-head .status.attention { color: var(--working-icon); }
 .pane-head .right { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+/* BROW-001: the address bar fills the browser tab's header; its page is a native web view laid over the body. */
+.pane-head .address { flex: 1; min-width: 0; height: 20px; padding: 0 8px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--kbd-bg); color: var(--fg); font: inherit; font-size: 12px; }
+.pane-head .address:focus { outline: none; border-color: var(--line-focus); }
+.pane.browser .pane-body { padding: 0; }
 .gauge { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; font-size: 11px; font-weight: 500; color: var(--gauge-text); }
 .pane-body { flex: 1; min-height: 0; padding: 4px; }
 .chooser-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; overflow: auto; font-size: 12px; }

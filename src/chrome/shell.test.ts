@@ -57,6 +57,12 @@ test("TERM-040: the strip offers a New tab menu when the window wires one", () =
   expect(html).toMatch(/aria-haspopup="menu"[^>]*>.*New tab/);
 });
 
+test("BROW-001: the New tab menu offers a browser tab with its chord", () => {
+  const html = renderToString(createElement(LayoutStrip, { count: 1, onLayout: () => {}, agents: [], onNewTab: () => {}, open: true }));
+  expect(html).toMatch(/Terminal.*Browser/);
+  expect(html).toMatch(/Browser[\s\S]*?<span class="kbd">B<\/span>/);
+});
+
 test("the status bar shows hooks, memory, terminals and agents on the right", () => {
   const html = renderToString(createElement(StatusBar, { terminals: 3, agents: 1 }));
   expect(html).toContain('class="statusbar"');

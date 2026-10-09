@@ -190,6 +190,12 @@ export const SplitRight = (p: P) => (
   </Glyph>
 );
 
+export const Globe = (p: P) => (
+  <Glyph {...p}>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M2.5 8h11M8 2.5c-2 2.2-2 8.8 0 11M8 2.5c2 2.2 2 8.8 0 11" />
+  </Glyph>
+);
 export const Expand = (p: P) => (
   <Glyph {...p}>
     <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" />
