@@ -1,7 +1,7 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 3, date: 2026-10-08; Txais lifted the cap for today)
+Budget: 6 passes per day   (today: 4, date: 2026-10-08; Txais lifted the cap for today)
 Next task: T-004 · One agent in its own worktree: the plus menu starts Claude Code in a new pane inside a fresh worktree with a creature name; the pane header shows the agent and the branch
 Done: 4 / 339 tasks  ·  P0 parity: 0/228 cards
 
@@ -54,7 +54,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 | OD-20 | Does the old app's update feed hand users over to Kolux RS? | No; own feed, manual first install, importer on first launch |
 | OD-21 | Bundle the 24 department agents as default suggestions? | Not bundled; suggestions load from a folder the user points Kolux at |
 | LOOK-1 | Bundle the UI and terminal fonts (Inter, JetBrains Mono / Cascadia Mono)? Their licence (SIL OFL 1.1) is not on the LOOP.md licence list | Not bundled; system font stacks only (Segoe UI, Cascadia Mono / Consolas), so the look depends on the fonts installed on the PC |
-| LOOK-2 | Vendor marks: keep Anthropic's Claude Spark (from its public press kit, no terms shipped) and the hand-redrawn OpenAI knot (openai.com/brand refused every fetch, terms unread) as model indicators in a public release? | Kept, as nominative use; see src/assets/vendors/NOTICE.md |
+| LOOK-2 | Vendor marks: keep Anthropic's Claude Spark (from its public press kit, no terms shipped) as a model indicator in a public release? And may someone fetch OpenAI's kit file by hand (openai.com/brand refuses every automated fetch)? | Spark kept, as nominative use; the hand-redrawn OpenAI knot was removed the same day (not a kit file, so outside the "public brand kits only" rule) and Codex shows Kolux's neutral spark glyph until a kit file arrives; see src/assets/vendors/NOTICE.md |
 
 ## Decisions made for Txais
 
@@ -141,6 +141,17 @@ recorded default until told otherwise; nothing here blocks a pass.
   number is unknown and was not looked up.
 - 2026-10-08 · Pane and sidebar corners are 12 px as DESIGN.md says; the reference's curve runs one
   pixel longer (about 13 px). Left as is, within the 2 px tolerance.
+- 2026-10-08 · T-003b follow-up (a second pass on the same task, run in parallel by mistake; it
+  committed only its own files and left the T-004 work in progress untouched): the hand-redrawn
+  OpenAI knot is out, because Txais's rule is "vendor logos only from public brand kits" and a
+  redrawing is not a kit file; Codex gets Kolux's own neutral spark glyph until a kit file is
+  obtained (LOOK-2). A render test (src/chrome/shell.test.ts) now fails if the top bar, its
+  switcher, search hint, usage pill or window controls, the Layout 1/2/4/6 strip, or the status bar
+  disappear; proven by dropping the "6" button (test failed) and restoring it. `cargo-deny` was
+  not on this PC (no `cargo-deny.exe` anywhere under the cargo bin, AppData or the build folder),
+  so `cargo install cargo-deny --locked` put 0.20.2 in `%USERPROFILE%\.cargo\bin`; the licence
+  gate now really runs ("licenses ok"). How the earlier "cargo-deny green" lines were produced
+  is UNKNOWN.
 
 ## Last 10 passes  (date · task · result · evidence)
 
@@ -149,3 +160,4 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · T-002 · done: one PowerShell pane through a Rust PTY, drawn by xterm.js on the GPU with a plain fallback; typing, resize (shell reports 166x54 after the window grew) and Close all proven live; no shell left behind after Close or after closing the window; 4 Rust tests and 9 front-end tests green · evidence/T-002.png
 - 2026-10-08 · T-003 · done: projects sidebar; a throwaway repository added as a project, "Fix login" created as branch `fix-login` in its own folder (confirmed with `git worktree list`), the pane opened inside it, then removed with a confirm step and both branch and folder gone on disk; 15 Rust tests (git runner round trip, name cleaner, project store) and 13 front-end tests green · evidence/T-003.png, evidence/T-003-removed.png
 - 2026-10-08 · T-003b · done: frameless window with its own top bar, switcher, search box, usage pill and window controls; floating sidebar card; layout strip; rounded pane card with the design's header; status bar with live memory; palette from DESIGN.md as CSS custom properties; measured against the reference at 1920x1032: top bar 36 px, sidebar x 8..296, pane card from y 84, status bar from y 1008, all six background hexes exact, corners 1 px tighter; 16 Rust tests and 18 front-end tests green · evidence/T-003b.png, evidence/T-003b-compare.png
+- 2026-10-08 · T-003b follow-up · done: chrome render test added (21 front-end tests green), hand-redrawn OpenAI knot removed in favour of a neutral glyph, cargo-deny installed and run ("licenses ok"), build / clippy / 16 Rust tests / tsc / JS licence check / plan check green; fresh maximized capture and side-by-side · evidence/T-003b.png, evidence/T-003b-compare.png

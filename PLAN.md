@@ -503,7 +503,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ## 5. X cards: replace third-party assets with Txais's own (never copied)
 
-Until these pass, earlier cards use a neutral placeholder (a text label or initial), except the Claude and OpenAI marks already sourced from public kits in T-003b.
+Until these pass, earlier cards use a neutral placeholder (a text label or initial), except the Claude Spark already sourced from Anthropic's public kit in T-003b (the OpenAI mark waits for a kit file; its hand-redrawn stand-in was removed).
 
 - [ ] T-335 · SESS-044 Third-party agent logos in pickers · TERM-131 Agent brand marks in pane headers and tabs · VIEW-104 Third-party provider logos in usage UI · SET-048 Other companies' logos on settings pages · HID-039 Bundled agent maker logos (29 images plus an OpenClaude logo) · HID-040 Redrawn provider marks (Claude, OpenAI, Gemini, MiniMax and others) · HID-041 Agent icons fetched live from Google's favicon service · HID-043 Shell, editor and terminal-app logos · HID-044 Integration and phone-platform logos (GitHub, GitLab, Jira, Linear, iOS, Android) · reinterpreted by Txais 2026-10-08: vendor marks STAY as model and provider indicators (nominative use), sourced only from each vendor's public brand kit with its URL, date and terms in src/assets/vendors/NOTICE.md, never from the old app; shells, editors and integrations likewise from public kits or as names; nothing fetched at run time
 - [ ] T-336 · USAGE-020 X logo on the post-sharing button · a plain share icon or the word Share
