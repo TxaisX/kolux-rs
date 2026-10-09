@@ -7,6 +7,9 @@ import { expect, test } from "vitest";
 import TopBar from "./TopBar";
 import LayoutStrip from "./LayoutStrip";
 import StatusBar from "./StatusBar";
+import { KeymapContext, type KeymapState } from "../keys/KeymapContext";
+import { resolve } from "../keys/keymap";
+import { Mark } from "./icons";
 
 test("the top bar carries the screen switcher, search hint, usage pill and window controls", () => {
   const html = renderToString(createElement(TopBar, { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {} }));
@@ -18,6 +21,26 @@ test("the top bar carries the screen switcher, search hint, usage pill and windo
   expect(html).toContain("Ctrl");
   expect(html).toContain('class="usage"');
   for (const control of ["Minimize", "Maximize", "Close"]) expect(html).toContain(`title="${control}"`);
+});
+
+test("the search box chips follow the keybindings file", () => {
+  const topbar = createElement(TopBar, { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {} });
+  const plain = renderToString(topbar);
+  expect(plain).toMatch(/kbd">Ctrl<.*kbd">Shift<.*kbd">J</);
+  const custom: KeymapState = { ...resolve({ version: 1, platforms: { win32: { "worktree.palette": "Mod+Alt+P" } } }, "win32"), path: null, reload: () => {} };
+  const html = renderToString(createElement(KeymapContext.Provider, { value: custom }, topbar));
+  expect(html).toMatch(/kbd">Ctrl<.*kbd">Alt<.*kbd">P</);
+  expect(html).not.toContain('kbd">J<');
+  const unbound: KeymapState = { ...resolve({ keybindings: { "worktree.palette": null } }, "win32"), path: null, reload: () => {} };
+  expect(renderToString(createElement(KeymapContext.Provider, { value: unbound }, topbar))).toContain("Unassigned");
+});
+
+test("the app mark is the six-spoke glyph on a 24-unit grid in the text colour", () => {
+  const html = renderToString(createElement(Mark));
+  expect(html).toContain('viewBox="0 0 24 24"');
+  expect(html).toContain('fill="currentColor"');
+  expect((html.match(/<use /g) ?? []).length).toBe(5);
+  expect(html).toContain("<circle");
 });
 
 test("the layout strip offers 1, 2, 4 and 6 panes with the current one pressed", () => {

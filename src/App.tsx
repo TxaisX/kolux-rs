@@ -14,6 +14,8 @@ import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
 import { markFor, type AgentInfo } from "./launch/PlusMenu";
 import type { Project, Worktree } from "./projects/model";
+import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
+import { matchEvent } from "./keys/keymap";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -27,6 +29,20 @@ export function columnsFor(count: number): number {
 const sameDir = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
 
 export default function App() {
+  return (
+    <KeymapProvider>
+      <Window />
+    </KeymapProvider>
+  );
+}
+
+/** The next screen in the Agents / Board / Terminals cycle. */
+export function nextScreen(s: Screen): Screen {
+  return screens[(screens.findIndex((x) => x.id === s) + 1) % screens.length].id;
+}
+
+function Window() {
+  const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("terminals");
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -49,6 +65,34 @@ export default function App() {
   useEffect(() => {
     document.title = windowTitle(info);
   }, [info]);
+
+  // T-005: the shortcuts file is read at start; what it got wrong is said once, in the notice.
+  useEffect(() => {
+    if (keymap.errors.length) setNotice(keymap.errors.join(" "));
+  }, [keymap]);
+
+  // Global-scope shortcuts are pressed here, wherever focus is (the terminal policy comes with
+  // SET-014). Only actions that exist today do something; the rest are matched and left alone.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const hit = matchEvent(keymap, e, ["global"]);
+      if (!hit) return;
+      switch (hit.id) {
+        case "sidebar.left.toggle":
+          setSidebarOpen((o) => !o);
+          break;
+        case "view.cycleWorkspaceView":
+          setScreen((s) => nextScreen(s));
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [keymap]);
 
   // T-003: Shell on a workspace row restarts the first plain-shell pane in that folder, or adds one.
   const openShell = (dir: string, branch: string | null) => {

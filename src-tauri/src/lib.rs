@@ -1,6 +1,7 @@
 mod agents;
 mod creatures;
 mod git;
+mod keybindings;
 mod names;
 mod projects;
 mod pty;
@@ -78,6 +79,7 @@ pub fn run() {
             projects::workspace_create_fresh,
             projects::workspace_remove,
             agents::agent_list,
+            keybindings::keybindings_read,
             projects::workspaces_dir_get,
             projects::workspaces_dir_set
         ])

@@ -12,11 +12,22 @@ function Glyph({ size = 14, children, ...rest }: P) {
   );
 }
 
-/** The app mark: a six-spoke asterisk. */
-export const Mark = (p: P) => (
-  <Glyph {...p}>
-    <path d="M8 1.5v13M2.4 4.75l11.2 6.5M2.4 11.25l11.2-6.5" />
-  </Glyph>
+/** The app mark: Txais's own six-spoke glyph (design/icon/kolux-mark.svg, 24-unit grid): rounded
+ * spokes 60 degrees apart that narrow to a neck at a round centre dot, filled in the text colour. */
+export const Mark = ({ size = 14, ...rest }: P) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...rest}>
+    <g transform="translate(12 12)">
+      <g transform="rotate(30)">
+        <path id="kolux-spoke" d="M1.3 -.13C2.3 -.13 2.7 -.84 3.3 -.84H5.9A.84 .84 0 0 1 5.9 .84H3.3C2.7 .84 2.3 .13 1.3 .13Z" />
+        <use href="#kolux-spoke" transform="rotate(60)" />
+        <use href="#kolux-spoke" transform="rotate(120)" />
+        <use href="#kolux-spoke" transform="rotate(180)" />
+        <use href="#kolux-spoke" transform="rotate(240)" />
+        <use href="#kolux-spoke" transform="rotate(300)" />
+      </g>
+      <circle r="1.5" />
+    </g>
+  </svg>
 );
 export const Dots = (p: P) => (
   <Glyph {...p} fill="currentColor" stroke="none">

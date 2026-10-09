@@ -45,6 +45,8 @@ input { font: inherit; }
 .searchbox .ph { flex: 1; text-align: left; }
 .kbd { display: inline-flex; align-items: center; height: 17px; padding: 0 4px; background: var(--kbd-bg); border: 1px solid var(--kbd-border); border-radius: 4px; font-size: 11px; font-weight: 500; line-height: 1; }
 .kbd-plus { font-size: 10px; margin: 0 -2px; }
+.kbd-part { display: inline-flex; align-items: center; gap: 6px; }
+.kbd-none { font-size: 11px; color: var(--fg-faint); }
 .topbar-right .bell { margin-right: 8px; }
 .usage { display: inline-flex; align-items: center; gap: 6px; height: 23px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg-muted); font-size: 12px; margin-right: 14px; white-space: nowrap; }
 

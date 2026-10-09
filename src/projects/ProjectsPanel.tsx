@@ -10,6 +10,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { orderWorktrees, previewSentence, worktreeLabel, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
+import { KeyText } from "../keys/KeymapContext";
 
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
@@ -325,7 +326,7 @@ export default function ProjectsPanel({ openDirs, onOpenShell, agents, launching
         <div className="sb-divider" />
         <div className="sb-next">
           Next that needs you
-          <span className="hint">Ctrl+J</span>
+          <span className="hint"><KeyText id="terminals.focusNextNeedsYou" /></span>
         </div>
         <button className="sb-new" title="New session: start an agent in a new pane inside a fresh workspace" aria-haspopup="menu" aria-expanded={plusOpen} onClick={() => setPlusOpen((o) => !o)} disabled={launching}>
           <Plus size={13} />

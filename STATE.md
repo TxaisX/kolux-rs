@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 5, date: 2026-10-08; Txais lifted the cap for today)
-Next task: T-005 · Shortcuts live in a file the user owns: `~/.kolux/keybindings.json` (SET-011, SET-013, compat contracts)
-Done: 5 / 339 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 6, date: 2026-10-08; Txais lifted the cap for today)
+Next task: T-006 · PROJ-066 Switching workspaces is instant and keeps each one's state
+Done: 6 / 339 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 339 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -40,6 +40,17 @@ sea creature, e.g. `jade-seahorse`, unique across every project's folders and br
 pane running `claude --permission-mode auto` in it; the header shows the Claude mark, the creature
 name, a branch chip, "Claude" and "Running"; the sidebar lists the worktree with a live dot; closing
 the pane ends the Claude process. Panes sit side by side (1, 2 or 3 columns) until the real grid in T-009.
+
+T-005 makes shortcuts the user's own: Kolux reads `~\.kolux\keybindings.json` at start (creating it
+empty when missing, through a temporary file), knows all 127 carried command ids with their
+built-in chords per platform, applies the file's all-platforms section and then its win32 section
+(a chord, a list of chords, or null / false for unbound), warns about and ignores ids it does not
+know, keeps the default for any entry with a bad chord, drops a custom chord that clashes with
+another in the same place, and shows a red notice when the file will not parse while leaving the
+file alone. The search box chips and "Next that needs you" read their keys from that map (an
+override shows at once at the next start; unbound shows "Unassigned"). Ctrl+B hides and shows the
+sidebar and Ctrl+Alt+V cycles Agents / Board / Terminals through the keymap. The app icon and the
+top-left mark are now Txais's own (design/icon/).
 
 ## Needs Txais
 
@@ -137,6 +148,21 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-08 · T-005: a missing keybindings file is created "empty" as the shape Txais's own file has
+  (version 1, empty keybindings map, empty darwin / linux / win32 sections); the defaults stay
+  built in and are never written out, so a fresh file is a true "no overrides" file. The file is
+  read once at start; reload is explicit (COMPAT.md 4.1 found no watcher), and the Settings
+  reload / open / reveal buttons come with SET-012 (T-246). Linux takes the Windows column of
+  COMPAT.md 4.3 (Mod = Ctrl on both). Only global-scope actions that exist today are wired to the
+  keyboard (sidebar toggle, screen cycle); every other id resolves, shows its label, and waits for
+  its own card. Chords are matched on the physical key (KeyJ) with the typed character as the
+  fallback; the layout rules of SET-015 come later. Warnings (unknown ids such as the old app's
+  `voice.dictation` and the cut `tab.openQuickCommandsMenu`, both in Txais's file) are kept in the
+  keymap but not shown; only errors reach the notice. The live checks edited Txais's real file
+  (backed up first, restored byte for byte, SHA-256 compared) because the file lives in the home
+  folder by contract and the app has no test override for that path.
+- 2026-10-08 · T-005: the Tauri icon generator also writes Android and iOS icon sets; they were
+  deleted from src-tauri/icons (LOOP.md: Windows first; those targets are not built).
 - 2026-10-08 · Default screen is Terminals, although VIEW-001 says Board when none was chosen;
   Terminals is the only screen with content until the Board task, and VIEW-001's own task will
   flip the default. Layout 2/4/6 buttons draw but do nothing until T-009.
@@ -187,4 +213,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · T-003 · done: projects sidebar; a throwaway repository added as a project, "Fix login" created as branch `fix-login` in its own folder (confirmed with `git worktree list`), the pane opened inside it, then removed with a confirm step and both branch and folder gone on disk; 15 Rust tests (git runner round trip, name cleaner, project store) and 13 front-end tests green · evidence/T-003.png, evidence/T-003-removed.png
 - 2026-10-08 · T-003b · done: frameless window with its own top bar, switcher, search box, usage pill and window controls; floating sidebar card; layout strip; rounded pane card with the design's header; status bar with live memory; palette from DESIGN.md as CSS custom properties; measured against the reference at 1920x1032: top bar 36 px, sidebar x 8..296, pane card from y 84, status bar from y 1008, all six background hexes exact, corners 1 px tighter; 16 Rust tests and 18 front-end tests green · evidence/T-003b.png, evidence/T-003b-compare.png
 - 2026-10-08 · T-003b follow-up · done: chrome render test added (21 front-end tests green), hand-redrawn OpenAI knot removed in favour of a neutral glyph, cargo-deny installed and run ("licenses ok"), build / clippy / 16 Rust tests / tsc / JS licence check / plan check green; fresh maximized capture and side-by-side · evidence/T-003b.png, evidence/T-003b-compare.png
+- 2026-10-08 · T-005 · done: shortcuts file read from the home folder (created empty when missing), 127 command ids with the COMPAT.md defaults per platform, overrides / null / win32 section / older top-level form / bad chords / unknown ids / conflicts all covered by 9 front-end tests and 4 Rust tests; live: chips show Ctrl+Shift+J and Ctrl+J from the map, an override in the win32 section showed Ctrl+Alt+P and "Unassigned" at the next start, a broken file showed the red notice with the defaults in use and was left untouched; Txais's own icon and mark carried over (src-tauri/icons regenerated); build / clippy / 28 Rust tests / 35 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-005.png, evidence/T-005-override.png, evidence/T-005-broken.png
 - 2026-10-08 · T-004 · done: plus menu (sidebar and pane header) lists Claude Code and Codex with a PATH check, one click made worktree `jade-seahorse` off main and a pane running `claude --permission-mode auto` with mark, creature name, branch chip, "Claude", "Running"; closing the pane killed claude.exe; no orphan after closing the app; build / clippy / 24 Rust tests / 24 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-004-menu.png, evidence/T-004.png

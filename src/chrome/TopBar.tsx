@@ -1,11 +1,13 @@
 // The 36 px top bar (DESIGN.md section 4): app mark, overflow, sidebar toggle, back/forward on
 // the left; the centred Agents / Board / Terminals switcher; panel toggle, search hint, bell,
 // usage pill and the window's own minimize / maximize / close on the right. The bar is the
-// window's drag region (the window has no OS title bar).
+// window's drag region (the window has no OS title bar). The search box shows the palette chord
+// from the keymap (T-005), so an edit to ~/.kolux/keybindings.json changes the chips.
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
 import VendorMark from "./VendorMark";
+import { Kbd } from "../keys/KeymapContext";
 
 export type Screen = "agents" | "board" | "terminals";
 export const screens: Array<{ id: Screen; label: string }> = [
@@ -67,11 +69,7 @@ export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar 
         <button className="searchbox" title="Search (not built yet)">
           <Search />
           <span className="ph">Search</span>
-          <span className="kbd">Ctrl</span>
-          <span className="kbd-plus">+</span>
-          <span className="kbd">Shift</span>
-          <span className="kbd-plus">+</span>
-          <span className="kbd">J</span>
+          <Kbd id="worktree.palette" />
         </button>
         <button className="ib bell" title="Inbox (not built yet)">
           <Bell />
