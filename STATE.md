@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 16, date: 2026-10-09)
-Next task: T-017-b · Pre-trust for Codex, Cursor and Copilot in their own configuration files (the rest of the card on T-017-a)
-Done: 22 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 17, date: 2026-10-09)
+Next task: T-018 · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
+Done: 23 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -235,6 +235,14 @@ left alone; at most 12 folders per launch. The step is best effort: a failure is
 the launch goes on. Claude therefore goes straight to the first prompt in a fresh worktree
 instead of halting on its "Quick safety check" menu.
 
+T-017-b does the same for Codex: before a Codex worker starts, the worktree and its main
+repository are written to Codex's own `config.toml` (under `CODEX_HOME`, else `~/.codex`) as
+`[projects."<real path, lower-cased on Windows>"] trust_level = "trusted"`, the key form Codex
+itself writes. The file is edited with `toml_edit`, so every other line, comment and the key
+order stay byte for byte; an already-trusted folder changes nothing; a file that is not valid
+TOML is left alone. Same batch rules and the same one lock as Claude (`checked_keys`,
+`write_whole` shared by both). Cursor and Copilot still get nothing (T-017-c).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -331,6 +339,21 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-017-b: Codex's key is the real path, lower-cased on Windows, exactly as the
+  public Codex source resolves and writes it; both the worktree and the project root are
+  trusted because Codex looks a linked worktree's trust up on the main checkout. `CODEX_HOME` is
+  honoured when set, otherwise `~/.codex`; the rebuild has no managed Codex home of its own
+  (Txais's shell currently points `CODEX_HOME` at the old app's managed home, which this pass
+  neither read nor wrote: the live proof ran the dev app and the CLI with the variable unset,
+  so his real `~/.codex/config.toml` gained the two entries). `toml_edit` (already in the
+  dependency tree) edits the file in place so nothing else moves. T-017-c (Cursor, Copilot) is
+  split off and left unticked: neither tool's trusted-folders storage is documented anywhere
+  public, Cursor is not installed on this PC and Copilot's `config.json` carries only a
+  first-launch stamp here, so there is nothing to copy the shape from. Options for Txais: install
+  Cursor / trust a folder in Copilot once by hand and read back what each wrote, or drop the two
+  from the card. Live note: Codex printed "Hook failed · hook exited with code 1" twice in the
+  throwaway repo before answering; those are hooks from his own Codex profile, not Kolux's, and
+  not part of this task.
 - 2026-10-09 · T-017-a: T-017 is split in place: T-017-a is Claude (the agent this app launches
   today) plus the one-write batch; T-017-b is Codex, Cursor and Copilot, each with its own file
   format. The batch is the real list of folders the launch is about to use, not a list of
@@ -585,6 +608,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
 - 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png
 - 2026-10-09 · T-016 · done: `terminal.rs` marks program sessions (start time, last output) and `program_in(dir, since)`; `projects::create_fresh` shared by the UI command and the CLI; `cli.rs` `orchestration worker-start` parse (`WORKER_FLAGS`, `check_worker_start` with every refusal from CLI-035/ORCH-016/018/019), `worker_start` dispatch (task made/found under `orchestration.tasks`, worktree made or picked, `created` + `start` notify, readiness wait, receipt, `orchestration.dispatches`), `text_of` worker line, help text; front end `CliWorkspace` `start` kind → `startIn` with extra args and a pane title; 2 Rust tests (49 total; dispatch test runs the full flow with a 1 ms timeout); live in the throwaway "repo": `worker-start --spec "add a test" --agent claude --json` → `status: ready` in 1.8 s, `dispatch-1`/`task-1`, worktree hazel-otter, terminal 2; sidebar row hazel-otter + background tab "add a test" (Claude, Running) while the view stayed on main; opening the row shows one tab with Claude's trust prompt; `claude.exe --permission-mode auto "add a test"` under the app; `--worktree current --base-branch main` refused with exit 1 before anything was made; `worktree rm --worktree path:… --force` took the row, tab, process and folder away; build / clippy / 49 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-016-ready.png, evidence/T-016-one-tab.png
 - 2026-10-09 · T-015 · done: `Copies` type, `defaultCopies` and `sharedWarning` in seats.ts; "Folders" radiogroup + warn note with the "Give each its own copy" fix on ChooserPane; App.tsx `startSeats` places each seat (terminal → chooser folder, agent → fresh worktree each when separate, shared folder or one fresh worktree otherwise); Rust `creatureNamesUsed` store key, `retired_names` / `remember_retired` / `fresh_name`, `workspace_create_fresh` holds the store lock; Rust test extended (48 total), 2 front-end tests added (71); live in the throwaway "repo" project: chooser from New session with 3 seats → "Separate copy for each AI" checked; "Same folder for all" → warn note + fix button, the fix re-selects separate; Claude + Claude + Terminal, Start → rows tidal-walrus and nimble-squid appeared, `git worktree list` shows both under workspaces/repo, Claude's trust prompt in nimble-squid's folder, the terminal seat in the chooser's folder; both removed through the sidebar (branches gone); one more Claude from New session → silver-narwhal; store key `creatureNamesUsed` = ["tidal-walrus","nimble-squid","silver-narwhal"]; build / clippy / 48 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-015-default.png, evidence/T-015-warning.png, evidence/T-015-started.png, evidence/T-015-retired.png
