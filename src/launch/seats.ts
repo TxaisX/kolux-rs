@@ -10,6 +10,17 @@ export type Seat = { agent: string | null; model: string | null; title?: string;
 
 export const TERMINAL = "terminal";
 
+/** SESS-014: where the AIs work: a fresh worktree each, or the chooser's own folder for all. */
+export type Copies = "separate" | "shared";
+
+/** SESS-014: one copy per seat for 2+ seats in a Git project; the shared folder otherwise. */
+export const defaultCopies = (seatCount: number, inGit: boolean): Copies => (inGit && seatCount >= 2 ? "separate" : "shared");
+
+/** SESS-014: the shared folder with 2+ seats in a Git project is worth a warning. */
+export const sharedWarning = (copies: Copies, seatCount: number, inGit: boolean): boolean => copies === "shared" && inGit && seatCount >= 2;
+
+export const NOT_GIT = "Not a Git project: there is nothing to copy, so every AI works in this folder.";
+
 /** The quick-pick counts (SESS-013: the rebuild settles on the New session page's set). */
 export const QUICK_COUNTS = [1, 2, 3, 4, 6, 8];
 

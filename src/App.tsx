@@ -25,7 +25,7 @@ import ProjectsPanel from "./projects/ProjectsPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, emptySeat, modelArgs, TERMINAL, withoutFailed, type Seat } from "./launch/seats";
+import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -34,7 +34,7 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -264,25 +264,36 @@ function Window() {
 
   const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
 
-  // Start replaces the chooser with one pane per seat (SESS-013). Agent seats run in the chooser's
-  // workspace; when the chooser sits outside any workspace they get one fresh worktree together,
-  // so the seats land side by side in the grid.
+  // SESS-014: a chooser can copy only inside a Git project: its workspace, or (outside any
+  // workspace) the registered projects.
+  const inGitFor = (p: Pane) => p.cwd !== null || projects.length > 0;
+
+  // Start replaces the chooser with one pane per seat (SESS-013). With separate copies (SESS-014)
+  // every agent seat gets a fresh creature-named worktree of its own (SESS-023), made one after
+  // another so no two pick one name; with the shared folder agent seats run in the chooser's
+  // workspace, or in one fresh worktree together when the chooser sits outside any workspace.
+  // Terminal seats always open in the chooser's folder.
   const startSeats = async (key: number, seats: Seat[]) => {
     const chooser = panes.find((p) => p.key === key);
     if (!chooser) return;
     setLaunching(true);
     try {
-      let dir = chooser.cwd;
-      let branch = chooser.branch;
       const picked = seats.map((s) => (s.agent === TERMINAL ? null : agents.find((a) => a.id === s.agent && a.installed) ?? null));
       const missing = seats.find((s, i) => s.agent !== TERMINAL && !picked[i]);
       if (missing) throw new Error(`${missing.agent} is not installed.`);
-      if (dir === null && picked.some((a) => a !== null)) {
-        const pid = projectFor(null);
+      const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
+      const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
+        const pid = projectOf(chooser.cwd) ?? projectFor(null);
         if (!pid) throw new Error("Add a project first: an agent needs a repository to work in.");
         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
-        dir = wt.path;
-        branch = wt.branch;
+        return { cwd: wt.path, branch: wt.branch };
+      };
+      const places: { cwd: string | null; branch: string | null }[] = [];
+      let shared: { cwd: string | null; branch: string | null } | null = null;
+      for (const a of picked) {
+        if (a === null) places.push({ cwd: chooser.cwd, branch: chooser.branch });
+        else if (separate) places.push(await fresh());
+        else places.push((shared ??= chooser.cwd === null ? await fresh() : { cwd: chooser.cwd, branch: chooser.branch }));
       }
       const batch = key;
       // SESS-051: each agent's start line comes from the catalogue, prompt route included; a
@@ -293,13 +304,14 @@ function Window() {
         const line = lines[i];
         const k = nextKey.current++;
         const title = s.title?.trim() || undefined;
+        const { cwd, branch } = places[i];
         return a && line
-          ? { key: k, cwd: dir, branch, agent: markFor(a.id), program: a.program, args: line.args, title, batch, typed: line.typed ?? undefined }
-          : { key: k, cwd: dir, branch, agent: "shell", program: null, args: [], title, batch };
+          ? { key: k, cwd, branch, agent: markFor(a.id), program: a.program, args: line.args, title, batch, typed: line.typed ?? undefined }
+          : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
       setToast(made.length === 1 ? "Starting 1 session" : `Starting ${made.length} sessions`);
-      setActiveDir(dir);
+      setActiveDir(made[0].cwd);
       setFocused(made[0].key);
       setRefresh((n) => n + 1);
       setNotice(null);
@@ -367,15 +379,8 @@ function Window() {
 
   // Which project a launch belongs to: the one asked for, else the one that owns the focused
   // pane's folder, else the first in the list.
-  const projectFor = (projectId: string | null): string | null => {
-    if (projectId) return projectId;
-    const cwd = panes.find((p) => p.key === focused)?.cwd;
-    if (cwd) {
-      const hit = Object.entries(owner).find(([dir]) => sameDir(dir, cwd));
-      if (hit) return hit[1];
-    }
-    return projects[0]?.id ?? null;
-  };
+  const projectOf = (cwd: string | null): string | null => (cwd ? (Object.entries(owner).find(([dir]) => sameDir(dir, cwd))?.[1] ?? null) : null);
+  const projectFor = (projectId: string | null): string | null => projectId ?? projectOf(panes.find((p) => p.key === focused)?.cwd ?? null) ?? projects[0]?.id ?? null;
 
   // SESS-004 + SESS-023: a fresh worktree with a creature name, then the agent in a new pane there.
   const launch = async (agent: AgentInfo, projectId: string | null) => {
@@ -535,6 +540,9 @@ function Window() {
                     seats={clearMissing(p.seats, installedIds)}
                     onSeats={(s) => setSeats(p.key, s)}
                     onStart={(s) => void startSeats(p.key, s)}
+                    copies={p.copies ?? defaultCopies(p.seats.length, inGitFor(p))}
+                    inGit={inGitFor(p)}
+                    onCopies={(c) => setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, copies: c } : x)))}
                     busy={launching}
                     closable
                     onClose={() => closePane(p.key)}

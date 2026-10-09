@@ -243,12 +243,35 @@ pub fn names_in_use(git: &Git, projects: &[Project]) -> Vec<String> {
     names
 }
 
+/// Every creature name ever handed out (SESS-023): a retired worktree's name is never reused.
+const RETIRED_KEY: &str = "creatureNamesUsed";
+
+pub fn retired_names(store: &Store) -> Vec<String> {
+    store.get(RETIRED_KEY).ok().flatten().and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default()
+}
+
+pub fn remember_retired(store: &Store, name: &str) -> Result<(), String> {
+    let mut names = retired_names(store);
+    if !names.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        names.push(name.to_string());
+        store.set(RETIRED_KEY, &serde_json::to_string(&names).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// A creature name in use nowhere, now or before (SESS-023).
+pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> String {
+    let mut taken = names_in_use(git, projects);
+    taken.extend(retired_names(store));
+    creature_name(&taken, seed)
+}
+
 /// A workspace an agent launch makes for itself: a creature name nobody uses, branched from the
 /// main checkout. The clock seeds the pick so launches do not always start at the same pair.
-pub fn create_fresh_workspace(git: &Git, place: &Place, projects: &[Project], project: &Project) -> Result<Worktree, String> {
-    let taken = names_in_use(git, projects);
+pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects: &[Project], project: &Project) -> Result<Worktree, String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    let name = creature_name(&taken, seed);
+    let name = fresh_name(git, store, projects, seed);
+    remember_retired(store, &name)?;
     create_workspace(git, place, project, &name, None).map(|c| c.worktree)
 }
 
@@ -339,13 +362,11 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
 
 #[tauri::command]
 pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Worktree, String> {
-    let (projects, project, place) = {
-        let store = store.lock().map_err(|e| e.to_string())?;
-        let project = find_project(&store, &project_id)?;
-        let place = place_for(&store, &project);
-        (load_projects(&store), project, place)
-    };
-    create_fresh_workspace(&git, &place, &projects, &project)
+    // The store stays locked while Git works so two seats launched together never pick one name.
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let project = find_project(&store, &project_id)?;
+    let place = place_for(&store, &project);
+    create_fresh_workspace(&git, &store, &place, &load_projects(&store), &project)
 }
 
 /// PROJ-025 / PROJ-028: a project's own workspaces folder and base ref; empty clears either.
@@ -522,8 +543,8 @@ mod tests {
         let project = add_project(&git, &store, &repo).unwrap();
         let projects = load_projects(&store);
 
-        let first = create_fresh_workspace(&git, &nested(&root), &projects, &project).unwrap();
-        let second = create_fresh_workspace(&git, &nested(&root), &projects, &project).unwrap();
+        let first = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project).unwrap();
+        let second = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project).unwrap();
         let name_of = |w: &Worktree| Path::new(&w.path).file_name().unwrap().to_string_lossy().to_string();
         assert_ne!(name_of(&first), name_of(&second), "two launches never share a name");
         for w in [&first, &second] {
@@ -534,6 +555,15 @@ mod tests {
         }
         let in_use = names_in_use(&git, &projects);
         assert!(in_use.contains(&name_of(&first)) && in_use.contains(&name_of(&second)));
+        // SESS-023: a retired name never comes back, even from the same seed.
+        remove_workspace(&git, &project, &first.path).unwrap();
+        assert!(!names_in_use(&git, &projects).contains(&name_of(&first)));
+        for seed in [0u64, 7, 4242] {
+            assert_ne!(fresh_name(&git, &store, &projects, seed), name_of(&first), "seed {seed}");
+        }
+        let x = fresh_name(&git, &store, &projects, 0);
+        remember_retired(&store, &x).unwrap();
+        assert_ne!(fresh_name(&git, &store, &projects, 0), x);
 
         drop(store);
         for d in [profile, repo, root] {

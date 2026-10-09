@@ -7,7 +7,7 @@
 import { Close } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
-import { allReady, modelsFor, QUICK_COUNTS, resizeSeats, sameForAll, seatReady, TERMINAL, type Seat } from "./seats";
+import { allReady, modelsFor, NOT_GIT, QUICK_COUNTS, resizeSeats, sameForAll, seatReady, sharedWarning, TERMINAL, type Copies, type Seat } from "./seats";
 
 type Props = {
   /** The session's number, shown in the header. */
@@ -19,6 +19,10 @@ type Props = {
   seats: Seat[];
   onSeats: (seats: Seat[]) => void;
   onStart: (seats: Seat[]) => void;
+  /** SESS-014: where the AIs work; `inGit` false disables the separate copies. */
+  copies: Copies;
+  inGit: boolean;
+  onCopies: (copies: Copies) => void;
   busy?: boolean;
   /** False when this is the grid's only pane: then there is no close button. */
   closable: boolean;
@@ -26,7 +30,7 @@ type Props = {
   onFocus?: () => void;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, onStart, busy = false, closable, onClose, onFocus }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus }: Props) {
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const ready = allReady(seats) && !busy;
   const anyReady = seats.some(seatReady);
@@ -80,6 +84,26 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
             Same for all
           </button>
         </div>
+        <div className="count-row" role="radiogroup" aria-label="Where the AIs work">
+          <span className="label">Folders</span>
+          <label className="choice" title={inGit ? "Each AI seat gets a fresh worktree of its own" : NOT_GIT}>
+            <input type="radio" name={`copies-${number}`} checked={copies === "separate"} disabled={!inGit} onChange={() => onCopies("separate")} />
+            Separate copy for each AI
+          </label>
+          <label className="choice" title="Every seat opens in this folder">
+            <input type="radio" name={`copies-${number}`} checked={copies === "shared"} onChange={() => onCopies("shared")} />
+            Same folder for all
+          </label>
+          {!inGit && <span className="caption">{NOT_GIT}</span>}
+        </div>
+        {sharedWarning(copies, seats.length, inGit) && (
+          <div className="note warn" role="status">
+            Several AIs would be editing the same files at once.{" "}
+            <button className="btn" onClick={() => onCopies("separate")}>
+              Give each its own copy
+            </button>
+          </div>
+        )}
         <div className="seats">
           {seats.map((seat, i) => (
             <div key={i} className="seat">

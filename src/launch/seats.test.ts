@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, emptySeat, modelArgs, modelsFor, resizeSeats, sameForAll, seatReady, TERMINAL, withoutFailed, type Seat } from "./seats";
+import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, resizeSeats, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, type Seat } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -57,4 +57,14 @@ test("every agent gets the program default as an explicit choice; only a real mo
   expect(modelArgs("opus")).toEqual(["--model", "opus"]);
   expect(modelArgs("default")).toEqual([]);
   expect(modelArgs(null)).toEqual([]);
+});
+
+test("SESS-014: separate copies for 2+ seats in Git, the shared folder otherwise; sharing in Git with 2+ seats warns", () => {
+  expect(defaultCopies(3, true)).toBe("separate");
+  expect(defaultCopies(1, true)).toBe("shared");
+  expect(defaultCopies(3, false)).toBe("shared");
+  expect(sharedWarning("shared", 3, true)).toBe(true);
+  expect(sharedWarning("separate", 3, true)).toBe(false);
+  expect(sharedWarning("shared", 1, true)).toBe(false);
+  expect(sharedWarning("shared", 3, false)).toBe(false);
 });

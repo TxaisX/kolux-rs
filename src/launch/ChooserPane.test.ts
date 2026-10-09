@@ -5,11 +5,12 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import ChooserPane from "./ChooserPane";
 import type { AgentInfo } from "./PlusMenu";
-import { TERMINAL, type Seat } from "./seats";
+import { defaultCopies, TERMINAL, type Copies, type Seat } from "./seats";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:\\bin\\claude.exe" };
-const render = (seats: Seat[], closable = true) =>
-  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onStart: () => {}, closable, onClose: () => {} }));
+const render = (seats: Seat[], closable = true, inGit = true, copies: Copies = defaultCopies(seats.length, inGit)) =>
+  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onStart: () => {}, copies, inGit, onCopies: () => {}, closable, onClose: () => {} }));
+const radio = (html: string, label: string) => html.split("<label").find((l) => l.includes(label))!;
 const startButton = (html: string) => html.split("<button").find((b) => b.includes("Start"))!;
 
 test("SESS-007: Claude without a model keeps Start disabled, a model enables it, Terminal is enabled at once", () => {
@@ -56,4 +57,23 @@ test("SESS-013: the count row shows the quick picks and one seat block per seat"
   expect(html).not.toContain("Seat 4");
   expect(html).toContain('value="3"');
   expect(html).toContain("Start 3");
+});
+
+test("SESS-014: three seats in Git pick separate copies; sharing them warns with a fix; outside Git separate is disabled and explained", () => {
+  const three: Seat[] = [{ agent: "claude", model: "opus" }, { agent: "claude", model: "opus" }, { agent: "claude", model: "opus" }];
+  const separate = render(three);
+  expect(radio(separate, "Separate copy for each AI")).toContain("checked");
+  expect(separate).not.toContain("Give each its own copy");
+  const shared = render(three, true, true, "shared");
+  expect(radio(shared, "Same folder for all")).toContain("checked");
+  expect(shared).toContain("Several AIs would be editing the same files at once");
+  expect(shared).toContain("Give each its own copy");
+  const one = render([three[0]]);
+  expect(radio(one, "Same folder for all")).toContain("checked");
+  expect(one).not.toContain("Give each its own copy");
+  const outside = render(three, true, false);
+  expect(radio(outside, "Separate copy for each AI")).toContain("disabled");
+  expect(radio(outside, "Same folder for all")).toContain("checked");
+  expect(outside).toContain("Not a Git project: there is nothing to copy");
+  expect(outside).not.toContain("Give each its own copy");
 });
