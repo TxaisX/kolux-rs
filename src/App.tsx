@@ -503,6 +503,7 @@ function Window() {
           )}
           {terminals && page === "routing" && (
             <RoutingPage
+              agents={agents}
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);

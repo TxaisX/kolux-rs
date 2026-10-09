@@ -271,3 +271,4 @@ input { font: inherit; }
 .routing-table { width: auto; min-width: 520px; }
 .routing-table td:first-child { min-width: 120px; }
 .routing-table select.field { width: 200px; }
+.routing-missing { margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; color: var(--fg-muted); background: var(--input-bg); border: 1px solid var(--line-subtle); }

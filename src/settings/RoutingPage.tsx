@@ -1,20 +1,24 @@
 // Model routing (SET-028): pick a provider, then a model and an effort for each worker tier.
 // When a coordinator starts a worker on a tier (`kolux-dev orchestration worker-start --tier`),
 // the worker runs on that provider with the model picked here. Only providers that can route by
-// tier are listed. ponytail: shown as a page of its own until Settings > Agents exists (T-036,
-// T-054); the reset button and the not-installed mark of ACCT-034 come with T-081.
+// tier are listed, installed or not; one this computer lacks carries a "Not detected" mark
+// (ACCT-034). Reset puts back the chosen provider's ladder only. ponytail: shown as a page of its
+// own until Settings > Agents exists (T-036, T-054).
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { chooseModel, current, effortsFor, routingOf, TIERS, withPick, type Provider } from "./routing";
+import type { AgentInfo } from "../launch/PlusMenu";
+import { chooseModel, current, effortsFor, isCustom, resetProvider, routingOf, TIERS, withPick, type Provider } from "./routing";
 
 type Props = {
+  /** The detected agents, for the not-detected mark. */
+  agents: AgentInfo[];
   settings: Record<string, unknown>;
   onSettings: (next: Record<string, unknown>) => void;
   /** Seeds the catalogue without asking the back end (tests render it to HTML). */
   initial?: Provider[];
 };
 
-export default function RoutingPage({ settings, onSettings, initial }: Props) {
+export default function RoutingPage({ agents, settings, onSettings, initial }: Props) {
   const [providers, setProviders] = useState<Provider[] | null>(initial ?? null);
   const [error, setError] = useState("");
   const [chosen, setChosen] = useState(initial?.[0]?.id ?? "claude");
@@ -28,6 +32,7 @@ export default function RoutingPage({ settings, onSettings, initial }: Props) {
 
   const p = providers?.find((x) => x.id === chosen) ?? providers?.[0];
   const routing = routingOf(settings);
+  const missing = (id: string) => !agents.some((a) => a.id === id && a.installed);
 
   return (
     <section className="autos routing" aria-label="Model routing">
@@ -35,11 +40,18 @@ export default function RoutingPage({ settings, onSettings, initial }: Props) {
         <h2>Model routing</h2>
         <div className="autos-agents" role="tablist" aria-label="Provider">
           {(providers ?? []).map((x) => (
-            <button key={x.id} className="btn" role="tab" aria-selected={x.id === p?.id} onClick={() => setChosen(x.id)}>
+            <button key={x.id} className="btn" role="tab" aria-selected={x.id === p?.id} onClick={() => setChosen(x.id)} title={missing(x.id) ? `${x.name} was not found on this computer` : undefined}>
               {x.name}
+              {missing(x.id) && <span className="routing-missing">Not detected</span>}
             </button>
           ))}
         </div>
+        <span className="autos-gap" />
+        {p && (
+          <button className="btn" disabled={!isCustom(routing, p.id)} onClick={() => onSettings(resetProvider(settings, p.id))} title={`Put back the default model and effort for every ${p.name} tier`}>
+            Reset {p.name}
+          </button>
+        )}
       </div>
       {error && <p className="autos-none routing-note">Model routing could not be loaded: {error}</p>}
       {p && (

@@ -3,6 +3,9 @@
 //! shipped ladder is the default; the user's picks live in settings under `modelRouting`, as
 //! `{ "<provider>": { "<tier>": { "model": "<id or empty>", "effort": "<level or empty>" } } }`.
 //! An empty model means "the provider's own default": no `--model` and no effort is passed.
+//! Reset (ACCT-034) removes one provider's entry, so its tiers go back to the ladder.
+//! ponytail: a 0.15.0 profile's routing table is brought into `modelRouting` by the settings
+//! importer (SET-035, T-181); nothing here reads the old file.
 use serde::Serialize;
 use serde_json::Value;
 
@@ -33,7 +36,9 @@ pub struct Provider {
 }
 
 const CLAUDE_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-const CODEX_EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
+// Codex's own model list (its models cache, 2026-10-09) says which levels each model takes.
+const CODEX_FULL: &[&str] = &["low", "medium", "high", "xhigh", "max", "ultra"];
+const CODEX_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 const CLAUDE_MODELS: &[Model] = &[
     Model { id: "fable", label: "Claude Fable", efforts: CLAUDE_EFFORTS },
@@ -42,9 +47,13 @@ const CLAUDE_MODELS: &[Model] = &[
     Model { id: "haiku", label: "Claude Haiku", efforts: &[] },
 ];
 const CODEX_MODELS: &[Model] = &[
-    Model { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", efforts: CODEX_EFFORTS },
-    Model { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", efforts: CODEX_EFFORTS },
-    Model { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: CODEX_EFFORTS },
+    Model { id: "gpt-6-sol", label: "GPT-6 Sol", efforts: CODEX_FULL },
+    Model { id: "gpt-6-astra", label: "GPT-6 Astra", efforts: CODEX_FULL },
+    Model { id: "gpt-6-luna", label: "GPT-6 Luna", efforts: CODEX_MAX },
+    Model { id: "gpt-5.6-sol", label: "GPT-5.6 Sol", efforts: CODEX_FULL },
+    Model { id: "gpt-5.6-terra", label: "GPT-5.6 Terra", efforts: CODEX_FULL },
+    Model { id: "gpt-5.6-luna", label: "GPT-5.6 Luna", efforts: CODEX_MAX },
+    Model { id: "gpt-5.5", label: "GPT-5.5", efforts: &["low", "medium", "high", "xhigh"] },
 ];
 
 const fn pick(model: &'static str, effort: Option<&'static str>) -> Pick {
@@ -65,7 +74,8 @@ pub fn providers() -> Vec<Provider> {
             id: "codex",
             name: "Codex",
             models: CODEX_MODELS,
-            defaults: [pick("gpt-5.6-sol", Some("high")), pick("gpt-5.6-terra", Some("high")), pick("gpt-5.6-terra", Some("medium")), pick("gpt-5.6-luna", Some("low"))],
+            // DT-12: the newest Codex model at high for Major and Deep, medium for Build, low for Light.
+            defaults: [pick("gpt-6-sol", Some("high")), pick("gpt-6-sol", Some("high")), pick("gpt-6-sol", Some("medium")), pick("gpt-6-sol", Some("low"))],
         },
     ]
 }
@@ -115,7 +125,8 @@ mod tests {
         let none = json!({});
         assert_eq!(r(&none, "claude", "build"), (s("sonnet"), s("medium")));
         assert_eq!(r(&none, "claude", "light"), (s("haiku"), None));
-        assert_eq!(r(&none, "codex", "major"), (s("gpt-5.6-sol"), s("high")));
+        assert_eq!(r(&none, "codex", "major"), (s("gpt-6-sol"), s("high")));
+        assert_eq!(r(&none, "codex", "build"), (s("gpt-6-sol"), s("medium")));
     }
 
     #[test]
@@ -125,7 +136,7 @@ mod tests {
         assert_eq!(r(&saved, "claude", "deep"), (s("haiku"), None));
         // Other tiers and the other provider keep their defaults.
         assert_eq!(r(&saved, "claude", "build"), (s("sonnet"), s("medium")));
-        assert_eq!(r(&saved, "codex", "light"), (s("gpt-5.6-luna"), s("low")));
+        assert_eq!(r(&saved, "codex", "light"), (s("gpt-6-sol"), s("low")));
     }
 
     #[test]

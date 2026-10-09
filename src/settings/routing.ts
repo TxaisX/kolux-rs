@@ -50,3 +50,12 @@ export function modelOf(args: string[]): string | null {
   const i = args.indexOf("--model");
   return i >= 0 && i + 1 < args.length ? args[i + 1] : null;
 }
+
+/** ACCT-034's reset: one provider's tiers go back to the shipped ladder; the others stay. */
+export function resetProvider(settings: Record<string, unknown>, provider: string): Record<string, unknown> {
+  const { [provider]: _dropped, ...rest } = routingOf(settings);
+  return { ...settings, [ROUTING_KEY]: rest };
+}
+
+/** Whether a provider has any pick of its own (reset has something to undo). */
+export const isCustom = (routing: Routing, provider: string): boolean => Object.keys(routing[provider] ?? {}).length > 0;

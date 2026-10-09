@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { chooseModel, current, effortsFor, modelOf, withPick, routingOf, type Provider } from "./routing";
+import { chooseModel, current, effortsFor, isCustom, modelOf, resetProvider, withPick, routingOf, type Provider } from "./routing";
 
 const claude: Provider = {
   id: "claude",
@@ -36,4 +36,14 @@ test("a new model keeps the effort if it still offers it, resets it otherwise", 
 test("the pane header reads the model from the start line", () => {
   expect(modelOf(["--permission-mode", "auto", "--model", "haiku", "--effort", "low"])).toBe("haiku");
   expect(modelOf(["--permission-mode", "auto"])).toBeNull();
+});
+
+test("reset puts back one provider's ladder and leaves the other alone", () => {
+  let s = withPick({}, "claude", "build", { model: "opus", effort: "high" });
+  s = withPick(s, "codex", "light", { model: "gpt-6-luna", effort: "medium" });
+  const after = resetProvider(s, "claude");
+  expect(current(claude, "build", routingOf(after))).toEqual({ model: "sonnet", effort: "medium" });
+  expect(routingOf(after).codex.light).toEqual({ model: "gpt-6-luna", effort: "medium" });
+  expect(isCustom(routingOf(s), "claude")).toBe(true);
+  expect(isCustom(routingOf(after), "claude")).toBe(false);
 });

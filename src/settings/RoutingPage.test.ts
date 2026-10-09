@@ -26,7 +26,7 @@ const providers: Provider[] = [
 
 test("four tiers, each with a model picker; a model with no effort levels has no effort picker", () => {
   const settings = { modelRouting: { claude: { deep: { model: "haiku", effort: "" } } } };
-  const html = renderToString(createElement(RoutingPage, { settings, onSettings: () => {}, initial: providers }));
+  const html = renderToString(createElement(RoutingPage, { agents: [], settings, onSettings: () => {}, initial: providers }));
   for (const t of ["Major", "Deep", "Build", "Light"]) expect(html).toContain(`aria-label="${t} model"`);
   expect(html).toContain('aria-label="Major effort"');
   expect(html).toContain('aria-label="Build effort"');
@@ -34,4 +34,15 @@ test("four tiers, each with a model picker; a model with no effort levels has no
   expect(html).not.toContain('aria-label="Light effort"');
   expect(html).toContain("Provider default");
   expect(html).toContain("Codex");
+});
+
+test("a provider this computer lacks is still a tab, marked not detected; reset is offered", () => {
+  const agents = [
+    { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: null },
+    { id: "codex", name: "Codex", program: "codex", args: [], installed: false, path: null },
+  ];
+  const html = renderToString(createElement(RoutingPage, { agents, settings: {}, onSettings: () => {}, initial: providers }));
+  expect(html).toMatch(/role="tab"[^>]*>Codex.*?Not detected/);
+  expect(html.split("Not detected").length - 1).toBe(1); // only Codex
+  expect(html).toMatch(/Reset (<!-- -->)?Claude Code/);
 });

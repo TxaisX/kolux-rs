@@ -214,7 +214,7 @@ T-016 adds `kolux-dev orchestration worker-start` (ORCH-016): `--spec <text>` ma
 (`task-N`, title from `--task-title` or the brief's first line) or `--task <id>` takes an
 existing one; `--agent <id>` names who runs it, or `--tier major|deep|build|light` picks the
 model and effort from the shipped routing (Claude: fable/high, opus/high, sonnet/medium,
-haiku; Codex: gpt-5.6-sol/high, gpt-5.6-terra/high, gpt-5.6-terra/medium, gpt-5.6-luna/low).
+haiku; Codex since T-081: gpt-6-sol at high, high, medium, low; see Model routing below).
 `--worktree` defaults to `new-top-level`: a fresh creature-named worktree (or `--name`/
 `--base-branch`/`--display-name` for a shaped one); `current` or a selector reuses one. The app
 opens the worker as a background tab named after the task, with the brief as the first prompt,
@@ -274,6 +274,15 @@ orchestration worker-start --tier <t>` now reads those picks, so the worker star
 picked model. Every agent pane started with `--model` (a seat's pick or a worker's tier) names the
 model in its header ("Claude · haiku"). The reset button and the "not on this computer" mark are
 still to come in T-081.
+
+T-081 (orchestration lane) completes Model routing for ACCT-034: each provider tab carries a
+"Not detected" mark when this computer lacks that program, and stays selectable. "Reset <provider>"
+(greyed when nothing was changed) puts back that provider's shipped ladder and leaves the other
+provider alone. Codex's ladder now follows DT-12: the newest Codex model, gpt-6-sol, at high for
+Major and Deep, medium for Build and low for Light. Its model list (GPT-6 Sol / Astra / Luna,
+GPT-5.6 Sol / Terra / Luna, GPT-5.5) and each model's effort levels come from Codex's own models
+cache on this PC. Claude's levels come from `claude --help` (low to max). A 0.15.0 profile's
+routing table is carried over by the settings importer (T-181).
 
 ## Needs Txais
 
@@ -649,7 +658,12 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [orchestration] T-087: when a new model does not offer the current effort, the effort goes back to "Default" (no effort flag) rather than to some other level.
 - [orchestration] T-087: effort levels offered are low / medium / high / xhigh / max for Claude Fable, Opus and Sonnet, none for Haiku, and low / medium / high / xhigh for the Codex models.
 
+- [orchestration] T-081: Codex's default ladder is gpt-6-sol at high / high / medium / low (DT-12: "newest Codex model"; Codex's own models cache on this PC lists gpt-6-sol, gpt-6-astra and gpt-6-luna as the newest, and `~/.codex/config.toml` uses gpt-6-sol). This replaces T-016's gpt-5.6-sol / terra / terra / luna ladder.
+- [orchestration] T-081: the Reset button is greyed while the chosen provider has no pick of its own.
+- [orchestration] T-081 for the coordinator: the importer task T-181 (SET-035) should bring a 0.15.0 profile's routing table into `modelRouting` (COMPAT 5.7, ACCT-034 row). It was not added to T-181's line because that line is outside this lane's section of PLAN.md.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [orchestration] T-081 · done: `resetProvider` / `isCustom` in `src/settings/routing.ts` (1 new test), Reset button and "Not detected" tab mark on `RoutingPage.tsx` (1 new render test), Codex models and DT-12 ladder in `routing.rs` (Rust tests updated); live: Claude Build set to Opus/high and Codex Light to GPT-6 Luna, Reset Claude Code put Build back to Sonnet/medium and left Codex's pick saved. This PC has Codex, so the not-detected mark is shown by the render test only · evidence/T-081-codex.png, T-081-before-reset.png, T-081-after-reset.png
 - 2026-10-09 · [orchestration] T-087 · done: new `src-tauri/src/routing.rs` (catalogue of routable providers, models, effort levels and the shipped ladder; `route` reads `modelRouting` from settings and drops an effort the model lacks; 3 Rust tests) used by `worker-start --tier` (CLI test now expects the saved Sonnet/low pick); `src/settings/routing.ts` (3 tests) + `RoutingPage.tsx` (1 render test), sliders button in the sidebar footer, model shown in the pane header; live: defaults table, Build set to Haiku hides its effort picker and saves, `kolux-dev orchestration worker-start --tier build` started a worker whose header reads "Claude · haiku" (Claude itself reports Haiku) · evidence/T-087-routing.png, T-087-no-effort.png, T-087-worker-header.png
 - 2026-10-09 · [orchestration] T-086 · done: new `src-tauri/src/automations.rs` (list / pause / delete / Run now commands, numbered manual runs, placement + trust + background tab via the cli-workspace event, skipped when the project is gone, failed when the agent is missing; 3 Rust tests), `src/automations/model.ts` (natural sort, last-run sort, filters, search, 5 tests) and `AutomationsPage.tsx` (3 render tests), clock button in the sidebar footer; live: list, search on prompt text, last-run sort, Run now on a paused row, delete confirm + Don't ask again, the background run tab, failed-load Retry · evidence/T-086-list.png, T-086-search.png, T-086-sort.png, T-086-runnow.png, T-086-confirm.png, T-086-deleted.png, T-086-run-tab.png, T-086-failed.png
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
