@@ -40,17 +40,21 @@ struct ExitPayload {
 impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>) -> Result<u32, String> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, env: Option<(&str, String)>) -> Result<u32, String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
         let out_app = app.clone();
         let exit_app = app;
         let registry = self.inner.clone();
-        let command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let mut command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => program_command(p, &args, cwd.as_deref()),
             None => shell_command(cwd.as_deref()),
         };
+        if let Some((k, v)) = env {
+            command.env(k, v);
+        }
         let session = PtySession::spawn(
             command,
             cols.max(2),
@@ -129,10 +133,17 @@ impl Terminals {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
-    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default())
+    // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
+    let env = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let settings = store.settings();
+        let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
+        crate::claude_key::pane_env(program.as_deref(), &settings, token)
+    };
+    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env)
 }
 
 #[tauri::command]

@@ -228,10 +228,32 @@ weekly figures each with its own reset time, the limit-reset credits and the pla
 Codex no longer accepts turns it into a yellow "Codex · sign in again" with no figures. The
 Claude half still reads "unknown" until T-041.
 
+[accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
+the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
+were. The Claude card connects on a key that lasts a year: Connect runs Claude Code's own
+long-lived-key setup out of sight (no console window, never through the command prompt), shows
+"Finish in the browser" with Cancel while Claude's page is open, picks the key out of the
+setup's output, keeps it sealed with the date it was made, and turns the card to "Connected ·
+1-year key, Renew in <month year>". From 30 days before the year is up the card warns with the
+days left and offers Renew; past it, it reads "ran out". A second Connect while one is running is
+turned down, the setup gives up after 10 minutes, and a launcher Kolux cannot start directly puts
+the card in needs attention. Every new Claude pane is handed the key through
+CLAUDE_CODE_OAUTH_TOKEN while key mode is on (its /status reads "Auth token:
+CLAUDE_CODE_OAUTH_TOKEN"). Disconnect forgets the key. Managed Claude accounts and the Codex
+sign-ins come with T-043-b / T-043-c.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
+
+- [accounts] 2026-10-09 · **Please revoke one Claude Code long-lived key.** During the T-043-a live
+  check, clicking Connect ran Claude Code's real key setup; your browser was already signed in to
+  claude.ai, so it finished by itself in a few seconds and made a real 1-year key on your account.
+  Nobody read or printed it; it was stored sealed in the lane's test profile and removed with
+  Disconnect about two minutes later, but it stays valid at Anthropic until revoked. Revoke the
+  long-lived Claude Code key created 2026-10-09 around 12:45 in your claude.ai account settings.
+  Every later check uses a stand-in program and fake keys only.
 
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
@@ -563,7 +585,20 @@ recorded default until told otherwise; nothing here blocks a pass.
   pill is the weekly pill, USAGE-008) and reads again every 10 minutes until USAGE-023's timer
   lands. The live proof read Txais's own Codex figures (read only, no session opened).
 
+- 2026-10-09 · [accounts] T-043-a · Settings opens from a click on the top-bar usage pill and
+  from Ctrl+Comma (`app.settings`), laid over the window body; it has only the AI connections page
+  until T-092 brings the full Connect cards (ACCT-001..003). The profile fields are
+  `claudeOauthToken` (sealed, from T-038), `claudeConnectionMode` = "key" and `claudeKeyCreatedAt`
+  (milliseconds). Twelve months = 365 days; the warning starts at 30 days left or fewer; the
+  renewal month shown is the month the key runs out. The setup runs in a hidden terminal (ConPTY,
+  400 columns) that answers Claude Code's cursor-position question, because without that answer
+  its output stalls; a launcher ending .cmd/.bat/.ps1 is refused rather than run through cmd. The
+  key is taken only from an `sk-ant-oat…` run of at least 40 characters; a subscription line counts
+  as final only when no key follows. Split: T-043-b (managed accounts, renewal opt-out), T-043-c
+  (Codex sign-ins).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [accounts] T-043-a · done (split; T-043-b ACCT-005/006, T-043-c ACCT-007): `claude_key.rs` (hidden `claude setup-token` in portable-pty answering ESC[6n, browser step seen from the first https:// line, key picked out of ANSI-stripped output, subscription line not final, 10-minute limit, cancel, single setup at a time, .cmd/.bat/.ps1 launcher → needs attention, status/connect/cancel/disconnect commands and a `claude-key` event, key handed to Claude panes only in key mode), `terminal_spawn` passes it as CLAUDE_CODE_OAUTH_TOKEN, `src/settings/` Settings overlay + Claude card, usage pill opens Settings; 7 Rust tests (64 total), 6 front-end tests (80 total); live: the real setup ran once by accident and connected (see Needs Txais: revoke that key), fake key now → "Renew in October 2027", fake key backdated 340 days → "runs out in 24 days (November 2026)" with Renew, new Claude pane in a throwaway worktree → /status "Auth token: CLAUDE_CODE_OAUTH_TOKEN" (401 with the fake key, no browser prompt), Disconnect → "Connect with a key that lasts a year"; build / clippy / 64 Rust tests / 80 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-043-a-browser.png, evidence/T-043-a-connected.png, evidence/T-043-a-renew.png, evidence/T-043-a-pane.png, evidence/T-043-a-disconnected.png
 - 2026-10-09 · [accounts] T-042-a · done (split; T-042-b holds the usage-service and status-screen routes): `codex_usage.rs` (sign-in lookup account home → `CODEX_HOME` → `~\.codex`, nothing launched without one, API-key sign-ins reported as such; hidden `codex app-server` with CREATE_NO_WINDOW, initialize → account/read → account/rateLimits/read, 20 s limit, input closed then 3 s grace then the process tree stopped by force; windows placed by their own length, model-specific buckets ignored, reset credits from `rateLimitResetCredits`; refused sign-ins / dead refresh tokens → sign in again; errors scrubbed of paths and key-like text; one read per Codex home), `src/usage/` pill text and hover detail, `CodexPill` in the top bar; 5 Rust tests (57 total), 3 front-end tests (74 total); live: real sign-in → pill "Codex 100% left", hover "5-hour: 97% left, resets today 05:27 PM / Weekly: 100% left, resets Fri 12:27 PM / Limit-reset credits: 3 / Plan: plus", no codex.exe left afterwards; CODEX_HOME = a throwaway folder with fake tokens → yellow "Codex · sign in again", no figures, no window; build / clippy / 57 Rust tests / 74 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing; note: the first dev launch after a fresh compile quit by itself twice (no panic in the log), a second launch stayed up · evidence/T-042-a-figures.png, evidence/T-042-a-signin-again.png
 - 2026-10-09 · [accounts] T-038 · done: `secrets.rs` (DPAPI seal/unseal with a `kolux-sealed:v1:` prefix, clear values from older profiles load as they are, settings fields `claudeOauthToken` / `xaiApiKey` kept out of `get_settings` and protected from `save_settings`, `secret_status` / `secret_set` / `secret_clear` commands, sealed vault files with read-and-reseal and move-aside, one-off pass 2 s after setup with `secretsSealingPassDone` in the store, profile folder limited to the user, `logs\kolux.log`); 4 Rust tests (52 total), 71 front-end tests; live with fake keys: a clear profile was sealed on first launch (settings + vault file, icacls shows only TxaisX\XiongT), still connected; a key set through `secret_set` and an attempted overwrite from the window left no key text in settings.json, still connected after quit and reopen; `shot.ps1` takes `-ProcessId`; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-038.png, evidence/T-038.txt
 - 2026-10-09 · T-015 · done: `Copies` type, `defaultCopies` and `sharedWarning` in seats.ts; "Folders" radiogroup + warn note with the "Give each its own copy" fix on ChooserPane; App.tsx `startSeats` places each seat (terminal → chooser folder, agent → fresh worktree each when separate, shared folder or one fresh worktree otherwise); Rust `creatureNamesUsed` store key, `retired_names` / `remember_retired` / `fresh_name`, `workspace_create_fresh` holds the store lock; Rust test extended (48 total), 2 front-end tests added (71); live in the throwaway "repo" project: chooser from New session with 3 seats → "Separate copy for each AI" checked; "Same folder for all" → warn note + fix button, the fix re-selects separate; Claude + Claude + Terminal, Start → rows tidal-walrus and nimble-squid appeared, `git worktree list` shows both under workspaces/repo, Claude's trust prompt in nimble-squid's folder, the terminal seat in the chooser's folder; both removed through the sidebar (branches gone); one more Claude from New session → silver-narwhal; store key `creatureNamesUsed` = ["tidal-walrus","nimble-squid","silver-narwhal"]; build / clippy / 48 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-015-default.png, evidence/T-015-warning.png, evidence/T-015-started.png, evidence/T-015-retired.png

@@ -231,3 +231,25 @@ input { font: inherit; }
 .statusbar .item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .statusbar .on { width: 6px; height: 6px; border-radius: 50%; background: var(--fg); margin-left: -2px; }
 .statusbar .sep { margin: 0 -12px; }
+
+/* Settings (T-043-a): laid over the window body; the panes underneath stay mounted */
+.body { position: relative; }
+.settings { position: absolute; inset: 0; z-index: 40; display: flex; gap: 8px; padding: 8px; background: var(--app-bg); }
+.settings-nav { flex: none; width: 288px; display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; }
+.settings-title { padding: 0 9px 10px; font-size: 13px; font-weight: 600; color: var(--fg-label); }
+.settings-link { height: 32px; padding: 0 9px; border-radius: 6px; text-align: left; font-size: 13px; color: var(--fg-row); }
+.settings-link[aria-current="page"] { background: var(--row-selected); color: var(--fg); font-weight: 600; }
+.settings-main { flex: 1; min-width: 0; overflow: auto; padding: 20px 28px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 12px; }
+.settings-head { display: flex; align-items: center; justify-content: space-between; }
+.settings-head h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--fg); }
+.settings-sub { margin: 6px 0 18px; font-size: 12px; color: var(--fg-muted); }
+.conn-card { max-width: 560px; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; }
+.conn-head { display: flex; align-items: center; gap: 8px; }
+.conn-name { font-size: 14px; font-weight: 600; color: var(--fg); }
+.conn-chip { margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 11px; color: var(--fg-muted); background: var(--chip-bg); }
+.conn-chip.connected, .conn-chip.warning { color: var(--done); }
+.conn-chip.expired, .conn-chip.attention { color: #fdc030; }
+.conn-chip.connecting { color: var(--working); }
+.conn-headline { font-size: 13px; color: var(--fg-row); }
+.conn-detail { margin: 0; font-size: 12px; color: var(--fg-muted); }
+.conn-detail.warn { color: #fdc030; }

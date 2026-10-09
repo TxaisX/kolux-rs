@@ -17,9 +17,9 @@ export const screens: Array<{ id: Screen; label: string }> = [
   { id: "terminals", label: "Terminals" },
 ];
 
-type Props = { screen: Screen; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void };
+type Props = { screen: Screen; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void };
 
-export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar }: Props) {
+export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onToggleSidebar }: Props) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -75,11 +75,11 @@ export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar 
         <button className="ib bell" title="Inbox (not built yet)">
           <Bell />
         </button>
-        <div className="usage" title="Claude usage is read from running sessions once T-041 is built">
+        <button className="usage" title="Claude usage is read from running sessions once T-041 is built. Click for AI connections." onClick={onSettings}>
           <VendorMark agent="claude" size={13} />
           <span>Claude · unknown</span>
           <CodexPill />
-        </div>
+        </button>
         <div className="wc">
           <button title="Minimize" onClick={() => win().minimize()}>
             <Minimize size={16} />

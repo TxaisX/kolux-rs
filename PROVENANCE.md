@@ -343,3 +343,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-09 · T-038 · the `windows-sys` 0.61.2 crate's own source in the local cargo registry (MIT/Apache-2.0), read only for the `CryptProtectData` / `CryptUnprotectData` / `LocalFree` signatures; Microsoft's public DPAPI and `icacls` documentation for behaviour
 
 > 2026-10-09 · T-042-a · the Codex CLI installed on this PC (0.156.1), used as a user would: `codex app-server --help`, the JSON Schema it prints with `codex app-server generate-json-schema`, and its live replies to `initialize` / `account/read` / `account/rateLimits/read` with an empty and a throwaway CODEX_HOME; no Codex source read
+
+> 2026-10-09 · T-043-a · the Claude Code CLI installed on this PC (2.1.x), used as a user would: `claude --help`, `claude setup-token --help`, `claude auth login --help` / `claude auth status --help`, and `/status` in a pane; the `codex login --help` output for the device-code flag; CLAUDE_CODE_OAUTH_TOKEN from Claude Code's public docs; no Claude Code or Codex source read

@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
+import SettingsPage from "./settings/SettingsPage";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -62,6 +63,7 @@ function Window() {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("terminals");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
@@ -145,6 +147,9 @@ function Window() {
           break;
         case "browser.reload":
           void invoke("browser_go", { id: focused, what: "reload" });
+          break;
+        case "app.settings":
+          setSettingsOpen(true);
           break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
@@ -436,8 +441,9 @@ function Window() {
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
   return (
     <div className="app">
-      <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
+      <TopBar screen={screen} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
       <div className="body">
+        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
         {terminals && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
@@ -528,7 +534,7 @@ function Window() {
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || settingsOpen || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
                   <ChooserPane
                     key={p.key}
