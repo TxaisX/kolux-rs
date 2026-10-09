@@ -10,9 +10,12 @@
 // T-014-a: the name field also takes a start ref, an agent and a first prompt (PROJ-028,
 // PROJ-038); the footer gear sets the global workspaces folder and layout, a project's own gear
 // its folder and base ref (PROJ-025).
+// T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
+// grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
@@ -21,6 +24,11 @@ import { KeyText } from "../keys/KeymapContext";
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
   openDirs: string[];
+  /** PROJ-063: each open folder's strongest agent state and when it last changed. */
+  states: Record<string, RowInfo>;
+  /** PROJ-045 / PROJ-050: the remembered group-by and sort choices, saved through `onSetting`. */
+  settings: Record<string, unknown>;
+  onSetting: (key: string, value: unknown) => void;
   /** The workspace the grid shows (PROJ-066); its row is the selected one. */
   activeDir: string | null;
   /** A click on a row shows that workspace. */
@@ -44,7 +52,7 @@ type Props = {
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
+export default function ProjectsPanel({ openDirs, states, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -72,6 +80,29 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
+  const indexed = useRef(""); // the last project list and owner map handed to the window
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
+  const [unread, setUnread] = useState<Set<string>>(new Set()); // workspace paths marked unread
+  const seen = useRef<Record<string, AgentState>>({});
+  const groupBy = groupFromSetting(settings[GROUP_SETTING]);
+  const sortBy = sortFromSetting(settings[SORT_SETTING]);
+  // PROJ-050: an old "Recent" choice is moved to Smart once and saved that way.
+  useEffect(() => {
+    if (settings[SORT_SETTING] === "recent") onSetting(SORT_SETTING, "smart");
+  }, [settings, onSetting]);
+  // PROJ-063: a state change in a workspace that is not in front marks its row unread.
+  useEffect(() => {
+    const was = seen.current;
+    const now: Record<string, AgentState> = {};
+    const fresh: string[] = [];
+    for (const [dir, i] of Object.entries(states)) {
+      now[dir] = i.state;
+      if (dir in was && was[dir] !== i.state && !(activeDir !== null && same(dir, activeDir))) fresh.push(dir);
+    }
+    seen.current = now;
+    if (fresh.length > 0) setUnread((u) => new Set([...u, ...fresh]));
+  }, [states, activeDir]);
 
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   const fail = (err: unknown) => say("error", String(err));
@@ -89,8 +120,16 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
     setWorktrees(next);
     const owner: Record<string, string> = {};
     for (const p of list) for (const w of next[p.id] ?? []) owner[w.path] = p.id;
-    index.current(list, owner);
+    const key = JSON.stringify([list, owner]);
+    if (key !== indexed.current) index.current(list, owner);
+    indexed.current = key;
   }, []);
+  // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
+  // ponytail: a 5 s poll while the window is visible; watching the folders is PROJ-041 (T-107).
+  useEffect(() => {
+    const t = window.setInterval(() => document.visibilityState === "visible" && refreshWorktrees(projects).catch(fail), 5000);
+    return () => window.clearInterval(t);
+  }, [projects, refreshWorktrees]);
 
   const reload = useCallback(async () => {
     const list = await invoke<Project[]>("project_list");
@@ -288,6 +327,86 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
   const isSelected = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
+  const infoOf = (w: Worktree): RowInfo => Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
+  const isUnread = (w: Worktree) => [...unread].some((d) => same(d, w.path));
+  const setRead = (w: Worktree, read: boolean) => setUnread((u) => new Set(read ? [...u].filter((d) => !same(d, w.path)) : [...u, w.path]));
+  const show = (w: Worktree) => {
+    setRead(w, true);
+    onSelect(w.path, w.branch);
+  };
+  type Entry = { p: Project; w: Worktree };
+  const order = (xs: Entry[]) => (sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry));
+  const toggleFold = (title: string) => setFolded((f) => new Set(f.has(title) ? [...f].filter((t) => t !== title) : [...f, title]));
+
+  // One workspace row: its state dot, name, unread mark, and the Remove and Mark unread buttons.
+  const row = ({ p, w }: Entry) => {
+    const asking = confirm?.path === w.path;
+    const info = infoOf(w);
+    const un = isUnread(w);
+    return (
+      <div key={w.path} data-worktree={worktreeLabel(w)}>
+        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state}>
+          <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} />
+          <span className="name">{worktreeLabel(w)}</span>
+          {groupBy !== "project" && <span className="hint">{p.name}</span>}
+          {!asking && (
+            <button
+              className="ib"
+              title={un ? "Mark read" : "Mark unread"}
+              onClick={(e) => {
+                e.stopPropagation();
+                setRead(w, un);
+              }}
+            >
+              <Bell size={11} />
+            </button>
+          )}
+          {!asking && !w.isMain && (
+            <button
+              className="ib"
+              title="Remove this workspace: deletes its branch and folder"
+              disabled={busy !== ""}
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirm({ projectId: p.id, path: w.path, branch: worktreeLabel(w) });
+              }}
+            >
+              <Close size={11} />
+            </button>
+          )}
+        </div>
+        {asking && (
+          <div className="sb-form warn">
+            {confirm.dirty ? (
+              <>
+                <b>{confirm.branch}</b> has uncommitted changes. Remove it anyway? That work is lost.
+              </>
+            ) : (
+              <>
+                Delete branch <b>{confirm.branch}</b> and its folder?
+              </>
+            )}
+            <div className="btn-row">
+              <button className="btn danger" onClick={remove} disabled={busy !== ""}>
+                {busy === "removing" ? "Removing…" : confirm.dirty ? "Discard and remove" : "Remove"}
+              </button>
+              <button className="btn" onClick={() => setConfirm(null)}>
+                Keep
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+  const standIn = (p: Project) =>
+    pending?.projectId === p.id && (
+      <div className="sess pending" data-pending={pending.name} aria-busy="true">
+        <span className="dot" role="img" aria-label="creating" />
+        <span className="name">{pending.name}</span>
+        <span className="hint">creating…</span>
+      </div>
+    );
 
   return (
     <div className="sidebar-wrap">
@@ -313,7 +432,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
             <button className="ib" title="Notifications (not built yet)">
               <Bell size={13} />
             </button>
-            <button className="ib" title="Filter (not built yet)">
+            <button className={`ib${filterOpen ? " on" : ""}`} title="Group and sort the list" aria-pressed={filterOpen} onClick={() => setFilterOpen((o) => !o)}>
               <Sliders size={13} />
             </button>
             <button className="ib" title="Add a project: choose folders that hold a Git repository" onClick={browse} disabled={busy !== ""}>
@@ -376,107 +495,98 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
               <option key={d} value={d} />
             ))}
           </datalist>
+          {filterOpen && (
+            <div className="sb-form" data-filter>
+              <label>Group by</label>
+              <select aria-label="group by" className="field" value={groupBy} onChange={(e) => onSetting(GROUP_SETTING, e.target.value)}>
+                <option value="project">Project</option>
+                <option value="none">None: one flat list</option>
+                <option value="status">Status</option>
+                <option value="pr">Pull request</option>
+              </select>
+              <label>Sort</label>
+              <select aria-label="sort" className="field" value={sortBy} onChange={(e) => onSetting(SORT_SETTING, e.target.value)}>
+                <option value="smart">Smart: what needs you first</option>
+                <option value="name">Name</option>
+              </select>
+            </div>
+          )}
           {creating === "" && nameField(null)}
           {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add one that holds a Git repository.</div>}
 
-          {projects.map((p) => {
-            const list = orderWorktrees(worktrees[p.id] ?? []);
-            const main = list.find((w) => w.isMain);
-            const others = list.filter((w) => !w.isMain);
-            const opening = creating === p.id;
-            return (
-              <div key={p.id}>
-                <div className="proj" title={p.path}>
-                  <span className="name">{p.name}</span>
-                  <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
-                    <Gear />
-                  </button>
-                  <button className={`ib${opening ? " on" : ""}`} title="New workspace: a branch in its own folder" aria-pressed={opening} onClick={() => setCreating(opening ? null : p.id)}>
-                    <Plus size={13} />
-                  </button>
+          {groupBy === "project" &&
+            projects.map((p) => {
+              const list = worktrees[p.id] ?? [];
+              const main = list.find((w) => w.isMain);
+              const others = order(list.filter((w) => !w.isMain).map((w) => ({ p, w })));
+              const opening = creating === p.id;
+              return (
+                <div key={p.id}>
+                  <div className="proj" title={p.path}>
+                    <span className="name">{p.name}</span>
+                    <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
+                      <Gear />
+                    </button>
+                    <button className={`ib${opening ? " on" : ""}`} title="New workspace: a branch in its own folder" aria-pressed={opening} onClick={() => setCreating(opening ? null : p.id)}>
+                      <Plus size={13} />
+                    </button>
+                  </div>
+                  {main && (
+                    <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
+                      <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} />
+                      <span className="name">{worktreeLabel(main)}</span>
+                      {isActive(main) && <span className="count">{openCount(main)}</span>}
+                      <span className="chev">
+                        <ChevronDown size={12} />
+                      </span>
+                    </button>
+                  )}
+                  {settingsFor === p.id && (
+                    <div className="sb-form" data-project-settings={p.id}>
+                      <label>Workspaces folder for {p.name}</label>
+                      <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+                      <label>Base ref</label>
+                      <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+                      <div className="btn-row">
+                        <button className="btn" onClick={() => saveProject(p)}>
+                          Save
+                        </button>
+                        <button className="btn" onClick={() => setSettingsFor(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {opening && nameField(p)}
+                  {standIn(p)}
+                  {others.map(row)}
                 </div>
-                {main && (
-                  <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => onSelect(main.path, main.branch)} title={`Show ${main.path}`}>
-                    <span className="name">{worktreeLabel(main)}</span>
-                    {isActive(main) && <span className="count">{openCount(main)}</span>}
+              );
+            })}
+
+          {/* PROJ-045: one list across projects, flat or under Status / Pull request headers that fold. */}
+          {groupBy !== "project" && creating && nameField(projects.find((p) => p.id === creating) ?? null)}
+          {groupBy !== "project" && projects.map(standIn)}
+          {groupBy !== "project" &&
+            groupRows(
+              order(projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w })))),
+              groupBy,
+              (x) => infoOf(x.w),
+              (x) => x.p.name,
+            ).map((g) => (
+              <div key={g.title} data-group={g.title}>
+                {g.title && (
+                  <button className="sb-group" aria-expanded={!folded.has(g.title)} onClick={() => toggleFold(g.title)}>
+                    {g.title}
+                    <span className="count">{g.rows.length}</span>
                     <span className="chev">
                       <ChevronDown size={12} />
                     </span>
                   </button>
                 )}
-                {settingsFor === p.id && (
-                  <div className="sb-form" data-project-settings={p.id}>
-                    <label>Workspaces folder for {p.name}</label>
-                    <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
-                    <label>Base ref</label>
-                    <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
-                    <div className="btn-row">
-                      <button className="btn" onClick={() => saveProject(p)}>
-                        Save
-                      </button>
-                      <button className="btn" onClick={() => setSettingsFor(null)}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {opening && nameField(p)}
-                {pending?.projectId === p.id && (
-                  <div className="sess pending" data-pending={pending.name} aria-busy="true">
-                    <span className="dot" role="img" aria-label="creating" />
-                    <span className="name">{pending.name}</span>
-                    <span className="hint">creating…</span>
-                  </div>
-                )}
-                {others.map((w) => {
-                  const asking = confirm?.path === w.path;
-                  const active = isActive(w);
-                  return (
-                    <div key={w.path} data-worktree={worktreeLabel(w)}>
-                      <div className={`sess${isSelected(w) ? " sel" : ""}`} role="button" tabIndex={0} onClick={() => onSelect(w.path, w.branch)} onKeyDown={(e) => e.key === "Enter" && onSelect(w.path, w.branch)} title={`Show ${w.path}`}>
-                        <span className={`dot${active ? " live" : ""}`} role="img" aria-label={active ? "terminal open here" : "idle"} />
-                        <span className="name">{worktreeLabel(w)}</span>
-                        {!asking && (
-                          <button
-                            className="ib"
-                            title="Remove this workspace: deletes its branch and folder"
-                            disabled={busy !== ""}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConfirm({ projectId: p.id, path: w.path, branch: worktreeLabel(w) });
-                            }}
-                          >
-                            <Close size={11} />
-                          </button>
-                        )}
-                      </div>
-                      {asking && (
-                        <div className="sb-form warn">
-                          {confirm.dirty ? (
-                            <>
-                              <b>{confirm.branch}</b> has uncommitted changes. Remove it anyway? That work is lost.
-                            </>
-                          ) : (
-                            <>
-                              Delete branch <b>{confirm.branch}</b> and its folder?
-                            </>
-                          )}
-                          <div className="btn-row">
-                            <button className="btn danger" onClick={remove} disabled={busy !== ""}>
-                              {busy === "removing" ? "Removing…" : confirm.dirty ? "Discard and remove" : "Remove"}
-                            </button>
-                            <button className="btn" onClick={() => setConfirm(null)}>
-                              Keep
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {!folded.has(g.title) && g.rows.map(row)}
               </div>
-            );
-          })}
+            ))}
 
           {message && <div className={`note ${message.kind}`}>{message.text}</div>}
         </div>

@@ -85,12 +85,23 @@ input { font: inherit; }
 .branch { display: flex; align-items: center; height: 32px; padding: 0 12px 0 8px; gap: 8px; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
 .branch .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .branch .count { font-size: 11px; color: var(--fg); }
+.branch .dot { margin-right: 2px; }
 .branch .chev { color: #797979; display: inline-flex; }
 .branch:hover { background: #1f1f1f; }
 .branch.sel { background: var(--row-selected); color: var(--fg); font-weight: 600; }
-.sess { display: flex; align-items: center; height: 32px; padding: 0 4px 0 26px; gap: 10px; border-radius: 6px; font-size: 13px; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
-.sess .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-idle); flex: none; }
-.sess .dot.live { background: var(--dot-live); }
+.sess { position: relative; display: flex; align-items: center; height: 32px; padding: 0 4px 0 26px; gap: 10px; border-radius: 6px; font-size: 13px; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
+/* PROJ-063: the dot is the strongest live agent state; what needs you is amber, working green, done teal. */
+.sb-list .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-idle); flex: none; }
+.sb-list .dot.live, .sb-list .dot.working { background: var(--dot-live); }
+.sb-list .dot.done { background: var(--done-icon); }
+.sb-list .dot.permission, .sb-list .dot.blocked, .sb-list .dot.waiting, .sb-list .dot.interrupted { background: var(--working-icon); }
+.sess.sel::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 1px; background: var(--dot-live); }
+.sess.unread .name { font-weight: 600; color: var(--fg); }
+.sess.unread .name::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--working-icon); vertical-align: middle; }
+.sb-group { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; margin-top: 6px; padding: 0 8px; text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-label); }
+.sb-group .count { font-weight: 400; color: var(--fg-muted); }
+.sb-group .chev { display: inline-flex; margin-left: auto; transition: transform 0.15s; }
+.sb-group[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 .sess .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sess .ib { opacity: 0; width: 22px; height: 22px; }
 .sess:hover { background: #1f1f1f; }

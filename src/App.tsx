@@ -28,6 +28,7 @@ import ProjectsPanel from "./projects/ProjectsPanel";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
+import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -83,6 +84,7 @@ function Window() {
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
+  const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
@@ -110,12 +112,13 @@ function Window() {
     invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
   }, []);
 
-  // SESS-004: the default agent is a settings key; the plus menu lists it first.
-  const setDefault = (id: string) => {
-    const next = { ...settings, [DEFAULT_AGENT_KEY]: id };
+  const saveSetting = (key: string, value: unknown) => {
+    const next = { ...settings, [key]: value };
     setSettings(next);
     invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
   };
+  // SESS-004: the default agent is a settings key; the plus menu lists it first.
+  const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
   useEffect(() => {
     document.title = windowTitle(info);
   }, [info]);
@@ -476,6 +479,17 @@ function Window() {
   const board = screen === "board";
   const live = panes.filter((p) => running[p.key]);
   const openDirs = panes.map((p) => p.cwd).filter((d): d is string => d !== null);
+  // PROJ-063 / PROJ-050: a workspace row shows the strongest state among its panes, and remembers
+  // when that last moved so the smart sort can put the newest change first.
+  const byDir: Record<string, AgentState[]> = {};
+  for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(paneState(p.agent, running[p.key]));
+  const rowStates: Record<string, RowInfo> = {};
+  for (const [dir, states] of Object.entries(byDir)) {
+    const state = strongest(states);
+    const prev = rowRef.current[dir];
+    rowStates[dir] = prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null };
+  }
+  rowRef.current = rowStates;
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
   return (
@@ -485,6 +499,9 @@ function Window() {
         {terminals && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
+            states={rowStates}
+            settings={settings}
+            onSetting={saveSetting}
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}

@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 22, date: 2026-10-09)
-Next task: T-022 · PROJ-045 / PROJ-050 / PROJ-063
-Done: 28 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 23, date: 2026-10-09)
+Next task: T-023 · TERM-020 / TERM-021 / TERM-023 / TERM-030 (+ STAT-051, VIEW-047)
+Done: 29 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -322,6 +322,22 @@ disagreeing parent flags, `--run-hooks` with `--setup skip`). A parent selector 
 nothing fails before anything is created. The sidebar does not draw lineage yet (PROJ-047,
 T-077).
 
+T-022 (PROJ-045, PROJ-050, PROJ-063): each sidebar row shows the strongest live state among the
+panes open in its folder as a coloured dot (amber for what needs you, green working, teal done,
+grey idle; a permission request outranks everything), and the main checkout's row gets the same
+dot. A state change in a workspace that is not in front marks its row unread (bold name and an
+amber mark); showing it clears the mark, and the bell button on any row, the shown one included,
+flips the mark by hand. The shown row carries a thin accent bar. The Sliders button in the
+Projects header opens Group by (Project, None, Status, Pull request) and Sort (Smart, Name); both
+are settings keys (`workspaceGroupBy`, `workspaceSort`) remembered across launches, and an old
+"recent" sort is moved to Smart once. Smart puts what needs you first, then done, then working,
+then idle, newest change first inside each class; an interrupted agent is never among the done.
+Status and Pull request grouping draw folding headers with counts; None is one flat list with
+the project name at the right of each row. A branch switched inside a workspace folder shows on
+its row within five seconds (a poll while the window is visible; watching is PROJ-041, T-107).
+Today the only live states are working, done and idle, read from whether an agent's program is
+up; the hook-fed states and the pull-request feed are named on T-025 and T-229.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -418,6 +434,13 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-022: with no status hooks yet (STAT-001, T-025) a row's state is read from
+  the pane's program: a shell is idle, an agent is working until its program ends, then done;
+  permission, blocked, waiting, interrupted and queued are typed and ranked now so the hooks only
+  have to fill them in. The pull-request state is typed (`pr` on each row, null today) and the
+  grouping is proved in tests only until GIT-025 (T-229) feeds it. The "Recent" sort is not kept
+  as a choice: an old `workspaceSort: "recent"` is saved back as "smart" on first load, as the
+  card asks. Unread marks live in the window only (not saved); a restart clears them.
 - 2026-10-09 · T-021: the parent is recorded as the worktree's path (the store key the names use),
   not an id, since worktrees have no id of their own yet; the main checkout counts as a parent
   when the call is made from it (the card says "the worktree the command was called from" and
@@ -755,6 +778,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-022 · done: `src/projects/rows.ts` (states, ranks, smart order, status and PR groups, setting keys) + `rows.test.ts`; `App.tsx` derives each folder's strongest state and change time from its panes and offers `saveSetting`; `ProjectsPanel.tsx` grouping, sort, filter form, state dots, unread marks, accent bar, 5 s branch poll; `styles.css`. Live: two CLI-made agent workspaces, one agent ended → done above working under Smart; Status grouping headers; hand-marked unread on the shown row; `git checkout -b renamed` in zeta's folder showed on its row. Evidence: `evidence/T-022-status.png`, `evidence/T-022-branch.png`.
 - 2026-10-09 · T-021 · done: `cli.rs` (parse refuses the retired `--parent-workspace`, an empty `--parent-worktree`, a non-numeric or zero `--issue`; dispatch works out the parent from the calling folder, `--parent-worktree` in the same project or `--no-parent`, records the origin and echoes it; `calling_worktree`), `projects.rs` (`set_origin` / `origin` under `workspaceOrigins`, forgotten on removal), tests extended (65 Rust tests); live with `kolux-dev` rebuilt and the dev app up: from inside zeta `worktree create --name b --agent claude --prompt hi --issue 7 --comment "from zeta" --json` → envelope with parent = zeta's path, madeBy cli, issue 7, comment; row b appeared with zeta still selected and claude.exe running "hi" under the app; `--name c --activate` → c selected; `--name d --prompt hi`, `--parent-workspace name:zeta`, `--issue nope` → exit 1 with their messages; `rm --worktree name:b --force` and c → rows back to zeta, the Claude process gone; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-021-background.png, T-021-activate.png
 - 2026-10-09 · T-020 · done: `projects.rs` (`resolve_workspaces_dir(env, setting)`, `KOLUX_WORKSPACES_DIR` read there, `PlaceInfo.fromEnv`, `set_place` makes an absolute folder and fails when it cannot; 2 tests, 65 Rust tests), `model.ts` (`placeFieldAction`; 1 test, 76 front-end tests), `ProjectsPanel.tsx` (Enter/Escape/composing, blur retry, Browse… for the folder, env label); live in the dev app started with the variable padded with spaces: Use default + Save showed the variable's folder with the "(from KOLUX_WORKSPACES_DIR)" label and env-proof was created at `<env>\repo\env-proof`; a folder under a file failed with "cannot be made" and kept the typed text, leaving the field after the blocker was removed saved it; Escape put the saved folder back; a typed folder + Enter put typed-proof at `<folder>\repo\typed-proof`; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-020-env.png, T-020-failed.png, T-020-folder.png
 - 2026-10-09 · T-019 · done: `include.rs` (new: include-file lines, kolux.yaml shared list, tidy rules, copy, junction link, unlink; 3 tests), `git.rs` (`worktree_remove` keeps a branch in use elsewhere and reports its commit, `worktree_move`, `delete_branch_if_at`, `dirty` sees submodule work, `ref_ok` guard; 1 test), `projects.rs` (per-repo turn, `Created.warnings`, `remove_workspace(force)`; 1 test), 63 Rust tests; sidebar form asks "Discard and remove" after a refusal, warnings join the created note; live in the dev app on the throwaway repo with `.gitignore`, `.worktreeinclude` (`.env`, `*.log`) and kolux.yaml (`node_modules/`, `src`): Remove on the dirty zeta → "zeta has uncommitted changes. Remove it anyway? That work is lost." with work.txt still there; New workspace "bring along" → created from origin/main, note names `*.log` and `src`, `.env` copied, `node_modules` a junction to the main checkout showing its dep.js, `git status --porcelain` empty on branch bring-along; removal of a worktree with untracked files took the two-step path, of a clean one the one-step path, the main checkout's node_modules/dep.js survived both; build / clippy / 63 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-019-dirty.png, T-019-created.png
