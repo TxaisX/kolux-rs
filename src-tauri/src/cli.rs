@@ -507,7 +507,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             projects::remove_workspace(ctx.git, &project, &w.path)?;
             {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
-                projects::set_name(&store, &w.path, None)?;
+                projects::forget_workspace(&store, &w.path)?;
             }
             (ctx.notify)(json!({ "kind": "removed", "path": w.path }));
             Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id }))
@@ -642,8 +642,10 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     // The placement: the caller's worktree, one picked by selector, or a new one (agent-first).
     let placement = text("worktree").unwrap_or_else(|| NEW_TOP.into());
     let (project, worktree, created) = if placement == NEW_TOP || placement == NEW_CHILD {
-        // ponytail: new-child is placed like new-top-level; lineage comes with the parent cards.
+        // PROJ-047: new-child is a new worktree whose parent is the worktree the call came from;
+        // called from outside one of the project's worktrees it has no parent (top level).
         let project = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
+        let parent = if placement == NEW_CHILD { pick_worktree(ctx, "current", &req.cwd).ok().filter(|(p, _)| p.id == project.id).map(|(_, w)| w.path) } else { None };
         let wt = match text("name") {
             Some(name) => projects::create_named(ctx.git, ctx.store, &project.id, &name, text("baseBranch").as_deref())?.worktree,
             None => projects::create_fresh(ctx.git, ctx.store, &project.id)?,
@@ -653,6 +655,14 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
                 projects::set_name(&store, &wt.path, Some(&shown))?;
                 Worktree { name: Some(shown), ..wt }
+            }
+            None => wt,
+        };
+        let wt = match parent {
+            Some(parent) => {
+                let store = ctx.store.lock().map_err(|e| e.to_string())?;
+                projects::set_parent(&store, &wt.path, Some(&parent))?;
+                Worktree { parent: Some(parent), ..wt }
             }
             None => wt,
         };
@@ -670,7 +680,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     };
     let since = Instant::now();
     if created {
-        (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false }));
+        (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false, "parent": worktree.parent }, "agent": Value::Null, "prompt": "", "activate": false }));
     }
     (ctx.notify)(json!({ "kind": "start", "path": worktree.path, "branch": worktree.branch, "agent": agent_id, "prompt": brief, "extra": extra, "title": task["title"] }));
     let (terminal, ready) = wait_ready(ctx.terminals, Path::new(&worktree.path), since, timeout);
@@ -678,7 +688,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
 
     let receipt = json!({
         "dispatchId": dispatch_id, "taskId": task_id, "status": status, "stage": "worker",
-        "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "projectId": project.id, "created": created },
+        "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "projectId": project.id, "created": created, "parent": worktree.parent },
         "placement": placement, "agent": agent_id, "program": agent.program, "model": model, "effort": effort, "tier": tier,
         "setup": "not_configured", "trust": trusted,
         "terminals": terminal.map(|id| vec![json!({ "id": id, "role": "worker" })]).unwrap_or_default(),
@@ -914,6 +924,16 @@ mod tests {
             drop(ev);
             let tasks = store.lock().unwrap().get("orchestration.tasks").unwrap().unwrap();
             assert!(tasks.contains("\"dispatched\""), "{tasks}");
+            // PROJ-047: a new-child worker called from inside that worktree is listed under it.
+            let child = dispatch(&ctx, &req("orchestration.worker-start", &wt, json!({ "spec": "a child", "agent": "claude", "worktree": "new-child", "setup": "inherit", "timeoutMs": "1" }))).unwrap_err();
+            assert_eq!(child.code, "timeout", "{}", child.message);
+            let child_path = child.data["worktree"]["path"].as_str().unwrap().to_string();
+            assert_eq!(child.data["worktree"]["parent"], out.data["worktree"]["path"]);
+            let project = projects::load_projects(&store.lock().unwrap()).remove(0);
+            let listed = projects::list_workspaces(&git_, &store.lock().unwrap(), &project).unwrap();
+            assert_eq!(listed.iter().find(|w| w.path == child_path).unwrap().parent.as_ref(), out.data["worktree"]["path"].as_str().map(String::from).as_ref());
+            dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": format!("path:{child_path}"), "force": true }))).unwrap();
+            assert_eq!(store.lock().unwrap().get("workspaceParents").unwrap().unwrap(), "{}", "removing the child forgets its parent");
             let again = dispatch(&ctx, &req("orchestration.worker-start", &repo, json!({ "task": "task-1", "agent": "claude", "worktree": "current", "setup": "inherit", "timeoutMs": "1" }))).unwrap_err();
             assert!(again.message.contains("already"), "{}", again.message);
             let gone = dispatch(&ctx, &req("orchestration.worker-start", &repo, json!({ "task": "task-9", "agent": "claude", "worktree": "current", "setup": "inherit", "timeoutMs": "1" }))).unwrap_err();

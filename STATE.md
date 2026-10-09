@@ -284,6 +284,14 @@ GPT-5.6 Sol / Terra / Luna, GPT-5.5) and each model's effort levels come from Co
 cache on this PC. Claude's levels come from `claude --help` (low to max). A 0.15.0 profile's
 routing table is carried over by the settings importer (T-181).
 
+T-077 (orchestration lane) nests child workspaces under their parent (PROJ-047). A worker started
+with `orchestration worker-start --worktree new-child` from inside a workspace gets a new
+workspace listed indented under the one it was called from, to any depth (child, grandchild...).
+A row with children has a chevron that folds them away and back. When a parent is removed, its
+children move to the top level. The footer gear has a checkbox, "Nest child workspaces under their
+parent"; unticked, every workspace sits at one level. The parent is remembered in the app's store
+(`workspaceParents`) and forgotten when the workspace is removed.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -662,7 +670,11 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [orchestration] T-081: the Reset button is greyed while the chosen provider has no pick of its own.
 - [orchestration] T-081 for the coordinator: the importer task T-181 (SET-035) should bring a 0.15.0 profile's routing table into `modelRouting` (COMPAT 5.7, ACCT-034 row). It was not added to T-181's line because that line is outside this lane's section of PLAN.md.
 
+- [orchestration] T-077: `worker-start --worktree new-child` called from outside one of the project's workspaces makes a top-level workspace (no parent) instead of refusing; called from the main checkout it is top level too, since main is never a parent row.
+- [orchestration] T-077: the nesting switch is a checkbox in the footer gear form (setting `workspaceNesting`, on unless false) until a Settings page holds workspace options. Folded rows are not saved; they reset when the window closes. A loop of parents (should one ever be written) is listed flat rather than hidden.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [orchestration] T-077 · done: `nestRows` in `src/projects/model.ts` (3 new tests: depth, fold, orphan, nesting off, loop), fold chevron and nesting checkbox in `ProjectsPanel.tsx`, `workspaceParents` store with `set_parent` / `forget_workspace` in `projects.rs`, worker-start records the calling workspace as parent (cli.rs test extended); live: P > sandy-beluga > nimble-crab, nimble-tuna nested, P folded hid all three, nesting off listed five flat, removing sandy-beluga put its two children at the top · evidence/T-077-nested.png, T-077-folded.png, T-077-nesting-off.png, T-077-parent-gone.png
 - 2026-10-09 · [orchestration] T-081 · done: `resetProvider` / `isCustom` in `src/settings/routing.ts` (1 new test), Reset button and "Not detected" tab mark on `RoutingPage.tsx` (1 new render test), Codex models and DT-12 ladder in `routing.rs` (Rust tests updated); live: Claude Build set to Opus/high and Codex Light to GPT-6 Luna, Reset Claude Code put Build back to Sonnet/medium and left Codex's pick saved. This PC has Codex, so the not-detected mark is shown by the render test only · evidence/T-081-codex.png, T-081-before-reset.png, T-081-after-reset.png
 - 2026-10-09 · [orchestration] T-087 · done: new `src-tauri/src/routing.rs` (catalogue of routable providers, models, effort levels and the shipped ladder; `route` reads `modelRouting` from settings and drops an effort the model lacks; 3 Rust tests) used by `worker-start --tier` (CLI test now expects the saved Sonnet/low pick); `src/settings/routing.ts` (3 tests) + `RoutingPage.tsx` (1 render test), sliders button in the sidebar footer, model shown in the pane header; live: defaults table, Build set to Haiku hides its effort picker and saves, `kolux-dev orchestration worker-start --tier build` started a worker whose header reads "Claude · haiku" (Claude itself reports Haiku) · evidence/T-087-routing.png, T-087-no-effort.png, T-087-worker-header.png
 - 2026-10-09 · [orchestration] T-086 · done: new `src-tauri/src/automations.rs` (list / pause / delete / Run now commands, numbered manual runs, placement + trust + background tab via the cli-workspace event, skipped when the project is gone, failed when the agent is missing; 3 Rust tests), `src/automations/model.ts` (natural sort, last-run sort, filters, search, 5 tests) and `AutomationsPage.tsx` (3 render tests), clock button in the sidebar footer; live: list, search on prompt text, last-run sort, Run now on a paused row, delete confirm + Don't ask again, the background run tab, failed-load Retry · evidence/T-086-list.png, T-086-search.png, T-086-sort.png, T-086-runnow.png, T-086-confirm.png, T-086-deleted.png, T-086-run-tab.png, T-086-failed.png

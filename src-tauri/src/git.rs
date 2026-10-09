@@ -20,6 +20,8 @@ pub struct Worktree {
     pub is_main: bool,
     /// The name the user typed when creating it (PROJ-021); the branch is shown when there is none.
     pub name: Option<String>,
+    /// The workspace it was made from (PROJ-047), by path; the sidebar nests it there.
+    pub parent: Option<String>,
 }
 
 fn command(args: &[&str], cwd: Option<&Path>) -> Command {
@@ -176,7 +178,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None });
         }
     }
     out

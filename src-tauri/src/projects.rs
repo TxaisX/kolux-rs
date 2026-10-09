@@ -49,6 +49,8 @@ const PROJECTS_KEY: &str = "projects";
 /// Typed workspace names by folder (PROJ-021): the branch and folder carry the cleaned form,
 /// the row shows exactly what was typed.
 const NAMES_KEY: &str = "workspaceNames";
+/// Child workspace path (as `name_key` writes it) to its parent's path (PROJ-047).
+const PARENTS_KEY: &str = "workspaceParents";
 const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 /// "nested" (the default) or "flat" (PROJ-025).
 const LAYOUT_SETTING: &str = "workspacesLayout";
@@ -87,11 +89,29 @@ pub fn set_name(store: &Store, path: &str, name: Option<&str>) -> Result<(), Str
     store.set(NAMES_KEY, &serde_json::Value::Object(names).to_string()).map_err(|e| e.to_string())
 }
 
+/// Remembers (or with `None`, forgets) which workspace `path` was made from (PROJ-047).
+pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(), String> {
+    let mut parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    match parent {
+        Some(p) => parents.insert(name_key(path), serde_json::Value::String(p.to_string())),
+        None => parents.remove(&name_key(path)),
+    };
+    store.set(PARENTS_KEY, &serde_json::Value::Object(parents).to_string()).map_err(|e| e.to_string())
+}
+
+/// Drops what Kolux remembers about a removed workspace, so a later one in the same folder starts
+/// clean: its typed name and its parent.
+pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
+    set_name(store, path, None)?;
+    set_parent(store, path, None)
+}
+
 /// The workspaces of a project as the sidebar lists them (PROJ-007): Git's list with the typed
-/// names laid over, minus scratch worktrees a coding tool keeps for its own sub-agents, which
+/// names and parents laid over, minus scratch worktrees a coding tool keeps for its own sub-agents, which
 /// live under a dot-folder inside the main checkout (Claude Code's `.claude/worktrees/`).
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
     let names = load_names(store);
+    let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let main = Path::new(&project.path);
     Ok(git
         .worktrees(main)?
@@ -99,6 +119,7 @@ pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Ve
         .filter(|w| !Path::new(&w.path).strip_prefix(main).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))))
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
+            w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w
         })
         .collect())
@@ -399,7 +420,7 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     terminals.kill_under(Path::new(&path));
     remove_workspace(&git, &project, &path)?;
     let store = store.lock().map_err(|e| e.to_string())?;
-    set_name(&store, &path, None)
+    forget_workspace(&store, &path)
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
@@ -524,9 +545,17 @@ mod tests {
         let listed = list_workspaces(&git, &store, &project).unwrap();
         assert_eq!(listed.iter().find(|w| w.path == wt.path).unwrap().name.as_deref(), Some("Fix login \u{1F525}"), "the typed name is shown");
         assert_eq!(listed.iter().find(|w| w.path == again.path).unwrap().name, None);
+        // PROJ-047: a workspace made from another one is listed with that parent, and removing it
+        // forgets the link so a later workspace in the same folder starts at the top level.
+        set_parent(&store, &third.path, Some(&wt.path)).unwrap();
+        let listed = list_workspaces(&git, &store, &project).unwrap();
+        assert_eq!(listed.iter().find(|w| w.path == third.path).unwrap().parent.as_deref(), Some(wt.path.as_str()));
+        assert_eq!(listed.iter().find(|w| w.path == again.path).unwrap().parent, None);
         for w in [&again, &third] {
             remove_workspace(&git, &project, &w.path).unwrap();
+            forget_workspace(&store, &w.path).unwrap();
         }
+        assert!(store.get("workspaceParents").unwrap().unwrap() == "{}");
 
         assert!(remove_workspace(&git, &project, &project.path).unwrap_err().contains("main checkout"));
         remove_workspace(&git, &project, &wt.path).unwrap();

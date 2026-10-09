@@ -137,7 +137,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
-- [ ] T-077 · PROJ-047 Child workspaces nest under their parent
+- [x] T-077 · PROJ-047 Child workspaces nest under their parent
 - [ ] T-078 · SESS-012 Launch shapes Solo, Pair, Workbench and Swarm assign roles · SESS-025 [compat] Agents launched side by side get a rules block and keep a handoff note
 - [ ] T-079 · TERM-125 [compat] Terminal commands in the CLI
 - [ ] T-080 · VIEW-020 Hand one agent's result to another agent

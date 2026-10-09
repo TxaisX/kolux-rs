@@ -10,10 +10,14 @@
 // T-014-a: the name field also takes a start ref, an agent and a first prompt (PROJ-028,
 // PROJ-038); the footer gear sets the global workspaces folder and layout, a project's own gear
 // its folder and base ref (PROJ-025).
+// T-077: a child workspace sits indented under the one it was made from and folds with it; the
+// gear's checkbox switches nesting off (PROJ-047). Folding hides child rows only; the agent summary
+// a card can show (PROJ-062, T-266) must stay open when its parent folds, and is built there.
+// ponytail: which rows are folded lasts until the window closes; nothing saves it.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { orderWorktrees, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
+import { nestRows, orderWorktrees, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
@@ -49,9 +53,13 @@ type Props = {
   createRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
+  /** PROJ-047: child workspaces nest under their parent unless this is off. */
+  nest: boolean;
+  onNest: (on: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, onStartIn }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, onStartIn, nest, onNest }: Props) {
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -350,6 +358,10 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
                   Use default
                 </button>
               </div>
+              <label className="check">
+                <input type="checkbox" checked={nest} onChange={(e) => onNest(e.target.checked)} />
+                Nest child workspaces under their parent
+              </label>
             </div>
           )}
 
@@ -410,12 +422,29 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
                     <span className="hint">creating…</span>
                   </div>
                 )}
-                {others.map((w) => {
+                {nestRows(others, nest, folded).map(({ w, depth, kids }) => {
                   const asking = confirm?.path === w.path;
                   const active = isActive(w);
+                  const shut = folded.has(w.path);
                   return (
-                    <div key={w.path} data-worktree={worktreeLabel(w)}>
-                      <div className={`sess${isSelected(w) ? " sel" : ""}`} role="button" tabIndex={0} onClick={() => onSelect(w.path, w.branch)} onKeyDown={(e) => e.key === "Enter" && onSelect(w.path, w.branch)} title={`Show ${w.path}`}>
+                    <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth}>
+                      <div className={`sess${isSelected(w) ? " sel" : ""}`} style={{ paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) }} role="button" tabIndex={0} onClick={() => onSelect(w.path, w.branch)} onKeyDown={(e) => e.key === "Enter" && onSelect(w.path, w.branch)} title={`Show ${w.path}`}>
+                        {kids && (
+                          <button
+                            className={`fold${shut ? " shut" : ""}`}
+                            aria-expanded={!shut}
+                            title={shut ? "Show the workspaces made from this one" : "Fold away the workspaces made from this one"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const next = new Set(folded);
+                              if (shut) next.delete(w.path);
+                              else next.add(w.path);
+                              setFolded(next);
+                            }}
+                          >
+                            <ChevronDown size={12} />
+                          </button>
+                        )}
                         <span className={`dot${active ? " live" : ""}`} role="img" aria-label={active ? "terminal open here" : "idle"} />
                         <span className="name">{worktreeLabel(w)}</span>
                         {!asking && (

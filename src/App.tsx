@@ -28,7 +28,7 @@ import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
-import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { matchEvent } from "./keys/keymap";
@@ -472,6 +472,12 @@ function Window() {
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}
+            nest={settings[NESTING_KEY] !== false}
+            onNest={(on) => {
+              const next = { ...settings, [NESTING_KEY]: on };
+              setSettings(next);
+              invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+            }}
             agents={agents}
             defaultId={defaultId}
             onSetDefault={setDefault}
