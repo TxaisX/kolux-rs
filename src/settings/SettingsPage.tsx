@@ -7,8 +7,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, type KeyAction, type KeyStatus } from "./claudeKey";
+import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 
-export function ClaudeCardView({ status, busy, error, onAction }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void }) {
+export function ClaudeCardView({ status, busy, error, onAction, onUseAccount }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void }) {
   const card = keyCard(status);
   const chip = card.state === "connected" || card.state === "warning" ? "Connected" : card.state === "expired" ? "Ran out" : card.state === "connecting" ? "Connecting" : card.state === "attention" ? "Needs attention" : card.state === "reading" ? "" : "Not connected";
   return (
@@ -32,6 +33,11 @@ export function ClaudeCardView({ status, busy, error, onAction }: { status: KeyS
             {actionLabel[a]}
           </button>
         ))}
+        {onUseAccount && (card.state === "disconnected" || card.state === "attention") && (
+          <button className="btn link" disabled={busy} onClick={onUseAccount}>
+            Use my Claude account instead
+          </button>
+        )}
       </div>
     </section>
   );
@@ -71,7 +77,11 @@ function ClaudeCard() {
         read();
       });
   };
-  return <ClaudeCardView status={status} busy={busy} error={error} onAction={act} />;
+  const useAccount = () => {
+    setError(null);
+    addClaudeAccount().catch((e) => setError(String(e)));
+  };
+  return <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} />;
 }
 
 export default function SettingsPage({ onClose }: { onClose: () => void }) {
@@ -99,6 +109,7 @@ export default function SettingsPage({ onClose }: { onClose: () => void }) {
         </header>
         <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
         <ClaudeCard />
+        <ClaudeAccounts />
       </main>
     </div>
   );

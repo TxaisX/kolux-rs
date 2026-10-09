@@ -53,6 +53,11 @@ impl Terminals {
             None => shell_command(cwd.as_deref()),
         };
         if let Some((k, v)) = env {
+            // A pane on a managed Claude account must not be overridden by a 1-year key that
+            // Kolux itself was started with (Claude Code prefers the variable).
+            if k == crate::claude_accounts::CONFIG_ENV {
+                command.env_remove(crate::claude_key::ENV);
+            }
             command.env(k, v);
         }
         let session = PtySession::spawn(
@@ -137,11 +142,13 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
+    // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
-        crate::claude_key::pane_env(program.as_deref(), &settings, token)
+        let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
+        crate::claude_key::pane_env(program.as_deref(), &settings, token).or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
     };
     terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env)
 }

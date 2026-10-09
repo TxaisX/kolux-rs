@@ -197,13 +197,27 @@ pub fn forget(store: &Store) -> Result<(), String> {
     store.save_settings(&settings).map_err(|e| e.to_string())
 }
 
-/// Runs `cmd` in a hidden pseudo-terminal until it prints a key, ends, runs past `limit` or is
-/// cancelled. `on_browser` fires once when the browser step shows.
-pub fn run_setup(cmd: CommandBuilder, limit: Duration, cancel: Arc<AtomicBool>, on_browser: impl Fn() + Send + 'static) -> Outcome {
+/// How a hidden run ended.
+#[derive(Debug, PartialEq)]
+pub enum Ended {
+    /// The program ended by itself (its exit code when known).
+    Exited(Option<u32>),
+    /// `stop` saw what it was waiting for; the program was stopped.
+    Stopped,
+    TimedOut,
+    Cancelled,
+    NotStarted(String),
+}
+
+/// Runs `cmd` in a hidden pseudo-terminal (no console window, never the command prompt) until it
+/// ends, `stop` accepts what it printed so far, it runs past `limit` or it is cancelled.
+/// `on_browser` fires once when a browser step shows. Returns the output with colours removed.
+/// Shared by the key setup (ACCT-004) and the managed-account sign-ins (ACCT-005).
+pub fn run_hidden(cmd: CommandBuilder, limit: Duration, cancel: Arc<AtomicBool>, on_browser: impl Fn() + Send + 'static, stop: impl Fn(&str) -> bool) -> (String, Ended) {
     let output = Arc::new(Mutex::new(String::new()));
     let sink = output.clone();
     let (tx, rx) = mpsc::channel::<Option<u32>>();
-    // Wide enough that the key never wraps onto a second line.
+    // Wide enough that a key or a link never wraps onto a second line.
     let session = crate::pty::PtySession::spawn(
         cmd,
         400,
@@ -219,46 +233,58 @@ pub fn run_setup(cmd: CommandBuilder, limit: Duration, cancel: Arc<AtomicBool>, 
     );
     let mut session = match session {
         Ok(s) => s,
-        Err(e) => return Outcome::Failed(format!("Claude's key setup could not start: {e}")),
+        Err(e) => return (String::new(), Ended::NotStarted(e.to_string())),
     };
     let deadline = Instant::now() + limit;
     let mut told = false;
     let mut answered = 0;
     let clean = || strip_ansi(&output.lock().map(|o| o.clone()).unwrap_or_default());
-    let outcome = loop {
+    let ended = loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(code) => {
                 // Let the reader drain what was printed last.
                 std::thread::sleep(Duration::from_millis(300));
-                break conclude(&clean(), code);
+                break Ended::Exited(code);
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break conclude(&clean(), None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break Ended::Exited(None),
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         // The console host asks where the cursor is (ESC [6n) and waits for the answer a
         // terminal would give; with no one drawing, Kolux answers for it.
-        let asked = output.lock().map(|o| o.matches("[6n").count()).unwrap_or(0);
+        let asked = output.lock().map(|o| o.matches("\u{1b}[6n").count()).unwrap_or(0);
         while answered < asked {
-            let _ = session.write(b"[1;1R");
+            let _ = session.write(b"\x1b[1;1R");
             answered += 1;
         }
         let now = clean();
-        if let Some(t) = extract_token(&now) {
-            break Outcome::Key(t);
+        if stop(&now) {
+            break Ended::Stopped;
         }
         if !told && shows_browser_step(&now) {
             told = true;
             on_browser();
         }
         if cancel.load(Ordering::SeqCst) {
-            break Outcome::Cancelled;
+            break Ended::Cancelled;
         }
         if Instant::now() >= deadline {
-            break Outcome::TimedOut;
+            break Ended::TimedOut;
         }
     };
     session.kill();
-    outcome
+    (clean(), ended)
+}
+
+/// Runs the key setup until it prints a key, ends, runs past `limit` or is cancelled.
+pub fn run_setup(cmd: CommandBuilder, limit: Duration, cancel: Arc<AtomicBool>, on_browser: impl Fn() + Send + 'static) -> Outcome {
+    let (out, ended) = run_hidden(cmd, limit, cancel, on_browser, |now| extract_token(now).is_some());
+    match ended {
+        Ended::Exited(code) => conclude(&out, code),
+        Ended::Stopped => conclude(&out, None),
+        Ended::TimedOut => Outcome::TimedOut,
+        Ended::Cancelled => Outcome::Cancelled,
+        Ended::NotStarted(e) => Outcome::Failed(format!("Claude's key setup could not start: {e}")),
+    }
 }
 
 /// What the card says for each way a setup can end without a key.
