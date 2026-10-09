@@ -223,3 +223,9 @@ export const Cup = (p: P) => (
     <path d="M3 5.5h8v4a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-4ZM11 7h1.5a1.5 1.5 0 0 1 0 3H11" />
   </Glyph>
 );
+export const Clock = (p: P) => (
+  <Glyph {...p}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M8 4.75V8l2.25 1.5" />
+  </Glyph>
+);

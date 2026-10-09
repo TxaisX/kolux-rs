@@ -22,6 +22,7 @@ import StatusBar from "./chrome/StatusBar";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
+import AutomationsPage from "./automations/AutomationsPage";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
@@ -64,6 +65,9 @@ function Window() {
   const [screen, setScreen] = useState<Screen>("terminals");
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
+  // the grid stays mounted (hidden) behind it.
+  const [page, setPage] = useState<"automations" | null>(null);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -344,6 +348,7 @@ function Window() {
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
   const select = (dir: string, branch: string | null) => {
+    setPage(null);
     setActiveDir(dir);
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else addShell(dir, branch);
@@ -471,6 +476,8 @@ function Window() {
             launching={launching}
             onLaunch={launch}
             onChoose={addChooser}
+            automationsOpen={page === "automations"}
+            onAutomations={() => setPage((p) => (p === "automations" ? null : "automations"))}
             refresh={refresh}
             createRequest={createRequest}
             onStartIn={startIn}
@@ -481,9 +488,20 @@ function Window() {
           />
         )}
         <div className="content">
+          {terminals && page === "automations" && (
+            <AutomationsPage
+              projects={projects}
+              agents={agents}
+              settings={settings}
+              onSettings={(next) => {
+                setSettings(next);
+                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              }}
+            />
+          )}
           {terminals && (
             <>
-              <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />
+              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />}
               {toast && (
                 <div className="toast" role="status">
                   {toast}
@@ -513,7 +531,7 @@ function Window() {
           )}
           <div
             className={board ? "board" : "grid"}
-            hidden={!terminals && !board}
+            hidden={(!terminals && !board) || (terminals && page !== null)}
             style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` } : undefined}
           >
               {terminals && shown.length === 0 && (

@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { orderWorktrees, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
-import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
 
@@ -34,6 +34,9 @@ type Props = {
   defaultId: string;
   onSetDefault: (id: string) => void;
   onChoose: () => void;
+  /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
+  automationsOpen: boolean;
+  onAutomations: () => void;
   /** Bump to reload the list after something outside the sidebar made a workspace. */
   refresh: number;
   /** Hands the window the project list and which project owns each workspace folder. */
@@ -44,7 +47,7 @@ type Props = {
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, automationsOpen, onAutomations, refresh, onIndex, createRequest, onStartIn }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -478,6 +481,9 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
         <div className="sb-foot">
           <button className="ib" title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`} aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
             <Gear />
+          </button>
+          <button className="ib" title="Automations" aria-pressed={automationsOpen} onClick={onAutomations}>
+            <Clock />
           </button>
           <button className="ib" title="Help (not built yet)">
             <Help />

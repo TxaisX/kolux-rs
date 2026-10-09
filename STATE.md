@@ -243,6 +243,26 @@ order stay byte for byte; an already-trusted folder changes nothing; a file that
 TOML is left alone. Same batch rules and the same one lock as Claude (`checked_keys`,
 `write_whole` shared by both). Cursor and Copilot still get nothing (T-017-c).
 
+T-086 (orchestration lane) adds the Automations page (AUTO-016, AUTO-019): the clock
+button in the sidebar footer opens it over the content column (the pane grid stays alive
+underneath; picking a workspace closes the page). A toolbar holds a search box (focused on open;
+it looks at name, project, worktree, agent and the first 2,048 characters of the prompt, ignores
+case and extra spaces, keeps its text across Refresh, refuses more than 200 characters), filters
+(on / paused, last run's result, several agents at once), Refresh, and Runs / New Automation,
+present but greyed until T-130 / T-085. The table keeps its header and first column in view,
+sorts names the way people count ("Report 2" before "Report 10") and by last run with never-run
+ones last; the first row is selected on open and the detail shows the on/off switch, Run now,
+the prompt and the numbered runs. Each row's menu (Run now, Pause/Resume, Edit greyed until
+T-085, Delete) acts without changing the selection. Delete asks first in an inline bar with
+"Don't ask again" (setting `confirmAutomationDelete`, on out of the box); deleting removes the
+automation's runs too. There are three different empty states: nothing created, nothing matches,
+and a load failure with Retry. Run now works on a paused automation as well: `automations.rs`
+records a manual run with its own number (numbers only go up), places it in the automation's
+worktree or a fresh one, trusts the folder, and opens a background tab named after the
+automation that runs the prompt. If the project is gone the run is marked skipped, and if the agent is
+missing it is marked failed. Automations live under `automations` / `automations.runs` in the store; the clock that
+starts them on time is T-085.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -607,7 +627,13 @@ recorded default until told otherwise; nothing here blocks a pass.
   as someone using the mouse while the app was in front, not a code path. The evidence harness
   note was extended: `type.ps1` needs the window activated first.
 
+- [orchestration] T-086: the Automations page (DT-17) is reached from a clock button in the sidebar footer until AUTO-023's optional sidebar row (T-291) and the command palette exist.
+- [orchestration] T-086: the "ask before deleting an automation" switch is the setting `confirmAutomationDelete` (on by default); the confirm bar's "Don't ask again" turns it off.
+- [orchestration] T-086: Runs, New Automation and row Edit are shown but greyed until T-130 (runs page) and T-085 (create/edit dialog) build them.
+- [orchestration] T-086: a search longer than 200 characters is refused (the box says so) instead of being run.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [orchestration] T-086 · done: new `src-tauri/src/automations.rs` (list / pause / delete / Run now commands, numbered manual runs, placement + trust + background tab via the cli-workspace event, skipped when the project is gone, failed when the agent is missing; 3 Rust tests), `src/automations/model.ts` (natural sort, last-run sort, filters, search, 5 tests) and `AutomationsPage.tsx` (3 render tests), clock button in the sidebar footer; live: list, search on prompt text, last-run sort, Run now on a paused row, delete confirm + Don't ask again, the background run tab, failed-load Retry · evidence/T-086-list.png, T-086-search.png, T-086-sort.png, T-086-runnow.png, T-086-confirm.png, T-086-deleted.png, T-086-run-tab.png, T-086-failed.png
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
 - 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png
 - 2026-10-09 · T-016 · done: `terminal.rs` marks program sessions (start time, last output) and `program_in(dir, since)`; `projects::create_fresh` shared by the UI command and the CLI; `cli.rs` `orchestration worker-start` parse (`WORKER_FLAGS`, `check_worker_start` with every refusal from CLI-035/ORCH-016/018/019), `worker_start` dispatch (task made/found under `orchestration.tasks`, worktree made or picked, `created` + `start` notify, readiness wait, receipt, `orchestration.dispatches`), `text_of` worker line, help text; front end `CliWorkspace` `start` kind → `startIn` with extra args and a pane title; 2 Rust tests (49 total; dispatch test runs the full flow with a 1 ms timeout); live in the throwaway "repo": `worker-start --spec "add a test" --agent claude --json` → `status: ready` in 1.8 s, `dispatch-1`/`task-1`, worktree hazel-otter, terminal 2; sidebar row hazel-otter + background tab "add a test" (Claude, Running) while the view stayed on main; opening the row shows one tab with Claude's trust prompt; `claude.exe --permission-mode auto "add a test"` under the app; `--worktree current --base-branch main` refused with exit 1 before anything was made; `worktree rm --worktree path:… --force` took the row, tab, process and folder away; build / clippy / 49 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-016-ready.png, evidence/T-016-one-tab.png
