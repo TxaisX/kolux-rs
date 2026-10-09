@@ -13,7 +13,7 @@ import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
 import { monoFont, terminalTheme } from "../theme";
 import { folderName } from "../projects/model";
-import { CheckCircle, Close, Dots, Expand, Plus, Spinner } from "../chrome/icons";
+import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
 
@@ -48,9 +48,11 @@ type Props = {
   defaultId?: string;
   onSetDefault?: (id: string) => void;
   onChoose?: () => void;
+  /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
+  onSplit?: () => void;
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -212,6 +214,11 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           <button className="ib" title="Expand (not built yet)">
             <Expand size={12} />
           </button>
+          {onSplit && (
+            <button className="ib" onClick={onSplit} title="Split right: a shell in the same folder (Ctrl+Shift+D; Alt+Shift+D splits down)">
+              <SplitRight size={12} />
+            </button>
+          )}
           <button
             className="ib"
             title="New session: start an agent in a new pane"
@@ -224,7 +231,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           >
             <Plus size={12} />
           </button>
-          <button className="ib" onClick={close} disabled={status.kind !== "running"} title="Close pane: ends the program">
+          <button className="ib" onClick={close} title="Close pane (Ctrl+W): ends the program">
             <Close size={12} />
           </button>
         </span>

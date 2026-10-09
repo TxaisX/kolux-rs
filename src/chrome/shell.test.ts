@@ -44,7 +44,7 @@ test("the app mark is the six-spoke glyph on a 24-unit grid in the text colour",
 });
 
 test("the layout strip offers 1, 2, 4 and 6 panes with the current one pressed", () => {
-  const html = renderToString(createElement(LayoutStrip, { layout: 1, onLayout: () => {} }));
+  const html = renderToString(createElement(LayoutStrip, { count: 1, onLayout: () => {} }));
   expect(html).toContain('class="strip"');
   for (const n of [1, 2, 4, 6]) expect(html).toContain(`>${n}</button>`);
   expect(html).toMatch(/aria-pressed="true"[^>]*>1<\/button>/);

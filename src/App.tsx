@@ -3,13 +3,14 @@
 // the pane list and the sidebar. The list starts with one PowerShell pane (T-002); the plus
 // menu adds an agent pane in a fresh creature-named workspace (T-004). The grid shows one
 // workspace at a time; the other workspaces' panes stay mounted but hidden, so switching back
-// finds every terminal as it was (T-006). Panes share the grid evenly for now; the real 1/2/4/6
-// layouts come with T-009.
+// finds every terminal as it was (T-006). The grid tiles 1..12 panes in balanced rows; the
+// layout strip sets the count, a pane splits right or down and closes (T-009, src/terminal/grid.ts).
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
-import LayoutStrip, { type Layout } from "./chrome/LayoutStrip";
+import LayoutStrip from "./chrome/LayoutStrip";
+import { clampCount, columnsFor, insertShown, MAX_PANES, resizePlan, rowsFor, splitIndex } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import type { Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
@@ -31,10 +32,6 @@ type Pane = { key: number; cwd: string | null; branch: string | null; agent: Age
 type StartLine = { args: string[]; typed: string | null };
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
-export function columnsFor(count: number): number {
-  return count <= 1 ? 1 : count <= 4 ? 2 : 3;
-}
-
 export default function App() {
   return (
     <KeymapProvider>
@@ -53,7 +50,6 @@ function Window() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("terminals");
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [layout, setLayout] = useState<Layout>(1);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
@@ -103,8 +99,9 @@ function Window() {
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const hit = matchEvent(keymap, e, ["global"]);
+      const hit = matchEvent(keymap, e, screen === "terminals" ? ["global", "terminal"] : ["global"]);
       if (!hit) return;
+      const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       switch (hit.id) {
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
@@ -118,6 +115,15 @@ function Window() {
           else void launch(a, null);
           break;
         }
+        case "terminal.closePane":
+          if (!inFront) return;
+          closePane(focused);
+          break;
+        case "terminal.splitRight":
+        case "terminal.splitDown":
+          if (!inFront) return;
+          splitPane(focused, hit.id === "terminal.splitRight" ? "right" : "down");
+          break;
         default:
           return;
       }
@@ -140,6 +146,37 @@ function Window() {
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }]);
     setFocused(key);
   };
+  // TERM-001: the layout strip sets how many panes the workspace in front holds. Growing adds
+  // empty chooser panes (nothing starts on its own); shrinking drops unstarted panes newest
+  // first and leaves started sessions alone (TERM-003's ask comes with its own task).
+  const setCount = (n: number) => {
+    const shown = panesIn(panes, activeDir);
+    const { add, drop } = resizePlan(shown.map((p) => ({ key: p.key, started: !p.seats })), n);
+    if (add === 0 && drop.length === 0 && clampCount(n) < shown.length) {
+      setToast(`All ${shown.length} panes here are started sessions. Close one to go smaller.`);
+      return;
+    }
+    const fresh: Pane[] = Array.from({ length: add }, () => ({ key: nextKey.current++, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }));
+    const rest = panes.filter((p) => !drop.includes(p.key));
+    setPanes([...rest, ...fresh]);
+    setFocused((f) => (drop.includes(f) ? focusIn(rest, activeDir, f) : f));
+  };
+
+  // TERM-006: a split opens a shell in the pane's own folder, beside it (right) or under it.
+  const splitPane = (key: number, dir: "right" | "down") => {
+    const src = panes.find((p) => p.key === key);
+    if (!src) return;
+    const shown = panesIn(panes, activeDir);
+    if (shown.length >= MAX_PANES) {
+      setToast(`A workspace holds up to ${MAX_PANES} panes.`);
+      return;
+    }
+    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [] };
+    const at = splitIndex(shown.map((p) => p.key), key, dir, columnsFor(shown.length + 1));
+    setPanes(insertShown(panes, activeDir, at, pane));
+    setFocused(pane.key);
+  };
+
   const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
 
   // Start replaces the chooser with one pane per seat (SESS-013). Agent seats run in the chooser's
@@ -241,8 +278,9 @@ function Window() {
     }
   };
 
-  // Closing a pane ends its program (the pane's own cleanup kills it); the last pane stays and
-  // shows "Ended" so the grid is never empty.
+  // TERM-014: closing a pane ends its program (the pane's own cleanup kills it) and its
+  // neighbours take the space; closing the last pane leaves the workspace's empty placeholder
+  // (tabs come with T-010).
   // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
   const failedPane = (key: number, error: string) => {
     const { panes: rest, batchEmpty } = withoutFailed(panes, key);
@@ -252,7 +290,7 @@ function Window() {
   };
 
   const closePane = (key: number) => {
-    setPanes((ps) => (ps.length > 1 ? ps.filter((p) => p.key !== key) : ps));
+    setPanes((ps) => ps.filter((p) => p.key !== key));
     setRunning((r) => {
       const { [key]: _gone, ...rest } = r;
       return rest;
@@ -290,7 +328,7 @@ function Window() {
         <div className="content">
           {terminals ? (
             <>
-              <LayoutStrip layout={layout} onLayout={setLayout} />
+              <LayoutStrip count={shown.length} onLayout={setCount} />
               {toast && (
                 <div className="toast" role="status">
                   {toast}
@@ -304,7 +342,7 @@ function Window() {
                   </button>
                 </div>
               )}
-              <div className="grid" style={{ gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))` }}>
+              <div className="grid" style={{ gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` }}>
                 {shown.length === 0 && (
                   <div className="empty">
                     <h2>{activeDir ? folderName(activeDir) : "Terminal"}</h2>
@@ -332,7 +370,7 @@ function Window() {
                       onSeats={(s) => setSeats(p.key, s)}
                       onStart={(s) => void startSeats(p.key, s)}
                       busy={launching}
-                      closable={shown.length > 1}
+                      closable
                       onClose={() => closePane(p.key)}
                     />
                   ) : (
@@ -348,6 +386,7 @@ function Window() {
                       onFocus={() => setFocused(p.key)}
                       onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                       onFailed={(error) => failedPane(p.key, error)}
+                      onSplit={() => splitPane(p.key, "right")}
                       title={p.title}
                       typed={p.typed}
                       number={p.key}

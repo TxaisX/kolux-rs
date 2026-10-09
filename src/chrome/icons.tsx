@@ -183,6 +183,13 @@ export const Spinner = (p: P) => (
     <path d="M8 2a6 6 0 0 1 6 6" />
   </Glyph>
 );
+export const SplitRight = (p: P) => (
+  <Glyph {...p}>
+    <rect x="2" y="3" width="12" height="10" rx="1.5" />
+    <path d="M8 3v10" />
+  </Glyph>
+);
+
 export const Expand = (p: P) => (
   <Glyph {...p}>
     <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9" />
