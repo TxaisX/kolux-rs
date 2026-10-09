@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 18, date: 2026-10-09)
-Next task: T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
-Done: 24 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 19, date: 2026-10-09)
+Next task: T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
+Done: 25 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -261,6 +261,23 @@ call), `scm_commit` (`-F -`). The list refreshes after each action and every 4 s
 is open; the watcher is GIT-001's (T-033), the multi-row bulk bar is T-018-c and folder rows are
 T-033's tree view.
 
+**Main button and remote menu (T-018-b, GIT-006 / GIT-007).** The large button under the commit
+box always names the next step: Stage all while edits wait with nothing staged; Commit once
+something is staged (held with "Write a message first" or "Resolve the conflicts first"); Publish
+branch for a branch with no upstream (held with "HEAD is detached"); Force push with lease when
+the upstream holds only patches the branch already has, as after a rebase; Sync ↓behind ↑ahead,
+Pull n or Push n by the counts; Create pull request on a clean, pushed branch (the composer is
+GIT-021, T-228, and the button says so). The Remote menu lists push, pull, sync, fetch,
+fast-forward, force push with lease, publish branch and rebase from base, labels carrying counts
+("Push 2 commits", "Sync ↓1 ↑2", "Rebase from origin/main"), every disabled item showing its
+reason (no branch checked out, branch unpublished, nothing to push / pull, already current, local
+commits are in the way, already published, this is the base branch). Actions run against the
+branch's own remote only (publish pushes to origin and sets it as upstream; force always carries a
+lease; rebase fetches first); a failure shows git's words with Fix with AI. Status never touches
+the network: ahead / behind come from the refs git has, so an unpublished branch is never checked
+against the remote; only an explicit menu action does. Back end: `scm_remote` in `scm.rs`,
+`Status.rewritten` (`git cherry HEAD @{upstream}` all `-`) and `Status.base`.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -357,6 +374,21 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-018-b: "differs from its remote only by commits with identical patches" is read
+  as `git cherry HEAD @{upstream}` marking every upstream-only commit `-`, checked only when the
+  branch is behind, so the common path costs no extra git call. The base branch is
+  `Git::default_branch` (origin's HEAD, else main / master, else the current branch); a repo
+  whose origin was added by hand has no `origin/HEAD`, so its base reads as the local `main`
+  until `git remote set-head origin -a`. Push, pull and sync use git's plain forms so the user's
+  own pull policy applies; a diverged pull with no policy shows git's refusal (GIT-008, T-313).
+  No push target is ever taken from the UI, so "a target that differs from the configured remote
+  is rejected" holds by construction, as does "git only reaches remotes the user set up". The
+  ten-minute "no repeating remote checks" acceptance holds by construction (status is local) and
+  is proven in the Rust test with origin pointing nowhere: three status calls in well under a
+  second, only an explicit fetch reports the trouble. The sync label shows the ↓ ↑ pair even when
+  one side is 0. Create pull request, the wait while the PR check loads and the "PR already
+  merged" reason go to T-228 (named in PLAN.md). Fix with AI's prompt now covers any failed
+  action, not only a commit (GIT-009's push hand-off proper stays on T-227).
 - 2026-10-09 · T-018-a: the stage card's batching rule is met by one git process fed
   NUL-separated paths on stdin (`--pathspec-from-file=- --pathspec-file-nul`, any count) rather
   than several argv batches; `--literal-pathspecs` so `[`, `*` and `?` in names match only
@@ -643,6 +675,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-018-b · done: `scm.rs` gains `Status.rewritten` / `Status.base`, `remote()` and `scm_remote` (push, pull, sync, fetch, ff, force --force-with-lease, publish --set-upstream origin, rebase after fetch); 1 Rust test over a bare remote (58 total); `nextStep` and `remoteItems` in `src/scm/model.ts` with 2 tests (75 total); panel: main button + Remote menu; live in the dev app on the throwaway repo with a bare origin: edit → "Stage all" → "Commit" held with "Write a message first" → typed → commit 6495041 → "Push 1"; menu read "Push 1 commit" on, "Pull · Nothing to pull", "Sync ↓0 ↑1", "Fast-forward · Already current", "Publish branch · Already published", "Rebase from origin/main · This is the base branch"; push → "Create pull request"; `feat` branch with a commit → "Publish branch" → published (`feat...origin/feat`); main moved from a second clone, menu Rebase from origin/main → `[ahead 2, behind 1]`, `git cherry HEAD @{u}` one `-`, button "Force push with lease" → pushed, counts 0; build / clippy / 58 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-b-menu.png, T-018-b-lease.png
 - 2026-10-09 · T-018-a · done: `scm.rs` (status / stage / commit, 4 Rust tests, 57 total), `src/scm/model.ts` + `SourceControlPanel.tsx` (2 front-end tests, 73 total), right card on Mod+Shift+G / Mod+L / the top bar button; live in the dev app on a throwaway repo: 1 edit + 4 new files listed as Changes 1 / Untracked 4, the three `docs/` rows staged by row, Ctrl+Enter in the box made commit 66f5f87 `Add the docs folder` (git log 2 → 3), the draft survived a switch to zeta and back, a refusing pre-commit hook gave `Commit blocked by a hook` + `nope, said the hook: README needs a title` + Fix with AI with no commit made, the Staged section's minus unstaged it; build / clippy / 57 Rust tests / 73 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-a-sections.png, -staged.png, -committed.png, -blocked.png
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
 - 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png

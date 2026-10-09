@@ -90,7 +90,7 @@ pub fn run() {
             trust::trust_folders_cmd,
             scm::scm_status,
             scm::scm_stage,
-            scm::scm_commit,
+            scm::scm_commit, scm::scm_remote,
             keybindings::keybindings_read,
             projects::workspaces_place_get,
             projects::workspaces_place_set,

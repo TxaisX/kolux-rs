@@ -1,8 +1,11 @@
-//! GIT-002 / GIT-004: the Source Control panel's back end: what one worktree has changed, staging
-//! and unstaging by path, and committing. Every call names the worktree it acts on, so one
-//! workspace's index is never touched from another's panel.
+//! GIT-002 / GIT-004 / GIT-006 / GIT-007: the Source Control panel's back end: what one worktree
+//! has changed, staging and unstaging by path, committing, and the remote actions (push, pull,
+//! sync, fetch, fast-forward, force push with lease, publish, rebase from base). Every call names
+//! the worktree it acts on, so one workspace's index is never touched from another's panel.
+//! Reading status never touches the network: the ahead / behind counts come from the refs git
+//! already has, so an unpublished branch is not checked against the remote over and over.
 
-use crate::git::{command, native, run};
+use crate::git::{command, native, run, Git};
 use std::io::Write;
 use std::path::{Component, Path};
 
@@ -25,6 +28,11 @@ pub struct Status {
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
+    /// GIT-006: the branch differs from its upstream only by commits whose patches it already
+    /// holds, as after a rebase, so a force push with lease loses nothing.
+    pub rewritten: bool,
+    /// The branch work rebases onto (origin's HEAD, else main or master); None without one.
+    pub base: Option<String>,
     pub staged: Vec<Change>,
     pub changed: Vec<Change>,
     pub untracked: Vec<Change>,
@@ -47,7 +55,54 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(parse_status(&String::from_utf8_lossy(&out.stdout)))
+    let mut st = parse_status(&String::from_utf8_lossy(&out.stdout));
+    if st.upstream.is_some() && st.behind > 0 {
+        // Every upstream-only commit marked `-` has an identical patch in HEAD.
+        st.rewritten = run(&["cherry", "HEAD", "@{upstream}"], Some(worktree)).is_ok_and(|t| !t.is_empty() && t.lines().all(|l| l.starts_with('-')));
+    }
+    st.base = Git::detect().ok().and_then(|g| g.default_branch(worktree));
+    Ok(st)
+}
+
+/// What a remote action came to: `ok`, and everything git printed either way.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionOutcome {
+    pub ok: bool,
+    pub output: String,
+}
+
+/// GIT-007: one remote action against the branch's own remote, never a target of its own:
+/// `publish` pushes to origin and makes it the upstream, `force` always carries a lease, `sync`
+/// is pull then push, `ff` pulls fast-forward only, `rebase` fetches and rebases onto the base
+/// branch, and the rest are git's plain forms, so the user's own pull and push settings apply.
+/// The output of every step is kept; a failing step stops the rest.
+pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
+    let st = status(worktree)?;
+    let branch = st.branch.clone().ok_or("no branch checked out")?;
+    let base = st.base.clone();
+    let steps: Vec<Vec<&str>> = match action {
+        "push" => vec![vec!["push"]],
+        "pull" => vec![vec!["pull"]],
+        "sync" => vec![vec!["pull"], vec!["push"]],
+        "fetch" => vec![vec!["fetch"]],
+        "ff" => vec![vec!["pull", "--ff-only"]],
+        "force" => vec![vec!["push", "--force-with-lease"]],
+        "publish" => vec![vec!["push", "--set-upstream", "origin", &branch]],
+        "rebase" => vec![vec!["fetch"], vec!["rebase", base.as_deref().ok_or("no base branch to rebase from")?]],
+        other => return Err(format!("unknown remote action {other}")),
+    };
+    let mut output = String::new();
+    for args in steps {
+        let out = command(&args, Some(worktree)).output().map_err(|e| format!("could not run git: {e}"))?;
+        output.push_str(String::from_utf8_lossy(&out.stdout).trim());
+        output.push_str(String::from_utf8_lossy(&out.stderr).trim());
+        output.push('\n');
+        if !out.status.success() {
+            return Ok(ActionOutcome { ok: false, output: output.trim().to_string() });
+        }
+    }
+    Ok(ActionOutcome { ok: true, output: output.trim().to_string() })
 }
 
 /// Parses porcelain v2 with NUL separators, so names with spaces, quotes or non-ASCII letters
@@ -174,6 +229,11 @@ pub fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, St
     commit(Path::new(&worktree), &message)
 }
 
+#[tauri::command]
+pub fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, String> {
+    remote(Path::new(&worktree), &action)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +256,84 @@ mod tests {
 
     fn paths(list: &[Change]) -> Vec<&str> {
         list.iter().map(|c| c.path.as_str()).collect()
+    }
+
+    fn commit_file(dir: &Path, name: &str, text: &str) {
+        fs::write(dir.join(name), text).unwrap();
+        run(&["add", "."], Some(dir)).unwrap();
+        run(&["commit", "-q", "-m", name], Some(dir)).unwrap();
+    }
+
+    fn counts(dir: &Path) -> (Option<String>, u32, u32, bool) {
+        let st = status(dir).unwrap();
+        (st.upstream, st.ahead, st.behind, st.rewritten)
+    }
+
+    #[test]
+    fn remote_actions_move_commits_through_a_bare_remote_and_rebased_work_offers_a_lease() {
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let bare_url = bare.to_string_lossy().replace('\\', "/");
+        let dir = temp_repo("remote");
+        run(&["remote", "add", "origin", &bare_url], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        run(&["remote", "set-head", "origin", "main"], Some(&dir)).unwrap();
+        let st = status(&dir).unwrap();
+        assert_eq!((st.upstream.as_deref(), st.ahead, st.behind, st.base.as_deref()), (Some("origin/main"), 0, 0, Some("origin/main")));
+
+        // Two local commits: push moves them and the count falls to zero (GIT-007 acceptance).
+        commit_file(&dir, "one.txt", "1\n");
+        commit_file(&dir, "two.txt", "2\n");
+        assert_eq!(counts(&dir), (Some("origin/main".into()), 2, 0, false));
+        assert!(remote(&dir, "push").unwrap().ok);
+        assert_eq!(counts(&dir), (Some("origin/main".into()), 0, 0, false));
+
+        // A new branch has no upstream until publish sets origin as its upstream.
+        run(&["checkout", "-q", "-b", "feat"], Some(&dir)).unwrap();
+        commit_file(&dir, "feat.txt", "f\n");
+        assert_eq!(counts(&dir), (None, 0, 0, false));
+        assert!(remote(&dir, "publish").unwrap().ok);
+        assert_eq!(counts(&dir), (Some("origin/feat".into()), 0, 0, false));
+
+        // Main moves on the remote; rebasing feat onto it leaves the upstream with only
+        // already-held patches, so force push with lease is the next step, not pull.
+        let other = std::env::temp_dir().join(format!("kolux-rs-scm-other-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&other);
+        run(&["clone", "-q", &bare_url, &other.to_string_lossy()], None).unwrap();
+        run(&["config", "user.email", "test@example.com"], Some(&other)).unwrap();
+        run(&["config", "user.name", "Kolux RS test"], Some(&other)).unwrap();
+        commit_file(&other, "main2.txt", "m\n");
+        run(&["push", "-q"], Some(&other)).unwrap();
+        assert!(remote(&dir, "rebase").unwrap().ok, "rebase from base");
+        assert_eq!(counts(&dir), (Some("origin/feat".into()), 2, 1, true));
+        assert!(remote(&dir, "force").unwrap().ok);
+        assert_eq!(counts(&dir), (Some("origin/feat".into()), 0, 0, false));
+
+        // A genuinely new commit on the remote is not "rewritten": nothing offers to force over it.
+        run(&["fetch", "-q"], Some(&other)).unwrap();
+        run(&["checkout", "-q", "-b", "feat", "origin/feat"], Some(&other)).unwrap();
+        commit_file(&other, "theirs.txt", "t\n");
+        run(&["push", "-q"], Some(&other)).unwrap();
+        commit_file(&dir, "mine.txt", "i\n");
+        assert!(remote(&dir, "fetch").unwrap().ok);
+        assert_eq!(counts(&dir), (Some("origin/feat".into()), 1, 1, false));
+
+        // Status never goes to the network: with the remote gone it still answers at once, and
+        // only an explicit fetch reports the trouble.
+        run(&["remote", "set-url", "origin", &format!("{bare_url}-missing")], Some(&dir)).unwrap();
+        let t = std::time::Instant::now();
+        for _ in 0..3 {
+            status(&dir).unwrap();
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(3), "status took {:?}", t.elapsed());
+        let fetched = remote(&dir, "fetch").unwrap();
+        assert!(!fetched.ok && !fetched.output.is_empty(), "{fetched:?}");
+        assert_eq!(remote(&dir, "nope").unwrap_err(), "unknown remote action nope");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&other);
+        let _ = fs::remove_dir_all(&bare);
     }
 
     #[test]

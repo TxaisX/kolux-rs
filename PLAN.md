@@ -61,7 +61,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-017-b · Pre-trust for Codex in its own configuration file (the rest of the card on T-017-a)
 - [ ] T-017-c · Pre-trust for Cursor and Copilot in their own configuration files (the rest of the card on T-017-a; their file formats are not public)
 - [x] T-018-a · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message
-- [ ] T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
+- [x] T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
 - [ ] T-018-c · Source Control bulk bar: select several rows and stage or unstage them together (the rest of the stage card on T-018-a)
 - [ ] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
 - [ ] T-020 · SET-032 [compat] Pick the folder new worktrees go into
@@ -338,7 +338,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-225 · VIEW-062 [compat] Source Control: changed files list · VIEW-063 Open a changed file's diff · VIEW-064 Commit box with saved drafts and AI message · VIEW-065 One main git button that changes with the state · VIEW-070 Create or link a pull request from the sidebar
 - [ ] T-226 · VIEW-071 Git history in the sidebar · VIEW-074 Start a pull request from Checks · VIEW-078 Ports in the status bar
 - [ ] T-227 · GIT-005 Commit together with push, sync or force push · GIT-009 A failed push can be handed to an agent · GIT-011 Branch row compares the workspace with its base · GIT-015 Merge and rebase conflicts with abort and AI resolve · GIT-017 [compat] AI writes the commit message from what is staged
-- [ ] T-228 · GIT-018 [compat] Choose who writes commit messages · GIT-020 Branches are named after the work done in them · GIT-021 Create a pull request from Source Control · GIT-022 One click takes unfinished work all the way to a pull request · GIT-023 Create PR explains why it is unavailable
+- [ ] T-228 · GIT-018 [compat] Choose who writes commit messages · GIT-020 Branches are named after the work done in them · GIT-021 Create a pull request from Source Control · GIT-022 One click takes unfinished work all the way to a pull request · GIT-023 Create PR explains why it is unavailable · the Source Control main button's pull-request step: Create pull request opens the composer, waits while the PR check loads, and the remote menu's "PR already merged" reason (the main-button and remote-menu cards on T-018-b)
 - [ ] T-229 · GIT-024 AI drafts the PR title and description · GIT-025 Each workspace knows its branch's pull request · GIT-026 A PR link printed by an agent attaches to its workspace · GIT-029 [compat] Checks panel shows CI results and hands failures to AI · GIT-030 Read and answer PR review comments in Kolux
 - [ ] T-230 · GIT-031 Send review comments to the agent · GIT-032 PR merge conflicts are explained, with AI resolve · GIT-033 Merge, auto-merge, merge queue and PR state actions · GIT-035 History panel draws the commit graph · GIT-036 History commit menu: copy, open or explain
 - [ ] T-231 · GIT-042 Review notes on Markdown documents · GIT-043 Tasks page lists GitHub issues and pull requests · GIT-046 Create a GitHub issue from Tasks · GIT-047 Close, reopen and comment on issues · GIT-049 [compat] Start or resume a workspace from an issue or PR

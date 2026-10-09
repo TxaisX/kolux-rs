@@ -420,7 +420,7 @@ function Window() {
       setNotice(`The default agent (${defaultId}) is not installed.`);
       return;
     }
-    const prompt = `A git commit in this workspace was refused. Find the cause, fix it, and commit again with the same message.\n\nGit said:\n${output}`;
+    const prompt = `A git action in this workspace failed. Find the cause, fix it, and finish the action.\n\nGit said:\n${output}`;
     void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
   };
   const projectOf = (cwd: string | null): string | null => (cwd ? (Object.entries(owner).find(([dir]) => sameDir(dir, cwd))?.[1] ?? null) : null);
