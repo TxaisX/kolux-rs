@@ -1,0 +1,65 @@
+# APP-059 / APP-060: a release built through CI. It publishes only when CI passed for that exact
+# commit, waiting up to 30 minutes for a run still queued; the reason for a refusal goes to the job
+# summary. Ships from the owner's PC start the same release job locally (pnpm ship --main).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the release (off = build and smoke-test only)
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Wait for CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: node scripts/ci-gate.mjs "$(git rev-parse HEAD)"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Signing key
+        shell: bash
+        env:
+          KEY: ${{ secrets.KOLUX_RELEASE_KEY }}
+          PUB: ${{ secrets.KOLUX_RELEASE_PUBKEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signing"
+          printf '%s' "$KEY" > "$RUNNER_TEMP/signing/kolux-rs.key"
+          printf '%s' "$PUB" > "$RUNNER_TEMP/signing/kolux-rs.key.pub"
+      - name: Release job
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.KOLUX_RELEASES_TOKEN }}
+          KOLUX_RELEASE_CHECKOUT: ${{ runner.temp }}/release-checkout
+          KOLUX_RELEASE_KEY: ${{ runner.temp }}/signing/kolux-rs.key
+          KOLUX_RELEASE_KEY_PASSWORD: ${{ secrets.KOLUX_RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ "${{ inputs.publish }}" = "true" ]; then
+            node scripts/release.mjs --repo "$GITHUB_WORKSPACE"
+          else
+            node scripts/release.mjs --no-publish --repo "$GITHUB_WORKSPACE"
+          fi

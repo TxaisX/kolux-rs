@@ -1,0 +1,77 @@
+# APP-060: CI on main runs the test suite in four shards and reports one result. It can also be
+# started by hand for a branch that is pushed but not merged yet (Run workflow, pick the branch).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Shard ${{ matrix.shard }} of 4
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Every shard runs its quarter of the front-end tests.
+      - name: Front-end tests
+        run: pnpm exec vitest run --shard=${{ matrix.shard }}/4
+      # The Rust side and the checks are spread over the shards so each is about as long.
+      - name: Rust toolchain
+        if: matrix.shard == 1 || matrix.shard == 2
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Rust tests
+        if: matrix.shard == 1
+        working-directory: src-tauri
+        run: cargo test
+      - name: Rust lints
+        if: matrix.shard == 2
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Licence check (Rust)
+        if: matrix.shard == 3
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check licenses
+      - name: Types, licences, plan and workflows
+        if: matrix.shard == 4
+        run: |
+          pnpm exec tsc
+          node scripts/license-check.mjs
+          node scripts/plan-check.mjs
+          node scripts/workflow-check.mjs
+
+  result:
+    name: CI result
+    needs: test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      # Green only when all four shards passed.
+      - name: All four shards passed
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "One or more shards did not pass: ${{ needs.test.result }}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "All four shards passed." >> "$GITHUB_STEP_SUMMARY"

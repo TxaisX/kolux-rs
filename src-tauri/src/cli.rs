@@ -72,7 +72,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent"];
 const CREATE_FLAGS: &[&str] = &["name", "repo", "agent", "prompt", "setup", "base-branch", "issue", "comment", "parent-worktree", "no-parent", "run-hooks", "activate"];
@@ -245,6 +245,11 @@ fn text_of(command: &str, r: &Value) -> String {
 
 /// The `kolux-dev` program: parses, talks to the app, prints, and returns the exit status.
 pub fn main(words: Vec<String>) -> i32 {
+    // APP-059 Compat: the CLI reports the same version as the app and the update manifest.
+    if matches!(words.first().map(String::as_str), Some("--version" | "-V")) {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
     let (json, parsed) = parse(&words);
     let id = request_id();
     let finish = |out: Result<(String, Value), Fail>| -> i32 {

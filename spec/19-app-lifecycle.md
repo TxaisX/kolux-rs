@@ -201,6 +201,7 @@ Acceptance:
   - [ ] Ship twice in quick succession → exactly two builds run, one after the other, never side by side.
 Compat: `kolux --version` prints the release version; an environment variable can point the release
   job at a different build checkout; the release job takes `--dry-run` and `--no-publish`.
+  Amended 2026-10-09 (DT-R07, DT-R09): a release carries the Windows installer, its signature file and the update manifest, the signature taking the block map's place; the version is set only in the release checkout and never committed.
 Source: D-19-059
 
 ### APP-060 · CI on main runs in four shards and gates releases

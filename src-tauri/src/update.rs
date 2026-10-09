@@ -20,10 +20,13 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// The update manifest of the newest published release (OD-20: Kolux RS's own feed).
 pub const RELEASE_ENDPOINT: &str = "https://github.com/TxaisX/kolux-rs-releases/releases/latest/download/latest.json";
-/// The minisign public key releases are signed with. Empty until the release pass (T-091) makes
-/// the signing key; while it is empty an installed copy says it cannot update instead of
-/// accepting anything unsigned.
-pub const RELEASE_PUBKEY: &str = "";
+/// The minisign public key releases are signed with. The release job (scripts/release.mjs, T-091)
+/// builds it in from the public half of the signing key; a build made without it says it cannot
+/// update instead of accepting anything unsigned.
+pub const RELEASE_PUBKEY: &str = match option_env!("KOLUX_RS_RELEASE_PUBKEY") {
+    Some(k) => k,
+    None => "",
+};
 /// A check that has not answered by then is dropped (APP-024 "a check that stalls").
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// Development copies only: a test feed and its key.
@@ -80,7 +83,7 @@ pub fn clean_notes(body: Option<&str>) -> Vec<String> {
     let Some(body) = body else { return Vec::new() };
     body.lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("<!--"))
         .filter(|l| !l.chars().all(|c| c == '-' || c == '=' || c == '*' || c == '_'))
         .map(|l| {
             let l = l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")).or_else(|| l.strip_prefix("+ ")).unwrap_or(l);
@@ -279,5 +282,7 @@ mod tests {
         assert_eq!(clean_notes(Some(body)), vec!["First", "Second", "Third", "Fourth plain line", "Fifth", "Sixth"]);
         assert_eq!(clean_notes(Some("# Only a heading\n\n")), Vec::<String>::new());
         assert_eq!(clean_notes(None), Vec::<String>::new());
+        // The release job's hidden source marker never shows as a note.
+        assert_eq!(clean_notes(Some("- Ship it\n<!-- kolux-rs-source: abc123 -->\n")), vec!["Ship it"]);
     }
 }
