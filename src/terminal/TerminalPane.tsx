@@ -30,6 +30,12 @@ type Props = {
   program?: string | null;
   args?: string[];
   onRunning?: (running: boolean) => void;
+  /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
+  onFailed?: (error: string) => void;
+  /** A job title from the seat (SESS-024) wins over the workspace name. */
+  title?: string;
+  /** Names a pane outside any workspace: "Terminal N". */
+  number?: number;
   onFocus?: () => void;
   /** Called after Close ended the program, so the window can drop the pane. */
   onClose?: () => void;
@@ -42,7 +48,7 @@ type Props = {
   onChoose?: () => void;
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -50,6 +56,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const idRef = useRef<number | null>(null);
   const report = useRef(onRunning);
   report.current = onRunning;
+  const failed = useRef(onFailed);
+  failed.current = onFailed;
 
   useEffect(() => {
     report.current?.(status.kind === "running");
@@ -106,6 +114,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         term.focus();
       } catch (err) {
         setStatus({ kind: "failed", error: String(err) });
+        failed.current?.(String(err));
       }
     })();
 
@@ -145,8 +154,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const tone = status.kind === "failed" ? "attention" : "";
   const icon = status.kind === "starting" ? "working" : status.kind === "running" ? "done" : "idle";
   const drawing = renderer === "webgl" ? "GPU renderer" : renderer === "dom" ? "plain renderer" : "";
-  // The workspace folder is the session's name: for an agent launch that is its creature name.
-  const title = cwd ? folderName(cwd) : "Terminal";
+  // The seat's job title names the pane; else the workspace folder (an agent launch's creature
+  // name); else "Terminal N" (SESS-024).
+  const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
 
   return (

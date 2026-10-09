@@ -177,7 +177,11 @@ input { font: inherit; }
 .count-field { width: 56px; height: 26px; padding: 0 6px; border: 1px solid var(--button-border); border-radius: 6px; background: transparent; color: var(--fg); font: inherit; }
 .seats { display: flex; flex-direction: column; gap: 10px; }
 .seat { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; }
+.seat-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .seat-title { font-weight: 600; color: var(--fg); }
+.seat-job { flex: 1; min-width: 160px; max-width: 320px; height: 24px; padding: 0 6px; border: 1px solid var(--button-border); border-radius: 6px; background: transparent; color: var(--fg); font: inherit; }
+.caption { margin: 0; color: var(--fg-muted); }
+.toast { flex: none; margin: 8px 8px 0; padding: 4px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; font-size: 12px; color: var(--fg-muted); }
 .choices { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; }
 .choice { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .choice input { margin: 0; accent-color: var(--fg); }

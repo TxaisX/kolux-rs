@@ -17,7 +17,7 @@ import ProjectsPanel from "./projects/ProjectsPanel";
 import { markFor, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
-import { emptySeat, modelArgs, TERMINAL, type Seat } from "./launch/seats";
+import { clearMissing, emptySeat, modelArgs, TERMINAL, withoutFailed, type Seat } from "./launch/seats";
 import { folderName, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -26,7 +26,7 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[] };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; title?: string; batch?: number };
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
 export function columnsFor(count: number): number {
@@ -60,11 +60,20 @@ function Window() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const defaultId = defaultAgentId(settings);
+  const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
   const [projects, setProjects] = useState<Project[]>([]);
   const [owner, setOwner] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
+  const [toast, setToastText] = useState<string | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  const setToast = (text: string) => {
+    setToastText(text);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastText(null), 4000);
+  };
   const nextKey = useRef(2);
 
   useEffect(() => {
@@ -151,12 +160,17 @@ function Window() {
         dir = wt.path;
         branch = wt.branch;
       }
+      const batch = key;
       const made: Pane[] = seats.map((s, i) => {
         const a = picked[i];
         const k = nextKey.current++;
-        return a ? { key: k, cwd: dir, branch, agent: markFor(a.id), program: a.program, args: [...a.args, ...modelArgs(s.model)] } : { key: k, cwd: dir, branch, agent: "shell", program: null, args: [] };
+        const title = s.title?.trim() || undefined;
+        return a
+          ? { key: k, cwd: dir, branch, agent: markFor(a.id), program: a.program, args: [...a.args, ...modelArgs(s.model)], title, batch }
+          : { key: k, cwd: dir, branch, agent: "shell", program: null, args: [], title, batch };
       });
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
+      setToast(made.length === 1 ? "Starting 1 session" : `Starting ${made.length} sessions`);
       setActiveDir(dir);
       setFocused(made[0].key);
       setRefresh((n) => n + 1);
@@ -223,6 +237,14 @@ function Window() {
 
   // Closing a pane ends its program (the pane's own cleanup kills it); the last pane stays and
   // shows "Ended" so the grid is never empty.
+  // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
+  const failedPane = (key: number, error: string) => {
+    const { panes: rest, batchEmpty } = withoutFailed(panes, key);
+    setPanes(rest);
+    setFocused((f) => (f === key ? focusIn(rest, activeDir, f) : f));
+    setToast(batchEmpty ? `Nothing started: ${error}` : `A session did not start: ${error}`);
+  };
+
   const closePane = (key: number) => {
     setPanes((ps) => (ps.length > 1 ? ps.filter((p) => p.key !== key) : ps));
     setRunning((r) => {
@@ -263,6 +285,11 @@ function Window() {
           {terminals ? (
             <>
               <LayoutStrip layout={layout} onLayout={setLayout} />
+              {toast && (
+                <div className="toast" role="status">
+                  {toast}
+                </div>
+              )}
               {notice && (
                 <div className="notice" role="alert">
                   {notice}
@@ -295,7 +322,7 @@ function Window() {
                       focused={p.key === focused}
                       onFocus={() => setFocused(p.key)}
                       agents={agents.filter((a) => a.installed)}
-                      seats={p.seats}
+                      seats={clearMissing(p.seats, installedIds)}
                       onSeats={(s) => setSeats(p.key, s)}
                       onStart={(s) => void startSeats(p.key, s)}
                       busy={launching}
@@ -314,6 +341,9 @@ function Window() {
                       focused={p.key === focused}
                       onFocus={() => setFocused(p.key)}
                       onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                      onFailed={(error) => failedPane(p.key, error)}
+                      title={p.title}
+                      number={p.key}
                       onClose={() => closePane(p.key)}
                       agents={agents}
                       defaultId={defaultId}

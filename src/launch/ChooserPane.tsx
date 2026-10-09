@@ -7,7 +7,7 @@
 import { Close } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
-import { allReady, modelsFor, QUICK_COUNTS, resizeSeats, TERMINAL, type Seat } from "./seats";
+import { allReady, modelsFor, QUICK_COUNTS, resizeSeats, sameForAll, seatReady, TERMINAL, type Seat } from "./seats";
 
 type Props = {
   /** The session's number, shown in the header. */
@@ -29,6 +29,7 @@ type Props = {
 export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, onStart, busy = false, closable, onClose, onFocus }: Props) {
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const ready = allReady(seats) && !busy;
+  const anyReady = seats.some(seatReady);
   // The free field applies on Enter or blur, not per keystroke: typing "15" must not pass
   // through a one-seat moment that drops the picks of seats 2 and up.
   const applyCount = (e: { currentTarget: HTMLInputElement }) => {
@@ -50,6 +51,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
         </span>
       </header>
       <div className="chooser-body">
+        <p className="caption">Every seat starts blank. Kolux never picks an AI or a model for you.</p>
         <div className="count-row" role="group" aria-label="How many sessions">
           <span className="label">Sessions</span>
           {QUICK_COUNTS.map((n) => (
@@ -74,11 +76,24 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
               if (!(e.nativeEvent as InputEvent).inputType) applyCount(e);
             }}
           />
+          <button className="btn" disabled={!anyReady || seats.length < 2} onClick={() => onSeats(sameForAll(seats))} title="Copy the first finished seat's AI and model into every seat">
+            Same for all
+          </button>
         </div>
         <div className="seats">
           {seats.map((seat, i) => (
             <div key={i} className="seat">
-              <div className="seat-title">Seat {i + 1}</div>
+              <div className="seat-head">
+                <span className="seat-title">Seat {i + 1}</span>
+                <input
+                  className="seat-job"
+                  type="text"
+                  placeholder="Job title (optional)"
+                  aria-label={`Seat ${i + 1}: job title`}
+                  value={seat.title ?? ""}
+                  onChange={(e) => setSeat(i, { title: e.currentTarget.value })}
+                />
+              </div>
               <div className="choices" role="radiogroup" aria-label={`Seat ${i + 1}: which AI`}>
                 {agents.map((a) => (
                   <label key={a.id} className="choice">

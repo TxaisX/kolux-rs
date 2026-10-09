@@ -25,6 +25,17 @@ test("SESS-007: Claude without a model keeps Start disabled, a model enables it,
   expect(render([{ agent: null, model: null }])).toContain("Session 2");
 });
 
+test("SESS-015: three blank seats keep Start disabled and show the no-guessing caption; Same for all waits for a finished seat", () => {
+  const blank = render([{ agent: null, model: null }, { agent: null, model: null }, { agent: null, model: null }]);
+  expect(startButton(blank)).toContain("disabled");
+  expect(blank).toContain("Kolux never picks an AI or a model for you");
+  expect(blank.split("<button").find((b) => b.includes("Same for all"))).toContain("disabled");
+  const one = render([{ agent: "claude", model: "opus" }, { agent: null, model: null }, { agent: null, model: null }]);
+  expect(one.split("<button").find((b) => b.includes("Same for all"))).not.toContain("disabled");
+  expect(render([{ agent: "claude", model: "opus" }]).split("<button").find((b) => b.includes("Same for all"))).toContain("disabled");
+  expect(render([{ agent: null, model: null, title: "Review" }])).toContain('value="Review"');
+});
+
 test("the grid's only pane has no close button; otherwise it does", () => {
   expect(render([{ agent: null, model: null }], false)).not.toContain("Close this chooser");
   expect(render([{ agent: null, model: null }], true)).toContain("Close this chooser");

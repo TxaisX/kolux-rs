@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, emptySeat, modelArgs, modelsFor, resizeSeats, seatReady, TERMINAL, type Seat } from "./seats";
+import { allReady, clearMissing, emptySeat, modelArgs, modelsFor, resizeSeats, sameForAll, seatReady, TERMINAL, withoutFailed, type Seat } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -25,6 +25,25 @@ test("SESS-007: an AI needs an explicit model, a terminal is ready at once, Star
   expect(allReady([claude, term])).toBe(true);
   expect(allReady([claude, emptySeat()])).toBe(false);
   expect(allReady([])).toBe(false);
+});
+
+test("SESS-015: Same for all copies the first finished seat's AI and model, keeps titles, and does nothing while no seat is finished", () => {
+  const seats: Seat[] = [{ agent: "claude", model: null }, claude, { agent: null, model: null, title: "Review" }];
+  expect(sameForAll(seats)).toEqual([{ agent: "claude", model: "opus" }, claude, { agent: "claude", model: "opus", title: "Review" }]);
+  expect(allReady(sameForAll(seats))).toBe(true);
+  const blank = [emptySeat(), { agent: "codex", model: null }];
+  expect(sameForAll(blank)).toBe(blank);
+});
+
+test("SESS-024: a failed pane is dropped; the lineup counts as gone when none of its panes is left", () => {
+  const panes = [{ key: 1 }, { key: 2, batch: 7 }, { key: 3, batch: 7 }];
+  const one = withoutFailed(panes, 2);
+  expect(one.panes.map((p) => p.key)).toEqual([1, 3]);
+  expect(one.batchEmpty).toBe(false);
+  const two = withoutFailed(one.panes, 3);
+  expect(two.panes.map((p) => p.key)).toEqual([1]);
+  expect(two.batchEmpty).toBe(true);
+  expect(withoutFailed(panes, 1).batchEmpty).toBe(false);
 });
 
 test("a pick that stops being detected is cleared rather than swapped", () => {

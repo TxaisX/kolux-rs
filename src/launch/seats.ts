@@ -3,8 +3,9 @@
 // them. Nothing is guessed: an AI seat is ready only once its model is picked explicitly.
 
 /** `agent` is an agent id, "terminal" for a plain shell, or null while unpicked. `model` is a
- * model id, "default" for "the program's own default" (an explicit pick), or null. */
-export type Seat = { agent: string | null; model: string | null };
+ * model id, "default" for "the program's own default" (an explicit pick), or null. `title` is
+ * the seat's job title (SESS-024): it names the pane; blank means none. */
+export type Seat = { agent: string | null; model: string | null; title?: string };
 
 export const TERMINAL = "terminal";
 
@@ -31,6 +32,23 @@ export function seatReady(s: Seat): boolean {
 }
 
 export const allReady = (seats: Seat[]): boolean => seats.length > 0 && seats.every(seatReady);
+
+/** SESS-015 "Same for all": the first finished seat's AI and model go into every other seat;
+ * job titles stay per seat. Unchanged when no seat is finished. */
+export function sameForAll(seats: Seat[]): Seat[] {
+  const first = seats.find(seatReady);
+  if (!first) return seats;
+  return seats.map((s) => ({ ...s, agent: first.agent, model: first.model }));
+}
+
+/** SESS-024: a pane whose session failed to start is dropped. `batchEmpty` says the whole
+ * lineup it came from is gone, so the window can say that nothing started. */
+export function withoutFailed<T extends { key: number; batch?: number }>(panes: T[], key: number): { panes: T[]; batchEmpty: boolean } {
+  const failed = panes.find((p) => p.key === key);
+  const rest = panes.filter((p) => p.key !== key);
+  const batchEmpty = failed?.batch !== undefined && !rest.some((p) => p.batch === failed.batch);
+  return { panes: rest, batchEmpty };
+}
 
 /** A model choice: its id on the agent's command line and the label the user reads. */
 export type ModelChoice = { id: string; label: string };
