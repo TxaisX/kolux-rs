@@ -10,6 +10,8 @@
 // focused pane, started in the workspace folder (T-010). A browser tab is a pane whose page is
 // a child web view laid over its body by the back end (T-012-a, src/browser/BrowserPane.tsx);
 // its shortcuts (bar, back, forward, reload) apply while a browser pane is focused (T-012-b).
+// An editor tab is one file in CodeMirror (T-093-a, src/editor/EditorPane.tsx): "File..." in the
+// New tab menu opens one, and Mod+S saves the focused editor while the terminals screen is up.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -17,8 +19,12 @@ import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
+import EditorPane, { editors } from "./editor/EditorPane";
+import { baseName, keyOf } from "./editor/buffers";
+import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
+import { FileCode } from "./chrome/icons";
 import UpdateCenter from "./update/UpdateCenter";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
@@ -35,11 +41,12 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor"; path?: string };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
+  if (p.kind === "editor") return baseName(p.path ?? "");
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** SESS-051: a seat's start line as the back end builds it. */
@@ -78,6 +85,7 @@ function Window() {
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
+  const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const defaultId = defaultAgentId(settings);
@@ -128,8 +136,12 @@ function Window() {
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const browser = panes.find((p) => p.key === focused)?.kind === "browser" && screen === "terminals";
-      const hit = (browser && matchEvent(keymap, e, ["browser"])) || matchEvent(keymap, e, screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+      const kind = screen === "terminals" ? panes.find((p) => p.key === focused)?.kind : undefined;
+      // EDIT-001: in an editor the editor shortcuts come first and terminal ones do not apply;
+      // the ones Kolux has no action for yet are left to CodeMirror.
+      const hit =
+        (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
+        matchEvent(keymap, e, kind === "editor" ? ["editor", "global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
@@ -147,6 +159,12 @@ function Window() {
         case "browser.reload":
           void invoke("browser_go", { id: focused, what: "reload" });
           break;
+        case "editor.save": {
+          const save = editors.get(focused);
+          if (!save) return;
+          void save();
+          break;
+        }
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
           break;
@@ -211,6 +229,11 @@ function Window() {
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
   // workspace an agent has no folder to work in, so it gets a fresh worktree instead (SESS-004).
   const newTab = async (what: NewTab) => {
+    if (what === "file") {
+      const path = await open({ multiple: false, directory: false, defaultPath: activeDir ?? undefined, title: "Open a file" }).catch(() => null);
+      if (typeof path === "string") openFile(path);
+      return;
+    }
     const a = what === "browser" ? null : what;
     if (a && activeDir === null) return launch(a, null);
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
@@ -230,6 +253,17 @@ function Window() {
     } catch (err) {
       setNotice(String(err));
     }
+  };
+
+  // EDIT-001: a file opens as a tab beside the focused pane; a file already open in that cell
+  // comes to the front instead of opening twice.
+  const openFile = (path: string) => {
+    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const same = here && panes.find((p) => p.kind === "editor" && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
+    if (same) return setFocused(same.key);
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path }]);
+    setFocused(key);
   };
 
   // TERM-001: the layout strip sets how many cells the workspace in front holds. Growing adds
@@ -423,6 +457,10 @@ function Window() {
       const { [key]: _gone, ...rest } = r;
       return rest;
     });
+    setDirty((d) => {
+      const { [key]: _gone, ...rest } = d;
+      return rest;
+    });
     const gone = panes.find((p) => p.key === key);
     const rest = panes.filter((p) => p.key !== key);
     const next = gone ? neighbourTab(rest.filter((p) => groupOf(p) === groupOf(gone)).map((p) => p.key).concat(key), key) : null;
@@ -518,8 +556,9 @@ function Window() {
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
-                            <VendorMark agent={p.agent} size={12} />
+                            {p.kind === "editor" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
+                            {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
                             </button>
@@ -530,6 +569,18 @@ function Window() {
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
                   <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                ) : p.kind === "editor" && p.path ? (
+                  <EditorPane
+                    key={p.key}
+                    id={p.key}
+                    path={p.path}
+                    hidden={!terminals || p.key !== active}
+                    focused={p.key === focused}
+                    onFocus={() => setFocused(p.key)}
+                    onClose={() => closePane(p.key)}
+                    onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
+                    onToast={setToast}
+                  />
                 ) : p.seats ? (
                   <ChooserPane
                     key={p.key}

@@ -154,6 +154,7 @@ Acceptance:
   - [ ] Take away read permission on a file and open it → failure message with Retry; give
         permission back and click Retry → the text loads.
 Compat: keybinding id editor.save; stored data: the open editor tabs of each worktree.
+  Amended 2026-10-09 (DT-R13): until the explorer exists, a File... item in the New tab menu opens a file through the Windows Open dialog; that dialog refuses an unreadable file itself, so the read-permission check runs from the explorer (T-094); a file that is not UTF-8 text shows its reason and Retry.
 Source: D-12-001
 
 ### EDIT-012 · Markdown opens in a rich editor, with source and preview views

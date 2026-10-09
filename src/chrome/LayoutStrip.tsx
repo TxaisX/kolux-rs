@@ -1,17 +1,18 @@
 // The 40 px layout strip (DESIGN.md section 6): "Layout" and the 1 / 2 / 4 / 6 group. A button
 // sets how many cells the workspace in front holds (TERM-001); the pressed one is the current
 // count, so none is pressed at 3, 5 or above 6. On the right, "New tab" opens the tab create menu
-// (TERM-040 / TERM-041): a shell, or any installed agent, as a tab beside the focused pane.
+// (TERM-040 / TERM-041): a shell, or any installed agent, as a tab beside the focused pane; the
+// browser; or a file from disk in an editor tab (EDIT-001).
 import { useState } from "react";
-import { Globe, Plus } from "./icons";
+import { FileCode, Globe, Plus } from "./icons";
 import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import { markFor, type AgentInfo } from "../launch/PlusMenu";
 
 const choices = [1, 2, 4, 6];
 
-/** What a new tab runs: an agent, a shell (null) or the browser (BROW-001). */
-export type NewTab = AgentInfo | null | "browser";
+/** What a new tab runs: an agent, a shell (null), the browser (BROW-001) or a file picked from disk (EDIT-001). */
+export type NewTab = AgentInfo | null | "browser" | "file";
 type Props = { count: number; onLayout: (n: number) => void; agents?: AgentInfo[]; onNewTab?: (what: NewTab) => void; open?: boolean };
 
 export default function LayoutStrip({ count, onLayout, agents = [], onNewTab, open = false }: Props) {
@@ -71,6 +72,12 @@ export default function LayoutStrip({ count, onLayout, agents = [], onNewTab, op
               </span>
               <span className="name">Browser</span>
               <Kbd id="tab.newBrowser" />
+            </button>
+            <button role="menuitem" className="menu-item" onClick={() => pick("file")}>
+              <span className="agent-mark">
+                <FileCode size={14} />
+              </span>
+              <span className="name">File…</span>
             </button>
           </div>
         </>

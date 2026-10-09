@@ -2,6 +2,7 @@ mod agents;
 mod browser;
 pub mod cli;
 mod creatures;
+mod files;
 mod git;
 mod keybindings;
 mod names;
@@ -96,6 +97,8 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_go,
             browser::browser_close,
+            files::file_read,
+            files::file_write,
             update::update_status,
             update::update_mark,
             update::update_check,
