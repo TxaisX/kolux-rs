@@ -45,7 +45,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-008-a · SESS-015 Every seat needs an AI and a model the user chose; nothing is guessed · SESS-024 Launched sessions land one per pane, titled by seat
 - [x] T-008-b · SESS-051 Each catalogue agent's program, start line and opening-prompt route
 - [x] T-009 · TERM-001 Session-per-pane grid sized by pane count · TERM-004 Grid layout arrangement for each pane count · TERM-006 [compat] Split a pane right or down · TERM-014 [compat] Close a pane
-- [ ] T-010 · TERM-040 [compat] New terminal tab and tab create menu · TERM-041 [compat] New agent tab · TERM-068 [compat] Paste into a terminal
+- [x] T-010 · TERM-040 [compat] New terminal tab and tab create menu · TERM-041 [compat] New agent tab · TERM-068 [compat] Paste into a terminal
 - [ ] T-011 · VIEW-026 Open a session's live terminal inside its Board card
 - [ ] T-012 · BROW-001 [compat] Open a browser tab next to the terminals · BROW-002 Browser pages survive switching away and back · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
 

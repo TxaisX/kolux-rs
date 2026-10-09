@@ -16,6 +16,8 @@ import { folderName } from "../projects/model";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
+import { useKeymap } from "../keys/KeymapContext";
+import { matchEvent } from "../keys/keymap";
 
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
@@ -58,6 +60,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   const idRef = useRef<number | null>(null);
+  const keymap = useKeymap();
+  const keys = useRef(keymap);
+  keys.current = keymap;
   const report = useRef(onRunning);
   report.current = onRunning;
   const failed = useRef(onFailed);
@@ -105,8 +110,24 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         if (pending === null || !alive) return;
         write(pending + "\r");
         pending = null;
+        for (const text of queued.splice(0)) term.paste(text);
       }, 1500);
     };
+    // TERM-068: a paste arrives through this pane's own text area, so it can only land in the
+    // pane that has focus, and the browser hands over the clipboard in the same tick, so there is
+    // no moment in which the target could change. A paste made while the opening prompt is still
+    // owed waits for it. The paste chords are left to the browser instead of xterm.
+    const queued: string[] = [];
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text") ?? "";
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (!text) return;
+      if (pending !== null) queued.push(text);
+      else term.paste(text);
+    };
+    term.textarea?.addEventListener("paste", onPaste, true);
+    term.attachCustomKeyEventHandler((e) => !(e.type === "keydown" && matchEvent(keys.current, e, ["terminal"])?.id === "terminal.paste"));
 
     (async () => {
       unlisteners.push(

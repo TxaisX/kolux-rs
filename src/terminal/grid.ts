@@ -1,7 +1,31 @@
-// The pane grid's arithmetic (TERM-001, TERM-004, TERM-006): how many panes a workspace may hold,
-// how they tile, what a resize adds or drops, and where a split lands. Pure, so it is tested
-// without a browser; the window applies the plan.
-import { panesIn, type PaneLike } from "../workspaces";
+// The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040): how many cells a workspace
+// may hold, how they tile, what a resize adds or drops, where a split lands, and which panes share
+// a cell as tabs. Pure, so it is tested without a browser; the window applies the plan.
+import type { PaneLike } from "../workspaces";
+
+/** TERM-040: panes with the same group share one grid cell as tabs; a pane without one is its own cell. */
+export type Tabbed = PaneLike & { group?: number };
+
+export const groupOf = (p: { key: number; group?: number }): number => p.group ?? p.key;
+
+/** The grid cells, in the order their first pane appears. */
+export function cellsOf<P extends Tabbed>(panes: P[]): { group: number; panes: P[] }[] {
+  const cells: { group: number; panes: P[] }[] = [];
+  for (const p of panes) {
+    const g = groupOf(p);
+    const cell = cells.find((c) => c.group === g);
+    if (cell) cell.panes.push(p);
+    else cells.push({ group: g, panes: [p] });
+  }
+  return cells;
+}
+
+/** The tab that takes over when `key` closes: the one after it, else the one before, else none. */
+export function neighbourTab(keys: number[], key: number): number | null {
+  const i = keys.indexOf(key);
+  const rest = keys.filter((k) => k !== key);
+  return i < 0 ? null : (rest[Math.min(i, rest.length - 1)] ?? null);
+}
 
 /** TERM-001: a workspace holds 1..12 panes. */
 export const MAX_PANES = 12;
@@ -43,11 +67,8 @@ export function splitIndex(shownKeys: number[], key: number, dir: "right" | "dow
   return Math.min(shownKeys.length, dir === "right" ? i + 1 : i + cols);
 }
 
-/** Puts `pane` at position `at` among the panes shown for `dir`; panes of other workspaces keep
- * their places. */
-export function insertShown<P extends PaneLike>(panes: P[], dir: string | null, at: number, pane: P): P[] {
-  const next = panesIn(panes, dir)[at];
-  if (!next) return [...panes, pane];
-  const i = panes.indexOf(next);
-  return [...panes.slice(0, i), pane, ...panes.slice(i)];
+/** Puts `pane` just before `next` (at the end when there is none); every other pane keeps its place. */
+export function insertBefore<P>(panes: P[], next: P | undefined, pane: P): P[] {
+  const i = next ? panes.indexOf(next) : -1;
+  return i < 0 ? [...panes, pane] : [...panes.slice(0, i), pane, ...panes.slice(i)];
 }

@@ -30,6 +30,14 @@ pub fn shell_command(cwd: Option<&str>) -> CommandBuilder {
     cmd
 }
 
+/// TERM-040: where a new terminal starts. A requested folder may be relative to the workspace or
+/// an absolute folder outside it; a missing one falls back to the workspace folder.
+pub fn start_dir(workspace: &str, requested: Option<&str>) -> String {
+    let Some(req) = requested.map(str::trim).filter(|r| !r.is_empty()) else { return workspace.to_string() };
+    let path = std::path::Path::new(workspace).join(req);
+    if path.is_dir() { path.to_string_lossy().into_owned() } else { workspace.to_string() }
+}
+
 /// A pane that runs one program (an agent such as `claude`) instead of a shell. `program` is
 /// resolved the way a shell would (`claude` becomes `...\claude.exe`) so the process starts
 /// without a shell in between; a name that does not resolve is passed through unchanged and the
@@ -262,6 +270,21 @@ mod tests {
     }
 
     /// A program that is not installed fails at spawn with a message, not a silent empty pane.
+    #[test]
+    fn term040_a_start_folder_is_relative_or_absolute_and_a_missing_one_falls_back() {
+        let ws = std::env::temp_dir();
+        let ws_s = ws.to_string_lossy().into_owned();
+        let sub = ws.join("kolux-rs-t010");
+        std::fs::create_dir_all(&sub).unwrap();
+        let sub_s = sub.to_string_lossy().into_owned();
+        assert_eq!(start_dir(&ws_s, Some("kolux-rs-t010")), sub_s);
+        assert_eq!(start_dir(&ws_s, Some(&sub_s)), sub_s);
+        assert_eq!(start_dir(&ws_s, Some("no-such-folder-t010")), ws_s);
+        assert_eq!(start_dir(&ws_s, None), ws_s);
+        assert_eq!(start_dir(&ws_s, Some("  ")), ws_s);
+        let _ = std::fs::remove_dir(&sub);
+    }
+
     #[test]
     fn a_missing_program_is_refused_at_spawn() {
         let r = PtySession::spawn(program_command("kolux-rs-no-such-program-7f3a", &[], None), 80, 24, |_| {}, |_| {});

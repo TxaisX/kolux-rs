@@ -49,6 +49,12 @@ test("the layout strip offers 1, 2, 4 and 6 panes with the current one pressed",
   for (const n of [1, 2, 4, 6]) expect(html).toContain(`>${n}</button>`);
   expect(html).toMatch(/aria-pressed="true"[^>]*>1<\/button>/);
   expect(html).not.toMatch(/aria-pressed="true"[^>]*>4<\/button>/);
+  expect(html).not.toContain("New tab");
+});
+
+test("TERM-040: the strip offers a New tab menu when the window wires one", () => {
+  const html = renderToString(createElement(LayoutStrip, { count: 1, onLayout: () => {}, agents: [], onNewTab: () => {} }));
+  expect(html).toMatch(/aria-haspopup="menu"[^>]*>.*New tab/);
 });
 
 test("the status bar shows hooks, memory, terminals and agents on the right", () => {

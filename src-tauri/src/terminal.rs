@@ -1,7 +1,7 @@
 //! Terminal panes as the front end sees them: numbered sessions, output pushed as events, input
 //! and resize taken as commands. Every open session is killed when the window goes away.
 
-use crate::pty::{program_command, shell_command, PtySession};
+use crate::pty::{program_command, shell_command, start_dir, PtySession};
 use base64::Engine as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -128,7 +128,10 @@ impl Terminals {
 }
 
 #[tauri::command]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
+#[allow(clippy::too_many_arguments)]
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
+    // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
+    let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default())
 }
 

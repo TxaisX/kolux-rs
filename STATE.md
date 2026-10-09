@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 6, date: 2026-10-09)
-Next task: T-010 · TERM-040 [compat] New terminal tab and tab create menu · TERM-041 [compat] New agent tab · TERM-068 [compat] Paste into a terminal
-Done: 12 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 7, date: 2026-10-09)
+Next task: T-011 · VIEW-026 Open a session's live terminal inside its Board card
+Done: 13 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -123,6 +123,18 @@ it in the same folder; Ctrl+Shift+D (split right), Alt+Shift+D (split down: the 
 Ctrl+W (close the focused pane) go through the shortcuts file. Closing a pane ends its program and
 the neighbours take the space; closing the last one leaves the workspace's empty placeholder.
 
+T-010 gives every grid cell tabs (TERM-040, TERM-041, TERM-068). The strip's "New tab" menu (and
+Ctrl+T) opens a shell as a tab beside the focused pane, started in the workspace folder and ready
+to type; the menu also lists every installed agent, each with its own `tab.newAgent.<id>` command
+(unbound unless the shortcuts file says otherwise) that opens a tab with that agent starting in the
+workspace folder; outside any workspace an agent still gets a fresh worktree. A cell with one tab
+shows no tab strip (the clean look); with two or more, the strip sits above the pane and each tab
+closes from its own x, the next tab taking over. A requested start folder for a new terminal may
+be relative to the workspace or absolute, and a missing one falls back to the workspace folder.
+Paste (Ctrl+V, Ctrl+Shift+V, Shift+Insert) goes through the focused pane's own text area, so it
+can never land in another pane, and a paste made while an opening prompt is still owed waits for
+it.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -219,6 +231,18 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-010: a "tab" is a pane sharing a grid cell with others (`group` on the pane,
+  `cellsOf` in grid.ts); the split tree of the old app (tabs holding split panes) is not rebuilt,
+  so a split is a new cell and a tab is a sibling in the same cell. The tab create menu lives in
+  the layout strip ("New tab"); browser and markdown entries join it with their own tasks (T-012,
+  BROW / MD cards). `tab.close` and `terminal.closePane` both carry Ctrl+W and both close the
+  focused pane, so the clash is harmless. Paste uses the browser's own paste event on the pane's
+  text area instead of an asynchronous clipboard read: the clipboard is handed over in the same
+  tick, so TERM-068's "cancel when the target changes while reading" has no window to guard; the
+  paste chords are taken away from xterm (which would otherwise send ^V to the program). Neither
+  the paste chords nor Ctrl+T could be proven live from the harness (posted keys carry no modifier
+  state and no context menu opens from a posted right-click), so Txais should press Ctrl+V in a
+  pane and Ctrl+T once by hand; the menu route and the tab strip were proven live.
 - 2026-10-09 · T-009: the strip keeps DESIGN.md's 1 / 2 / 4 / 6 presets; 3, 5 and 7..12 panes are
   reached by splitting (the limit is 12, TERM-001), and the strip then shows no pressed button.
   Shrinking never removes a started session: TERM-003's "ask first" is T-151, so for now a toast
@@ -344,6 +368,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-010 · done: grid cells hold tabs (`group` on panes, `cellsOf` / `neighbourTab` / `insertBefore` in grid.ts), "New tab" menu in the layout strip with Terminal + every installed agent and their chords, Ctrl+T / `tab.newAgent` / `tab.newAgent.<id>` / `tab.close` wired, a tab strip above cells with two or more tabs, `start_dir` for a requested start folder (relative, absolute, missing → workspace), paste through the pane's own text area with the chords left to the browser and queued behind an owed opening prompt; 3 grid tests + 1 strip test + 1 Rust test; live: New tab → Terminal opened "Terminal 3" as a second tab in the t010-repo cell at `PS G:\Temp\t010-repo>`, New tab → Claude Code opened a "Claude" tab with Claude running in that folder, closing "Terminal 2" from its x left the other two tabs with Claude in front; paste and Ctrl+T not provable from the harness (see decision); build / clippy / 40 Rust tests / 63 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-010-tabs.png, evidence/T-010-agent.png, evidence/T-010-close-tab.png
 - 2026-10-09 · T-009 · done: pane grid 1..12 with balanced rows (`src/terminal/grid.ts`: clamp, columns / rows, resize plan, split index, insert), layout strip sets the count with the current count pressed, split button in every pane header, Ctrl+W / Ctrl+Shift+D / Alt+Shift+D wired through the keymap, close removes any pane including the last; 6 grid tests + strip test updated; live: "4" gave Terminal 1 plus three chooser panes 2x2, the split button opened Terminal 5 beside Terminal 1 in the same folder (3+2), "1" dropped the three unstarted panes and the second press showed the "started sessions" toast, the header close removed Terminal 5 and Terminal 1 took the full width; chords not provable from the harness (see decision); build / clippy / 39 Rust tests / 60 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-009-four.png, evidence/T-009-split.png, evidence/T-009-shrink.png, evidence/T-009-close.png
 - 2026-10-09 · T-008-b · done: per-agent start-line builder with every SESS-051 prompt route (trailing, `--`, `--prompt`, `--prompt-interactive`, `-i`, Hermes query, typed), blank prompt = none, Hermes limit refused, foreground matcher with second names / Codex-Grok prefixes / interpreter entry scripts, "Opening prompt (optional)" box per AI seat, typed prompts sent after the pane goes quiet; 8 Rust tests + 1 chooser test; live: seat 1 Claude + Haiku with a prompt, Start opened worktree `silver-narwhal`, after the trust question Claude ran the prompt and answered "pong" with the session still open; build / clippy / 39 Rust tests / 54 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-008-b-prompt.png, evidence/T-008-b-launched.png
 - 2026-10-09 · T-008-a · done: blank-seat caption, Same for all (greyed until a seat is finished), job-title field per seat, missing agents cleared not swapped, "Starting N sessions" toast, one pane per seat titled by its job, failed panes dropped with a toast; 2 seats tests + 1 chooser test; live: 3 seats blank with Start disabled, seat 1 Claude + Haiku then Same for all filled seats 2-3 and enabled Start 3, "Review" typed as seat 2's title, Start showed the toast and three Claude panes in worktree `velvet-seal` re-tiled 2+1 with the second titled Review; build / clippy / 31 Rust tests / 53 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-008-a-blank.png, evidence/T-008-a-same.png, evidence/T-008-a-toast.png, evidence/T-008-a-launched.png

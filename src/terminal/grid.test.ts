@@ -1,6 +1,6 @@
-// The pane grid's arithmetic (TERM-001, TERM-004, TERM-006), pure so it runs without a browser.
+// The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040), pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { clampCount, columnsFor, insertShown, MAX_PANES, resizePlan, rowsFor, splitIndex } from "./grid";
+import { cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex } from "./grid";
 
 const started = (key: number) => ({ key, started: true });
 const empty = (key: number) => ({ key, started: false });
@@ -50,7 +50,7 @@ test("TERM-006: split right lands next to the pane, split down in the cell below
   expect(splitIndex(keys, 99, "right", 3)).toBe(6);
 });
 
-test("TERM-004/006: inserting into the shown list keeps every pane in order and hidden panes untouched", () => {
+test("TERM-004/006: inserting before a pane keeps every other pane in place", () => {
   const panes = [
     { key: 1, cwd: null },
     { key: 2, cwd: "C:\\a" },
@@ -58,7 +58,29 @@ test("TERM-004/006: inserting into the shown list keeps every pane in order and 
     { key: 4, cwd: "C:\\a" },
   ];
   const fresh = { key: 9, cwd: "C:\\a" };
-  expect(insertShown(panes, "C:\\a", 1, fresh).map((p) => p.key)).toEqual([1, 2, 3, 9, 4]);
-  expect(insertShown(panes, "C:\\a", 2, fresh).map((p) => p.key)).toEqual([1, 2, 3, 4, 9]);
-  expect(insertShown(panes, "C:\\a", 0, fresh).map((p) => p.key)).toEqual([1, 9, 2, 3, 4]);
+  expect(insertBefore(panes, panes[3], fresh).map((p) => p.key)).toEqual([1, 2, 3, 9, 4]);
+  expect(insertBefore(panes, undefined, fresh).map((p) => p.key)).toEqual([1, 2, 3, 4, 9]);
+  expect(insertBefore(panes, panes[1], fresh).map((p) => p.key)).toEqual([1, 9, 2, 3, 4]);
+});
+
+test("TERM-040: panes sharing a group make one cell of tabs, in first-seen order", () => {
+  const panes = [
+    { key: 1, cwd: null },
+    { key: 2, cwd: null, group: 1 },
+    { key: 3, cwd: null },
+    { key: 4, cwd: null, group: 3 },
+    { key: 5, cwd: null, group: 1 },
+  ];
+  const cells = cellsOf(panes);
+  expect(cells.map((c) => c.group)).toEqual([1, 3]);
+  expect(cells[0].panes.map((p) => p.key)).toEqual([1, 2, 5]);
+  expect(cells[1].panes.map((p) => p.key)).toEqual([3, 4]);
+});
+
+test("TERM-040/014: closing a tab hands over to the next one, else the previous, and the last closes the cell", () => {
+  expect(neighbourTab([1, 2, 3], 2)).toBe(3);
+  expect(neighbourTab([1, 2, 3], 3)).toBe(2);
+  expect(neighbourTab([1, 2, 3], 1)).toBe(2);
+  expect(neighbourTab([7], 7)).toBeNull();
+  expect(neighbourTab([1, 2], 9)).toBeNull();
 });
