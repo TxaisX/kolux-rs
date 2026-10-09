@@ -151,8 +151,8 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 8 · Release, update and CI pipeline (7 cards)
 
-- [ ] T-090 · APP-024 [compat] Quiet update checks on start-up and then every half hour · APP-025 A downloaded update waits behind a small ready pop-up and installs on restart or quit · APP-026 The update card follows a requested check from start to finish · APP-027 Release notes inside the update card
-- [ ] T-091 · APP-058 [compat] One ship command commits, syncs and lands work on main · APP-059 [compat] Every ship to main publishes a release by itself · APP-060 CI on main runs in four shards and gates releases
+- [x] T-090 · APP-024 [compat] Quiet update checks on start-up and then every half hour · APP-025 A downloaded update waits behind a small ready pop-up and installs on restart or quit · APP-026 The update card follows a requested check from start to finish · APP-027 Release notes inside the update card
+- [ ] T-091 · APP-058 [compat] One ship command commits, syncs and lands work on main · APP-059 [compat] Every ship to main publishes a release by itself · APP-060 CI on main runs in four shards and gates releases · also from T-090: make the release signing key (private half kept outside the repo), put its public half in `src-tauri/src/update.rs` RELEASE_PUBKEY, and publish `latest.json` with the installer and its `.sig` to the TxaisX/kolux-rs-releases feed
 
 ### P0 · theme 6 · Business-user frame (4 cards)
 

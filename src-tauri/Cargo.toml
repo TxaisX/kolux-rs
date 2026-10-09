@@ -27,6 +27,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 portable-pty = "0.9"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "system-proxy", "zip"] }
 
 [profile.release]
 codegen-units = 1

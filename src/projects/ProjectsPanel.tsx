@@ -17,6 +17,7 @@ import { orderWorktrees, previewSentence, worktreeLabel, type Created, type Plac
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
+import { requestUpdateCheck } from "../update/UpdateCenter";
 
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
@@ -482,7 +483,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
           <button className="ib" title="Help (not built yet)">
             <Help />
           </button>
-          <button className="upd" title="Updates (not built yet)">
+          <button className="upd" title="Check for a newer version of Kolux RS" onClick={requestUpdateCheck}>
             <Refresh size={13} />
             Check for updates
           </button>

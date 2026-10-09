@@ -17,7 +17,7 @@ if (match === "list" || !match) {
   for (const t of targets) console.log(t.type, "|", t.title, "|", t.url);
   process.exit(0);
 }
-const pick = (m) => targets.find((t) => t.type === "page" && (m === "main" ? /localhost:1420|tauri\.localhost/.test(t.url) : (t.url + " " + t.title).includes(m)));
+const pick = (m) => targets.find((t) => t.type === "page" && (m === "main" ? /localhost:14\d\d|tauri\.localhost/.test(t.url) : (t.url + " " + t.title).includes(m)));
 const target = pick(match);
 if (!target) { console.error("no target matching", match); for (const t of targets) console.error(" ", t.type, t.title, t.url); process.exit(2); }
 

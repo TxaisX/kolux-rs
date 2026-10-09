@@ -10,6 +10,7 @@ mod pty;
 mod state;
 mod sysmem;
 mod terminal;
+mod update;
 
 use state::Store;
 use std::sync::Mutex;
@@ -46,6 +47,7 @@ fn save_settings(store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
@@ -53,6 +55,7 @@ pub fn run() {
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
             app.manage(Terminals::default());
+            app.manage(update::Updates::default());
             // Git is checked once here; every project and workspace action runs through it.
             app.manage(git::Git::detect()?);
             // The command line reaches the app through a loopback port (PROJ-077).
@@ -92,7 +95,12 @@ pub fn run() {
             browser::browser_bounds,
             browser::browser_navigate,
             browser::browser_go,
-            browser::browser_close
+            browser::browser_close,
+            update::update_status,
+            update::update_mark,
+            update::update_check,
+            update::update_download,
+            update::update_restart
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -102,6 +110,8 @@ pub fn run() {
                 if let Ok(dir) = app.path().app_data_dir() {
                     let _ = std::fs::remove_file(dir.join(cli::FILE));
                 }
+                // APP-025: an update that finished downloading installs as the app quits.
+                update::install_on_quit(app);
             }
         });
 }

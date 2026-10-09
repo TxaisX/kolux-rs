@@ -19,6 +19,7 @@ import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
+import UpdateCenter from "./update/UpdateCenter";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
@@ -581,6 +582,7 @@ function Window() {
           </div>
         </div>
       </div>
+      <UpdateCenter />
       <StatusBar terminals={live.length} agents={live.filter((p) => p.agent !== "shell").length} />
     </div>
   );
