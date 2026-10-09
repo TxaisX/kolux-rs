@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 15, date: 2026-10-09)
-Next task: T-017 · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts
-Done: 21 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 16, date: 2026-10-09)
+Next task: T-017-b · Pre-trust for Codex, Cursor and Copilot in their own configuration files (the rest of the card on T-017-a)
+Done: 22 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -225,6 +225,16 @@ Every flag mix the spec refuses is refused before the app is asked; `--terminal`
 `unsupported` until terminal handles exist. Tasks and dispatches live under
 `orchestration.tasks` / `orchestration.dispatches` in the store.
 
+T-017-a pre-trusts every folder a Claude launch will use (SAFE-023 / SAFE-024): before any
+Claude process starts, the worktree and its main repository are marked
+`hasTrustDialogAccepted` in Claude's own `.claude.json` (under `CLAUDE_CONFIG_DIR`, else the
+home folder), keyed by the real path on disk with forward slashes. One write covers a whole
+launch (every seat of a chooser Start, a new tab, a sidebar launch, or a `worker-start` from
+the command line); an already-trusted folder changes nothing; a file that is not valid JSON is
+left alone; at most 12 folders per launch. The step is best effort: a failure is logged and
+the launch goes on. Claude therefore goes straight to the first prompt in a fresh worktree
+instead of halting on its "Quick safety check" menu.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -321,6 +331,24 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-017-a: T-017 is split in place: T-017-a is Claude (the agent this app launches
+  today) plus the one-write batch; T-017-b is Codex, Cursor and Copilot, each with its own file
+  format. The batch is the real list of folders the launch is about to use, not a list of
+  names: the front end makes the worktrees first, then trusts them all in one `trust_folders_cmd`
+  call before any pane mounts, so the "pre-trust 13 names → refused" rule became "more than 12
+  folders in one call → refused before any path is resolved". The main repository is trusted
+  through the project's registered path (Kolux's own record), never by following the worktree's
+  `.git` file, so tampered Git metadata cannot extend trust elsewhere. The quarter-second merge
+  window is not built: all writes go through one lock and happen before the processes start,
+  and Claude's own rewrites keep our key because we write the flag before Claude reads its file.
+  `serde_json` gained `preserve_order` so Claude's file keeps its key order on our rewrite.
+  Live note: Claude itself adds `lastGracefulShutdown`/`lastVersionBase` to the main
+  repository's entry when a worker runs in a linked worktree, so the config file's bytes change
+  between two launches even though our entry does not. The throwaway repo's two entries stay in
+  Txais's `.claude.json` (the feature's normal trace; harmless). A worker launched from the dev
+  app inherits the launching session's environment (the pane showed Claude's "inherited
+  CLAUDE_CODE_CHILD_SESSION" note): a test artefact of starting the dev app from inside a Claude
+  session, not a product path.
 - 2026-10-09 · T-016: tasks and dispatches are JSON lists under two store keys (no tables
   yet); the Board (STAT/ORCH cards) reads them later. Readiness = the worker's terminal has
   written something and is still running one second after; the spec's idle detector comes with
@@ -557,6 +585,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png
 - 2026-10-09 · T-016 · done: `terminal.rs` marks program sessions (start time, last output) and `program_in(dir, since)`; `projects::create_fresh` shared by the UI command and the CLI; `cli.rs` `orchestration worker-start` parse (`WORKER_FLAGS`, `check_worker_start` with every refusal from CLI-035/ORCH-016/018/019), `worker_start` dispatch (task made/found under `orchestration.tasks`, worktree made or picked, `created` + `start` notify, readiness wait, receipt, `orchestration.dispatches`), `text_of` worker line, help text; front end `CliWorkspace` `start` kind → `startIn` with extra args and a pane title; 2 Rust tests (49 total; dispatch test runs the full flow with a 1 ms timeout); live in the throwaway "repo": `worker-start --spec "add a test" --agent claude --json` → `status: ready` in 1.8 s, `dispatch-1`/`task-1`, worktree hazel-otter, terminal 2; sidebar row hazel-otter + background tab "add a test" (Claude, Running) while the view stayed on main; opening the row shows one tab with Claude's trust prompt; `claude.exe --permission-mode auto "add a test"` under the app; `--worktree current --base-branch main` refused with exit 1 before anything was made; `worktree rm --worktree path:… --force` took the row, tab, process and folder away; build / clippy / 49 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-016-ready.png, evidence/T-016-one-tab.png
 - 2026-10-09 · T-015 · done: `Copies` type, `defaultCopies` and `sharedWarning` in seats.ts; "Folders" radiogroup + warn note with the "Give each its own copy" fix on ChooserPane; App.tsx `startSeats` places each seat (terminal → chooser folder, agent → fresh worktree each when separate, shared folder or one fresh worktree otherwise); Rust `creatureNamesUsed` store key, `retired_names` / `remember_retired` / `fresh_name`, `workspace_create_fresh` holds the store lock; Rust test extended (48 total), 2 front-end tests added (71); live in the throwaway "repo" project: chooser from New session with 3 seats → "Separate copy for each AI" checked; "Same folder for all" → warn note + fix button, the fix re-selects separate; Claude + Claude + Terminal, Start → rows tidal-walrus and nimble-squid appeared, `git worktree list` shows both under workspaces/repo, Claude's trust prompt in nimble-squid's folder, the terminal seat in the chooser's folder; both removed through the sidebar (branches gone); one more Claude from New session → silver-narwhal; store key `creatureNamesUsed` = ["tidal-walrus","nimble-squid","silver-narwhal"]; build / clippy / 48 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-015-default.png, evidence/T-015-warning.png, evidence/T-015-started.png, evidence/T-015-retired.png
 - 2026-10-09 · T-014-b · done: loopback listener + `cli.json` in the app, `kolux-dev` program with the parser, the JSON envelope and exit codes, `worktree create` (name, repo selector or the shell's folder, base branch, agent + prompt, activate) and `worktree rm` / remove / delete (selectors current, name:, branch:, path:, id:; dirty refusal; --force), the window picks the change up over a `cli-workspace` event; 3 Rust tests added (48 total), 69 front-end tests; live: with the app closed `--help` exits 0, create says "Kolux is not running; start it first" (exit 1, JSON envelope with app_unreachable), a prompt without --agent is refused (exit 1); with the app up, from the repo folder `worktree create --name "cli test" --agent claude --prompt hello --json` → envelope with the path, the row "cli test" appeared, a hidden pane "cli-test Claude Running" with claude.exe started on "hello", the shown pane untouched; `--name quiet --activate --setup skip` → "created quiet at … (from main)", row selected with a shell; `rm --worktree name:quiet` → removed; junk file in cli test → `remove` exits 1 "cli test has uncommitted changes" + the --force hint; `delete --worktree branch:cli-test --force --json` → success envelope, rows back to main + zeta, the Claude pane and process gone, worktrees and folders gone; build / clippy / 48 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; `cli.json` gone after closing · evidence/T-014-b-created.png, evidence/T-014-b-removed.png

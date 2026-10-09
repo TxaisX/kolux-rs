@@ -222,6 +222,7 @@ function Window() {
       return;
     }
     try {
+      if (a) await pretrust(a.id, [activeDir]);
       const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: [], prompt: "" }) : null;
       const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: a.program, args: line.args, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
       setPanes((ps) => [...ps, pane]);
@@ -296,6 +297,7 @@ function Window() {
         else places.push((shared ??= chooser.cwd === null ? await fresh() : { cwd: chooser.cwd, branch: chooser.branch }));
       }
       const batch = key;
+      for (const id of new Set(picked.flatMap((a) => (a ? [a.id] : [])))) await pretrust(id, picked.map((a, i) => (a?.id === id ? places[i].cwd : null)));
       // SESS-051: each agent's start line comes from the catalogue, prompt route included; a
       // refused line (Hermes past its limit) stops the whole Start before any pane is made.
       const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: modelArgs(seats[i].model), prompt: seats[i].prompt ?? "" }) : null)));
@@ -326,6 +328,7 @@ function Window() {
   // opens there. Shown only when the sidebar says the user has not moved on.
   const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string) => {
     try {
+      await pretrust(agent.id, [dir]);
       const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
       const key = nextKey.current++;
       setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: agent.program, args: line.args, title, typed: line.typed ?? undefined }]);
@@ -385,6 +388,18 @@ function Window() {
 
   // Which project a launch belongs to: the one asked for, else the one that owns the focused
   // pane's folder, else the first in the list.
+  // SAFE-023 / SAFE-024: every folder a launch will use (and its main repository) is marked
+  // trusted in the agent's own configuration in one write before any agent process starts; best
+  // effort, a failure never stops the launch.
+  const pretrust = async (agent: string, dirs: (string | null)[]) => {
+    const paths = [...new Set(dirs.flatMap((d) => (d === null ? [] : [d, projects.find((p) => p.id === projectOf(d))?.path])).filter((p): p is string => typeof p === "string"))];
+    if (paths.length === 0) return;
+    try {
+      await invoke("trust_folders_cmd", { agent, paths });
+    } catch (err) {
+      console.warn(`trust: ${String(err)}`);
+    }
+  };
   const projectOf = (cwd: string | null): string | null => (cwd ? (Object.entries(owner).find(([dir]) => sameDir(dir, cwd))?.[1] ?? null) : null);
   const projectFor = (projectId: string | null): string | null => projectId ?? projectOf(panes.find((p) => p.key === focused)?.cwd ?? null) ?? projects[0]?.id ?? null;
 

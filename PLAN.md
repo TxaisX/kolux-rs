@@ -57,7 +57,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-014-b · PROJ-077 [compat] `kolux worktree` create and remove
 - [x] T-015 · SESS-014 Separate copy per agent, or one shared folder · SESS-023 Each launched agent gets its own worktree with a creature name
 - [x] T-016 · ORCH-016 [compat] One command starts a worker agent in a worktree of its own
-- [ ] T-017 · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts
+- [x] T-017-a · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost (Claude Code) · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts
+- [ ] T-017-b · Pre-trust for Codex, Cursor and Copilot in their own configuration files (the rest of the card on T-017-a)
 - [ ] T-018 · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
 - [ ] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
 - [ ] T-020 · SET-032 [compat] Pick the folder new worktrees go into

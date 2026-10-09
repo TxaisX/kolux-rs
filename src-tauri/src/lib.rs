@@ -10,6 +10,7 @@ mod pty;
 mod state;
 mod sysmem;
 mod terminal;
+mod trust;
 
 use state::Store;
 use std::sync::Mutex;
@@ -85,6 +86,7 @@ pub fn run() {
             projects::project_set,
             agents::agent_list,
             agents::agent_start_line,
+            trust::trust_folders_cmd,
             keybindings::keybindings_read,
             projects::workspaces_place_get,
             projects::workspaces_place_set,

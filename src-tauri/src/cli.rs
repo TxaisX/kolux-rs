@@ -388,6 +388,8 @@ pub fn main(words: Vec<String>) -> i32 {
 /// What a command needs from the app: Git, the store, the open terminals, and a way to tell the
 /// front end what changed.
 pub struct Ctx<'a> {
+    /// Claude's user configuration, where a new worktree is marked trusted (SAFE-023).
+    pub claude_config: PathBuf,
     pub git: &'a Git,
     pub store: &'a Mutex<Store>,
     pub terminals: &'a Terminals,
@@ -676,6 +678,12 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         (p, w, false)
     };
 
+    // SAFE-023: the worktree (and its main repository) are trusted before the agent starts; best
+    // effort, a failure never stops the worker.
+    let trusted = match crate::trust::trust_folders(&ctx.claude_config, &agent_id, &[PathBuf::from(&worktree.path), PathBuf::from(&project.path)]) {
+        Ok(_) => json!(true),
+        Err(e) => json!(format!("not trusted: {e}")),
+    };
     let since = Instant::now();
     if created {
         (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false }));
@@ -688,7 +696,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "dispatchId": dispatch_id, "taskId": task_id, "status": status, "stage": "worker",
         "worktree": { "path": worktree.path, "branch": worktree.branch, "name": worktree.name, "projectId": project.id, "created": created },
         "placement": placement, "agent": agent_id, "program": agent.program, "model": model, "effort": effort, "tier": tier,
-        "setup": "not_configured",
+        "setup": "not_configured", "trust": trusted,
         "terminals": terminal.map(|id| vec![json!({ "id": id, "role": "worker" })]).unwrap_or_default(),
         "waitedMs": since.elapsed().as_millis() as u64,
         "hint": format!("kolux-dev worktree rm --worktree path:{} --force removes the worktree, its worker and all", worktree.path),
@@ -751,7 +759,7 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
             let notify = |v: Value| {
                 let _ = app.emit(EVENT, v);
             };
-            dispatch(&Ctx { git: &git, store: &store, terminals: &terminals, notify: &notify }, req)
+            dispatch(&Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify }, req)
         });
     });
     Ok(())
@@ -861,7 +869,7 @@ mod tests {
         let events = Mutex::new(Vec::<Value>::new());
         let notify = |v: Value| events.lock().unwrap().push(v);
         let terminals = Terminals::default();
-        let ctx = Ctx { git: &git_, store: &store, terminals: &terminals, notify: &notify };
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify };
         let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args };
 
         let made = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "cli one", "setup": "skip" }))).unwrap();
@@ -904,6 +912,11 @@ mod tests {
             assert_eq!(out.data["setup"], "not_configured");
             let wt = PathBuf::from(out.data["worktree"]["path"].as_str().unwrap());
             assert!(wt.join(".git").exists());
+            // SAFE-023: the new worktree and the main repository are trusted before the start.
+            assert_eq!(out.data["trust"], true, "{}", out.data["trust"]);
+            let conf: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".claude.json")).unwrap()).unwrap();
+            assert_eq!(conf["projects"][crate::trust::claude_key(&wt).unwrap()]["hasTrustDialogAccepted"], true);
+            assert_eq!(conf["projects"][crate::trust::claude_key(&repo).unwrap()]["hasTrustDialogAccepted"], true);
             let ev = events.lock().unwrap();
             let n = ev.len();
             assert_eq!(ev[n - 2]["kind"], "created");
