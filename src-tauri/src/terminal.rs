@@ -19,6 +19,9 @@ pub struct Terminals {
 struct Inner {
     next_id: u32,
     sessions: HashMap<u32, PtySession>,
+    /// The folder each session was started in, so a workspace can close its shells before its
+    /// folder is deleted.
+    dirs: HashMap<u32, String>,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -35,7 +38,7 @@ struct ExitPayload {
 }
 
 impl Terminals {
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16) -> Result<u32, String> {
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>) -> Result<u32, String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
@@ -43,7 +46,7 @@ impl Terminals {
         let exit_app = app;
         let registry = self.inner.clone();
         let session = PtySession::spawn(
-            shell_command(),
+            shell_command(cwd.as_deref()),
             cols.max(2),
             rows.max(1),
             move |chunk| {
@@ -54,11 +57,15 @@ impl Terminals {
                 // Drop the session so the PTY closes and the reader thread can finish.
                 if let Ok(mut inner) = registry.lock() {
                     inner.sessions.remove(&id);
+                    inner.dirs.remove(&id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
         )?;
         inner.sessions.insert(id, session);
+        if let Some(dir) = cwd {
+            inner.dirs.insert(id, dir);
+        }
         Ok(id)
     }
 
@@ -75,15 +82,38 @@ impl Terminals {
     /// Ends one session. Its exit event follows from the waiter thread.
     pub fn kill(&self, id: u32) -> Result<(), String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
+        inner.dirs.remove(&id);
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
         Ok(())
     }
 
+    /// Ends every session that was started in `dir` or a folder under it, and waits (briefly) for
+    /// the programs to be gone, so the folder can be deleted. Returns how many were ended.
+    pub fn kill_under(&self, dir: &std::path::Path) -> usize {
+        let wanted = |d: &str| {
+            let d = std::path::Path::new(d);
+            let same = |a: &std::path::Path, b: &std::path::Path| a.canonicalize().ok() == b.canonicalize().ok();
+            same(d, dir) || d.ancestors().skip(1).any(|a| same(a, dir))
+        };
+        let ids: Vec<u32> = match self.inner.lock() {
+            Ok(inner) => inner.dirs.iter().filter(|(_, d)| wanted(d)).map(|(id, _)| *id).collect(),
+            Err(_) => return 0,
+        };
+        for id in &ids {
+            let _ = self.kill(*id);
+        }
+        if !ids.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        ids.len()
+    }
+
     /// Ends every session: the window is closing, nothing may be left running.
     pub fn kill_all(&self) {
         if let Ok(mut inner) = self.inner.lock() {
+            inner.dirs.clear();
             for (_, mut s) in inner.sessions.drain() {
                 s.kill();
             }
@@ -92,8 +122,8 @@ impl Terminals {
 }
 
 #[tauri::command]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16) -> Result<u32, String> {
-    terminals.spawn(app, cols, rows)
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16, cwd: Option<String>) -> Result<u32, String> {
+    terminals.spawn(app, cols, rows, cwd)
 }
 
 #[tauri::command]

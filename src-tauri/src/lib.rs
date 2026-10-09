@@ -1,3 +1,6 @@
+mod git;
+mod names;
+mod projects;
 mod pty;
 mod state;
 mod terminal;
@@ -36,6 +39,7 @@ fn save_settings(store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
@@ -43,6 +47,8 @@ pub fn run() {
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
             app.manage(Terminals::default());
+            // Git is checked once here; every project and workspace action runs through it.
+            app.manage(git::Git::detect()?);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -58,7 +64,16 @@ pub fn run() {
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_resize,
-            terminal::terminal_kill
+            terminal::terminal_kill,
+            projects::git_version,
+            projects::project_list,
+            projects::project_add,
+            projects::workspace_list,
+            projects::workspace_preview,
+            projects::workspace_create,
+            projects::workspace_remove,
+            projects::workspaces_dir_get,
+            projects::workspaces_dir_set
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

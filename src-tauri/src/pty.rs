@@ -9,8 +9,9 @@ use std::io::{Read, Write};
 use std::thread;
 
 /// Which program a new pane runs. Windows PowerShell ships with every Windows install; `pwsh`
-/// (PowerShell 7) is used only when the user has it on the path.
-pub fn shell_command() -> CommandBuilder {
+/// (PowerShell 7) is used only when the user has it on the path. The shell starts in `cwd` when
+/// that folder exists (a workspace's folder), otherwise in the user's home folder.
+pub fn shell_command(cwd: Option<&str>) -> CommandBuilder {
     let mut cmd = if cfg!(windows) {
         let mut c = CommandBuilder::new("powershell.exe");
         c.arg("-NoLogo");
@@ -18,8 +19,13 @@ pub fn shell_command() -> CommandBuilder {
     } else {
         CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "sh".into()))
     };
-    if let Ok(home) = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
-        cmd.cwd(home);
+    match cwd.filter(|d| std::path::Path::new(d).is_dir()) {
+        Some(dir) => cmd.cwd(dir),
+        None => {
+            if let Ok(home) = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
+                cmd.cwd(home);
+            }
+        }
     }
     cmd
 }
@@ -110,7 +116,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
         let mut session = PtySession::spawn(
-            shell_command(),
+            shell_command(None),
             100,
             30,
             move |chunk| {
@@ -154,7 +160,7 @@ mod tests {
     #[test]
     fn kill_ends_a_running_shell() {
         let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
-        let mut session = PtySession::spawn(shell_command(), 80, 24, |_| {}, move |code| {
+        let mut session = PtySession::spawn(shell_command(None), 80, 24, |_| {}, move |code| {
             let _ = exit_tx.send(code);
         })
         .expect("spawn shell in a pty");

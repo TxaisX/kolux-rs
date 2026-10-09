@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 1, date: 2026-10-08)
-Next task: T-003 · One project and one worktree: pick a git folder as a project, create a workspace on a new branch in its own folder, remove it again
-Done: 2 / 338 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 2, date: 2026-10-08; Txais lifted the cap for today)
+Next task: T-004 · One agent in its own worktree: the plus menu starts Claude Code in a new pane inside a fresh worktree with a creature name; the pane header shows the agent and the branch
+Done: 3 / 338 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 338 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -13,6 +13,15 @@ What works today: the window opens with one terminal pane running Windows PowerS
 reaches the shell, output comes back, the pane follows the window size, the header says whether
 the GPU (WebGL) or the plain renderer is drawing, and Close ends the shell and shows "ended".
 Closing the window kills every shell it started.
+
+A sidebar on the left lists projects. Add one by typing or browsing to a folder that holds a Git
+repository (anything else is refused with a plain message; the same repository is never added
+twice). Each project lists its main checkout and its workspaces (Git worktrees). Type a name such
+as "Fix login" and the sidebar shows the branch and folder it will get (`fix-login`, under the
+workspaces folder, inside a folder named after the project); Create makes the branch and folder.
+Shell restarts the terminal pane inside that folder. Remove asks first, then deletes the folder and
+the branch, closing any pane still sitting in that folder. The workspaces folder can be changed and
+is remembered; projects are remembered across restarts.
 
 ## Needs Txais
 
@@ -75,8 +84,29 @@ recorded default until told otherwise; nothing here blocks a pass.
   whatever Txais has in front of him. (One early attempt used the shared keyboard route; the
   window was not in front, so the text "echo kolux-rs-ok" may have landed in another program.)
 
+- 2026-10-08 · T-003: the default workspaces folder is `%USERPROFILE%\kolux-rs\workspaces`
+  (PROJ-025 says "a workspaces folder inside a kolux folder in the home folder"; the `-rs` keeps it
+  apart from anything the old app made). New workspaces use the nested layout
+  (`<root>\<project>\<name>`); the flat layout and the per-project folder wait for the settings page.
+  Every Git action runs the `git` program found on the path (checked once at startup; the sidebar
+  shows its version); there is no bundled Git. A new workspace branches from the current HEAD of
+  the main checkout; the base-ref chooser is T-013. Name cleaning: lower-case, spaces and
+  punctuation become hyphens, repeated dots shrink, accented and non-Latin letters stay, fourteen
+  common emoji become words (fire, rocket, bug, sparkles, star, heart, bulb, wrench, tada, check,
+  zap, test-tube, memo, lock); other emoji are dropped rather than carrying a full emoji table.
+  Removing a workspace first ends any terminal pane started in that folder, because Windows will
+  not delete a folder a running shell sits in (seen live: the first removal attempt failed with
+  "Permission denied" until this was added). A project can be added with the system folder picker
+  (Browse, several folders at once) or by typing a path; the picker is the Tauri dialog plugin.
+  Removing a project from the list is PROJ-008, not built yet; the pass's test project was cleared
+  by deleting the fresh `state.db` (it held only the start counter and that one entry).
+- 2026-10-08 · Evidence harness: `scripts\evidence\shot.ps1` and `type.ps1` are now in the repo
+  with a README. Characters are posted to the web view one every 120 ms; faster loses keystrokes
+  while the page re-renders (seen live twice).
+
 ## Last 10 passes  (date · task · result · evidence)
 
 - 2026-10-07 · Phase 2: write PLAN.md · done: 338 tasks covering 1,030 cards (228 P0, 564 P1, 199 P2, 27 H marked build, 12 X), no dropped card · `node scripts/plan-check.mjs` prints OK
 - 2026-10-07 · T-001 · done: Tauri 2 window opens, SQLite state store and JSON settings under the profile folder, cargo-deny and JS license gates green, build/clippy/test/vitest green · evidence/T-001.png
 - 2026-10-08 · T-002 · done: one PowerShell pane through a Rust PTY, drawn by xterm.js on the GPU with a plain fallback; typing, resize (shell reports 166x54 after the window grew) and Close all proven live; no shell left behind after Close or after closing the window; 4 Rust tests and 9 front-end tests green · evidence/T-002.png
+- 2026-10-08 · T-003 · done: projects sidebar; a throwaway repository added as a project, "Fix login" created as branch `fix-login` in its own folder (confirmed with `git worktree list`), the pane opened inside it, then removed with a confirm step and both branch and folder gone on disk; 15 Rust tests (git runner round trip, name cleaner, project store) and 13 front-end tests green · evidence/T-003.png, evidence/T-003-removed.png

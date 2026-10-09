@@ -331,3 +331,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-07 · Phase 3 · T-001 · public Tauri 2 documentation and the create-tauri-app React/TypeScript template (config file shapes, capability file, Vite dev-server settings), the rusqlite and cargo-deny public docs · own icon art in `app-icon.svg` · src-tauri/, src/, package.json, vite.config.ts, deny.toml, scripts/license-check.mjs
 
 > 2026-10-08 Â· T-002 Â· public doc: Tauri 2 (events from Rust to the page, window events), portable-pty (open a pty, spawn, read, write, resize, kill), xterm.js with the WebGL and fit addons (load, context loss, fit) Â· areas 03 Â· read through the context7 documentation service; nothing copied, no old-app material
+
+> 2026-10-08 Â· T-003 Â· public doc: Tauri 2 dialog plugin (folder picker call, capability permission name) and the git command-line manual (worktree add/remove/list --porcelain, branch -D, rev-parse) Â· area 01 Â· read through the context7 documentation service; nothing copied, no old-app material. The evidence harness in scripts/evidence/ is own work from the T-002 pass.

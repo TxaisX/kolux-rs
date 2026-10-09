@@ -12,7 +12,7 @@ import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./co
 
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
-export default function TerminalPane() {
+export default function TerminalPane({ cwd = null }: { cwd?: string | null }) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -59,7 +59,7 @@ export default function TerminalPane() {
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows });
+        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
@@ -97,7 +97,7 @@ export default function TerminalPane() {
   };
 
   const label =
-    status.kind === "starting" ? "starting PowerShell…" : status.kind === "running" ? "PowerShell" : status.kind === "ended" ? `PowerShell · ${endedLabel(status.code)}` : `could not start: ${status.error}`;
+    status.kind === "starting" ? "starting PowerShell…" : status.kind === "running" ? (cwd ? `PowerShell · ${cwd}` : "PowerShell") : status.kind === "ended" ? `PowerShell · ${endedLabel(status.code)}` : `could not start: ${status.error}`;
 
   return (
     <section style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
