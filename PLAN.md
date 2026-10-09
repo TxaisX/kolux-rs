@@ -84,12 +84,12 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 4 · Accounts, sign-in and usage limits (20 cards)
 
-- [ ] T-038 · ACCT-009 [compat] Saved keys and sign-ins are sealed on disk · moved: from theme 5 (rule 10): secrets are sealed from the first card that stores one, never a plain-text stage
+- [x] T-038 · ACCT-009 [compat] Saved keys and sign-ins are sealed on disk · moved: from theme 5 (rule 10): secrets are sealed from the first card that stores one, never a plain-text stage
 - [ ] T-039 · STAT-022 Stopped state says why an agent halted · STAT-023 [compat] Notification when an agent stops · STAT-040 Claude Code's status line feeds usage and context figures · STAT-046 Expired sign-in notice in the main window
 - [ ] T-040 · USAGE-002 Board cards carry a compact session meter · USAGE-003 Agent tabs carry a tiny context ring · USAGE-004 Agents view shows rings per session and a plan footer · USAGE-005 How the meters work out context and plan figures · also passes: VIEW-018 Usage line on the Agents screen
 - [ ] T-041 · USAGE-006 [compat] Claude, Agent Teams and Codex are held to a 200k window by default · USAGE-007 [compat] Claude carries on by itself once a limit resets (opt-in) · USAGE-008 Weekly usage pill at the top right · USAGE-021 [compat] Claude plan figures read safely from several sources · also passes: VIEW-008 Weekly usage pill in the top right
 - [ ] T-042 · USAGE-022 [compat] Codex plan figures read without opening a session
-- [ ] T-043 · ACCT-004 [compat] Claude connects once with a key that lasts a year · ACCT-005 [compat] Sign a Claude account in through the browser and keep it as a managed account · ACCT-006 [compat] Claude sign-ins are renewed by default, with an opt-out · ACCT-007 Codex connects with a ChatGPT sign-in or a device code
+- [ ] T-043 · ACCT-004 [compat] Claude connects once with a key that lasts a year · ACCT-005 [compat] Sign a Claude account in through the browser and keep it as a managed account · ACCT-006 [compat] Claude sign-ins are renewed by default, with an opt-out · ACCT-007 Codex connects with a ChatGPT sign-in or a device code · storage: the key through `secret_set` and each managed sign-in as one sealed vault file through `secrets::write_file` / `read_file` (built in T-038)
 - [ ] T-044 · ACCT-012 A lapsed sign-in is flagged outside Settings with Sign in again · ACCT-013 A needs-attention card states the reason and offers the one fix that fits
 - [ ] T-045 · SET-030 Accounts & keys flags sign-in trouble
 

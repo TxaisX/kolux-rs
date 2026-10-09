@@ -7,6 +7,7 @@ mod keybindings;
 mod names;
 mod projects;
 mod pty;
+mod secrets;
 mod state;
 mod sysmem;
 mod terminal;
@@ -34,12 +35,16 @@ fn app_info(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>) -> Res
 
 #[tauri::command]
 fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Value, String> {
-    Ok(store.lock().map_err(|e| e.to_string())?.settings())
+    // Secrets stay in the backend: the window never receives them (ACCT-009, ACCT-011).
+    Ok(secrets::without_secrets(store.lock().map_err(|e| e.to_string())?.settings()))
 }
 
 #[tauri::command]
 fn save_settings(store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value) -> Result<(), String> {
-    store.lock().map_err(|e| e.to_string())?.save_settings(&value).map_err(|e| e.to_string())
+    let store = store.lock().map_err(|e| e.to_string())?;
+    // The window cannot write a secret field; the sealed values on disk are kept as they are.
+    let value = secrets::keep_stored_secrets(&store.settings(), value);
+    store.save_settings(&value).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -57,6 +62,13 @@ pub fn run() {
             app.manage(git::Git::detect()?);
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
+            // Shortly after the first window: seal anything older still in the clear and limit
+            // the profile folder to this user (ACCT-009). Never delays or stops the launch.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                secrets::sealing_pass(&handle.state::<Mutex<Store>>(), &dir);
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -92,7 +104,10 @@ pub fn run() {
             browser::browser_bounds,
             browser::browser_navigate,
             browser::browser_go,
-            browser::browser_close
+            browser::browser_close,
+            secrets::secret_status,
+            secrets::secret_set,
+            secrets::secret_clear
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
