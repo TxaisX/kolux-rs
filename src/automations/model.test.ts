@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { confirmDelete, lastRun, matches, normalizeQuery, noFilters, passes, PROMPT_SEARCH_CHARS, sortRows, type Automation, type Names, type Run } from "./model";
+import { confirmDelete, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, triggerLabel, upcoming, type Automation, type Names, type Run } from "./model";
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };
 const auto = (id: string, name: string, extra: Partial<Automation> = {}): Automation => ({ id, name, prompt: "", provider: "claude", projectId: "p1", enabled: true, ...extra });
@@ -46,4 +46,22 @@ test("filters: on or paused, the last run's result, and several agents at once",
 test("the delete confirmation is on unless switched off", () => {
   expect(confirmDelete({})).toBe(true);
   expect(confirmDelete({ confirmAutomationDelete: false })).toBe(false);
+});
+
+test("find in the prompt wraps round to the top and ignores case; the main worktree is preselected", () => {
+  expect(findNext("Check tests, then TESTS again", "tests", 0)).toBe(6);
+  expect(findNext("Check tests, then TESTS again", "tests", 7)).toBe(18);
+  expect(findNext("Check tests, then TESTS again", "tests", 19)).toBe(6);
+  expect(findNext("abc", "z", 0)).toBe(-1);
+  expect(preselect([{ path: "a", isMain: false }, { path: "m", isMain: true }])).toBe("m");
+  expect(preselect([{ path: "a", isMain: false }])).toBe("a");
+  expect(preselect([])).toBe("");
+});
+
+test("the list shows the back end's timetable sentence and when it goes next", () => {
+  const a = auto("a", "Morning", { trigger: { kind: "schedule", cron: "0 9 * * 1-5", timezone: "UTC" }, timetable: "Monday to Friday at 09:00 (UTC)", nextRunAt: 3 * 86400000, nextRunLabel: "Monday 09:00" });
+  expect(triggerLabel(a)).toBe("Monday to Friday at 09:00 (UTC)");
+  expect(upcoming(a, 0)).toBe("Monday 09:00 · in 3 days");
+  expect(upcoming({ ...a, enabled: false }, 0)).toBe("Paused");
+  expect(triggerLabel(auto("b", "Raw", { trigger: { kind: "schedule", cron: "5  4 * * *" } }))).toBe("Custom: 5 4 * * *");
 });

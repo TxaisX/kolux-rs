@@ -288,12 +288,13 @@ pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> 
 }
 
 /// A workspace an agent launch makes for itself: a creature name nobody uses, branched from the
-/// main checkout. The clock seeds the pick so launches do not always start at the same pair.
-pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects: &[Project], project: &Project) -> Result<Worktree, String> {
+/// main checkout, or from `base` when given (AUTO-005). The clock seeds the pick so launches do
+/// not always start at the same pair.
+pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects: &[Project], project: &Project, base: Option<&str>) -> Result<Worktree, String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let name = fresh_name(git, store, projects, seed);
     remember_retired(store, &name)?;
-    create_workspace(git, place, project, &name, None).map(|c| c.worktree)
+    create_workspace(git, place, project, &name, base).map(|c| c.worktree)
 }
 
 pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str) -> Result<(), String> {
@@ -384,10 +385,15 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
 /// A fresh creature-named workspace in project `project_id`. The store stays locked while Git
 /// works so two launches at once never pick one name.
 pub fn create_fresh(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<Worktree, String> {
+    create_fresh_from(git, store, project_id, None)
+}
+
+/// As `create_fresh`, cut from `base` (a ref) when given, else the project's base (AUTO-005).
+pub fn create_fresh_from(git: &Git, store: &Mutex<Store>, project_id: &str, base: Option<&str>) -> Result<Worktree, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = find_project(&store, project_id)?;
     let place = place_for(&store, &project);
-    create_fresh_workspace(git, &store, &place, &load_projects(&store), &project)
+    create_fresh_workspace(git, &store, &place, &load_projects(&store), &project, base)
 }
 
 #[tauri::command]
@@ -577,8 +583,8 @@ mod tests {
         let project = add_project(&git, &store, &repo).unwrap();
         let projects = load_projects(&store);
 
-        let first = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project).unwrap();
-        let second = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project).unwrap();
+        let first = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project, None).unwrap();
+        let second = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project, None).unwrap();
         let name_of = |w: &Worktree| Path::new(&w.path).file_name().unwrap().to_string_lossy().to_string();
         assert_ne!(name_of(&first), name_of(&second), "two launches never share a name");
         for w in [&first, &second] {

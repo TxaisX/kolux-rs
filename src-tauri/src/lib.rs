@@ -9,6 +9,7 @@ mod names;
 mod projects;
 mod pty;
 mod routing;
+mod schedule;
 mod state;
 mod sysmem;
 mod terminal;
@@ -60,6 +61,8 @@ pub fn run() {
             app.manage(git::Git::detect()?);
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
+            // AUTO-001: the automations clock.
+            automations::start_clock(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -101,6 +104,8 @@ pub fn run() {
             automations::automation_set_enabled,
             automations::automation_delete,
             automations::automation_run_now,
+            automations::automation_preview,
+            automations::automation_save,
             routing::routing_catalog
         ])
         .build(tauri::generate_context!())

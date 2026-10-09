@@ -268,6 +268,25 @@ input { font: inherit; }
 .autos-runs li { display: flex; align-items: center; gap: 10px; height: 26px; border-bottom: 1px solid var(--line-inner); }
 .autos-runs .num { width: 34px; color: var(--fg-label); }
 .autos-runs .muted, .autos-none { color: var(--fg-faint); font-size: 12px; }
+/* AUTO-005: the create / edit dialog. */
+.scrim { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); }
+.auto-dialog { width: min(920px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); color: var(--fg); }
+.auto-dialog h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.auto-dialog-body { flex: 1; min-height: 0; display: flex; gap: 16px; }
+.auto-dialog-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.auto-dialog-side { width: 270px; flex: none; display: flex; flex-direction: column; gap: 9px; overflow: auto; }
+.auto-label { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; border: 0; font-size: 12px; color: var(--fg-label); }
+.auto-label legend { padding: 0; margin-bottom: 4px; }
+.auto-label.grow { flex: 1; min-height: 0; }
+.auto-radio { display: flex; align-items: center; gap: 6px; color: var(--fg-row); }
+.auto-prompt { flex: 1; height: auto; min-height: 0; padding: 8px 10px; resize: none; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 var(--mono-font); }
+.auto-find { display: flex; align-items: center; gap: 6px; }
+.auto-find .field { width: 220px; }
+.auto-find .muted, .auto-dialog-foot .muted { color: var(--fg-faint); font-size: 12px; }
+.auto-dialog .field.mono { font-family: var(--mono-font); }
+.auto-preview { padding: 7px 9px; font-size: 12px; line-height: 1.5; color: var(--fg-row); background: var(--input-bg); border: 1px solid var(--line-subtle); border-radius: 6px; }
+.auto-dialog-foot { display: flex; align-items: center; gap: 8px; }
+.auto-dialog-foot .muted { flex: 1; }
 /* Model routing (SET-028): the Automations page frame with one small table per provider. */
 .btn[aria-selected="true"] { background: var(--row-selected); border-color: var(--line-focus); color: var(--fg); }
 .routing-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; }

@@ -292,6 +292,18 @@ children move to the top level. The footer gear has a checkbox, "Nest child work
 parent"; unticked, every workspace sits at one level. The parent is remembered in the app's store
 (`workspaceParents`) and forgotten when the workspace is removed.
 
+T-085-a (orchestration lane) makes automations on a timetable (AUTO-001, AUTO-005). New
+Automation and a row's Edit open one dialog: a name, a large prompt editor (Ctrl+F opens a find bar;
+Escape shuts the find bar first, then the dialog), the agent, the project, an existing worktree (the
+main one preselected) or a new worktree for every run cut from a base branch (empty means the
+project's default), and a timetable: every hour, every day, Monday to Friday, once a week, or a
+custom cron line or RRULE, in a time zone that starts as the computer's. Under the timetable a live
+preview reads it back in words with the next run ("Monday to Friday at 09:00 (America/Los_Angeles),
+Next run: Monday 09:00"); a line that cannot work (minute 61, 30 February) shows why and Save stays
+off. The list shows that sentence and "Monday 09:00 · in 3 days". A clock in the app checks every
+30 seconds and starts what is due, works out the next time after every run, never starts a paused
+automation, and moves on a due time more than two minutes old instead of running it late.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -673,7 +685,11 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [orchestration] T-077: `worker-start --worktree new-child` called from outside one of the project's workspaces makes a top-level workspace (no parent) instead of refusing; called from the main checkout it is top level too, since main is never a parent row.
 - [orchestration] T-077: the nesting switch is a checkbox in the footer gear form (setting `workspaceNesting`, on unless false) until a Settings page holds workspace options. Folded rows are not saved; they reset when the window closes. A loop of parents (should one ever be written) is listed flat rather than hidden.
 
+- [orchestration] T-085: split in place. T-085-a is the timetable and the dialog (AUTO-001, AUTO-005); T-085-b keeps event triggers and background runs (AUTO-004, AUTO-011), which need T-025's hooks and T-176's PR polling, plus RRULE lines with INTERVAL other than 1, COUNT, UNTIL, BYSETPOS, DTSTART or numbered weekdays, which are refused with a message until then.
+- [orchestration] T-085-a: a timetable that is not one of the presets is described as "Custom: <line> (zone)" rather than turned into a sentence; an RRULE that leaves out BYHOUR / BYMINUTE runs at minute 0 / hour 0; a due time more than 2 minutes old (Kolux was closed or asleep) is skipped to the next one, and the grace window for those is T-175 (AUTO-007); the clock checks every 30 seconds. `jiff` (already in the lock tree through another crate, MIT/Unlicense) is now a direct dependency for time zones. Editing an automation that waits for an event turns it into a timed one until T-085-b adds events to the dialog.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [orchestration] T-085-a · done: `schedule.rs` (cron + RRULE parser, next run in a zone, words; 5 tests incl. 29 Feb, DST, minute 61), `automations.rs` save / preview / clock `tick` (2 new tests: validation + doubled create, due / paused / missed), `create_fresh_from` in projects.rs, `AutomationDialog.tsx` + test, model labels; live: weekday 09:00 saved on Friday reads "Monday 09:00 · in 3 days", double-clicked Save left 1 automation, minute 61 refused, 0 0 29 2 * next run 29 Feb 2028 00:00, Escape shut find then the dialog, a * * * * * automation started run #1 "by the timetable" at 16:57:16 and none after it was paused · evidence/T-085-dialog.png, T-085-cron-61.png, T-085-leap-day.png, T-085-find.png, T-085-saved-list.png, T-085-edit.png, T-085-clock-run.png
 - 2026-10-09 · [orchestration] T-079 · not built, left unticked. HAND TO FABLE: TERM-125 is terminal grid + PTY + two-way IPC. The Rust side keeps no screen of a terminal (output only streams to xterm in the window), so show/read/--cursor/--screen need either a terminal-emulator crate (a new dependency to clear with cargo-deny) or a round trip asking the window's xterm buffer; tabs, splits, titles and focus live only in App.tsx, so list/split/switch/rename/close --tab need the window to report its layout to Rust and take orders back over `cli-workspace`-style events; wait --for tui-idle needs a quiet-screen rule. Nothing was changed · no evidence
 - 2026-10-09 · [orchestration] T-077 · done: `nestRows` in `src/projects/model.ts` (3 new tests: depth, fold, orphan, nesting off, loop), fold chevron and nesting checkbox in `ProjectsPanel.tsx`, `workspaceParents` store with `set_parent` / `forget_workspace` in `projects.rs`, worker-start records the calling workspace as parent (cli.rs test extended); live: P > sandy-beluga > nimble-crab, nimble-tuna nested, P folded hid all three, nesting off listed five flat, removing sandy-beluga put its two children at the top · evidence/T-077-nested.png, T-077-folded.png, T-077-nesting-off.png, T-077-parent-gone.png
 - 2026-10-09 · [orchestration] T-081 · done: `resetProvider` / `isCustom` in `src/settings/routing.ts` (1 new test), Reset button and "Not detected" tab mark on `RoutingPage.tsx` (1 new render test), Codex models and DT-12 ladder in `routing.rs` (Rust tests updated); live: Claude Build set to Opus/high and Codex Light to GPT-6 Luna, Reset Claude Code put Build back to Sonnet/medium and left Codex's pick saved. This PC has Codex, so the not-detected mark is shown by the render test only · evidence/T-081-codex.png, T-081-before-reset.png, T-081-after-reset.png

@@ -2,14 +2,15 @@
 // and search, a quick-actions menu on each row (Run now, pause / resume, Edit, Delete), and the
 // selected automation's prompt and numbered runs below. The page reloads itself whenever the
 // back end says an automation or a run changed, so a run's status moves without a refresh.
-// New Automation and Edit open the dialog of AUTO-005 (T-085); Runs opens the dashboard of
-// AUTO-015 (T-130); until then those buttons are present and disabled.
+// New Automation and Edit open the dialog of AUTO-005; Runs opens the dashboard of AUTO-015
+// (T-130) and is present and disabled until then.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Dots, Plus, Refresh, Search } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import type { Project } from "../projects/model";
+import AutomationDialog from "./AutomationDialog";
 import { ago, CONFIRM_DELETE_KEY, confirmDelete, lastRun, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
 export type Data = { automations: Automation[]; runs: Run[] };
@@ -54,6 +55,8 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   const [dontAsk, setDontAsk] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // The dialog: undefined shut, null a new automation, else the latest saved copy being edited.
+  const [dialog, setDialog] = useState<Automation | null | undefined>(undefined);
   const search = useRef<HTMLInputElement>(null);
 
   const load = () =>
@@ -107,6 +110,23 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
     if (dontAsk) onSettings({ ...settings, [CONFIRM_DELETE_KEY]: false });
     void act(invoke("automation_delete", { id }));
   };
+  // AUTO-005: Edit fetches the latest saved copy before the dialog appears.
+  const edit = (a: Automation) => {
+    setMenu(null);
+    invoke<Data>("automations_list")
+      .then((d) => {
+        setData(d);
+        const latest = d.automations.find((x) => x.id === a.id);
+        if (latest) setDialog(latest);
+        else setNote(`${a.name} was deleted elsewhere`);
+      })
+      .catch((e) => setNote(String(e)));
+  };
+  const saved = (a: Automation) => {
+    setSelected(a.id);
+    setNote(`Saved ${a.name}`);
+    void load();
+  };
   const sortBy = (key: SortKey) => setSort((s) => ({ key, desc: s.key === key ? !s.desc : false }));
   const filtered = filters.state !== "all" || filters.result !== "all" || filters.agents.length > 0 || (q ?? "") !== "";
 
@@ -146,7 +166,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
         <button className="btn" disabled title="The runs dashboard comes with T-130">
           Runs
         </button>
-        <button className="btn primary" disabled title="The new automation dialog comes with T-085">
+        <button className="btn primary" disabled={projects.length === 0} title={projects.length === 0 ? "Add a project first" : undefined} onClick={() => setDialog(null)}>
           <Plus size={12} />
           New Automation
         </button>
@@ -255,7 +275,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
                             <button className="menu-item" role="menuitem" onClick={() => toggle(a)}>
                               <span className="name">{a.enabled ? "Pause" : "Resume"}</span>
                             </button>
-                            <button className="menu-item" role="menuitem" disabled title="The edit dialog comes with T-085">
+                            <button className="menu-item" role="menuitem" onClick={() => edit(a)}>
                               <span className="name">Edit</span>
                             </button>
                             <button className="menu-item" role="menuitem" onClick={() => remove(a)}>
@@ -273,6 +293,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
           {current && <Detail a={current} runs={runs} now={now} onRun={() => runNow(current)} onToggle={() => toggle(current)} />}
         </>
       )}
+      {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} onClose={() => setDialog(undefined)} onSaved={saved} />}
     </div>
   );
 }

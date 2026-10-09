@@ -13,9 +13,22 @@ export type Automation = {
   workspace?: string | null;
   trigger?: Trigger;
   enabled: boolean;
-  /** When the clock will start it next (T-085 fills it in); milliseconds since 1970. */
+  /** When the clock will start it next; milliseconds since 1970. */
   nextRunAt?: number | null;
+  /** AUTO-005: the branch a new-per-run worktree is cut from; empty means the project's default. */
+  baseBranch?: string;
+  /** From the back end (AUTO-001): the timetable in words, e.g. "Monday to Friday at 09:00 (UTC)". */
+  timetable?: string;
+  /** From the back end: the next run in the timetable's zone, e.g. "Monday 09:00". */
+  nextRunLabel?: string;
+  /** From the back end: what the dialog's timetable fields open with. */
+  form?: ScheduleForm;
 };
+
+export type Preset = "hourly" | "daily" | "weekdays" | "weekly" | "custom";
+/** The dialog's timetable fields: `time` is HH:MM (minutes past for hourly), `day` 0-6 from Sunday. */
+export type ScheduleForm = { preset: Preset; time: string; day: number | null; custom: string };
+export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", day: 1, custom: "" };
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
@@ -90,15 +103,14 @@ export function sortRows(list: Automation[], runs: Run[], key: SortKey, desc: bo
 }
 
 const events: Record<string, string> = { "pr-opened": "When a pull request opens", "checks-failed": "When checks fail", "agent-finished": "When an agent finishes" };
-const presets: Record<string, string> = { "0 * * * *": "Every hour", "0 9 * * *": "Every day at 09:00", "0 9 * * 1-5": "Weekdays at 09:00", "0 9 * * 1": "Mondays at 09:00" };
-
-/** The timetable or trigger in a few words. ponytail: AUTO-001's full friendly sentence is T-085. */
+/** The timetable or trigger in a few words; a timetable's sentence comes from the back end. */
 export function triggerLabel(a: Automation): string {
   const t = a.trigger;
   if (!t) return "No timetable";
   if (t.kind === "event") return events[t.event] ?? "On an event";
+  if (a.timetable) return a.timetable;
   const cron = (t.cron ?? "").trim().replace(/\s+/g, " ");
-  return presets[cron] ?? (cron ? `Custom: ${cron}` : "No timetable");
+  return cron ? `Custom: ${cron}` : "No timetable";
 }
 
 export function statusWord(r: Run): string {
@@ -133,11 +145,26 @@ export function upcoming(a: Automation, now: number): string {
   if (a.trigger?.kind === "event") return "On the next event";
   if (!a.nextRunAt) return "Not scheduled";
   const mins = Math.max(0, Math.round((a.nextRunAt - now) / 60000));
-  if (mins < 60) return `in ${mins} min`;
   const h = Math.round(mins / 60);
-  return h < 48 ? `in ${h} h` : `in ${Math.round(h / 24)} days`;
+  const rel = mins < 60 ? `in ${mins} min` : h < 48 ? `in ${h} h` : `in ${Math.round(h / 24)} days`;
+  return a.nextRunLabel ? `${a.nextRunLabel} · ${rel}` : rel;
 }
 
 /** The delete confirmation is on out of the box (AUTO-019); settings can switch it off. */
 export const CONFIRM_DELETE_KEY = "confirmAutomationDelete";
 export const confirmDelete = (settings: Record<string, unknown>): boolean => settings[CONFIRM_DELETE_KEY] !== false;
+
+/** The prompt editor's find bar: where the next match starts at or after `from`, wrapping round to
+ * the top, case ignored; -1 when there is none. */
+export function findNext(text: string, query: string, from: number): number {
+  if (query === "") return -1;
+  const hay = text.toLowerCase();
+  const q = query.toLowerCase();
+  const at = hay.indexOf(q, from);
+  return at >= 0 ? at : hay.indexOf(q);
+}
+
+/** The workspace a new automation starts in (AUTO-005): the main worktree, or failing that the first. */
+export function preselect(worktrees: Array<{ path: string; isMain: boolean }>): string {
+  return (worktrees.find((w) => w.isMain) ?? worktrees[0])?.path ?? "";
+}
