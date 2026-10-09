@@ -1,8 +1,10 @@
 // The window: top bar, then the sidebar card beside the content column (layout strip over the
 // pane grid), then the status bar. Agents and Board are empty screens for now; Terminals holds
 // the pane list and the sidebar. The list starts with one PowerShell pane (T-002); the plus
-// menu adds an agent pane in a fresh creature-named workspace (T-004). Panes share the grid
-// evenly for now; the real 1/2/4/6 layouts come with T-009.
+// menu adds an agent pane in a fresh creature-named workspace (T-004). The grid shows one
+// workspace at a time; the other workspaces' panes stay mounted but hidden, so switching back
+// finds every terminal as it was (T-006). Panes share the grid evenly for now; the real 1/2/4/6
+// layouts come with T-009.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { windowTitle, type AppInfo } from "./app-info";
@@ -13,7 +15,8 @@ import type { Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
 import { markFor, type AgentInfo } from "./launch/PlusMenu";
-import type { Project, Worktree } from "./projects/model";
+import { folderName, type Project, type Worktree } from "./projects/model";
+import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { matchEvent } from "./keys/keymap";
 
@@ -25,8 +28,6 @@ type Pane = { key: number; cwd: string | null; branch: string | null; agent: Age
 export function columnsFor(count: number): number {
   return count <= 1 ? 1 : count <= 4 ? 2 : 3;
 }
-
-const sameDir = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
 
 export default function App() {
   return (
@@ -49,6 +50,8 @@ function Window() {
   const [layout, setLayout] = useState<Layout>(1);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
+  // The workspace the grid shows; null is the home group (panes opened in no workspace).
+  const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -94,18 +97,28 @@ function Window() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [keymap]);
 
-  // T-003: Shell on a workspace row restarts the first plain-shell pane in that folder, or adds one.
-  const openShell = (dir: string, branch: string | null) => {
+  const addShell = (dir: string | null, branch: string | null) => {
     const key = nextKey.current++;
-    setPanes((ps) => {
-      const fresh: Pane = { key, cwd: dir, branch, agent: "shell", program: null, args: [] };
-      const i = ps.findIndex((p) => p.agent === "shell");
-      if (i < 0) return [...ps, fresh];
-      const next = [...ps];
-      next[i] = fresh;
-      return next;
-    });
+    setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: "shell", program: null, args: [] }]);
     setFocused(key);
+  };
+
+  // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
+  // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
+  const select = (dir: string, branch: string | null) => {
+    setActiveDir(dir);
+    if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
+    else addShell(dir, branch);
+  };
+
+  // PROJ-066: removing a workspace closes every pane in it, wherever it was; the view stays
+  // unless it was the one removed, then it falls back to the home group.
+  const removed = (path: string) => {
+    const left = withoutDir(panes, path);
+    const next = activeAfterRemove(activeDir, path);
+    setPanes(left);
+    setActiveDir(next);
+    setFocused((f) => focusIn(left, next, f));
   };
 
   // Which project a launch belongs to: the one asked for, else the one that owns the focused
@@ -132,6 +145,7 @@ function Window() {
       const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
       const key = nextKey.current++;
       setPanes((ps) => [...ps, { key, cwd: wt.path, branch: wt.branch, agent: markFor(agent.id), program: agent.program, args: agent.args }]);
+      setActiveDir(wt.path);
       setFocused(key);
       setRefresh((n) => n + 1);
       setNotice(null);
@@ -150,12 +164,13 @@ function Window() {
       const { [key]: _gone, ...rest } = r;
       return rest;
     });
-    setFocused((f) => (f === key ? (panes.find((p) => p.key !== key)?.key ?? f) : f));
+    setFocused((f) => (f === key ? focusIn(panes.filter((p) => p.key !== key), activeDir, f) : f));
   };
 
   const terminals = screen === "terminals";
   const live = panes.filter((p) => running[p.key]);
   const openDirs = panes.map((p) => p.cwd).filter((d): d is string => d !== null);
+  const shown = panesIn(panes, activeDir);
   return (
     <div className="app">
       <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
@@ -163,7 +178,9 @@ function Window() {
         {terminals && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
-            onOpenShell={openShell}
+            activeDir={activeDir}
+            onSelect={select}
+            onRemoved={removed}
             agents={agents}
             launching={launching}
             onLaunch={launch}
@@ -186,10 +203,20 @@ function Window() {
                   </button>
                 </div>
               )}
-              <div className="grid" style={{ gridTemplateColumns: `repeat(${columnsFor(panes.length)}, minmax(0, 1fr))` }}>
+              <div className="grid" style={{ gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))` }}>
+                {shown.length === 0 && (
+                  <div className="empty">
+                    <h2>{activeDir ? folderName(activeDir) : "Terminal"}</h2>
+                    <p>No terminal open here.</p>
+                    <button className="btn" onClick={() => addShell(activeDir, null)}>
+                      Open a shell
+                    </button>
+                  </div>
+                )}
                 {panes.map((p) => (
                   <TerminalPane
                     key={p.key}
+                    hidden={!sameDir(p.cwd, activeDir)}
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}

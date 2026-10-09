@@ -1,0 +1,48 @@
+// PROJ-066: each workspace keeps its own panes; switching shows one set and hides the rest;
+// removing a workspace drops every pane inside it.
+import { expect, test } from "vitest";
+import { activeAfterRemove, focusIn, panesIn, sameDir, underDir, withoutDir } from "./workspaces";
+
+const panes = [
+  { key: 1, cwd: null },
+  { key: 2, cwd: "C:\\repo\\ws\\alpha" },
+  { key: 3, cwd: "C:/repo/ws/alpha/" },
+  { key: 4, cwd: "C:\\repo\\ws\\beta" },
+  { key: 5, cwd: "C:\\repo" },
+];
+
+test("folders compare by content, not by slash style, case or trailing slash", () => {
+  expect(sameDir("C:\\Repo\\WS\\alpha", "c:/repo/ws/alpha/")).toBe(true);
+  expect(sameDir("C:\\repo\\ws\\alpha", "C:\\repo\\ws\\alphabet")).toBe(false);
+  expect(sameDir(null, null)).toBe(true);
+  expect(sameDir(null, "C:\\repo")).toBe(false);
+  expect(underDir("C:\\repo\\ws\\alpha\\src", "C:\\repo\\ws\\alpha")).toBe(true);
+  expect(underDir("C:\\repo\\ws\\alphabet", "C:\\repo\\ws\\alpha")).toBe(false);
+  expect(underDir(null, "C:\\repo")).toBe(false);
+});
+
+test("switching shows one workspace's panes and keeps the others for later", () => {
+  expect(panesIn(panes, "C:\\repo\\ws\\alpha").map((p) => p.key)).toEqual([2, 3]);
+  expect(panesIn(panes, "C:\\repo\\ws\\beta").map((p) => p.key)).toEqual([4]);
+  expect(panesIn(panes, "C:\\repo").map((p) => p.key)).toEqual([5]);
+  expect(panesIn(panes, null).map((p) => p.key)).toEqual([1]);
+  expect(panesIn(panes, "C:\\nowhere")).toEqual([]);
+  // The list itself is untouched: every pane is still there to come back to.
+  expect(panes.length).toBe(5);
+});
+
+test("focus stays on a shown pane, else lands on the first one shown", () => {
+  expect(focusIn(panes, "C:\\repo\\ws\\alpha", 3)).toBe(3);
+  expect(focusIn(panes, "C:\\repo\\ws\\alpha", 4)).toBe(2);
+  expect(focusIn(panes, "C:\\nowhere", 4)).toBe(4);
+});
+
+test("removing a workspace drops every pane in it and nothing else; the view falls back to home", () => {
+  const left = withoutDir(panes, "C:\\repo\\ws\\alpha");
+  expect(left.map((p) => p.key)).toEqual([1, 4, 5]);
+  // The main checkout is not "under" a worktree folder and a worktree is not removed with main here.
+  expect(withoutDir(panes, "C:\\repo\\ws\\beta").map((p) => p.key)).toEqual([1, 2, 3, 5]);
+  expect(activeAfterRemove("C:/repo/ws/alpha", "C:\\repo\\ws\\alpha")).toBeNull();
+  expect(activeAfterRemove("C:\\repo\\ws\\beta", "C:\\repo\\ws\\alpha")).toBe("C:\\repo\\ws\\beta");
+  expect(activeAfterRemove(null, "C:\\repo\\ws\\alpha")).toBeNull();
+});

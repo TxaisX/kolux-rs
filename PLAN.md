@@ -39,7 +39,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 1 · Session-per-pane terminal grid (20 cards)
 
-- [ ] T-006 · PROJ-066 Switching workspaces is instant and keeps each one's state
+- [x] T-006 · PROJ-066 Switching workspaces is instant and keeps each one's state
 - [ ] T-007 · SESS-001 [compat] Launch choices list only agents that are really installed · SESS-004 One click on the plus menu starts an agent in a new pane · SESS-007 An empty pane asks what to run · SESS-013 Choose how many sessions to start
 - [ ] T-008 · SESS-015 Every seat needs an AI and a model the user chose; nothing is guessed · SESS-024 Launched sessions land one per pane, titled by seat · SESS-051 Each catalogue agent's program, start line and opening-prompt route
 - [ ] T-009 · TERM-001 Session-per-pane grid sized by pane count · TERM-004 Grid layout arrangement for each pane count · TERM-006 [compat] Split a pane right or down · TERM-014 [compat] Close a pane

@@ -15,7 +15,12 @@ import { KeyText } from "../keys/KeymapContext";
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
   openDirs: string[];
-  onOpenShell: (dir: string, branch: string | null) => void;
+  /** The workspace the grid shows (PROJ-066); its row is the selected one. */
+  activeDir: string | null;
+  /** A click on a row shows that workspace. */
+  onSelect: (dir: string, branch: string | null) => void;
+  /** After a workspace and its folder are gone, so the window drops its panes. */
+  onRemoved: (path: string) => void;
   /** The plus menu behind "New session" (T-004): agents found on the PATH, and the launch. */
   agents: AgentInfo[];
   launching: boolean;
@@ -26,7 +31,7 @@ type Props = {
   onIndex: (projects: Project[], owner: Record<string, string>) => void;
 };
 
-export default function ProjectsPanel({ openDirs, onOpenShell, agents, launching, onLaunch, refresh, onIndex }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, refresh, onIndex }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -152,6 +157,7 @@ export default function ProjectsPanel({ openDirs, onOpenShell, agents, launching
     setBusy("removing");
     try {
       await invoke("workspace_remove", { projectId: confirm.projectId, path: confirm.path });
+      onRemoved(confirm.path);
       say("ok", `removed ${confirm.branch} and its folder`);
       setConfirm(null);
       await reload();
@@ -165,6 +171,7 @@ export default function ProjectsPanel({ openDirs, onOpenShell, agents, launching
   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
+  const isSelected = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
 
   return (
     <div className="sidebar-wrap">
@@ -256,7 +263,7 @@ export default function ProjectsPanel({ openDirs, onOpenShell, agents, launching
                   </button>
                 </div>
                 {main && (
-                  <button className={`branch${isActive(main) ? " sel" : ""}`} onClick={() => onOpenShell(main.path, main.branch)} title={`Open the terminal in ${main.path}`}>
+                  <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => onSelect(main.path, main.branch)} title={`Show ${main.path}`}>
                     <span className="name">{worktreeLabel(main)}</span>
                     {isActive(main) && <span className="count">{openCount(main)}</span>}
                     <span className="chev">
@@ -283,7 +290,7 @@ export default function ProjectsPanel({ openDirs, onOpenShell, agents, launching
                   const active = isActive(w);
                   return (
                     <div key={w.path} data-worktree={worktreeLabel(w)}>
-                      <div className={`sess${active ? " sel" : ""}`} role="button" tabIndex={0} onClick={() => onOpenShell(w.path, w.branch)} onKeyDown={(e) => e.key === "Enter" && onOpenShell(w.path, w.branch)} title={`Open the terminal in ${w.path}`}>
+                      <div className={`sess${isSelected(w) ? " sel" : ""}`} role="button" tabIndex={0} onClick={() => onSelect(w.path, w.branch)} onKeyDown={(e) => e.key === "Enter" && onSelect(w.path, w.branch)} title={`Show ${w.path}`}>
                         <span className={`dot${active ? " live" : ""}`} role="img" aria-label={active ? "terminal open here" : "idle"} />
                         <span className="name">{worktreeLabel(w)}</span>
                         {!asking && (

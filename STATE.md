@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 6, date: 2026-10-08; Txais lifted the cap for today)
-Next task: T-006 · PROJ-066 Switching workspaces is instant and keeps each one's state
-Done: 6 / 339 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 1, date: 2026-10-09; the T-006 pass began 2026-10-08 as the 7th and finished after the usage-limit reset)
+Next task: T-007 · SESS-001 [compat] Launch choices list only agents that are really installed · SESS-004 One click on the plus menu starts an agent in a new pane · SESS-007 An empty pane asks what to run · SESS-013 Choose how many sessions to start
+Done: 7 / 339 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 339 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -51,6 +51,15 @@ file alone. The search box chips and "Next that needs you" read their keys from 
 override shows at once at the next start; unbound shows "Unassigned"). Ctrl+B hides and shows the
 sidebar and Ctrl+Alt+V cycles Agents / Board / Terminals through the keymap. The app icon and the
 top-left mark are now Txais's own (design/icon/).
+
+T-006 makes the sidebar rows a switch: a click on a workspace row (main checkout or worktree)
+shows that workspace's panes on the same click and highlights the row; every other workspace's
+panes stay mounted but hidden, so switching back finds each terminal exactly as it was (same
+output, same program, no resize). A workspace with no pane yet gets a plain shell on first click;
+a workspace whose last pane was closed shows "No terminal open here" with an "Open a shell"
+button. A launch from the plus menu switches to the new worktree. Removing a workspace from the
+sidebar closes every pane inside it wherever it was, and the view falls back to the start-up
+PowerShell pane if the removed one was in front.
 
 ## Needs Txais
 
@@ -148,6 +157,17 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-006: a row click now selects (shows) the workspace; it no longer restarts an
+  ended shell there as T-003 had it (that was the only way to get a shell before there was a
+  selection; an ended pane keeps showing "Ended" until its own restart card). Panes of the other
+  workspaces are kept mounted and hidden (`hidden` on the pane section) rather than unmounted and
+  rebuilt, because xterm's buffer is the state PROJ-066 wants kept; a hidden pane skips its fit /
+  resize so the program never sees a 0x0 terminal. The start-up PowerShell pane belongs to a "no
+  workspace" group with no sidebar row; it is shown at start and again when the shown workspace is
+  removed. The "last pane is never removed" rule from T-004 still counts panes across all
+  workspaces, so a workspace can become empty (it then shows the "Open a shell" placeholder).
+  Live checks: `pnpm tauri dev` failed once with Windows error 1450 (insufficient system resources)
+  in the Vite step and worked on the retry; nothing in the repo caused it.
 - 2026-10-08 · T-005: a missing keybindings file is created "empty" as the shape Txais's own file has
   (version 1, empty keybindings map, empty darwin / linux / win32 sections); the defaults stay
   built in and are never written out, so a fresh file is a true "no overrides" file. The file is
@@ -206,6 +226,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-006 · done: workspace switching (sidebar row click shows that workspace, panes of the others kept hidden, remove drops every pane inside the folder, empty-workspace placeholder) with 4 new front-end tests on the pure helpers; live: worktrees alpha and beta each got a shell, `echo alpha-one` / `echo beta-one`, switching back to alpha showed its earlier output unchanged with the row selected, removing beta dropped its pane (terminal count 3 to 2) and left alpha as it was; build / clippy / 28 Rust tests / 39 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-006.png, evidence/T-006-removed.png
 - 2026-10-08 · T-006 · cut short by the usage limit before the live check: workspace switching code (pure helpers + 4 tests, hidden panes, sidebar selection, remove hook) passed tsc and 39 front-end tests but the live proof and the Rust gates had not run, so the work was reverted and the task stays unticked; the diff and the two new files are kept in the session scratchpad (t006-saved/) to re-apply next pass
 
 - 2026-10-07 · Phase 2: write PLAN.md · done: 338 tasks covering 1,030 cards (228 P0, 564 P1, 199 P2, 27 H marked build, 12 X), no dropped card · `node scripts/plan-check.mjs` prints OK

@@ -20,6 +20,8 @@ import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
 type Props = {
+  /** Kept mounted but not shown: another workspace is in front (PROJ-066). */
+  hidden?: boolean;
   cwd?: string | null;
   branch?: string | null;
   focused?: boolean;
@@ -37,7 +39,7 @@ type Props = {
   onLaunch?: (agent: AgentInfo) => void;
 };
 
-export default function TerminalPane({ cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -105,6 +107,8 @@ export default function TerminalPane({ cwd = null, branch = null, focused = fals
     })();
 
     const resize = () => {
+      // A hidden pane has no size; fitting it would shrink the program's terminal to nothing.
+      if (el.clientWidth === 0 || el.clientHeight === 0) return;
       fit.fit();
       const id = idRef.current;
       if (id !== null && !ended) invoke("terminal_resize", { id, cols: term.cols, rows: term.rows }).catch(() => {});
@@ -143,7 +147,7 @@ export default function TerminalPane({ cwd = null, branch = null, focused = fals
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}`} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
+    <section className={`pane${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
       <header className="pane-head">
         <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
           {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}
