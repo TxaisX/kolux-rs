@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { folderName, orderWorktrees, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { folderName, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -27,4 +27,12 @@ test("the preview sentence explains the branch and folder, or the refusal", () =
   expect(previewSentence("???", null, project)).toMatch(/nothing usable/);
   expect(previewSentence("Fix login", { branch: "fix-login", folder: "C:\\ws\\app\\fix-login" }, project)).toBe("branch fix-login · folder C:\\ws\\app\\fix-login");
   expect(previewSentence("x", { branch: "x", folder: "" }, null)).toBe("Add a project first.");
+});
+
+test("the workspaces-folder field saves on Enter, reverts on Escape and ignores keys mid-composition (SET-032)", () => {
+  expect(placeFieldAction("Enter", false)).toBe("save");
+  expect(placeFieldAction("Escape", false)).toBe("revert");
+  expect(placeFieldAction("Enter", true)).toBeNull();
+  expect(placeFieldAction("Escape", true)).toBeNull();
+  expect(placeFieldAction("a", false)).toBeNull();
 });

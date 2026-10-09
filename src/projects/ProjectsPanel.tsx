@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { orderWorktrees, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
+import { orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
@@ -50,7 +50,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
   const index = useRef(onIndex);
   index.current = onIndex;
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
-  const [place, setPlace] = useState<PlaceInfo>({ dir: "", flat: false, used: [] });
+  const [place, setPlace] = useState<PlaceInfo>({ dir: "", flat: false, used: [], fromEnv: false });
   const [rootDraft, setRootDraft] = useState("");
   const [flatDraft, setFlatDraft] = useState(false);
   const [settingsFor, setSettingsFor] = useState<string | null>(null); // project id whose folder / base form is open
@@ -153,15 +153,34 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
     }
   };
 
-  const saveRoot = async () => {
+  // SET-032: a failed save leaves the draft as typed, so Enter or leaving the field sends it again.
+  const saveRoot = async (dir = rootDraft) => {
     try {
-      const p = await invoke<PlaceInfo>("workspaces_place_set", { dir: rootDraft, flat: flatDraft });
+      const p = await invoke<PlaceInfo>("workspaces_place_set", { dir, flat: flatDraft });
       setPlace(p);
       setRootDraft(p.dir);
       say("ok", `workspaces go under ${p.dir}, ${p.flat ? "side by side" : "a folder per project"}`);
     } catch (err) {
       fail(err);
     }
+  };
+
+  const browseRoot = async () => {
+    try {
+      const picked = await open({ directory: true, title: "Choose the workspaces folder" });
+      if (typeof picked === "string") {
+        setRootDraft(picked);
+        await saveRoot(picked);
+      }
+    } catch (err) {
+      fail(err);
+    }
+  };
+
+  const rootKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    const action = placeFieldAction(e.key, e.nativeEvent.isComposing);
+    if (action === "save") saveRoot();
+    else if (action === "revert") setRootDraft(place.dir);
   };
 
   // PROJ-025 / PROJ-028: a project's own workspaces folder (empty: the global one) and base ref
@@ -331,16 +350,19 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
                   Browse…
                 </button>
               </div>
-              <label>Workspaces folder</label>
-              <input aria-label="workspaces folder" className="field" list="used-dirs" value={rootDraft} onChange={(e) => setRootDraft(e.target.value)} />
+              <label>Workspaces folder{place.fromEnv && rootDraft === place.dir ? " (from KOLUX_WORKSPACES_DIR)" : ""}</label>
+              <input aria-label="workspaces folder" className="field" list="used-dirs" value={rootDraft} onChange={(e) => setRootDraft(e.target.value)} onKeyDown={rootKey} onBlur={() => rootDraft !== place.dir && saveRoot()} />
               <label>Layout</label>
               <select aria-label="workspaces layout" className="field" value={flatDraft ? "flat" : "nested"} onChange={(e) => setFlatDraft(e.target.value === "flat")}>
                 <option value="nested">Nested: a folder per project</option>
                 <option value="flat">Flat: all side by side</option>
               </select>
               <div className="btn-row">
-                <button className="btn" onClick={saveRoot} disabled={rootDraft === place.dir && flatDraft === place.flat}>
+                <button className="btn" onMouseDown={(e) => e.preventDefault()} onClick={() => saveRoot()} disabled={rootDraft === place.dir && flatDraft === place.flat}>
                   Save
+                </button>
+                <button className="btn" onMouseDown={(e) => e.preventDefault()} onClick={browseRoot}>
+                  Browse…
                 </button>
                 <button className="btn" onClick={() => setRootDraft("")} title="Empty means the default folder">
                   Use default

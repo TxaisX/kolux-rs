@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 20, date: 2026-10-09)
-Next task: T-020 · SET-032 [compat] Pick the folder new worktrees go into
-Done: 26 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 21, date: 2026-10-09)
+Next task: T-021 · CLI-018 [compat] kolux worktree create, with an optional agent started inside
+Done: 27 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -297,6 +297,17 @@ is T-218). `Git::worktree_move` goes through `git worktree move`. A base ref tha
 git option or range (leading dash, blanks, `..`) is refused before any git command runs. Back end:
 `include.rs` (new), `git.rs`, `projects.rs`; `workspace_remove` takes `force`.
 
+**The workspaces folder (T-020, SET-032, PROJ-026).** The sidebar's Workspaces-folder field saves
+on Enter, puts the saved folder back on Escape, and does nothing while an input method is still
+composing; leaving the field sends the typed folder again whenever it differs from the saved one,
+so a save that failed is retried by moving on. An absolute folder is made at save time, and one
+that cannot be made (a path under a file, say) is a failed save that keeps the typed text in the
+field. Browse… picks the folder with the native dialog and saves it at once. Folders used before
+are offered from the field's list. `KOLUX_WORKSPACES_DIR` (trimmed, blank counts as unset)
+replaces the default folder without opening Settings; a saved folder still wins over it, and the
+field's label says "(from KOLUX_WORKSPACES_DIR)" while the variable is what supplies the folder.
+Back end: `projects::resolve_workspaces_dir`, `PlaceInfo.fromEnv`, `set_place`.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -393,6 +404,16 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-020: the saved folder wins over `KOLUX_WORKSPACES_DIR`, which only moves the
+  default (PROJ-026's acceptance says "no folder setting"); so with a folder saved the variable
+  does nothing, and the field says where its value comes from only while the variable supplies it.
+  A save makes the folder right away (`create_dir_all`) so that a bad folder is a failure the user
+  can retry rather than a later failed create; a relative folder is only saved, since it counts
+  from each project root. The blur retry is "differs from the saved folder", which is the same as
+  "equals the last failed attempt" because a successful save puts the saved value in the field.
+  Save and Browse… keep the field's focus on mousedown, so a click never saves twice. Hidden
+  worktrees by origin (made by Claude Code, GSD, elsewhere, extra roots) are not built here: they
+  are PROJ-042/PROJ-044's rules and go with T-108, whose line now names them.
 - 2026-10-09 · T-019: shared folders are junctions on Windows, not symlinks: a symlink needs a
   privilege most accounts lack and git treats it as a file, so a `node_modules/` ignore line
   would not match it and the new worktree would start dirty (seen in the test); a junction
@@ -710,6 +731,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-020 · done: `projects.rs` (`resolve_workspaces_dir(env, setting)`, `KOLUX_WORKSPACES_DIR` read there, `PlaceInfo.fromEnv`, `set_place` makes an absolute folder and fails when it cannot; 2 tests, 65 Rust tests), `model.ts` (`placeFieldAction`; 1 test, 76 front-end tests), `ProjectsPanel.tsx` (Enter/Escape/composing, blur retry, Browse… for the folder, env label); live in the dev app started with the variable padded with spaces: Use default + Save showed the variable's folder with the "(from KOLUX_WORKSPACES_DIR)" label and env-proof was created at `<env>\repo\env-proof`; a folder under a file failed with "cannot be made" and kept the typed text, leaving the field after the blocker was removed saved it; Escape put the saved folder back; a typed folder + Enter put typed-proof at `<folder>\repo\typed-proof`; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-020-env.png, T-020-failed.png, T-020-folder.png
 - 2026-10-09 · T-019 · done: `include.rs` (new: include-file lines, kolux.yaml shared list, tidy rules, copy, junction link, unlink; 3 tests), `git.rs` (`worktree_remove` keeps a branch in use elsewhere and reports its commit, `worktree_move`, `delete_branch_if_at`, `dirty` sees submodule work, `ref_ok` guard; 1 test), `projects.rs` (per-repo turn, `Created.warnings`, `remove_workspace(force)`; 1 test), 63 Rust tests; sidebar form asks "Discard and remove" after a refusal, warnings join the created note; live in the dev app on the throwaway repo with `.gitignore`, `.worktreeinclude` (`.env`, `*.log`) and kolux.yaml (`node_modules/`, `src`): Remove on the dirty zeta → "zeta has uncommitted changes. Remove it anyway? That work is lost." with work.txt still there; New workspace "bring along" → created from origin/main, note names `*.log` and `src`, `.env` copied, `node_modules` a junction to the main checkout showing its dep.js, `git status --porcelain` empty on branch bring-along; removal of a worktree with untracked files took the two-step path, of a clean one the one-step path, the main checkout's node_modules/dep.js survived both; build / clippy / 63 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-019-dirty.png, T-019-created.png
 - 2026-10-09 · T-018-b · done: `scm.rs` gains `Status.rewritten` / `Status.base`, `remote()` and `scm_remote` (push, pull, sync, fetch, ff, force --force-with-lease, publish --set-upstream origin, rebase after fetch); 1 Rust test over a bare remote (58 total); `nextStep` and `remoteItems` in `src/scm/model.ts` with 2 tests (75 total); panel: main button + Remote menu; live in the dev app on the throwaway repo with a bare origin: edit → "Stage all" → "Commit" held with "Write a message first" → typed → commit 6495041 → "Push 1"; menu read "Push 1 commit" on, "Pull · Nothing to pull", "Sync ↓0 ↑1", "Fast-forward · Already current", "Publish branch · Already published", "Rebase from origin/main · This is the base branch"; push → "Create pull request"; `feat` branch with a commit → "Publish branch" → published (`feat...origin/feat`); main moved from a second clone, menu Rebase from origin/main → `[ahead 2, behind 1]`, `git cherry HEAD @{u}` one `-`, button "Force push with lease" → pushed, counts 0; build / clippy / 58 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-b-menu.png, T-018-b-lease.png
 - 2026-10-09 · T-018-a · done: `scm.rs` (status / stage / commit, 4 Rust tests, 57 total), `src/scm/model.ts` + `SourceControlPanel.tsx` (2 front-end tests, 73 total), right card on Mod+Shift+G / Mod+L / the top bar button; live in the dev app on a throwaway repo: 1 edit + 4 new files listed as Changes 1 / Untracked 4, the three `docs/` rows staged by row, Ctrl+Enter in the box made commit 66f5f87 `Add the docs folder` (git log 2 → 3), the draft survived a switch to zeta and back, a refusing pre-commit hook gave `Commit blocked by a hook` + `nope, said the hook: README needs a title` + Fix with AI with no commit made, the Staged section's minus unstaged it; build / clippy / 57 Rust tests / 73 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-a-sections.png, -staged.png, -committed.png, -blocked.png

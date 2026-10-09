@@ -147,8 +147,21 @@ pub fn default_workspaces_dir() -> PathBuf {
     home.join("kolux-rs").join("workspaces")
 }
 
+pub const WORKSPACES_DIR_ENV: &str = "KOLUX_WORKSPACES_DIR";
+
+fn non_blank(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The global workspaces folder (SET-032, PROJ-026): the saved setting, else the environment
+/// variable (which only moves the default, so a folder the user saved still wins), else the
+/// default. Both values are trimmed and a blank one counts as not set.
+pub fn resolve_workspaces_dir(env: Option<&str>, setting: Option<&str>) -> PathBuf {
+    non_blank(setting).or(non_blank(env)).map(PathBuf::from).unwrap_or_else(default_workspaces_dir)
+}
+
 pub fn workspaces_dir(store: &Store) -> PathBuf {
-    store.settings()[WORKSPACES_DIR_SETTING].as_str().filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(default_workspaces_dir)
+    resolve_workspaces_dir(std::env::var(WORKSPACES_DIR_ENV).ok().as_deref(), store.settings()[WORKSPACES_DIR_SETTING].as_str())
 }
 
 /// The folder and layout for `project`'s workspaces (PROJ-025): the project's own folder when it
@@ -427,17 +440,22 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaceInfo {
     /// The folder in use (the default when nothing is set).
     pub dir: String,
     pub flat: bool,
     pub used: Vec<String>,
+    /// True while KOLUX_WORKSPACES_DIR supplies the folder (nothing saved), so the field can say so.
+    pub from_env: bool,
 }
 
 fn place_info(store: &Store) -> PlaceInfo {
-    PlaceInfo { dir: workspaces_dir(store).display().to_string(), flat: store.settings()[LAYOUT_SETTING].as_str() == Some("flat"), used: used_dirs(store) }
+    let settings = store.settings();
+    let saved = non_blank(settings[WORKSPACES_DIR_SETTING].as_str()).is_some();
+    let from_env = !saved && non_blank(std::env::var(WORKSPACES_DIR_ENV).ok().as_deref()).is_some();
+    PlaceInfo { dir: workspaces_dir(store).display().to_string(), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), used: used_dirs(store), from_env }
 }
 
 #[tauri::command]
@@ -450,17 +468,26 @@ pub fn workspaces_place_get(store: StoreState<'_>) -> Result<PlaceInfo, String> 
 #[tauri::command]
 pub fn workspaces_place_set(store: StoreState<'_>, dir: String, flat: bool) -> Result<PlaceInfo, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
+    set_place(&store, &dir, flat)
+}
+
+/// An absolute folder is made right away (so a folder that cannot be made is a failed save the
+/// user can retry, SET-032); a relative one counts from each project root, so it is only saved.
+fn set_place(store: &Store, dir: &str, flat: bool) -> Result<PlaceInfo, String> {
     let mut settings = store.settings();
     let trimmed = dir.trim();
     if trimmed.is_empty() {
         settings.as_object_mut().map(|o| o.remove(WORKSPACES_DIR_SETTING));
     } else {
+        if Path::new(trimmed).is_absolute() {
+            std::fs::create_dir_all(trimmed).map_err(|e| format!("{trimmed} cannot be made: {e}"))?;
+        }
         settings[WORKSPACES_DIR_SETTING] = serde_json::Value::String(trimmed.to_string());
     }
     settings[LAYOUT_SETTING] = serde_json::Value::String(if flat { "flat" } else { "nested" }.to_string());
     store.save_settings(&settings).map_err(|e| e.to_string())?;
-    remember_dir(&store, trimmed)?;
-    Ok(place_info(&store))
+    remember_dir(store, trimmed)?;
+    Ok(place_info(store))
 }
 
 #[cfg(test)]
@@ -764,6 +791,34 @@ mod tests {
         assert_eq!(workspaces_dir(&store), PathBuf::from("D:\\ws"));
         store.save_settings(&serde_json::json!({ "workspacesDir": "  " })).unwrap();
         assert_eq!(workspaces_dir(&store), default_workspaces_dir());
+        drop(store);
+        fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn env_var_moves_the_default_but_a_setting_still_wins() {
+        // PROJ-026 / SET-032: KOLUX_WORKSPACES_DIR is trimmed, ignored when blank, and only
+        // replaces the default, never a folder the user saved.
+        assert_eq!(resolve_workspaces_dir(Some("  D:\\wt  "), None), PathBuf::from("D:\\wt"));
+        assert_eq!(resolve_workspaces_dir(Some("   "), None), default_workspaces_dir());
+        assert_eq!(resolve_workspaces_dir(None, None), default_workspaces_dir());
+        assert_eq!(resolve_workspaces_dir(Some("D:\\wt"), Some("E:\\mine")), PathBuf::from("E:\\mine"));
+        assert_eq!(resolve_workspaces_dir(Some("D:\\wt"), Some(" ")), PathBuf::from("D:\\wt"));
+    }
+
+    #[test]
+    fn saving_a_folder_that_cannot_be_made_fails_and_keeps_the_old_one() {
+        let profile = temp("profile4");
+        let store = Store::open(&profile).unwrap();
+        let bad = profile.join("file-not-folder");
+        fs::write(&bad, "x").unwrap();
+        let err = set_place(&store, &bad.join("ws").display().to_string(), false).unwrap_err();
+        assert!(err.contains("cannot be made"), "{err}");
+        assert_eq!(store.settings()[WORKSPACES_DIR_SETTING], serde_json::Value::Null, "the failed folder is not saved");
+        assert!(used_dirs(&store).is_empty(), "nor remembered");
+        let good = profile.join("ws").join("deep");
+        let info = set_place(&store, &good.display().to_string(), true).unwrap();
+        assert!(good.is_dir() && info.flat && info.dir == good.display().to_string() && info.used == vec![good.display().to_string()]);
         drop(store);
         fs::remove_dir_all(profile).unwrap();
     }

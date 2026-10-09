@@ -6,8 +6,14 @@ export type Project = { id: string; name: string; path: string; workspacesDir?: 
 export type Preview = { branch: string; folder: string };
 /** A workspace just made: the worktree, the ref it started from, a note when the saved base was gone (PROJ-028), and what could not be brought along (GIT-067). */
 export type Created = Worktree & { base: string; note: string | null; warnings: string[] };
-/** The global workspaces settings (PROJ-025): folder in use, layout, folders used before. */
-export type PlaceInfo = { dir: string; flat: boolean; used: string[] };
+/** The global workspaces settings (PROJ-025): folder in use, layout, folders used before, and whether KOLUX_WORKSPACES_DIR supplies the folder (SET-032). */
+export type PlaceInfo = { dir: string; flat: boolean; used: string[]; fromEnv: boolean };
+
+/** What a key does in the workspaces-folder field (SET-032): Enter saves, Escape puts the saved folder back, and nothing happens while an input method is still composing. */
+export function placeFieldAction(key: string, composing: boolean): "save" | "revert" | null {
+  if (composing) return null;
+  return key === "Enter" ? "save" : key === "Escape" ? "revert" : null;
+}
 export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null };
 
 /** The last folder name of a path, whichever slash style it uses. */

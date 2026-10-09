@@ -64,7 +64,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
 - [ ] T-018-c · Source Control bulk bar: select several rows and stage or unstage them together (the rest of the stage card on T-018-a)
 - [x] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
-- [ ] T-020 · SET-032 [compat] Pick the folder new worktrees go into
+- [x] T-020 · SET-032 [compat] Pick the folder new worktrees go into
 - [ ] T-021 · CLI-018 [compat] kolux worktree create, with an optional agent started inside
 
 ### P0 · theme 3 · Knowing what each agent is doing (41 cards)
@@ -188,7 +188,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [ ] T-106 · PROJ-006 Picking a linked worktree adds or selects its main repository · PROJ-022 Branch names get a configurable prefix · PROJ-026 [compat] KOLUX_WORKSPACES_DIR moves the default workspaces folder · PROJ-030 Open an existing branch or pull request as a workspace · PROJ-032 [compat] Ignored local files the repo lists are copied into new workspaces, within a budget
 - [ ] T-107 · PROJ-033 A project setup script runs when a workspace is created · PROJ-037 Create a workspace straight from a GitHub issue or pull request · PROJ-039 The branch is renamed to fit the work once it begins · PROJ-041 Worktrees made outside Kolux are noticed and offered for review · PROJ-042 Show or hide individual worktrees, with defaults for new projects
-- [ ] T-108 · PROJ-044 Kolux tells its own worktrees apart from external and scratch ones
+- [ ] T-108 · PROJ-044 Kolux tells its own worktrees apart from external and scratch ones · also: the per-origin show/hide choice for worktrees Kolux did not make (Claude Code, GSD, elsewhere on disk, extra root folders that start hidden), global and per repository, where the global choice never overwrites a repository's own (the visibility rules of the workspaces-folder card on T-020)
 - [ ] T-109 · SESS-035 New workspace composer: pick the project · SESS-036 The workspace name can come from a branch or a GitHub item · SESS-037 Composer parent worktree and Advanced options · SESS-038 Create workspace, Create more, and what guards them
 - [ ] T-110 · STAT-039 The agent's first real work names a new worktree · STAT-055 [compat] Setup and archive scripts for worktrees
 - [ ] T-111 · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette · VIEW-048 [compat] Delete-workspace and rename-tab shortcuts · VIEW-068 Branch summary against the base branch
