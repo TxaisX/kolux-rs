@@ -1,0 +1,58 @@
+// Evidence harness: start the dev app with WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222,
+// then this script sends keys and reads the DOM over that port. Nothing goes through the shared
+// keyboard, so it works while another window holds the foreground.
+// Drives the dev app's own WebView2 through its remote-debugging port (never the shared keyboard).
+// usage: node cdp.mjs list
+//        node cdp.mjs <targetMatch> eval "<js>"
+//        node cdp.mjs <targetMatch> type "<text>" [enter]   (focus must already be in a field)
+//        node cdp.mjs <targetMatch> key <Enter|Escape|...>
+//        node cdp.mjs <targetMatch> focus "<css selector>"
+// targetMatch is a substring of the target's url or title; "main" = the localhost dev page.
+const PORT = process.env.CDP_PORT || "9222";
+const [match, cmd, ...rest] = process.argv.slice(2);
+
+const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
+if (match === "list" || !match) {
+  for (const t of targets) console.log(t.type, "|", t.title, "|", t.url);
+  process.exit(0);
+}
+const pick = (m) => targets.find((t) => t.type === "page" && (m === "main" ? /localhost:1420|tauri\.localhost/.test(t.url) : (t.url + " " + t.title).includes(m)));
+const target = pick(match);
+if (!target) { console.error("no target matching", match); for (const t of targets) console.error(" ", t.type, t.title, t.url); process.exit(2); }
+
+const ws = new WebSocket(target.webSocketDebuggerUrl);
+await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
+let id = 0; const waiting = new Map();
+ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id && waiting.has(m.id)) { waiting.get(m.id)(m); waiting.delete(m.id); } };
+const send = (method, params = {}) => new Promise((r) => { const i = ++id; waiting.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const KEYS = { Enter: { code: "Enter", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }, Escape: { code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 }, Tab: { code: "Tab", key: "Tab", windowsVirtualKeyCode: 9 } };
+const key = async (name, mods = 0) => {
+  const k = KEYS[name] || { code: "Key" + name.toUpperCase(), key: name, windowsVirtualKeyCode: name.toUpperCase().charCodeAt(0) };
+  await send("Input.dispatchKeyEvent", { type: "keyDown", modifiers: mods, ...k });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", modifiers: mods, ...k });
+};
+
+if (cmd === "eval") {
+  const r = await send("Runtime.evaluate", { expression: rest[0], returnByValue: true, awaitPromise: true });
+  console.log(JSON.stringify(r.result?.result?.value ?? r.result ?? r));
+} else if (cmd === "focus") {
+  const r = await send("Runtime.evaluate", { expression: `(()=>{const e=document.querySelector(${JSON.stringify(rest[0])}); if(!e) return "missing"; e.focus(); if(e.select) e.select(); return document.activeElement===e?"focused":"not-focused";})()`, returnByValue: true });
+  console.log(r.result?.result?.value);
+} else if (cmd === "type") {
+  for (const ch of rest[0]) {
+    await send("Input.dispatchKeyEvent", { type: "keyDown", key: ch, text: ch, unmodifiedText: ch });
+    await send("Input.dispatchKeyEvent", { type: "keyUp", key: ch });
+    await sleep(25);
+  }
+  if (rest[1] === "enter") await key("Enter");
+  console.log("typed", rest[0].length, "chars", rest[1] === "enter" ? "+ Enter" : "");
+} else if (cmd === "key") {
+  // mods: Alt=1, Ctrl=2, Meta=4, Shift=8
+  await key(rest[0], Number(rest[1] || 0));
+  console.log("key", rest[0], rest[1] || "");
+} else {
+  console.error("unknown cmd", cmd); process.exit(2);
+}
+ws.close();

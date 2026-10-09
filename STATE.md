@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 9, date: 2026-10-09)
-Next task: T-012-b · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
-Done: 15 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 10, date: 2026-10-09)
+Next task: T-013 · PROJ-001 Add a project by choosing a folder; nothing else is pulled in · PROJ-007 After adding a project its main checkout opens, with existing worktrees listed · PROJ-020 [compat] Create a workspace: a new branch in a folder of its own · PROJ-021 Workspace names become safe branch and folder names
+Done: 16 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -154,6 +154,17 @@ fields and history, and a page's `window.close()` does nothing to the tab. The t
 the page's title. The bar takes a full address only until T-012-b (typed words, back / forward,
 reload / stop).
 
+T-012-b makes the bar and the toolbar work (BROW-003, BROW-005). Enter reads the bar: a full
+web or file address is taken as is, `localhost:3000` opens over HTTP, `example.com` over HTTPS,
+an absolute path on disk as a file address, and anything else is a Google search; `javascript:`,
+`mailto:` and every other scheme are refused with a red notice and the page stays. Ctrl+L
+puts the cursor in the bar with its text selected. Back and forward sit before the bar and dim
+when there is nothing that way; reload turns into Stop inside a spinner while a page loads.
+History is the tab's own record of its loads (a redirect replaces its entry), since the web
+view does not say whether it can go back. The harness now drives the app through WebView2's
+own debugging port (`scripts/evidence/cdp.mjs`), so chords and typing land even while another
+window holds the foreground.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -250,6 +261,20 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-012-b: the default search engine is Google (OD-18 said "a fixed standard web
+  search"; DuckDuckGo, Bing and Kagi addresses are in `src/browser/address.ts` for the day a
+  setting chooses one; the Kagi session link is not built). Back / forward availability is
+  tracked by the tab from its own actions and the loads it sees, because wry exposes no
+  can-go-back: a page's own `history.back()` or `pushState` can drift the dimming, not the
+  navigation itself. A load that starts before the previous one finished counts as a redirect
+  and replaces the entry (Google's `&sei=` hop proved this live). Ctrl+L / Alt+Left / Ctrl+R
+  reach the tab only while the keyboard is in the app's own web view, not when the cursor is
+  inside the page (the child web view has no IPC); a page click then a chord does nothing
+  until the bar or a tab is clicked. Hard reload (Ctrl+Shift+R) is the same as reload. The
+  evidence harness gained `scripts/evidence/cdp.mjs`: the dev app is started with
+  `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` and the script sends
+  keys and reads the DOM over that port, never through the shared keyboard; the earlier
+  posted-message typing stopped landing while a full-screen game held the foreground.
 - 2026-10-09 · T-012-a: a browser tab is a native child web view (WebView2) of the main window,
   not an iframe: iframes are refused by most sites' frame headers and give no history or
   title. Consequences to live with until a card asks otherwise: the page sits above every
@@ -409,6 +434,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-012-b · done: the bar resolves sites, local hosts, file paths and searches (Google), refuses other schemes with a notice; back / forward / reload / stop toolbar with dimming and a loading spinner; Ctrl+L, Alt+Left / Right, Ctrl+R wired in the browser key scope; 1 Rust test, 4 front-end tests; live over the web view's debugging port: Ctrl+Shift+B opened the tab, "example.com" + Enter loaded https://example.com/ (tab "Example Domain", back lit), Ctrl+L selected the bar, "rust ownership" + Enter loaded Google results, Stop + spinner showed 116 ms into a reload and cleared at 1.3 s, "javascript:alert(1)" gave the red notice and left the page, Back returned to example.com with forward lit, Forward returned to the results; build / clippy / 42 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-012-b-fresh.png, evidence/T-012-b-site.png, evidence/T-012-b-search.png, evidence/T-012-b-invalid.png, evidence/T-012-b-back.png, evidence/T-012-b-forward.png
 - 2026-10-09 · T-012-a · done: Browser item in the New tab menu (Ctrl+Shift+B) opens a "New Tab" pane with an address bar focused over a blank page, the page is a child web view moved with the pane body and hidden while its tab / screen is away, tab named after the page title; 1 Rust test, 1 front-end test; live: "typed-in-bar" landed in the bar with no click, a local form page loaded from the bar and "kept-text" typed into its field survived a switch to Terminal 1 and back, a page calling `window.close()` left the tab in place, the Board showed no page; build / clippy / 41 Rust tests / 65 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-012-a-newtab.png, evidence/T-012-a-form.png, evidence/T-012-a-back.png, evidence/T-012-a-close.png
 - 2026-10-09 · T-011 · done: Board screen lists every pane as a card (same cells as the grid, `.board` styling), expand shows the live terminal inside the card and collapses again, panes stay mounted across Agents / Board / Terminals; 1 grid test; live: `echo t011-ok` typed in the grid pane, Board showed the card collapsed, expand showed the same scrollback and `echo expanded-ok` typed into the card ran there, collapse + Terminals showed both lines in the grid pane in its old slot with the shell still at its prompt; build / clippy / 40 Rust tests / 64 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-011-grid.png, evidence/T-011-board.png, evidence/T-011-expanded.png, evidence/T-011-back.png
 - 2026-10-09 · T-010 · done: grid cells hold tabs (`group` on panes, `cellsOf` / `neighbourTab` / `insertBefore` in grid.ts), "New tab" menu in the layout strip with Terminal + every installed agent and their chords, Ctrl+T / `tab.newAgent` / `tab.newAgent.<id>` / `tab.close` wired, a tab strip above cells with two or more tabs, `start_dir` for a requested start folder (relative, absolute, missing → workspace), paste through the pane's own text area with the chords left to the browser and queued behind an owed opening prompt; 3 grid tests + 1 strip test + 1 Rust test; live: New tab → Terminal opened "Terminal 3" as a second tab in the t010-repo cell at `PS G:\Temp\t010-repo>`, New tab → Claude Code opened a "Claude" tab with Claude running in that folder, closing "Terminal 2" from its x left the other two tabs with Claude in front; paste and Ctrl+T not provable from the harness (see decision); build / clippy / 40 Rust tests / 63 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-010-tabs.png, evidence/T-010-agent.png, evidence/T-010-close-tab.png

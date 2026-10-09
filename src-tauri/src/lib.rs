@@ -87,6 +87,7 @@ pub fn run() {
             browser::browser_open,
             browser::browser_bounds,
             browser::browser_navigate,
+            browser::browser_go,
             browser::browser_close
         ])
         .build(tauri::generate_context!())

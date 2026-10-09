@@ -190,6 +190,11 @@ export const SplitRight = (p: P) => (
   </Glyph>
 );
 
+export const Stop = (p: P) => (
+  <Glyph {...p}>
+    <rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" stroke="none" />
+  </Glyph>
+);
 export const Globe = (p: P) => (
   <Glyph {...p}>
     <circle cx="8" cy="8" r="5.5" />

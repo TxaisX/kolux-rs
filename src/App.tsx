@@ -8,7 +8,8 @@
 // layout strip sets the count, a pane splits right or down and closes (T-009, src/terminal/grid.ts).
 // A cell holds tabs: Ctrl+T or the strip's "New tab" menu adds a shell or an agent beside the
 // focused pane, started in the workspace folder (T-010). A browser tab is a pane whose page is
-// a child web view laid over its body by the back end (T-012-a, src/browser/BrowserPane.tsx).
+// a child web view laid over its body by the back end (T-012-a, src/browser/BrowserPane.tsx);
+// its shortcuts (bar, back, forward, reload) apply while a browser pane is focused (T-012-b).
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -125,10 +126,25 @@ function Window() {
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const hit = matchEvent(keymap, e, screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+      const browser = panes.find((p) => p.key === focused)?.kind === "browser" && screen === "terminals";
+      const hit = (browser && matchEvent(keymap, e, ["browser"])) || matchEvent(keymap, e, screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
+      const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
       switch (hit.id) {
+        case "browser.focusAddressBar": {
+          const bar = inBrowser(".address") as HTMLInputElement | null;
+          bar?.focus();
+          bar?.select();
+          break;
+        }
+        case "browser.back":
+        case "browser.forward":
+          inBrowser(`[data-go="${hit.id.slice("browser.".length)}"]`)?.click();
+          break;
+        case "browser.reload":
+          void invoke("browser_go", { id: focused, what: "reload" });
+          break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
           break;

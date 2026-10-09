@@ -48,7 +48,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-010 · TERM-040 [compat] New terminal tab and tab create menu · TERM-041 [compat] New agent tab · TERM-068 [compat] Paste into a terminal
 - [x] T-011 · VIEW-026 Open a session's live terminal inside its Board card
 - [x] T-012-a · BROW-001 [compat] Open a browser tab next to the terminals · BROW-002 Browser pages survive switching away and back
-- [ ] T-012-b · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
+- [x] T-012-b · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
 
 ### P0 · theme 2 · Isolation: one worktree per agent (20 cards)
 

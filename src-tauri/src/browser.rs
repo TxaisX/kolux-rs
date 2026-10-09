@@ -52,14 +52,15 @@ fn err(e: tauri::Error) -> String {
 }
 
 /// Opens a tab's page over the given spot (CSS pixels, window-relative). Async on purpose:
-/// creating a child web view from the main thread deadlocks on Windows. The new page takes the
-/// keyboard as it is created; it goes back to the app's own web view so the address bar keeps it
-/// (BROW-001).
+/// creating a child web view from the main thread deadlocks on Windows. Creating the page moves
+/// the keyboard off the app's web view (to the page, or with `focused(false)` to the bare window),
+/// so it is handed back for the address bar (BROW-001).
 #[tauri::command]
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot) -> Result<(), String> {
     let url = parse(&url)?;
     let load_app = app.clone();
     let builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
+        .focused(false)
         .on_page_load(move |_, payload| {
             let event = match payload.event() {
                 PageLoadEvent::Started => "started",
@@ -90,6 +91,26 @@ pub async fn browser_navigate(app: AppHandle, id: u32, url: String) -> Result<()
     view(&app, id)?.navigate(parse(&url)?).map_err(err)
 }
 
+/// What the toolbar does to the page (BROW-005). wry offers reload only, so the rest runs as
+/// page script; `None` is a request this tab does not know.
+pub fn script(what: &str) -> Option<&'static str> {
+    match what {
+        "back" => Some("history.back()"),
+        "forward" => Some("history.forward()"),
+        "stop" => Some("window.stop()"),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub async fn browser_go(app: AppHandle, id: u32, what: String) -> Result<(), String> {
+    let v = view(&app, id)?;
+    if what == "reload" {
+        return v.reload().map_err(err);
+    }
+    v.eval(script(&what).ok_or_else(|| format!("unknown browser action {what}"))?).map_err(err)
+}
+
 #[tauri::command]
 pub async fn browser_close(app: AppHandle, id: u32) -> Result<(), String> {
     view(&app, id)?.close().map_err(err)
@@ -105,5 +126,13 @@ mod tests {
         assert_eq!(parse("about:blank").unwrap().as_str(), "about:blank");
         assert_eq!(parse("https://example.com").unwrap().host_str(), Some("example.com"));
         assert!(parse("not an address").unwrap_err().starts_with("invalid address"));
+    }
+
+    #[test]
+    fn brow005_toolbar_actions_run_as_page_script() {
+        assert_eq!(script("back"), Some("history.back()"));
+        assert_eq!(script("forward"), Some("history.forward()"));
+        assert_eq!(script("stop"), Some("window.stop()"));
+        assert_eq!(script("close"), None);
     }
 }
