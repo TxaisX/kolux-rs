@@ -25,6 +25,14 @@ test("SESS-007: Claude without a model keeps Start disabled, a model enables it,
   expect(render([{ agent: null, model: null }])).toContain("Session 2");
 });
 
+test("SESS-051: an AI seat offers an opening prompt field; a Terminal seat has none", () => {
+  const ai = render([{ agent: "claude", model: "opus", prompt: "Fix it" }]);
+  expect(ai).toContain("Opening prompt (optional)");
+  expect(ai).toContain("Fix it");
+  expect(render([{ agent: TERMINAL, model: null }])).not.toContain("Opening prompt");
+  expect(render([{ agent: null, model: null }])).not.toContain("Opening prompt");
+});
+
 test("SESS-015: three blank seats keep Start disabled and show the no-guessing caption; Same for all waits for a finished seat", () => {
   const blank = render([{ agent: null, model: null }, { agent: null, model: null }, { agent: null, model: null }]);
   expect(startButton(blank)).toContain("disabled");

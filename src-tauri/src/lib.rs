@@ -79,6 +79,7 @@ pub fn run() {
             projects::workspace_create_fresh,
             projects::workspace_remove,
             agents::agent_list,
+            agents::agent_start_line,
             keybindings::keybindings_read,
             projects::workspaces_dir_get,
             projects::workspaces_dir_set

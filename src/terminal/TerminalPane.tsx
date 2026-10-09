@@ -34,6 +34,8 @@ type Props = {
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
   title?: string;
+  /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
+  typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
   number?: number;
   onFocus?: () => void;
@@ -48,7 +50,7 @@ type Props = {
   onChoose?: () => void;
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -89,11 +91,27 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       if (id !== null && !ended) invoke("terminal_write", { id, data }).catch(() => {});
     };
     term.onData(write);
+    // SESS-051: a typed-route prompt goes in once the program has drawn its screen and gone
+    // quiet. ponytail: "ready" is the first 1.5 s of silence after some output; SESS-032 owns the
+    // real readiness rule and replaces this timer.
+    let pending = typed?.trim() ? typed.trim() : null;
+    let quiet: ReturnType<typeof setTimeout> | undefined;
+    const sawOutput = () => {
+      if (pending === null) return;
+      clearTimeout(quiet);
+      quiet = setTimeout(() => {
+        if (pending === null || !alive) return;
+        write(pending + "\r");
+        pending = null;
+      }, 1500);
+    };
 
     (async () => {
       unlisteners.push(
         await listen<OutputEvent>("terminal-output", (e) => {
-          if (e.payload.id === idRef.current) term.write(decodeOutput(e.payload.data));
+          if (e.payload.id !== idRef.current) return;
+          term.write(decodeOutput(e.payload.data));
+          sawOutput();
         }),
         await listen<ExitEvent>("terminal-exit", (e) => {
           if (e.payload.id !== idRef.current) return;
@@ -130,6 +148,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
     return () => {
       alive = false;
+      clearTimeout(quiet);
       observer.disconnect();
       unlisteners.forEach((u) => u());
       const id = idRef.current;

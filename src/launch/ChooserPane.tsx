@@ -119,6 +119,16 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                   ))}
                 </div>
               )}
+              {seat.agent !== null && seat.agent !== TERMINAL && (
+                <textarea
+                  className="seat-prompt"
+                  rows={2}
+                  placeholder="Opening prompt (optional)"
+                  aria-label={`Seat ${i + 1}: opening prompt`}
+                  value={seat.prompt ?? ""}
+                  onChange={(e) => setSeat(i, { prompt: e.currentTarget.value })}
+                />
+              )}
             </div>
           ))}
         </div>

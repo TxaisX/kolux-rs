@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 4, date: 2026-10-09)
-Next task: T-008-b · SESS-051 Each catalogue agent's program, start line and opening-prompt route
-Done: 10 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 5, date: 2026-10-09)
+Next task: T-009 · TERM-001 Session-per-pane grid sized by pane count · TERM-004 Grid layout arrangement for each pane count · TERM-006 [compat] Split a pane right or down · TERM-014 [compat] Close a pane
+Done: 11 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -99,6 +99,19 @@ workspace name, and a pane outside any workspace reads "Terminal N". A pane whos
 to start is dropped instead of left blank, with the reason in a toast, and "Nothing started: …"
 when the whole lineup is gone. Without a project the error toast explains that an agent needs a
 repository.
+
+T-008-b gives every catalogue agent its start line and opening-prompt route (SESS-051). An AI seat
+in the chooser has an "Opening prompt (optional)" box; the back end builds the line from the
+catalogue: the prompt goes last for Claude Code, OpenClaude, Codex, Pi, OMP, Command Code, Cursor
+and Droid, behind `--` for Trae, Prime Agent and Grok (a prompt beginning with a dash stays the
+task), behind `--prompt` for MiMo, `--prompt-interactive` for Gemini CLI and Antigravity, `-i` for
+GitHub Copilot, and through `chat --query <prompt> --tui` for Hermes (the user's own `--query` /
+`--tui` arguments give way; a line past 24,000 characters is refused and Start reports it); the
+other agents start bare and the prompt is typed in once the program has drawn its screen and gone
+quiet. A blank prompt adds nothing. A foreground matcher credits a running program to its agent
+(case, folder and `.exe`/`.cmd` endings ignored, `kimi-code` → Kimi, `mistral-vibe` → Mistral
+Vibe, `codex-…`/`grok-…` builds, and interpreter runs such as `node …/claude-code/cli.js`); nothing
+polls it yet.
 
 ## Needs Txais
 
@@ -196,6 +209,16 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-008-b: the opening prompt lives on the seat (SESS-051) until PROJ-038 / TERM-126 /
+  CHAT-029 add their own fields. The typed route (Aider, Goose, Kiro, Kimi, …) sends the prompt
+  after the first 1.5 s of silence following output, a stand-in for SESS-032's readiness rule
+  (P1), which replaces the timer; it is unit-tested but not proven live (none of those agents is
+  installed here). Codex's "start line sent once the pane's shell is ready" is moot: the rebuild
+  runs the program directly in the PTY, not through a shell, so Codex takes the plain trailing
+  argument. The foreground matcher (`credited_agent`) is built and tested, but nothing polls the
+  foreground yet: that belongs to the status cards (04-agent-status-hooks), so a pane is credited
+  to the agent it was started as. The Hermes 24,000-character limit is enforced by the builder
+  (SESS-005's reporting is the Start toast). Claude Agent Teams stays skipped (DECISIONS.md).
 - 2026-10-09 · T-008-a: T-008 was split in place (SESS-015 + SESS-024 as T-008-a, SESS-051 as
   T-008-b); PLAN.md now has 341 tasks. "Same for all" copies the AI and model only; job titles
   stay per seat (one title on three panes would hide which is which). A pane without a job title
@@ -298,6 +321,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-008-b · done: per-agent start-line builder with every SESS-051 prompt route (trailing, `--`, `--prompt`, `--prompt-interactive`, `-i`, Hermes query, typed), blank prompt = none, Hermes limit refused, foreground matcher with second names / Codex-Grok prefixes / interpreter entry scripts, "Opening prompt (optional)" box per AI seat, typed prompts sent after the pane goes quiet; 8 Rust tests + 1 chooser test; live: seat 1 Claude + Haiku with a prompt, Start opened worktree `silver-narwhal`, after the trust question Claude ran the prompt and answered "pong" with the session still open; build / clippy / 39 Rust tests / 54 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-008-b-prompt.png, evidence/T-008-b-launched.png
 - 2026-10-09 · T-008-a · done: blank-seat caption, Same for all (greyed until a seat is finished), job-title field per seat, missing agents cleared not swapped, "Starting N sessions" toast, one pane per seat titled by its job, failed panes dropped with a toast; 2 seats tests + 1 chooser test; live: 3 seats blank with Start disabled, seat 1 Claude + Haiku then Same for all filled seats 2-3 and enabled Start 3, "Review" typed as seat 2's title, Start showed the toast and three Claude panes in worktree `velvet-seal` re-tiled 2+1 with the second titled Review; build / clippy / 31 Rust tests / 53 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-008-a-blank.png, evidence/T-008-a-same.png, evidence/T-008-a-toast.png, evidence/T-008-a-launched.png
 - 2026-10-09 · T-007-b · done: chooser pane with per-seat AI and model radio groups, Start gated on every seat, count row 1/2/3/4/6/8 + free field, Start replaces the chooser with one pane per seat (`--model` appended, terminals in the same folder), close button hidden when it is the only pane; 4 seats tests + 3 chooser tests + 1 plus-menu test; live: menu item opened the chooser, Claude without a model kept Start disabled, Haiku enabled it, 3 → 2 kept seat 1, typing 15 + Enter gave fifteen seats with seats 1-2 untouched, 2 + Terminal + Start opened worktree `dusky-shrimp` with Claude (trust prompt) beside a PowerShell pane, a lone chooser had no close button; build / clippy / 31 Rust tests / 50 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-007-b.png, evidence/T-007-b-disabled.png, evidence/T-007-b-enabled.png, evidence/T-007-b-15.png, evidence/T-007-b-started.png
 - 2026-10-09 · T-007-a · done: 34-agent catalogue with install detection on the PATH and the usual install folders (runnable files only), plus menu lists only installed agents with the default first and a "default" button on the others, `defaultAgent` saved in settings.json, `tab.newAgent` shortcut starts the default agent, `.cmd` shims start through cmd.exe; 4 Rust tests (find_in, catalogue order and start lines, newest nvm version, cmd shim start line) and 3 new front-end tests (menu ordering, default-agent setting, default-first rendering); live: menu showed only Claude Code and Codex of the 34 with Claude first and its Ctrl+Shift+K chip, "default" on Codex moved Codex to the top with the chip and wrote settings.json, clicking Codex opened worktree `ivory-crab` with Codex running through its npm `.cmd` shim; build / clippy / 31 Rust tests / 42 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-007-a.png, evidence/T-007-a-default.png, evidence/T-007-a-codex.png

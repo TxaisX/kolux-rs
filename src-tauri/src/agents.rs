@@ -219,6 +219,152 @@ pub fn agent_list() -> Vec<AgentInfo> {
     catalogue()
 }
 
+/// A start line built for one seat (SESS-051): the arguments after the program, and a prompt
+/// that is typed in once the agent is ready (SESS-032) instead of being passed on the line.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartLine {
+    pub args: Vec<String>,
+    pub typed: Option<String>,
+}
+
+/// How an agent takes its opening prompt (SESS-051).
+enum Route {
+    /// As the last argument.
+    Trailing,
+    /// Behind an end-of-options `--`, so a prompt that starts with a dash or reads like a
+    /// subcommand is still the task.
+    DashDash,
+    /// Behind a named switch.
+    Flag(&'static str),
+    /// Hermes's own query route: `chat --query <p> --tui`.
+    Hermes,
+    /// Typed in once the agent is ready; the agent starts bare.
+    Typed,
+}
+
+fn route(id: &str) -> Route {
+    match id {
+        "claude" | "openclaude" | "codex" | "pi" | "omp" | "command-code" | "cursor" | "droid" => Route::Trailing,
+        "trae" | "prime-agent" | "grok" => Route::DashDash,
+        "mimo-code" => Route::Flag("--prompt"),
+        "gemini" | "antigravity" => Route::Flag("--prompt-interactive"),
+        // The one-letter interactive switch: plain `--prompt` quits once the task is done.
+        "copilot" => Route::Flag("-i"),
+        "hermes" => Route::Hermes,
+        _ => Route::Typed,
+    }
+}
+
+/// Hermes refuses a start line past about this many characters (SESS-005).
+const HERMES_LIMIT: usize = 24_000;
+
+/// The start line for agent `id`: its fixed arguments, then `extra` (the user's default
+/// arguments and the seat's model choice), then the opening prompt by the agent's own route.
+/// A blank prompt counts as none. Hermes's query and interface-mode arguments in `extra` give
+/// way to Kolux's, and a Hermes line over the limit is refused.
+pub fn start_args(id: &str, extra: &[String], prompt: &str) -> Result<StartLine, String> {
+    let (_, _, _, fixed) = CATALOGUE.iter().find(|e| e.0 == id).ok_or_else(|| format!("Unknown agent {id}"))?;
+    let prompt = prompt.trim();
+    let mut args: Vec<String> = fixed.iter().map(|a| a.to_string()).collect();
+    let mut typed = None;
+    match route(id) {
+        Route::Hermes => {
+            let mut keep = Vec::new();
+            let mut it = extra.iter();
+            while let Some(a) = it.next() {
+                match a.as_str() {
+                    "--query" | "-q" => {
+                        it.next();
+                    }
+                    "--tui" | "--no-tui" => {}
+                    _ => keep.push(a.clone()),
+                }
+            }
+            if !prompt.is_empty() {
+                args = vec!["chat".into(), "--query".into(), prompt.into(), "--tui".into()];
+            }
+            args.extend(keep);
+            let len = "hermes".len() + args.iter().map(|a| a.len() + 1).sum::<usize>();
+            if len > HERMES_LIMIT {
+                return Err(format!("Hermes's start line with this prompt is {len} characters, past the 24,000 it accepts; shorten the prompt."));
+            }
+        }
+        r => {
+            args.extend(extra.iter().cloned());
+            if !prompt.is_empty() {
+                match r {
+                    Route::Trailing => args.push(prompt.into()),
+                    Route::DashDash => args.extend(["--".to_string(), prompt.into()]),
+                    Route::Flag(f) => args.extend([f.to_string(), prompt.into()]),
+                    Route::Typed => typed = Some(prompt.to_string()),
+                    Route::Hermes => unreachable!(),
+                }
+            }
+        }
+    }
+    Ok(StartLine { args, typed })
+}
+
+/// The agent credited with a running program, from its command line (SESS-051): letter case,
+/// the folder part and Windows endings are ignored; second names count; Codex and Grok builds
+/// named `codex-…` / `grok-…` count; a program run through a script interpreter is credited by
+/// its entry script's name or folder. A running `claude` is always Claude Code itself.
+// ponytail: no per-agent entry-script table; under an interpreter any path part equal to a
+// program name, or a package folder such as `claude-code`, credits the agent. Widen when the
+// status cards start polling the foreground.
+// Its first caller is the foreground poll of the status cards (04-agent-status-hooks).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn credited_agent(command_line: &str) -> Option<&'static str> {
+    let line = command_line.trim_start();
+    let (first, rest) = match line.strip_prefix('"').and_then(|r| r.split_once('"')) {
+        Some((q, rest)) => (q, rest),
+        None => line.split_once(char::is_whitespace).unwrap_or((line, "")),
+    };
+    if first.is_empty() {
+        return None;
+    }
+    let name = program_stem(first);
+    if let Some(id) = credited_name(&name, false) {
+        return Some(id);
+    }
+    const INTERPRETERS: [&str; 6] = ["node", "bun", "deno", "python", "python3", "pwsh"];
+    if !INTERPRETERS.contains(&name.as_str()) {
+        return None;
+    }
+    rest.split_whitespace()
+        .flat_map(|w| w.split(['\\', '/']))
+        .find_map(|part| credited_name(&program_stem(part), true))
+}
+
+/// The bare lower-case name of a program word: no folder, no quotes, no program/script ending.
+fn program_stem(word: &str) -> String {
+    let base = word.trim_matches('"').rsplit(['\\', '/']).next().unwrap_or("").to_ascii_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".com", ".ps1", ".js", ".mjs", ".cjs", ".py"] {
+        if let Some(stem) = base.strip_suffix(ext) {
+            return stem.to_string();
+        }
+    }
+    base
+}
+
+/// The catalogue id whose program names cover `stem`; with `packages`, `<name>-…` also counts
+/// for every agent (an entry script's package folder), else only for Codex and Grok builds.
+fn credited_name(stem: &str, packages: bool) -> Option<&'static str> {
+    if stem.is_empty() {
+        return None;
+    }
+    CATALOGUE.iter().find_map(|(id, _, names, _)| {
+        let dashed = packages || matches!(*id, "codex" | "grok");
+        names.iter().any(|n| *n == stem || (dashed && stem.strip_prefix(*n).is_some_and(|r| r.starts_with('-')))).then_some(*id)
+    })
+}
+
+#[tauri::command]
+pub fn agent_start_line(id: String, extra: Vec<String>, prompt: String) -> Result<StartLine, String> {
+    start_args(&id, &extra, &prompt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +383,94 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+    }
+
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn sess051_trailing_prompt_comes_after_the_fixed_and_model_arguments() {
+        let line = start_args("claude", &s(&["--model", "haiku"]), "Fix the build").unwrap();
+        assert_eq!(line.args, s(&["--permission-mode", "auto", "--model", "haiku", "Fix the build"]));
+        assert_eq!(line.typed, None);
+        let codex = start_args("codex", &[], "Review").unwrap();
+        assert_eq!(codex.args, s(&["--dangerously-bypass-approvals-and-sandbox", "Review"]));
+        assert_eq!(start_args("command-code", &[], "go").unwrap().args, s(&["--trust", "go"]));
+    }
+
+    #[test]
+    fn sess051_grok_trae_and_prime_agent_get_an_end_of_options_dash_before_the_prompt() {
+        assert_eq!(start_args("grok", &[], "--help me out").unwrap().args, s(&["--", "--help me out"]));
+        assert_eq!(start_args("trae", &[], "run").unwrap().args, s(&["--", "run"]));
+        assert_eq!(start_args("prime-agent", &[], "chat").unwrap().args, s(&["--", "chat"]));
+    }
+
+    #[test]
+    fn sess051_flag_routes_copilot_interactive_gemini_antigravity_prompt_interactive_mimo_prompt() {
+        assert_eq!(start_args("copilot", &[], "Tidy up").unwrap().args, s(&["-i", "Tidy up"]));
+        assert_eq!(start_args("gemini", &[], "Tidy up").unwrap().args, s(&["--prompt-interactive", "Tidy up"]));
+        assert_eq!(start_args("antigravity", &[], "Tidy up").unwrap().args, s(&["--prompt-interactive", "Tidy up"]));
+        assert_eq!(start_args("mimo-code", &[], "Tidy up").unwrap().args, s(&["--prompt", "Tidy up"]));
+    }
+
+    #[test]
+    fn sess051_hermes_takes_its_query_route_once_and_refuses_an_overlong_line() {
+        let line = start_args("hermes", &s(&["--no-tui", "--query", "old", "-x"]), "Explain").unwrap();
+        assert_eq!(line.args, s(&["chat", "--query", "Explain", "--tui", "-x"]));
+        assert_eq!(line.typed, None);
+        assert_eq!(start_args("hermes", &s(&["-x"]), "").unwrap().args, s(&["--tui", "-x"]));
+        let long = "x".repeat(24_000);
+        let err = start_args("hermes", &[], &long).unwrap_err();
+        assert!(err.contains("24,000"), "{err}");
+        assert!(start_args("claude", &[], &long).is_ok(), "only Hermes has the limit");
+    }
+
+    #[test]
+    fn sess051_typed_route_starts_bare_and_hands_the_prompt_over_for_later() {
+        let aider = start_args("aider", &s(&["--model", "x"]), "Add tests").unwrap();
+        assert_eq!(aider.args, s(&["--model", "x"]));
+        assert_eq!(aider.typed.as_deref(), Some("Add tests"));
+        let kiro = start_args("kiro", &[], "Hi").unwrap();
+        assert_eq!(kiro.args, s(&["chat", "--tui"]));
+        assert_eq!(kiro.typed.as_deref(), Some("Hi"));
+        for id in ["ante", "devin", "kimi", "mistral-vibe", "continue"] {
+            assert!(start_args(id, &[], "p").unwrap().typed.is_some(), "{id} is typed in");
+        }
+    }
+
+    #[test]
+    fn sess051_a_blank_prompt_counts_as_none_and_an_unknown_agent_is_refused() {
+        let line = start_args("grok", &[], "   ").unwrap();
+        assert_eq!(line.args, Vec::<String>::new());
+        assert_eq!(line.typed, None);
+        assert_eq!(start_args("aider", &[], "\n\t").unwrap().typed, None);
+        assert!(start_args("nope", &[], "p").is_err());
+    }
+
+    #[test]
+    fn sess051_foreground_matching_ignores_case_folder_and_windows_endings() {
+        assert_eq!(credited_agent("CLAUDE.EXE"), Some("claude"));
+        assert_eq!(credited_agent(r"C:\Users\t\AppData\Roaming\npm\codex.cmd --foo"), Some("codex"));
+        assert_eq!(credited_agent(r#""C:\Program Files\Claude\claude.exe" --permission-mode auto"#), Some("claude"));
+        assert_eq!(credited_agent("codex-x86_64-pc-windows-msvc.exe"), Some("codex"));
+        assert_eq!(credited_agent("grok-cli"), Some("grok"));
+        assert_eq!(credited_agent("kimi-code"), Some("kimi"), "second names count");
+        assert_eq!(credited_agent("mistral-vibe.cmd"), Some("mistral-vibe"));
+        assert_eq!(credited_agent("cn"), Some("continue"));
+        assert_eq!(credited_agent("kiro"), None, "plain kiro is not Kiro");
+        assert_eq!(credited_agent("powershell.exe"), None);
+        assert_eq!(credited_agent("claude-teams"), None, "only Codex and Grok builds match by prefix");
+        assert_eq!(credited_agent(""), None);
+    }
+
+    #[test]
+    fn sess051_an_agent_run_through_an_interpreter_is_credited_by_its_entry_script() {
+        assert_eq!(credited_agent(r"node C:\Users\t\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js"), Some("claude"));
+        assert_eq!(credited_agent("python -m aider --model x"), Some("aider"));
+        assert_eq!(credited_agent("node /usr/lib/node_modules/@openai/codex/bin/codex.js"), Some("codex"));
+        assert_eq!(credited_agent("node build.js"), None);
     }
 
     #[test]

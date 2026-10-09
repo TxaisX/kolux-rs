@@ -26,7 +26,9 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; title?: string; batch?: number };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; title?: string; batch?: number; typed?: string };
+/** SESS-051: a seat's start line as the back end builds it. */
+type StartLine = { args: string[]; typed: string | null };
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
 export function columnsFor(count: number): number {
@@ -161,12 +163,16 @@ function Window() {
         branch = wt.branch;
       }
       const batch = key;
+      // SESS-051: each agent's start line comes from the catalogue, prompt route included; a
+      // refused line (Hermes past its limit) stops the whole Start before any pane is made.
+      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: modelArgs(seats[i].model), prompt: seats[i].prompt ?? "" }) : null)));
       const made: Pane[] = seats.map((s, i) => {
         const a = picked[i];
+        const line = lines[i];
         const k = nextKey.current++;
         const title = s.title?.trim() || undefined;
-        return a
-          ? { key: k, cwd: dir, branch, agent: markFor(a.id), program: a.program, args: [...a.args, ...modelArgs(s.model)], title, batch }
+        return a && line
+          ? { key: k, cwd: dir, branch, agent: markFor(a.id), program: a.program, args: line.args, title, batch, typed: line.typed ?? undefined }
           : { key: k, cwd: dir, branch, agent: "shell", program: null, args: [], title, batch };
       });
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
@@ -343,6 +349,7 @@ function Window() {
                       onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                       onFailed={(error) => failedPane(p.key, error)}
                       title={p.title}
+                      typed={p.typed}
                       number={p.key}
                       onClose={() => closePane(p.key)}
                       agents={agents}

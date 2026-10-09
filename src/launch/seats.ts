@@ -4,8 +4,9 @@
 
 /** `agent` is an agent id, "terminal" for a plain shell, or null while unpicked. `model` is a
  * model id, "default" for "the program's own default" (an explicit pick), or null. `title` is
- * the seat's job title (SESS-024): it names the pane; blank means none. */
-export type Seat = { agent: string | null; model: string | null; title?: string };
+ * the seat's job title (SESS-024): it names the pane; blank means none. `prompt` is the opening
+ * prompt (SESS-051), handed to the agent by its own route; blank means none. */
+export type Seat = { agent: string | null; model: string | null; title?: string; prompt?: string };
 
 export const TERMINAL = "terminal";
 

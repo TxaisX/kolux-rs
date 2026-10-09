@@ -51,7 +51,8 @@ pub fn program_command(program: &str, args: &[String], cwd: Option<&str>) -> Com
 /// What is started for `resolved`: the file itself, or for a `.cmd` / `.bat` shim `cmd.exe` with
 /// `/d /c <shim>` in front of the program's own arguments.
 // ponytail: cmd.exe's quote rules bite when the shim's folder has a space AND an argument carries
-// quotes (both together); revisit with the opening-prompt arguments of SESS-051.
+// quotes (both together), which an opening prompt (SESS-051) can; run the shim's target directly
+// if a prompt with quotes ever misfires.
 pub fn start_line(resolved: &std::path::Path) -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
     let shim = cfg!(windows)
         && resolved
