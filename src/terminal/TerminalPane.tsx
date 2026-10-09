@@ -52,9 +52,11 @@ type Props = {
   onChoose?: () => void;
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
   onSplit?: () => void;
+  /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
+  card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -202,7 +204,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
+    <section className={`pane${focused ? " focused" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
       <header className="pane-head">
         <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
           {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}
@@ -232,7 +234,12 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           <button className="ib" title="Pane menu (not built yet)">
             <Dots size={12} />
           </button>
-          <button className="ib" title="Expand (not built yet)">
+          <button
+            className="ib"
+            onClick={card?.onToggle}
+            aria-expanded={card ? card.expanded : undefined}
+            title={card ? (card.expanded ? "Collapse: the terminal goes back to its grid slot" : "Expand: show this session's live terminal in the card") : "Expand (not built yet)"}
+          >
             <Expand size={12} />
           </button>
           {onSplit && (

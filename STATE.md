@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 7, date: 2026-10-09)
-Next task: T-011 · VIEW-026 Open a session's live terminal inside its Board card
-Done: 13 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 8, date: 2026-10-09)
+Next task: T-012 · BROW-001 [compat] Open a browser tab next to the terminals · BROW-002 Browser pages survive switching away and back · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
+Done: 14 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -135,6 +135,15 @@ Paste (Ctrl+V, Ctrl+Shift+V, Shift+Insert) goes through the focused pane's own t
 can never land in another pane, and a paste made while an opening prompt is still owed waits for
 it.
 
+T-011 gives the Board its first life (VIEW-026). The Board lists every pane of every workspace as
+a card (the pane header: status, name, program, the header buttons), in cell and tab order; a
+card's expand button shows that session's live terminal inside the card and the same button
+collapses it again. The panes never move in the page: the grid and the Board are the same cells
+drawn two ways, so the program, its scrollback and the pane's place in the grid are untouched
+by expanding, collapsing or switching screens (a command typed in the card shows in the grid
+pane afterwards, and the other way round). Switching to Agents or Board no longer unmounts the
+terminals (it did before T-011).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -231,6 +240,14 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-011: the Board card and the grid pane are one DOM element styled two ways
+  (`.board` on the cells container, `card` / `expanded` on the pane), not a terminal moved
+  between two homes: React cannot reparent a mounted xterm without remounting it, and the
+  spec's rule is that only the view moves. One card expands at a time (`toggleCard` in
+  grid.ts) at a fixed 420 px height; a taller or resizable card can come with the Board
+  polish (VIEW-023 / VIEW-024, T-028 / T-050), which also owns lanes, chips, chooser cards and
+  hiding editor / browser tabs. The header's expand button is the Board toggle; on the
+  Terminals screen it still reads "not built yet" (pane zoom is its own card).
 - 2026-10-09 · T-010: a "tab" is a pane sharing a grid cell with others (`group` on the pane,
   `cellsOf` in grid.ts); the split tree of the old app (tabs holding split panes) is not rebuilt,
   so a split is a new cell and a tab is a sibling in the same cell. The tab create menu lives in
@@ -368,6 +385,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-011 · done: Board screen lists every pane as a card (same cells as the grid, `.board` styling), expand shows the live terminal inside the card and collapses again, panes stay mounted across Agents / Board / Terminals; 1 grid test; live: `echo t011-ok` typed in the grid pane, Board showed the card collapsed, expand showed the same scrollback and `echo expanded-ok` typed into the card ran there, collapse + Terminals showed both lines in the grid pane in its old slot with the shell still at its prompt; build / clippy / 40 Rust tests / 64 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-011-grid.png, evidence/T-011-board.png, evidence/T-011-expanded.png, evidence/T-011-back.png
 - 2026-10-09 · T-010 · done: grid cells hold tabs (`group` on panes, `cellsOf` / `neighbourTab` / `insertBefore` in grid.ts), "New tab" menu in the layout strip with Terminal + every installed agent and their chords, Ctrl+T / `tab.newAgent` / `tab.newAgent.<id>` / `tab.close` wired, a tab strip above cells with two or more tabs, `start_dir` for a requested start folder (relative, absolute, missing → workspace), paste through the pane's own text area with the chords left to the browser and queued behind an owed opening prompt; 3 grid tests + 1 strip test + 1 Rust test; live: New tab → Terminal opened "Terminal 3" as a second tab in the t010-repo cell at `PS G:\Temp\t010-repo>`, New tab → Claude Code opened a "Claude" tab with Claude running in that folder, closing "Terminal 2" from its x left the other two tabs with Claude in front; paste and Ctrl+T not provable from the harness (see decision); build / clippy / 40 Rust tests / 63 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-010-tabs.png, evidence/T-010-agent.png, evidence/T-010-close-tab.png
 - 2026-10-09 · T-009 · done: pane grid 1..12 with balanced rows (`src/terminal/grid.ts`: clamp, columns / rows, resize plan, split index, insert), layout strip sets the count with the current count pressed, split button in every pane header, Ctrl+W / Ctrl+Shift+D / Alt+Shift+D wired through the keymap, close removes any pane including the last; 6 grid tests + strip test updated; live: "4" gave Terminal 1 plus three chooser panes 2x2, the split button opened Terminal 5 beside Terminal 1 in the same folder (3+2), "1" dropped the three unstarted panes and the second press showed the "started sessions" toast, the header close removed Terminal 5 and Terminal 1 took the full width; chords not provable from the harness (see decision); build / clippy / 39 Rust tests / 60 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-009-four.png, evidence/T-009-split.png, evidence/T-009-shrink.png, evidence/T-009-close.png
 - 2026-10-09 · T-008-b · done: per-agent start-line builder with every SESS-051 prompt route (trailing, `--`, `--prompt`, `--prompt-interactive`, `-i`, Hermes query, typed), blank prompt = none, Hermes limit refused, foreground matcher with second names / Codex-Grok prefixes / interpreter entry scripts, "Opening prompt (optional)" box per AI seat, typed prompts sent after the pane goes quiet; 8 Rust tests + 1 chooser test; live: seat 1 Claude + Haiku with a prompt, Start opened worktree `silver-narwhal`, after the trust question Claude ran the prompt and answered "pong" with the session still open; build / clippy / 39 Rust tests / 54 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-008-b-prompt.png, evidence/T-008-b-launched.png

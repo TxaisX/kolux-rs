@@ -1,6 +1,6 @@
-// The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040), pure so it runs without a browser.
+// The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040, VIEW-026), pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex } from "./grid";
+import { cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./grid";
 
 const started = (key: number) => ({ key, started: true });
 const empty = (key: number) => ({ key, started: false });
@@ -83,4 +83,10 @@ test("TERM-040/014: closing a tab hands over to the next one, else the previous,
   expect(neighbourTab([1, 2, 3], 1)).toBe(2);
   expect(neighbourTab([7], 7)).toBeNull();
   expect(neighbourTab([1, 2], 9)).toBeNull();
+});
+
+test("VIEW-026: expanding a Board card shows its terminal, expanding it again or another card collapses it", () => {
+  expect(toggleCard(null, 2)).toBe(2);
+  expect(toggleCard(2, 2)).toBeNull();
+  expect(toggleCard(2, 5)).toBe(5);
 });

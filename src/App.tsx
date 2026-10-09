@@ -1,5 +1,6 @@
 // The window: top bar, then the sidebar card beside the content column (layout strip over the
-// pane grid), then the status bar. Agents and Board are empty screens for now; Terminals holds
+// pane grid), then the status bar. Agents is an empty screen for now; Board lists every pane as
+// a card and a card can show its live terminal without moving it (T-011); Terminals holds
 // the pane list and the sidebar. The list starts with one PowerShell pane (T-002); the plus
 // menu adds an agent pane in a fresh creature-named workspace (T-004). The grid shows one
 // workspace at a time; the other workspaces' panes stay mounted but hidden, so switching back
@@ -12,7 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import LayoutStrip from "./chrome/LayoutStrip";
-import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex } from "./terminal/grid";
+import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
@@ -56,6 +57,7 @@ function Window() {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("terminals");
+  const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
@@ -343,6 +345,7 @@ function Window() {
   };
 
   const terminals = screen === "terminals";
+  const board = screen === "board";
   const live = panes.filter((p) => running[p.key]);
   const openDirs = panes.map((p) => p.cwd).filter((d): d is string => d !== null);
   const cells = cellsOf(panes);
@@ -371,7 +374,7 @@ function Window() {
           />
         )}
         <div className="content">
-          {terminals ? (
+          {terminals && (
             <>
               <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />
               {toast && (
@@ -387,92 +390,104 @@ function Window() {
                   </button>
                 </div>
               )}
-              <div className="grid" style={{ gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` }}>
-                {shown.length === 0 && (
-                  <div className="empty">
-                    <h2>{activeDir ? folderName(activeDir) : "Terminal"}</h2>
-                    <p>No terminal open here.</p>
-                    <div className="btn-row">
-                      <button className="btn" onClick={() => addShell(activeDir, null)}>
-                        Open a shell
-                      </button>
-                      <button className="btn" onClick={addChooser}>
-                        Choose what to run
-                      </button>
-                    </div>
-                  </div>
-                )}
-                {cells.map((c) => {
-                  const active = c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key;
-                  return (
-                    <div key={c.group} className="cell" hidden={!sameDir(c.panes[0].cwd, activeDir)}>
-                      {c.panes.length > 1 && (
-                        <div className="tabs" role="tablist" aria-label="Tabs">
-                          {c.panes.map((p) => (
-                            <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
-                              <VendorMark agent={p.agent} size={12} />
-                              <span className="tab-name">{tabName(p)}</span>
-                              <button className="tab-x" aria-label={`Close ${tabName(p)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {c.panes.map((p) =>
-                  p.seats ? (
-                    <ChooserPane
-                      key={p.key}
-                      number={p.key}
-                      hidden={p.key !== active}
-                      focused={p.key === focused}
-                      onFocus={() => setFocused(p.key)}
-                      agents={agents.filter((a) => a.installed)}
-                      seats={clearMissing(p.seats, installedIds)}
-                      onSeats={(s) => setSeats(p.key, s)}
-                      onStart={(s) => void startSeats(p.key, s)}
-                      busy={launching}
-                      closable
-                      onClose={() => closePane(p.key)}
-                    />
-                  ) : (
-                    <TerminalPane
-                      key={p.key}
-                      hidden={p.key !== active}
-                      cwd={p.cwd}
-                      branch={p.branch}
-                      agent={p.agent}
-                      program={p.program}
-                      args={p.args}
-                      focused={p.key === focused}
-                      onFocus={() => setFocused(p.key)}
-                      onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
-                      onFailed={(error) => failedPane(p.key, error)}
-                      onSplit={() => splitPane(p.key, "right")}
-                      title={p.title}
-                      typed={p.typed}
-                      number={p.key}
-                      onClose={() => closePane(p.key)}
-                      agents={agents}
-                      defaultId={defaultId}
-                      onSetDefault={setDefault}
-                      launching={launching}
-                      onLaunch={(a) => launch(a, null)}
-                      onChoose={addChooser}
-                    />
-                  ),
-                )}
-                    </div>
-                  );
-                })}
-              </div>
             </>
-          ) : (
+          )}
+          {!terminals && !board && (
             <div className="empty">
               <h2>{screens.find((s) => s.id === screen)?.label}</h2>
               <p>Nothing here yet. This screen is built in a later task.</p>
             </div>
           )}
+          {board && panes.length === 0 && (
+            <div className="empty">
+              <h2>Board</h2>
+              <p>No session yet.</p>
+            </div>
+          )}
+          <div
+            className={board ? "board" : "grid"}
+            hidden={!terminals && !board}
+            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` } : undefined}
+          >
+              {terminals && shown.length === 0 && (
+                <div className="empty">
+                  <h2>{activeDir ? folderName(activeDir) : "Terminal"}</h2>
+                  <p>No terminal open here.</p>
+                  <div className="btn-row">
+                    <button className="btn" onClick={() => addShell(activeDir, null)}>
+                      Open a shell
+                    </button>
+                    <button className="btn" onClick={addChooser}>
+                      Choose what to run
+                    </button>
+                  </div>
+                </div>
+              )}
+              {cells.map((c) => {
+                const active = c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key;
+                return (
+                  <div key={c.group} className="cell" hidden={!board && !sameDir(c.panes[0].cwd, activeDir)}>
+                    {c.panes.length > 1 && (
+                      <div className="tabs" role="tablist" aria-label="Tabs">
+                        {c.panes.map((p) => (
+                          <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
+                            <VendorMark agent={p.agent} size={12} />
+                            <span className="tab-name">{tabName(p)}</span>
+                            <button className="tab-x" aria-label={`Close ${tabName(p)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {c.panes.map((p) =>
+                p.seats ? (
+                  <ChooserPane
+                    key={p.key}
+                    number={p.key}
+                    hidden={!board && p.key !== active}
+                    focused={p.key === focused}
+                    onFocus={() => setFocused(p.key)}
+                    agents={agents.filter((a) => a.installed)}
+                    seats={clearMissing(p.seats, installedIds)}
+                    onSeats={(s) => setSeats(p.key, s)}
+                    onStart={(s) => void startSeats(p.key, s)}
+                    busy={launching}
+                    closable
+                    onClose={() => closePane(p.key)}
+                  />
+                ) : (
+                  <TerminalPane
+                    key={p.key}
+                    hidden={!board && p.key !== active}
+                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)) } : undefined}
+                    cwd={p.cwd}
+                    branch={p.branch}
+                    agent={p.agent}
+                    program={p.program}
+                    args={p.args}
+                    focused={p.key === focused}
+                    onFocus={() => setFocused(p.key)}
+                    onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                    onFailed={(error) => failedPane(p.key, error)}
+                    onSplit={() => splitPane(p.key, "right")}
+                    title={p.title}
+                    typed={p.typed}
+                    number={p.key}
+                    onClose={() => closePane(p.key)}
+                    agents={agents}
+                    defaultId={defaultId}
+                    onSetDefault={setDefault}
+                    launching={launching}
+                    onLaunch={(a) => launch(a, null)}
+                    onChoose={addChooser}
+                  />
+                ),
+              )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
       <StatusBar terminals={live.length} agents={live.filter((p) => p.agent !== "shell").length} />

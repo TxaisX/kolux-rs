@@ -154,6 +154,15 @@ input { font: inherit; }
 /* a cell holds tabs (TERM-040); the tab strip shows only for two tabs or more (TERM-028 clean look) */
 .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 4px; }
 .cell[hidden] { display: none; }
+/* VIEW-026: the Board is the same cells as cards, one per pane; the panes never move in the DOM,
+   so an expanded card shows the live terminal and a collapsed one only its header. */
+.grid[hidden], .board[hidden], .board .tabs { display: none; }
+.board { flex: 1; min-height: 0; margin: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.board .cell { flex: none; gap: 6px; }
+.board .cell > .pane { flex: none; }
+.board .pane.card:not(.expanded) .pane-body { display: none; }
+.board .pane.card:not(.expanded) .pane-head { border-bottom: 0; }
+.board .pane.card.expanded { height: 420px; }
 .cell > .pane { flex: 1; }
 .tabs { flex: none; display: flex; gap: 4px; height: 26px; overflow-x: auto; font-size: 12px; }
 .tab { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border: 1px solid var(--line-subtle); border-radius: 8px; color: var(--fg-muted); white-space: nowrap; cursor: default; }

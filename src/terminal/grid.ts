@@ -20,6 +20,9 @@ export function cellsOf<P extends Tabbed>(panes: P[]): { group: number; panes: P
   return cells;
 }
 
+/** VIEW-026: one Board card at a time shows its live terminal; the same card again collapses it. */
+export const toggleCard = (expanded: number | null, key: number): number | null => (expanded === key ? null : key);
+
 /** The tab that takes over when `key` closes: the one after it, else the one before, else none. */
 export function neighbourTab(keys: number[], key: number): number | null {
   const i = keys.indexOf(key);
