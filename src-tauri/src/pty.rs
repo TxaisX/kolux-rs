@@ -30,6 +30,20 @@ pub fn shell_command(cwd: Option<&str>) -> CommandBuilder {
     cmd
 }
 
+/// A pane that runs one program (an agent such as `claude`) instead of a shell. `program` is
+/// resolved on the PATH the way a shell would (`claude` becomes `...\claude.exe`) so the
+/// process starts without a shell in between; a name that does not resolve is passed through
+/// unchanged and the spawn error says what was missing. Starts in `cwd` when that folder exists.
+pub fn program_command(program: &str, args: &[String], cwd: Option<&str>) -> CommandBuilder {
+    let resolved = crate::agents::find_program(program).map(|p| p.into_os_string()).unwrap_or_else(|| program.into());
+    let mut cmd = CommandBuilder::new(resolved);
+    cmd.args(args);
+    if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
+        cmd.cwd(dir);
+    }
+    cmd
+}
+
 pub struct PtySession {
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
@@ -154,6 +168,67 @@ mod tests {
         let code = exit_rx.recv_timeout(Duration::from_secs(30)).expect("shell exits after `exit`");
         assert_eq!(code, Some(0), "clean exit code");
         session.kill();
+    }
+
+    /// An agent pane runs a program directly, with its own arguments, in a chosen folder: the
+    /// path every agent launch takes. PowerShell stands in for the agent so the test needs
+    /// nothing installed beyond Windows.
+    #[test]
+    fn a_program_with_arguments_runs_through_the_pty_and_prints() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
+        let (program, args, cwd) = if cfg!(windows) {
+            ("powershell", vec!["-NoLogo".to_string(), "-Command".to_string(), "echo kolux-rs-program-marker; (Get-Location).Path".to_string()], std::env::temp_dir())
+        } else {
+            ("sh", vec!["-c".to_string(), "echo kolux-rs-program-marker; pwd".to_string()], std::env::temp_dir())
+        };
+        let cwd_text = cwd.display().to_string();
+        let mut session = PtySession::spawn(
+            program_command(program, &args, Some(&cwd_text)),
+            100,
+            30,
+            move |chunk| {
+                let _ = tx.send(chunk.to_vec());
+            },
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        )
+        .expect("spawn a program in a pty");
+        // Drain output while waiting for the exit: the console host asks where the cursor is
+        // (ESC[6n) before it draws anything and blocks until answered, as in the shell test.
+        let mut seen = String::new();
+        let mut answered = 0;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let code = loop {
+            if let Ok(code) = exit_rx.try_recv() {
+                break code;
+            }
+            assert!(Instant::now() < deadline, "the program did not end within 30s; saw:\n{seen}");
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(200)) {
+                seen.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            let asks = seen.matches("\x1b[6n").count();
+            while answered < asks {
+                session.write(b"\x1b[1;1R").expect("answer cursor query");
+                answered += 1;
+            }
+        };
+        while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(500)) {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        assert_eq!(code, Some(0), "clean exit; output:\n{seen}");
+        assert!(seen.contains("kolux-rs-program-marker"), "the program's output reached the pane:\n{seen}");
+        let folder = cwd_text.trim_end_matches(['\\', '/']).to_lowercase();
+        assert!(seen.to_lowercase().contains(&folder), "it started in the chosen folder {folder}:\n{seen}");
+        session.kill();
+    }
+
+    /// A program that is not installed fails at spawn with a message, not a silent empty pane.
+    #[test]
+    fn a_missing_program_is_refused_at_spawn() {
+        let r = PtySession::spawn(program_command("kolux-rs-no-such-program-7f3a", &[], None), 80, 24, |_| {}, |_| {});
+        assert!(r.is_err());
     }
 
     /// Closing a pane ends its program even when the program is still waiting for input.

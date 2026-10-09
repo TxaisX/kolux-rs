@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 4, date: 2026-10-08; Txais lifted the cap for today)
-Next task: T-004 · One agent in its own worktree: the plus menu starts Claude Code in a new pane inside a fresh worktree with a creature name; the pane header shows the agent and the branch
-Done: 4 / 339 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 5, date: 2026-10-08; Txais lifted the cap for today)
+Next task: T-005 · Shortcuts live in a file the user owns: `~/.kolux/keybindings.json` (SET-011, SET-013, compat contracts)
+Done: 5 / 339 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 339 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -32,6 +32,14 @@ workspaces folder, inside a folder named after the project); Create makes the br
 Shell restarts the terminal pane inside that folder. Remove asks first, then deletes the folder and
 the branch, closing any pane still sitting in that folder. The workspaces folder can be changed and
 is remembered; projects are remembered across restarts.
+
+T-004 adds the first agent launch: "+ New session" in the sidebar and the "+" in any pane header open
+a menu listing Claude Code and Codex; an agent whose program is not on the PATH is greyed "not
+installed". Picking Claude Code makes a fresh worktree off main with a creature name (adjective +
+sea creature, e.g. `jade-seahorse`, unique across every project's folders and branches) and opens a
+pane running `claude --permission-mode auto` in it; the header shows the Claude mark, the creature
+name, a branch chip, "Claude" and "Running"; the sidebar lists the worktree with a live dot; closing
+the pane ends the Claude process. Panes sit side by side (1, 2 or 3 columns) until the real grid in T-009.
 
 ## Needs Txais
 
@@ -153,6 +161,24 @@ recorded default until told otherwise; nothing here blocks a pass.
   gate now really runs ("licenses ok"). How the earlier "cargo-deny green" lines were produced
   is UNKNOWN.
 
+- 2026-10-08 · T-004 · Claude Code is launched as `claude --permission-mode auto` (the value SESS-027
+  Compat names; `claude --help` on this PC lists `auto` among the accepted modes); Codex as
+  `codex --dangerously-bypass-approvals-and-sandbox`. Agent detection is a PATH + PATHEXT lookup of
+  the program name, done in Rust at start (`src-tauri/src/agents.rs`), so the menu shows what Kolux
+  really found. Creature names come from 26 adjectives x 26 sea creatures written into
+  `src-tauri/src/creatures.rs`, seeded from the clock, with `-2`, `-3` suffixes once a round is used
+  up; a name is refused if any project already has a folder or branch of that name (case-insensitive).
+  A launch from the sidebar goes to the only project when there is one, else the project that owns
+  the focused pane's folder, else the first project; a launch from a pane header always uses that
+  pane's project. The last pane is never removed (it shows "Ended"). Panes split evenly
+  (`columnsFor`: 1 / 2 up to four / 3) until T-009 builds the grid. The live check pre-seeded the
+  throwaway project straight into state.db (kv `projects`) and removed it after; during the first
+  run extra launches appeared with no scripted input (a "Shell" row click, two more "Claude Code"
+  picks), then the window was closed from outside: a click-recording rerun showed exactly one trusted
+  click per scripted action and one launch, 50 s idle produced nothing more, so the extras are read
+  as someone using the mouse while the app was in front, not a code path. The evidence harness
+  note was extended: `type.ps1` needs the window activated first.
+
 ## Last 10 passes  (date · task · result · evidence)
 
 - 2026-10-07 · Phase 2: write PLAN.md · done: 338 tasks covering 1,030 cards (228 P0, 564 P1, 199 P2, 27 H marked build, 12 X), no dropped card · `node scripts/plan-check.mjs` prints OK
@@ -161,3 +187,4 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · T-003 · done: projects sidebar; a throwaway repository added as a project, "Fix login" created as branch `fix-login` in its own folder (confirmed with `git worktree list`), the pane opened inside it, then removed with a confirm step and both branch and folder gone on disk; 15 Rust tests (git runner round trip, name cleaner, project store) and 13 front-end tests green · evidence/T-003.png, evidence/T-003-removed.png
 - 2026-10-08 · T-003b · done: frameless window with its own top bar, switcher, search box, usage pill and window controls; floating sidebar card; layout strip; rounded pane card with the design's header; status bar with live memory; palette from DESIGN.md as CSS custom properties; measured against the reference at 1920x1032: top bar 36 px, sidebar x 8..296, pane card from y 84, status bar from y 1008, all six background hexes exact, corners 1 px tighter; 16 Rust tests and 18 front-end tests green · evidence/T-003b.png, evidence/T-003b-compare.png
 - 2026-10-08 · T-003b follow-up · done: chrome render test added (21 front-end tests green), hand-redrawn OpenAI knot removed in favour of a neutral glyph, cargo-deny installed and run ("licenses ok"), build / clippy / 16 Rust tests / tsc / JS licence check / plan check green; fresh maximized capture and side-by-side · evidence/T-003b.png, evidence/T-003b-compare.png
+- 2026-10-08 · T-004 · done: plus menu (sidebar and pane header) lists Claude Code and Codex with a PATH check, one click made worktree `jade-seahorse` off main and a pane running `claude --permission-mode auto` with mark, creature name, branch chip, "Claude", "Running"; closing the pane killed claude.exe; no orphan after closing the app; build / clippy / 24 Rust tests / 24 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-004-menu.png, evidence/T-004.png

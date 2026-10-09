@@ -1,3 +1,5 @@
+mod agents;
+mod creatures;
 mod git;
 mod names;
 mod projects;
@@ -73,7 +75,9 @@ pub fn run() {
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,
+            projects::workspace_create_fresh,
             projects::workspace_remove,
+            agents::agent_list,
             projects::workspaces_dir_get,
             projects::workspaces_dir_set
         ])

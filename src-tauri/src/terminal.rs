@@ -1,7 +1,7 @@
 //! Terminal panes as the front end sees them: numbered sessions, output pushed as events, input
 //! and resize taken as commands. Every open session is killed when the window goes away.
 
-use crate::pty::{shell_command, PtySession};
+use crate::pty::{program_command, shell_command, PtySession};
 use base64::Engine as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -38,15 +38,21 @@ struct ExitPayload {
 }
 
 impl Terminals {
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>) -> Result<u32, String> {
+    /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
+    /// `claude`) it runs that program directly with `args`, in `cwd`.
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>) -> Result<u32, String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
         let out_app = app.clone();
         let exit_app = app;
         let registry = self.inner.clone();
+        let command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => program_command(p, &args, cwd.as_deref()),
+            None => shell_command(cwd.as_deref()),
+        };
         let session = PtySession::spawn(
-            shell_command(cwd.as_deref()),
+            command,
             cols.max(2),
             rows.max(1),
             move |chunk| {
@@ -122,8 +128,8 @@ impl Terminals {
 }
 
 #[tauri::command]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16, cwd: Option<String>) -> Result<u32, String> {
-    terminals.spawn(app, cols, rows, cwd)
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
+    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default())
 }
 
 #[tauri::command]

@@ -2,6 +2,7 @@
 //! Git repository the user chose; a workspace is one of its worktrees. Projects are saved in the
 //! state store; the workspaces folder is a user setting.
 
+use crate::creatures::creature_name;
 use crate::git::{Git, Worktree};
 use crate::names::safe_name;
 use crate::state::Store;
@@ -89,6 +90,32 @@ pub fn create_workspace(git: &Git, root: &Path, project: &Project, typed_name: &
         .ok_or_else(|| "the worktree was created but Git does not list it".to_string())
 }
 
+/// Every workspace folder name and branch in use across all registered projects (SESS-023 and
+/// PROJ-023: a generated name never repeats one in use anywhere).
+pub fn names_in_use(git: &Git, projects: &[Project]) -> Vec<String> {
+    let mut names = Vec::new();
+    for p in projects {
+        for w in git.worktrees(Path::new(&p.path)).unwrap_or_default() {
+            if let Some(folder) = Path::new(&w.path).file_name() {
+                names.push(folder.to_string_lossy().to_string());
+            }
+            if let Some(branch) = w.branch {
+                names.push(branch);
+            }
+        }
+    }
+    names
+}
+
+/// A workspace an agent launch makes for itself: a creature name nobody uses, branched from the
+/// main checkout. The clock seeds the pick so launches do not always start at the same pair.
+pub fn create_fresh_workspace(git: &Git, root: &Path, projects: &[Project], project: &Project) -> Result<Worktree, String> {
+    let taken = names_in_use(git, projects);
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let name = creature_name(&taken, seed);
+    create_workspace(git, root, project, &name)
+}
+
 pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str) -> Result<(), String> {
     let repo = Path::new(&project.path);
     let target = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(worktree_path))).ok_or_else(|| format!("{worktree_path} is not a worktree of {}", project.name))?;
@@ -140,6 +167,15 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
         (find_project(&store, &project_id)?, workspaces_dir(&store))
     };
     create_workspace(&git, &root, &project, &name)
+}
+
+#[tauri::command]
+pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Worktree, String> {
+    let (projects, project, root) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        (load_projects(&store), find_project(&store, &project_id)?, workspaces_dir(&store))
+    };
+    create_fresh_workspace(&git, &root, &projects, &project)
 }
 
 #[tauri::command]
@@ -241,6 +277,35 @@ mod tests {
         remove_workspace(&git, &project, &wt.path).unwrap();
         assert!(!expected.exists());
         assert!(!git.branch_exists(&repo, "fix-login-fire"));
+        drop(store);
+        for d in [profile, repo, root] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_fresh_workspace_gets_a_creature_name_that_is_not_in_use() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile4");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("repo4");
+        let root = temp("root4");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let projects = load_projects(&store);
+
+        let first = create_fresh_workspace(&git, &root, &projects, &project).unwrap();
+        let second = create_fresh_workspace(&git, &root, &projects, &project).unwrap();
+        let name_of = |w: &Worktree| Path::new(&w.path).file_name().unwrap().to_string_lossy().to_string();
+        assert_ne!(name_of(&first), name_of(&second), "two launches never share a name");
+        for w in [&first, &second] {
+            let name = name_of(w);
+            assert!(name.split('-').count() == 2, "adjective-creature: {name}");
+            assert_eq!(w.branch.as_deref(), Some(name.as_str()), "the branch carries the same name");
+            assert!(Path::new(&w.path).join("a.txt").is_file(), "a real checkout");
+        }
+        let in_use = names_in_use(&git, &projects);
+        assert!(in_use.contains(&name_of(&first)) && in_use.contains(&name_of(&second)));
+
         drop(store);
         for d in [profile, repo, root] {
             fs::remove_dir_all(d).unwrap();

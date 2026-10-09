@@ -4,16 +4,32 @@
 // T-003's: add a Git folder as a project (type or browse), set where workspace folders live,
 // create a workspace (a new branch in its own folder), open a shell in one, remove one again.
 // Every action goes to the Rust side; this file only draws the state it gets back.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { orderWorktrees, previewSentence, worktreeLabel, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 
-type Props = { activeDir: string | null; onOpenShell: (dir: string, branch: string | null) => void };
+type Props = {
+  /** Folders a pane is open in: those workspace rows show a live dot and a count. */
+  openDirs: string[];
+  onOpenShell: (dir: string, branch: string | null) => void;
+  /** The plus menu behind "New session" (T-004): agents found on the PATH, and the launch. */
+  agents: AgentInfo[];
+  launching: boolean;
+  onLaunch: (agent: AgentInfo, projectId: string | null) => void;
+  /** Bump to reload the list after something outside the sidebar made a workspace. */
+  refresh: number;
+  /** Hands the window the project list and which project owns each workspace folder. */
+  onIndex: (projects: Project[], owner: Record<string, string>) => void;
+};
 
-export default function ProjectsPanel({ activeDir, onOpenShell }: Props) {
+export default function ProjectsPanel({ openDirs, onOpenShell, agents, launching, onLaunch, refresh, onIndex }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const index = useRef(onIndex);
+  index.current = onIndex;
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
   const [root, setRoot] = useState("");
   const [rootDraft, setRootDraft] = useState("");
@@ -41,6 +57,9 @@ export default function ProjectsPanel({ activeDir, onOpenShell }: Props) {
       }
     }
     setWorktrees(next);
+    const owner: Record<string, string> = {};
+    for (const p of list) for (const w of next[p.id] ?? []) owner[w.path] = p.id;
+    index.current(list, owner);
   }, []);
 
   const reload = useCallback(async () => {
@@ -57,8 +76,10 @@ export default function ProjectsPanel({ activeDir, onOpenShell }: Props) {
         setRootDraft(d);
       })
       .catch(fail);
+  }, []);
+  useEffect(() => {
     reload().catch(fail);
-  }, [reload]);
+  }, [reload, refresh]);
 
   useEffect(() => {
     if (name.trim() === "") {
@@ -141,7 +162,8 @@ export default function ProjectsPanel({ activeDir, onOpenShell }: Props) {
   };
 
   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
-  const isActive = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
+  const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
+  const isActive = (w: Worktree) => openCount(w) > 0;
 
   return (
     <div className="sidebar-wrap">
@@ -235,7 +257,7 @@ export default function ProjectsPanel({ activeDir, onOpenShell }: Props) {
                 {main && (
                   <button className={`branch${isActive(main) ? " sel" : ""}`} onClick={() => onOpenShell(main.path, main.branch)} title={`Open the terminal in ${main.path}`}>
                     <span className="name">{worktreeLabel(main)}</span>
-                    {isActive(main) && <span className="count">1</span>}
+                    {isActive(main) && <span className="count">{openCount(main)}</span>}
                     <span className="chev">
                       <ChevronDown size={12} />
                     </span>
@@ -305,10 +327,22 @@ export default function ProjectsPanel({ activeDir, onOpenShell }: Props) {
           Next that needs you
           <span className="hint">Ctrl+J</span>
         </div>
-        <button className="sb-new" title="New session (comes with the agent task)">
+        <button className="sb-new" title="New session: start an agent in a new pane inside a fresh workspace" aria-haspopup="menu" aria-expanded={plusOpen} onClick={() => setPlusOpen((o) => !o)} disabled={launching}>
           <Plus size={13} />
-          New session
+          {launching ? "Starting…" : "New session"}
         </button>
+        {plusOpen && (
+          <PlusMenu
+            agents={agents}
+            busy={launching}
+            style={{ left: 16, bottom: 56 }}
+            onClose={() => setPlusOpen(false)}
+            onPick={(a) => {
+              setPlusOpen(false);
+              onLaunch(a, projects.length === 1 ? projects[0].id : null);
+            }}
+          />
+        )}
         <div className="sb-foot">
           <button className="ib" title={gitVersion ? `Settings (not built yet) · ${gitVersion}` : "Settings (not built yet)"}>
             <Gear />

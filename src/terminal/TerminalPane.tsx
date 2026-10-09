@@ -15,15 +15,33 @@ import { monoFont, terminalTheme } from "../theme";
 import { folderName } from "../projects/model";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
+import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
 
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
-type Props = { cwd?: string | null; branch?: string | null; focused?: boolean; agent?: Agent; onRunning?: (running: boolean) => void };
+type Props = {
+  cwd?: string | null;
+  branch?: string | null;
+  focused?: boolean;
+  agent?: Agent;
+  /** The program to run instead of the shell (an agent's command), with its arguments. */
+  program?: string | null;
+  args?: string[];
+  onRunning?: (running: boolean) => void;
+  onFocus?: () => void;
+  /** Called after Close ended the program, so the window can drop the pane. */
+  onClose?: () => void;
+  /** The plus menu behind the header's "+" button. */
+  agents?: AgentInfo[];
+  launching?: boolean;
+  onLaunch?: (agent: AgentInfo) => void;
+};
 
-export default function TerminalPane({ cwd = null, branch = null, focused = false, agent = "shell", onRunning }: Props) {
+export default function TerminalPane({ cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFocus, onClose, agents = [], launching = false, onLaunch }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
+  const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   const idRef = useRef<number | null>(null);
   const report = useRef(onRunning);
   report.current = onRunning;
@@ -73,7 +91,7 @@ export default function TerminalPane({ cwd = null, branch = null, focused = fals
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd });
+        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
@@ -105,25 +123,32 @@ export default function TerminalPane({ cwd = null, branch = null, focused = fals
     };
   }, []);
 
+  // Close ends the program (TERM-014; the "ask first" step comes with its own task) and tells
+  // the window, which drops the pane unless it is the last one.
   const close = () => {
     const id = idRef.current;
     if (id !== null) invoke("terminal_kill", { id }).catch(() => {});
+    onClose?.();
   };
 
-  // TERM-020/021: a plain shell reads as a terminal with a neutral status; only a failure is tinted.
-  const word = status.kind === "starting" ? "Starting" : status.kind === "running" ? "Ready" : status.kind === "ended" ? `Ended${status.code ? ` (${status.code})` : ""}` : "Failed";
+  // TERM-020/021: a plain shell reads as a terminal with a neutral status; an agent reads
+  // "Running" while its program is up (what it needs comes from hooks, a later task); only a
+  // failure is tinted.
+  const word = status.kind === "starting" ? "Starting" : status.kind === "running" ? (agent === "shell" ? "Ready" : "Running") : status.kind === "ended" ? `Ended${status.code ? ` (${status.code})` : ""}` : "Failed";
   const tone = status.kind === "failed" ? "attention" : "";
   const icon = status.kind === "starting" ? "working" : status.kind === "running" ? "done" : "idle";
   const drawing = renderer === "webgl" ? "GPU renderer" : renderer === "dom" ? "plain renderer" : "";
+  // The workspace folder is the session's name: for an agent launch that is its creature name.
   const title = cwd ? folderName(cwd) : "Terminal";
+  const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}`} aria-label={`${title} pane`}>
+    <section className={`pane${focused ? " focused" : ""}`} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
       <header className="pane-head">
         <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
           {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}
         </span>
-        <span className="agent-mark" title={agent === "shell" ? "Plain shell" : agent}>
+        <span className="agent-mark" title={agentLabel}>
           <VendorMark agent={agent} size={13} />
         </span>
         <span className="title" title={cwd ?? undefined}>
@@ -134,7 +159,9 @@ export default function TerminalPane({ cwd = null, branch = null, focused = fals
             {branch}
           </span>
         )}
-        <span className="word">PowerShell</span>
+        <span className="word" title={program ? [program, ...args].join(" ") : undefined}>
+          {programWord(agent)}
+        </span>
         <span className={`status ${tone}`}>{word}</span>
         <span className="right">
           <span className="gauge" title="Context used (agents only)">
@@ -149,7 +176,16 @@ export default function TerminalPane({ cwd = null, branch = null, focused = fals
           <button className="ib" title="Expand (not built yet)">
             <Expand size={12} />
           </button>
-          <button className="ib" title="Split (not built yet)">
+          <button
+            className="ib"
+            title="New session: start an agent in a new pane"
+            aria-haspopup="menu"
+            aria-expanded={plusAt !== null}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setPlusAt({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+            }}
+          >
             <Plus size={12} />
           </button>
           <button className="ib" onClick={close} disabled={status.kind !== "running"} title="Close pane: ends the program">
@@ -157,6 +193,18 @@ export default function TerminalPane({ cwd = null, branch = null, focused = fals
           </button>
         </span>
       </header>
+      {plusAt && (
+        <PlusMenu
+          agents={agents}
+          busy={launching}
+          style={{ top: plusAt.top, right: plusAt.right }}
+          onClose={() => setPlusAt(null)}
+          onPick={(a) => {
+            setPlusAt(null);
+            onLaunch?.(a);
+          }}
+        />
+      )}
       <div ref={host} className="pane-body" />
     </section>
   );
