@@ -147,7 +147,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-084 · ORCH-014 [compat] A worker's brief tells it how to report, ask and stay in touch · ORCH-018 [compat] Choose a worker's model by work tier instead of by name
 - [ ] T-085 · AUTO-001 [compat] Launch an agent with a saved prompt on a timetable · AUTO-004 [compat] Event triggers: pull request opened, checks failed, agent finished · AUTO-005 [compat] One dialog to create or edit an automation · AUTO-011 Runs launch in the background and never take focus (also from T-086: the Automations page's New Automation button and row Edit open this dialog, and the upcoming time is worked out again after every run)
 - [x] T-086 · AUTO-016 Automations list with sorting, filters and search · AUTO-019 Run now, pause, edit or delete an automation
-- [ ] T-087 · SET-028 Model and effort per tier for orchestration workers
+- [x] T-087 · SET-028 Model and effort per tier for orchestration workers
 - [ ] T-088 · CLI-007 [compat] kolux works in every Kolux terminal with no setup · CLI-030 [compat] Orchestration runs: start one, bind to one, look one up · CLI-031 [compat] Orchestration messages: send and reply · CLI-032 [compat] Orchestration inbox: check and inbox
 - [ ] T-089 · CLI-033 [compat] Orchestration ask: a question that waits for its answer, and can be resumed · CLI-034 [compat] Orchestration tasks and dispatch · CLI-035 [compat] Orchestration worker-start launches a worker, with model routing · CLI-036 [compat] Orchestration workers: list, show, read, stop, abandon, release and retain
 

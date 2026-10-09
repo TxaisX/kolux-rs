@@ -13,6 +13,7 @@ import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
 import { monoFont, terminalTheme } from "../theme";
 import { folderName } from "../projects/model";
+import { modelOf } from "../settings/routing";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
@@ -202,6 +203,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   // name); else "Terminal N" (SESS-024).
   const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
+  // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
+  const model = agent === "shell" ? null : modelOf(args);
 
   return (
     <section className={`pane${focused ? " focused" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
@@ -222,6 +225,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         )}
         <span className="word" title={program ? [program, ...args].join(" ") : undefined}>
           {programWord(agent)}
+          {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`}>{word}</span>
         <span className="right">

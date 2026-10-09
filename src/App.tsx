@@ -21,8 +21,9 @@ import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neig
 import StatusBar from "./chrome/StatusBar";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
-import ProjectsPanel from "./projects/ProjectsPanel";
+import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
+import RoutingPage from "./settings/RoutingPage";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
@@ -67,7 +68,8 @@ function Window() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
   // the grid stays mounted (hidden) behind it.
-  const [page, setPage] = useState<"automations" | null>(null);
+  // SET-028: Model routing opens the same way until Settings > Agents exists.
+  const [page, setPage] = useState<Page | null>(null);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -476,8 +478,8 @@ function Window() {
             launching={launching}
             onLaunch={launch}
             onChoose={addChooser}
-            automationsOpen={page === "automations"}
-            onAutomations={() => setPage((p) => (p === "automations" ? null : "automations"))}
+            page={page}
+            onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}
             createRequest={createRequest}
             onStartIn={startIn}
@@ -492,6 +494,15 @@ function Window() {
             <AutomationsPage
               projects={projects}
               agents={agents}
+              settings={settings}
+              onSettings={(next) => {
+                setSettings(next);
+                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              }}
+            />
+          )}
+          {terminals && page === "routing" && (
+            <RoutingPage
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);

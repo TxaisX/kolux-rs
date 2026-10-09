@@ -264,3 +264,10 @@ input { font: inherit; }
 .autos-runs li { display: flex; align-items: center; gap: 10px; height: 26px; border-bottom: 1px solid var(--line-inner); }
 .autos-runs .num { width: 34px; color: var(--fg-label); }
 .autos-runs .muted, .autos-none { color: var(--fg-faint); font-size: 12px; }
+/* Model routing (SET-028): the Automations page frame with one small table per provider. */
+.btn[aria-selected="true"] { background: var(--row-selected); border-color: var(--line-focus); color: var(--fg); }
+.routing-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; }
+.routing-note { margin: 0 0 12px; font-size: 12px; color: var(--fg-muted); }
+.routing-table { width: auto; min-width: 520px; }
+.routing-table td:first-child { min-width: 120px; }
+.routing-table select.field { width: 200px; }

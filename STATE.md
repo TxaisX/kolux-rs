@@ -263,6 +263,18 @@ automation that runs the prompt. If the project is gone the run is marked skippe
 missing it is marked failed. Automations live under `automations` / `automations.runs` in the store; the clock that
 starts them on time is T-085.
 
+T-087 (orchestration lane) adds Model routing (SET-028): the sliders button in the sidebar
+footer opens a page with one tab per provider that can route by tier (Claude Code, Codex) and a
+row per tier (Major, Deep, Build, Light), each with a model picker ("Provider default" first) and
+an effort picker. A model with no effort levels (Claude Haiku) hides the effort picker, and a new
+model keeps the effort while it still offers that level, otherwise the effort goes back to
+Default. Picks are saved in settings under `modelRouting`; a tier nothing was saved for uses the
+shipped ladder (`src-tauri/src/routing.rs`, the same table ORCH-018 used). `kolux-dev
+orchestration worker-start --tier <t>` now reads those picks, so the worker starts with the
+picked model. Every agent pane started with `--model` (a seat's pick or a worker's tier) names the
+model in its header ("Claude · haiku"). The reset button and the "not on this computer" mark are
+still to come in T-081.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -632,7 +644,13 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [orchestration] T-086: Runs, New Automation and row Edit are shown but greyed until T-130 (runs page) and T-085 (create/edit dialog) build them.
 - [orchestration] T-086: a search longer than 200 characters is refused (the box says so) instead of being run.
 
+- [orchestration] T-087: Model routing is a page of its own, opened from a sliders button in the sidebar footer, until Settings > Agents exists (T-036 / T-054); it should move there then.
+- [orchestration] T-087: the per-tier picks are saved in settings as `modelRouting.<provider>.<tier> = { model, effort }`; an empty model means the provider's own default (no `--model`, no effort).
+- [orchestration] T-087: when a new model does not offer the current effort, the effort goes back to "Default" (no effort flag) rather than to some other level.
+- [orchestration] T-087: effort levels offered are low / medium / high / xhigh / max for Claude Fable, Opus and Sonnet, none for Haiku, and low / medium / high / xhigh for the Codex models.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [orchestration] T-087 · done: new `src-tauri/src/routing.rs` (catalogue of routable providers, models, effort levels and the shipped ladder; `route` reads `modelRouting` from settings and drops an effort the model lacks; 3 Rust tests) used by `worker-start --tier` (CLI test now expects the saved Sonnet/low pick); `src/settings/routing.ts` (3 tests) + `RoutingPage.tsx` (1 render test), sliders button in the sidebar footer, model shown in the pane header; live: defaults table, Build set to Haiku hides its effort picker and saves, `kolux-dev orchestration worker-start --tier build` started a worker whose header reads "Claude · haiku" (Claude itself reports Haiku) · evidence/T-087-routing.png, T-087-no-effort.png, T-087-worker-header.png
 - 2026-10-09 · [orchestration] T-086 · done: new `src-tauri/src/automations.rs` (list / pause / delete / Run now commands, numbered manual runs, placement + trust + background tab via the cli-workspace event, skipped when the project is gone, failed when the agent is missing; 3 Rust tests), `src/automations/model.ts` (natural sort, last-run sort, filters, search, 5 tests) and `AutomationsPage.tsx` (3 render tests), clock button in the sidebar footer; live: list, search on prompt text, last-run sort, Run now on a paused row, delete confirm + Don't ask again, the background run tab, failed-load Retry · evidence/T-086-list.png, T-086-search.png, T-086-sort.png, T-086-runnow.png, T-086-confirm.png, T-086-deleted.png, T-086-run-tab.png, T-086-failed.png
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
 - 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png

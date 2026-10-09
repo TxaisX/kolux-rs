@@ -8,6 +8,7 @@ mod keybindings;
 mod names;
 mod projects;
 mod pty;
+mod routing;
 mod state;
 mod sysmem;
 mod terminal;
@@ -99,7 +100,8 @@ pub fn run() {
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,
-            automations::automation_run_now
+            automations::automation_run_now,
+            routing::routing_catalog
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

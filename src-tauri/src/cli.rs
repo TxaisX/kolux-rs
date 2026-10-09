@@ -548,23 +548,6 @@ fn installed_agent(id: &str) -> Result<crate::agents::AgentInfo, Fail> {
     Ok(known)
 }
 
-/// ORCH-018's shipped routing: the model and effort each tier means for a provider.
-/// ponytail: the per-provider routing page in Settings is the card's other half.
-fn route(agent: &str, tier: &str) -> Result<(String, Option<String>), Fail> {
-    let hit = match (agent, tier) {
-        ("claude", "major") => ("fable", Some("high")),
-        ("claude", "deep") => ("opus", Some("high")),
-        ("claude", "build") => ("sonnet", Some("medium")),
-        ("claude", "light") => ("haiku", None),
-        ("codex", "major") => ("gpt-5.6-sol", Some("high")),
-        ("codex", "deep") => ("gpt-5.6-terra", Some("high")),
-        ("codex", "build") => ("gpt-5.6-terra", Some("medium")),
-        ("codex", "light") => ("gpt-5.6-luna", Some("low")),
-        _ => return Err(Fail::new("no_route", format!("{agent} has no model route for the {tier} tier"))),
-    };
-    Ok((hit.0.to_string(), hit.1.map(str::to_string)))
-}
-
 /// The start-line arguments a model and effort add for an agent.
 fn model_args(agent: &str, model: Option<&str>, effort: Option<&str>) -> Result<Vec<String>, Fail> {
     let mut extra = Vec::new();
@@ -613,10 +596,11 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     };
     let agent = installed_agent(&agent_id)?;
     let tier = text("tier");
+    // ORCH-018 / SET-028: a tier means the model and effort picked for it in model routing.
     let (model, effort) = match &tier {
         Some(t) => {
-            let (m, e) = route(&agent_id, t)?;
-            (Some(m), e)
+            let settings = ctx.store.lock().map_err(|e| e.to_string())?.settings();
+            crate::routing::route(&settings, &agent_id, t).map_err(|m| Fail::new("no_route", m))?
         }
         None => (text("model"), text("effort")),
     };
@@ -902,13 +886,16 @@ mod tests {
         // ORCH-016: a worker start makes the task, the worktree and the start event, then waits
         // for the worker's terminal; with no window to open one, the wait runs out.
         let claude_installed = crate::agents::agent_list().iter().any(|a| a.id == "claude" && a.installed);
+        // SET-028: the light tier was given Sonnet at low effort in settings, so the worker runs on it.
+        store.lock().unwrap().save_settings(&json!({ "modelRouting": { "claude": { "light": { "model": "sonnet", "effort": "low" } } } })).unwrap();
         let start = json!({ "spec": "add a test", "agent": "claude", "tier": "light", "worktree": "new-top-level", "setup": "inherit", "timeoutMs": "1" });
         let out = dispatch(&ctx, &req("orchestration.worker-start", &repo, start.clone())).unwrap_err();
         if claude_installed {
             assert_eq!(out.code, "timeout", "{}", out.message);
             assert_eq!(out.data["dispatchId"], "dispatch-1");
             assert_eq!(out.data["taskId"], "task-1");
-            assert_eq!(out.data["model"], "haiku");
+            assert_eq!(out.data["model"], "sonnet");
+            assert_eq!(out.data["effort"], "low");
             assert_eq!(out.data["setup"], "not_configured");
             let wt = PathBuf::from(out.data["worktree"]["path"].as_str().unwrap());
             assert!(wt.join(".git").exists());
@@ -922,7 +909,7 @@ mod tests {
             assert_eq!(ev[n - 2]["kind"], "created");
             assert_eq!(ev[n - 1]["kind"], "start");
             assert_eq!(ev[n - 1]["prompt"], "add a test");
-            assert_eq!(ev[n - 1]["extra"], json!(["--model", "haiku"]));
+            assert_eq!(ev[n - 1]["extra"], json!(["--model", "sonnet", "--effort", "low"]));
             assert_eq!(ev[n - 1]["path"], out.data["worktree"]["path"]);
             drop(ev);
             let tasks = store.lock().unwrap().get("orchestration.tasks").unwrap().unwrap();

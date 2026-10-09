@@ -18,6 +18,9 @@ import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
 
+/** The pages that open over the content column from the sidebar footer. */
+export type Page = "automations" | "routing";
+
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
   openDirs: string[];
@@ -35,8 +38,9 @@ type Props = {
   onSetDefault: (id: string) => void;
   onChoose: () => void;
   /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
-  automationsOpen: boolean;
-  onAutomations: () => void;
+  /** Which page (Automations, Model routing) is open over the content column, if any. */
+  page: Page | null;
+  onPage: (page: Page) => void;
   /** Bump to reload the list after something outside the sidebar made a workspace. */
   refresh: number;
   /** Hands the window the project list and which project owns each workspace folder. */
@@ -47,7 +51,7 @@ type Props = {
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, automationsOpen, onAutomations, refresh, onIndex, createRequest, onStartIn }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, onStartIn }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -482,8 +486,12 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
           <button className="ib" title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`} aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
             <Gear />
           </button>
-          <button className="ib" title="Automations" aria-pressed={automationsOpen} onClick={onAutomations}>
+          <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
             <Clock />
+          </button>
+          {/* SET-028: until Settings > Agents exists (T-036, T-054), model routing opens from here. */}
+          <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
+            <Sliders size={14} />
           </button>
           <button className="ib" title="Help (not built yet)">
             <Help />
