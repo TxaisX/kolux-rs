@@ -1,13 +1,14 @@
 // Settings, laid over the window body (the panes underneath stay mounted and untouched). Its first
 // page is AI connections (ACCT-004): the Claude card connects on the 1-year key by default. The
 // other Connect cards and their install steps come with T-092 (ACCT-001..003); the Claude account
-// route and the Codex sign-ins with T-043-b / T-043-c.
+// route and the Codex sign-ins with T-043-b / T-043-c (both in).
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, type KeyAction, type KeyStatus } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
+import CodexCard from "./CodexCard";
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void }) {
   const card = keyCard(status);
@@ -110,6 +111,7 @@ export default function SettingsPage({ onClose }: { onClose: () => void }) {
         <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
         <ClaudeCard />
         <ClaudeAccounts />
+        <CodexCard />
       </main>
     </div>
   );

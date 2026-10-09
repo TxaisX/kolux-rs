@@ -3,6 +3,7 @@ mod browser;
 pub mod cli;
 mod claude_accounts;
 mod claude_key;
+mod codex_accounts;
 mod codex_usage;
 mod creatures;
 mod git;
@@ -63,6 +64,7 @@ pub fn run() {
             app.manage(Terminals::default());
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());
+            app.manage(codex_accounts::SignIns::default());
             // Git is checked once here; every project and workspace action runs through it.
             app.manage(git::Git::detect()?);
             // The command line reaches the app through a loopback port (PROJ-077).
@@ -121,7 +123,11 @@ pub fn run() {
             claude_accounts::claude_accounts,
             claude_accounts::claude_account_sign_in,
             claude_accounts::claude_account_cancel,
-            claude_accounts::claude_account_activate
+            claude_accounts::claude_account_activate,
+            codex_accounts::codex_accounts,
+            codex_accounts::codex_account_sign_in,
+            codex_accounts::codex_account_cancel,
+            codex_accounts::codex_account_activate
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

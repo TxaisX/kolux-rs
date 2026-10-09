@@ -48,10 +48,17 @@ pub fn strip_ansi(s: &str) -> String {
             continue;
         }
         match it.next() {
-            // CSI: parameters up to a final byte in @..~
+            // CSI: parameters up to a final byte in @..~. The console host places text by moving
+            // the cursor, so a jump to a position starts a new line and a move right is a space;
+            // otherwise two screen lines run together.
             Some('[') => {
                 for d in it.by_ref() {
                     if ('@'..='~').contains(&d) {
+                        match d {
+                            'H' | 'f' => out.push('\n'),
+                            'C' => out.push(' '),
+                            _ => {}
+                        }
                         break;
                     }
                 }

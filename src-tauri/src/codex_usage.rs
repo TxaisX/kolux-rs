@@ -73,7 +73,7 @@ pub fn signed_in_home(account_home: Option<&Path>, codex_home_env: Option<&str>,
     homes.into_iter().find_map(|h| sign_in_kind(&h.join("auth.json")).map(|k| (h, k)))
 }
 
-fn sign_in_kind(auth: &Path) -> Option<SignIn> {
+pub fn sign_in_kind(auth: &Path) -> Option<SignIn> {
     let v: Value = serde_json::from_slice(&std::fs::read(auth).ok()?).ok()?;
     let present = |k: &str| v.get(k).is_some_and(|x| !x.is_null() && x.as_str() != Some(""));
     if present("tokens") {
@@ -322,8 +322,10 @@ pub fn read(account_home: Option<&Path>) -> CodexUsage {
 }
 
 #[tauri::command]
-pub async fn codex_usage() -> Result<CodexUsage, String> {
-    tauri::async_runtime::spawn_blocking(|| read(None)).await.map_err(|e| e.to_string())
+pub async fn codex_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Result<CodexUsage, String> {
+    // ACCT-007: the active managed Codex account's home is read first.
+    let home = store.lock().ok().and_then(|s| crate::codex_accounts::active_home(&s)).map(PathBuf::from);
+    tauri::async_runtime::spawn_blocking(move || read(home.as_deref())).await.map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

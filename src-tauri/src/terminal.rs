@@ -148,7 +148,10 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
         let settings = store.settings();
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
-        crate::claude_key::pane_env(program.as_deref(), &settings, token).or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
+        crate::claude_key::pane_env(program.as_deref(), &settings, token)
+            .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
+            // ACCT-007: a Codex pane runs in the active Codex account's private home.
+            .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
     };
     terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env)
 }
