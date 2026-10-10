@@ -27,6 +27,7 @@ import PreviewPane from "./editor/PreviewPane";
 import FilePicker, { type Pick } from "./editor/FilePicker";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
+import Explorer from "./editor/Explorer";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -82,6 +83,15 @@ function Window() {
   const [screen, setScreen] = useState<Screen>("terminals");
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // EDIT-033: the explorer on the right; closed at start (DT-R17). A bump of explorerFocus moves focus into its tree.
+  const [explorerOpen, setExplorerOpen] = useState(false);
+  const [explorerFocus, setExplorerFocus] = useState(0);
+  const toggleExplorer = () => {
+    if (explorerOpen && document.activeElement?.closest(".explorer")) return setExplorerOpen(false);
+    setScreen("terminals");
+    setExplorerOpen(true);
+    setExplorerFocus((n) => n + 1);
+  };
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -148,11 +158,12 @@ function Window() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const kind = screen === "terminals" ? panes.find((p) => p.key === focused)?.kind : undefined;
+      const inTree = !!document.activeElement?.closest(".explorer"); // the explorer's own keys (EDIT-034) come with T-094-b
       // EDIT-001: in an editor the editor shortcuts come first and terminal ones do not apply;
       // the ones Kolux has no action for yet are left to CodeMirror.
       const hit =
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
@@ -176,6 +187,9 @@ function Window() {
           void save();
           break;
         }
+        case "sidebar.explorer.toggle":
+          toggleExplorer();
+          break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
           break;
@@ -548,7 +562,7 @@ function Window() {
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
   return (
     <div className="app">
-      <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
+      <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && explorerOpen} onToggleRight={() => (terminals && explorerOpen ? setExplorerOpen(false) : toggleExplorer())} />
       <div className="body">
         {terminals && sidebarOpen && (
           <ProjectsPanel
@@ -740,6 +754,7 @@ function Window() {
             })}
           </div>
         </div>
+        {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
       </div>
       <UpdateCenter />
       <StatusBar terminals={live.length} agents={live.filter((p) => p.agent !== "shell").length} />

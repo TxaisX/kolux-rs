@@ -102,6 +102,49 @@ pub fn new_note(root: &Path) -> Result<String, String> {
     Err(format!("{} already has 100 untitled notes; rename or delete some first", root.display()))
 }
 
+/// One row of the explorer (EDIT-033). A symlink (or junction) is `link` until it is opened, so it
+/// expands only once `path_kind` has confirmed it points at a folder.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: &'static str,
+}
+
+/// A folder's entries for the explorer: folders first, then by name ignoring case; `.git` is left out.
+pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
+    let mut out: Vec<DirEntry> = fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name() != ".git")
+        .map(|e| {
+            let kind = match e.file_type() {
+                Ok(t) if t.is_symlink() => "link",
+                Ok(t) if t.is_dir() => "dir",
+                _ => "file",
+            };
+            DirEntry { name: e.file_name().to_string_lossy().into_owned(), path: e.path().to_string_lossy().into_owned(), kind }
+        })
+        .collect();
+    out.sort_by(|a, b| (a.kind != "dir").cmp(&(b.kind != "dir")).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn dir_list(path: String) -> Result<Vec<DirEntry>, String> {
+    list_dir(Path::new(&path))
+}
+
+/// What a path really is, following links: "dir", "file" or "missing".
+#[tauri::command]
+pub fn path_kind(path: String) -> &'static str {
+    match fs::metadata(&path) {
+        Ok(m) if m.is_dir() => "dir",
+        Ok(_) => "file",
+        Err(_) => "missing",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +154,22 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn the_explorer_lists_folders_first_by_name_and_leaves_out_git() {
+        let d = temp_dir("list");
+        for f in ["b.txt", "A.txt"] {
+            fs::write(d.join(f), "x").unwrap();
+        }
+        for f in ["zeta", "Alpha", ".git"] {
+            fs::create_dir(d.join(f)).unwrap();
+        }
+        let got: Vec<_> = list_dir(&d).unwrap().into_iter().map(|e| (e.name, e.kind)).collect();
+        assert_eq!(got, [("Alpha".to_string(), "dir"), ("zeta".to_string(), "dir"), ("A.txt".to_string(), "file"), ("b.txt".to_string(), "file")]);
+        assert_eq!(path_kind(d.join("zeta").to_string_lossy().into()), "dir");
+        assert_eq!(path_kind(d.join("nope").to_string_lossy().into()), "missing");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

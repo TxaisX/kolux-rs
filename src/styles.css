@@ -65,6 +65,19 @@ input { font: inherit; }
 /* ---- 5. sidebar card: x 8, y 44, 289 wide ---- */
 .sidebar-wrap { flex: none; display: flex; padding: 8px 0 8px 8px; }
 .sidebar { width: 289px; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
+/* EDIT-033: the explorer, a card on the right matching the sidebar; rows are fixed 22px and virtualized. */
+.explorer { flex: none; width: 280px; margin: 8px 8px 8px 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
+.explorer-head { flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.explorer-head .title { font-weight: 500; color: var(--fg-label); }
+.explorer-head .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+.explorer-rows { flex: 1; min-height: 0; overflow: auto; outline: none; padding: 4px 0; }
+.explorer-rows:focus-visible .ex-row.at { box-shadow: inset 0 0 0 1px var(--line-focus); }
+.ex-row { position: absolute; left: 4px; right: 4px; height: 22px; display: flex; align-items: center; gap: 6px; padding-right: 8px; border-radius: 5px; font-size: 12.5px; color: var(--fg-row); white-space: nowrap; cursor: default; }
+.ex-row:hover { background: var(--row-selected); color: var(--fg); }
+.ex-row.sel { background: var(--row-selected); color: var(--fg); }
+.ex-twist { width: 12px; flex: none; display: inline-flex; justify-content: center; color: var(--fg-icon-dim); }
+.ex-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ex-link { flex: none; font-size: 10.5px; color: var(--fg-faint); }
 .sb-nav { padding: 8px 4px 0; }
 .row { display: flex; align-items: center; height: 32px; padding: 0 8px 0 13px; gap: 13px; border-radius: 6px; color: var(--fg-nav); white-space: nowrap; width: 100%; text-align: left; }
 .row .ic { width: 16px; display: inline-flex; justify-content: center; color: var(--fg-icon-dim); flex: none; }

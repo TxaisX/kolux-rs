@@ -105,6 +105,8 @@ pub fn run() {
             files::git_changes,
             files::change_entries,
             files::diff_image,
+            files::dir_list,
+            files::path_kind,
             update::update_status,
             update::update_mark,
             update::update_check,
