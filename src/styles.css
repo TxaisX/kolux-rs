@@ -212,6 +212,8 @@ input { font: inherit; }
 .tab .tab-x:hover { background: var(--row-selected); color: var(--fg); }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
 .pane.focused { border-color: var(--line-focus); }
+/* TERM-023: a soft, static green glow on a pane whose agent finished while it was not focused. */
+.pane.glow { border-color: var(--done); box-shadow: inset 0 0 0 1px var(--line-inner), 0 0 18px rgba(1, 200, 143, 0.3); }
 .pane[hidden] { display: none; }
 .pane-head { flex: none; height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 9px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; white-space: nowrap; }
 .pane-head .st { display: inline-flex; flex: none; }
@@ -226,6 +228,7 @@ input { font: inherit; }
 .pane-head .status.working { color: var(--working); }
 .pane-head .status.done { color: var(--done); }
 .pane-head .status.attention { color: var(--working-icon); }
+.pane-head .age { color: var(--fg-muted); }
 .pane-head .right { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 /* BROW-001: the address bar fills the browser tab's header; its page is a native web view laid over the body. */
 .pane-head .address { flex: 1; min-width: 0; height: 20px; padding: 0 8px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--kbd-bg); color: var(--fg); font: inherit; font-size: 12px; }

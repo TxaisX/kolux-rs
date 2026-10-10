@@ -29,6 +29,7 @@ import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
+import { nextNeedsYou } from "./terminal/status";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -84,6 +85,7 @@ function Window() {
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
+  const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -190,6 +192,16 @@ function Window() {
           if (!inFront) return;
           closePane(focused);
           break;
+        case "terminals.focusNextNeedsYou": {
+          // TERM-030: cycle through the panes waiting on the user in grid order, across workspaces;
+          // with none waiting, focus stays where it is.
+          const k = nextNeedsYou(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)), focused);
+          if (k === null) return;
+          const p = panes.find((x) => x.key === k);
+          if (p && !sameDir(p.cwd, activeDir)) setActiveDir(p.cwd);
+          setFocused(k);
+          break;
+        }
         case "terminal.splitRight":
         case "terminal.splitDown":
           if (!inFront) return;
@@ -621,6 +633,7 @@ function Window() {
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                    onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title}

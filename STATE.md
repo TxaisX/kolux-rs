@@ -1,9 +1,9 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 23, date: 2026-10-09)
-Next task: T-023 · TERM-020 / TERM-021 / TERM-023 / TERM-030 (+ STAT-051, VIEW-047)
-Done: 29 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 24, date: 2026-10-09)
+Next task: T-024 · TERM-055 / TERM-118
+Done: 30 / 341 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -338,6 +338,17 @@ its row within five seconds (a poll while the window is visible; watching is PRO
 Today the only live states are working, done and idle, read from whether an agent's program is
 up; the hook-fed states and the pull-request feed are named on T-025 and T-229.
 
+T-023 (TERM-020, TERM-021, TERM-023, TERM-030; STAT-051, VIEW-047): the pane header's status
+word is tinted by `status.ts`: an agent reads Starting then Working (cyan), Done (green) once
+its program ends well, "Ended (code)" neutral when it stopped otherwise, Failed (amber) when it
+could not start; a plain shell reads Starting, Ready and Ended in the neutral tone; the status
+dot keeps its spoken label. A Done agent shows its age next to the word ("just now", then "1m
+ago", refreshed each minute), and a pane whose agent finished while another pane was focused
+carries a static green glow until it is focused. Ctrl+J (Cmd+Shift+J on macOS;
+`terminals.focusNextNeedsYou`) cycles through the panes waiting on the user in grid order
+across workspaces and leaves focus alone when none waits; today no pane waits, since what an
+agent needs arrives with the status hooks (T-025), so the two-waiting cycle is proved in tests.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -434,6 +445,12 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-023: a stopped agent ("Ended (code)", non-zero exit) is not Done and does not
+  glow; only a clean exit reads Done with its age. The pane's finish time is its own clock read
+  at the exit event (the sidebar's `changed` is read at the same event in the window; the two
+  differ by milliseconds), so no shared store is kept until the Board needs one. A failed start
+  counts as "needs you" in `status.ts`, but the window already drops a failed pane with a
+  toast, so the next-that-needs-you cycle has nothing to visit until the hooks feed it.
 - 2026-10-09 · T-022: with no status hooks yet (STAT-001, T-025) a row's state is read from
   the pane's program: a shell is idle, an agent is working until its program ends, then done;
   permission, blocked, waiting, interrupted and queued are typed and ranked now so the hooks only
@@ -778,6 +795,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-023 · done: `src/terminal/status.ts` (header word, tone, icon, age, needs-you cycle) + `status.test.ts`; `TerminalPane.tsx` finish time, minute tick, glow until focused, `onNeedsYou`; `App.tsx` Ctrl+J handler across workspaces; `styles.css` glow and age. Live: agent workspace via CLI, split shell focused, `/exit` sent to the agent → "Done · just now" with a glow, "1m ago" after a minute, glow gone on focus; Ctrl+J with nothing waiting left focus where it was. Evidence: `evidence/T-023-glow.png`, `evidence/T-023-focused.png`.
 - 2026-10-09 · T-022 · done: `src/projects/rows.ts` (states, ranks, smart order, status and PR groups, setting keys) + `rows.test.ts`; `App.tsx` derives each folder's strongest state and change time from its panes and offers `saveSetting`; `ProjectsPanel.tsx` grouping, sort, filter form, state dots, unread marks, accent bar, 5 s branch poll; `styles.css`. Live: two CLI-made agent workspaces, one agent ended → done above working under Smart; Status grouping headers; hand-marked unread on the shown row; `git checkout -b renamed` in zeta's folder showed on its row. Evidence: `evidence/T-022-status.png`, `evidence/T-022-branch.png`.
 - 2026-10-09 · T-021 · done: `cli.rs` (parse refuses the retired `--parent-workspace`, an empty `--parent-worktree`, a non-numeric or zero `--issue`; dispatch works out the parent from the calling folder, `--parent-worktree` in the same project or `--no-parent`, records the origin and echoes it; `calling_worktree`), `projects.rs` (`set_origin` / `origin` under `workspaceOrigins`, forgotten on removal), tests extended (65 Rust tests); live with `kolux-dev` rebuilt and the dev app up: from inside zeta `worktree create --name b --agent claude --prompt hi --issue 7 --comment "from zeta" --json` → envelope with parent = zeta's path, madeBy cli, issue 7, comment; row b appeared with zeta still selected and claude.exe running "hi" under the app; `--name c --activate` → c selected; `--name d --prompt hi`, `--parent-workspace name:zeta`, `--issue nope` → exit 1 with their messages; `rm --worktree name:b --force` and c → rows back to zeta, the Claude process gone; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-021-background.png, T-021-activate.png
 - 2026-10-09 · T-020 · done: `projects.rs` (`resolve_workspaces_dir(env, setting)`, `KOLUX_WORKSPACES_DIR` read there, `PlaceInfo.fromEnv`, `set_place` makes an absolute folder and fails when it cannot; 2 tests, 65 Rust tests), `model.ts` (`placeFieldAction`; 1 test, 76 front-end tests), `ProjectsPanel.tsx` (Enter/Escape/composing, blur retry, Browse… for the folder, env label); live in the dev app started with the variable padded with spaces: Use default + Save showed the variable's folder with the "(from KOLUX_WORKSPACES_DIR)" label and env-proof was created at `<env>\repo\env-proof`; a folder under a file failed with "cannot be made" and kept the typed text, leaving the field after the blocker was removed saved it; Escape put the saved folder back; a typed folder + Enter put typed-proof at `<folder>\repo\typed-proof`; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-020-env.png, T-020-failed.png, T-020-folder.png
