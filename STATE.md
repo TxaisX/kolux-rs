@@ -3,9 +3,9 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-025 · STAT-001 / STAT-007 / STAT-008 … (status hooks)
-Done: 38 / 351 tasks  ·  P0 parity: 0/228 cards
+Done: 49 / 353 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 351 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 353 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
