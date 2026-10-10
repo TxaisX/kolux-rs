@@ -16,6 +16,7 @@ import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
+import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
@@ -103,7 +104,14 @@ function Window() {
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
     invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
-    const readSettings = () => void invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    // SET-001: the saved look is put on the window every time the settings are read.
+    const readSettings = () =>
+      void invoke<Record<string, unknown>>("get_settings")
+        .then((s) => {
+          setSettings(s);
+          applyAppearance(readAppearance(s));
+        })
+        .catch(() => setSettings({}));
     readSettings();
     const off = listen("settings-saved", readSettings);
     return () => void off.then((u) => u()).catch(() => {});

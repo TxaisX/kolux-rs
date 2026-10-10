@@ -277,3 +277,24 @@ input { font: inherit; }
 .conn-switch { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--chip-bg); cursor: pointer; }
 .conn-switch input { margin-top: 2px; accent-color: var(--done); }
 .conn-switch small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: 12px; }
+/* Settings > Appearance (SET-001..003) */
+.look-row { display: flex; gap: 16px; align-items: flex-start; }
+.look-swatches { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; }
+.look-swatch { width: 24px; height: 24px; border-radius: 999px; border: 2px solid var(--line-strong); }
+.look-swatch.on { border-color: var(--fg); box-shadow: 0 0 0 2px var(--surface) inset; }
+.look-name { flex-basis: 100%; margin-top: 2px; font-size: 12px; color: var(--fg-muted); }
+.look-preview { flex: none; width: 168px; height: 104px; display: flex; flex-direction: column; gap: 4px; padding: 0 0 4px; background: var(--app-bg); border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+.lp-top { height: 12px; background: var(--surface); border-bottom: 1px solid var(--line-strong); }
+.lp-body { flex: 1; display: flex; gap: 4px; padding: 0 4px; }
+.lp-side { width: 46px; display: flex; flex-direction: column; gap: 4px; padding: 5px 4px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 4px; }
+.lp-row { height: 5px; border-radius: 2px; background: var(--line-focus); }
+.lp-row.sel { background: var(--seg-active); }
+.lp-pane { flex: 1; display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 4px; }
+.lp-line { height: 4px; width: 80%; border-radius: 2px; background: var(--fg-muted); }
+.lp-line.short { width: 50%; background: var(--done); }
+.look-slider { display: grid; grid-template-columns: 90px 1fr 56px; align-items: center; gap: 10px; font-size: 13px; color: var(--fg-row); }
+.look-slider.off { color: var(--fg-disabled); }
+.look-slider input { accent-color: var(--fg-muted); }
+.look-slider output { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
+.look-select { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--fg-row); }
+.look-select select { height: 28px; padding: 0 8px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }

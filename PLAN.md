@@ -106,7 +106,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-050 · VIEW-015 Agents screen lists sessions by saved agent · VIEW-019 Chat, terminal and composer for the selected session · VIEW-021 Add a session from the Agents screen · VIEW-024 Board shows every terminal session in order
 - [ ] T-051 · VIEW-050 [compat] Left sidebar: show, hide, resize and focus · VIEW-051 Sidebar card lists projects and their sessions
 - [ ] T-052 · USAGE-001 Each agent pane header carries a context ring and a percentage
-- [ ] T-053 · SET-001 [compat] App colour theme: Classic or one of 16 hues · SET-002 [compat] Tint, saturation and depth sliders adjust the theme · SET-003 Terminal colours can follow the app theme · SET-004 Startup never flashes the wrong theme or font
+- [x] T-053 · SET-001 [compat] App colour theme: Classic or one of 16 hues · SET-002 [compat] Tint, saturation and depth sliders adjust the theme · SET-003 Terminal colours can follow the app theme · SET-004 Startup never flashes the wrong theme or font
 - [ ] T-054 · SET-005 [compat] Light, Dark or System mode · SET-006 [compat] Settings: ten pages plus a small page per repository · SET-037 [compat] Classic or New look, and the screen that opens first
 
 ### P0 · theme 5 · Safety and trust (20 cards)
@@ -237,7 +237,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-145 · TERM-098 Terminal colour themes
 - [ ] T-146 · VIEW-006 Each workspace screen can have its own theme · VIEW-009 [compat] Full-page views open over the workspace · VIEW-056 [compat] Right sidebar: open, close, width and remembered tab · VIEW-057 [compat] Right sidebar tab strip · VIEW-086 Resume a past session as chat
 - [ ] T-147 · VIEW-096 Status bar: show, hide and choose items
-- [ ] T-148 · SET-016 Appearance page in three foldable sections · SET-018 App font and editor font · SET-020 Show or hide the title, toolbar buttons and status bar items · SET-023 Terminal colour schemes for dark and for light
+- [ ] T-148 · SET-016 Appearance page in three foldable sections · SET-018 App font and editor font · SET-020 Show or hide the title, toolbar buttons and status bar items · SET-023 Terminal colour schemes for dark and for light · also: the rest of T-053's card: the scheme catalogue, the separate light scheme and imported schemes go in the same Terminal colours picker as Kolux dark and Match app theme (Settings > Appearance, settings field `terminalScheme`)
 
 ### P1 · theme 5 · Safety and trust (37 cards)
 

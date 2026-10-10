@@ -2,6 +2,8 @@
 // They become CSS custom properties on the document root (styles.css reads them as var(--name))
 // and feed the terminal theme, so every colour has one home. The 16 hued themes come with SET-001.
 
+import type { ITheme } from "@xterm/xterm";
+
 export const classic = {
   // surfaces and lines
   "app-bg": "#050405",
@@ -66,4 +68,152 @@ export function applyTheme(el: StyleHost, theme: Theme = classic): void {
 /** The terminal's colours, taken from the same tokens so the body matches the pane around it. */
 export function terminalTheme(theme: Theme = classic) {
   return { background: theme["pane-bg"], foreground: theme.fg, cursor: theme.fg, cursorAccent: theme["pane-bg"] };
+}
+
+// ---- SET-001 / SET-002: Classic or one of 16 hued themes, with tint, saturation and depth ----
+
+/** Classic first, then the hued themes in colour-wheel order (Graphite is the greyscale one). */
+export const THEMES = ["classic", "ember", "copper", "sand", "moss", "fern", "jade", "teal", "lagoon", "sky", "cobalt", "indigo", "iris", "violet", "orchid", "rose", "graphite"] as const;
+export type ThemeName = (typeof THEMES)[number];
+const HUE: Record<Exclude<ThemeName, "classic">, number> = {
+  ember: 12, copper: 26, sand: 40, moss: 75, fern: 105, jade: 150, teal: 174, lagoon: 188,
+  sky: 202, cobalt: 218, indigo: 236, iris: 252, violet: 268, orchid: 290, rose: 340, graphite: 0,
+};
+export const themeLabel = (t: ThemeName) => t[0].toUpperCase() + t.slice(1);
+/** The swatch colour shown for a theme in the picker. */
+export const swatch = (t: ThemeName) => (t === "classic" ? classic["seg-active"] : t === "graphite" ? "#6b6b6b" : hsl(HUE[t], 0.55, 0.52));
+
+/** SET-003: "default" is Kolux's own dark terminal scheme, "match" follows the app hue. */
+export type TerminalScheme = "default" | "match";
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme };
+/** The settings fields the appearance lives in. */
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme" } as const;
+export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0] } as const;
+
+/** Out of span is pulled to the nearest end; anything not a number falls back to the default. */
+function clampNum(v: unknown, [lo, hi, dflt]: readonly [number, number, number]): number {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+}
+
+export function readAppearance(s: Record<string, unknown>): Appearance {
+  const t = s[FIELD.theme];
+  return {
+    theme: typeof t === "string" && (THEMES as readonly string[]).includes(t.toLowerCase()) ? (t.toLowerCase() as ThemeName) : "classic",
+    tint: clampNum(s[FIELD.tint], SPAN.tint),
+    saturation: clampNum(s[FIELD.saturation], SPAN.saturation),
+    depth: clampNum(s[FIELD.depth], SPAN.depth),
+    terminal: s[FIELD.terminal] === "match" ? "match" : "default",
+  };
+}
+
+const asFields = (a: Appearance): Record<string, unknown> => Object.fromEntries(Object.entries(FIELD).map(([k, f]) => [f, a[k as keyof Appearance]]));
+
+/** The settings with the appearance written back in its saved form (always one of the known names). */
+export function writeAppearance(s: Record<string, unknown>, a: Appearance): Record<string, unknown> {
+  return { ...s, ...asFields(readAppearance(asFields(a))) };
+}
+
+function toHsl(hex: string): [number, number, number] {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+  if (d === 0) return [0, 0, l];
+  const s = d / (1 - Math.abs(2 * l - 1));
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [(h * 60 + 360) % 360, s, l];
+}
+
+export function hsl(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return "#" + [r, g, b].map((v) => Math.round(Math.min(1, Math.max(0, v + m)) * 255).toString(16).padStart(2, "0")).join("");
+}
+
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+/** One depth step moves every background this much lightness. */
+const DEPTH_STEP = 0.012;
+/** How strongly a hued theme colours the backgrounds at 100 % saturation (text gets a third). */
+const BASE_SAT = 0.3;
+
+/** The theme's hue after tint, or null for Classic (no hue). */
+export const themeHue = (a: Appearance) => (a.theme === "classic" ? null : (((HUE[a.theme] + a.tint) % 360) + 360) % 360);
+
+/** Every token for an appearance: Classic as measured; a hued theme recolours the neutral greys
+ *  (backgrounds, lines, text) and leaves the status colours alone so their meaning holds. */
+export function buildTheme(a: Appearance): Theme {
+  const hue = themeHue(a);
+  if (hue === null) return { ...classic };
+  const sat = a.theme === "graphite" ? 0 : (BASE_SAT * a.saturation) / 100;
+  const out = { ...classic } as Theme;
+  for (const [k, hex] of Object.entries(classic) as [keyof Theme, string][]) {
+    const [, s, l] = toHsl(hex);
+    if (s > 0.12) continue; // a status colour
+    out[k] = l < 0.5 ? hsl(hue, clamp01(sat), clamp01(l + a.depth * DEPTH_STEP)) : hsl(hue, clamp01(sat / 3), l);
+  }
+  return out;
+}
+
+/** The preview beside the swatches: the chosen theme, or a violet sample while Classic is chosen. */
+export const previewOf = (a: Appearance): Appearance => (a.theme === "classic" ? { ...a, theme: "violet" } : a);
+
+function mix(a: string, b: string, t: number): string {
+  const p = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("");
+}
+
+const ANSI = { red: 0, green: 135, yellow: 45, blue: 215, magenta: 300, cyan: 185 } as const;
+
+/** SET-003: the terminal colours for an appearance. "match" works background, text and the 16-colour
+ *  palette out of the app hue; "default" is Kolux's own dark scheme whatever the app hue. */
+export function terminalFor(a: Appearance): ITheme {
+  if (a.terminal !== "match") return terminalTheme(classic);
+  const t = buildTheme(a);
+  const hue = themeHue(a);
+  const pull = (h: number, l: number) => (hue === null || a.theme === "graphite" ? hsl(h, 0.6, l) : mix(hsl(h, 0.6, l), hsl(hue, 0.6, l), 0.2));
+  const colours: Record<string, string> = {};
+  for (const [name, h] of Object.entries(ANSI)) {
+    colours[name] = pull(h, 0.55);
+    colours["bright" + name[0].toUpperCase() + name.slice(1)] = pull(h, 0.7);
+  }
+  return { ...terminalTheme(t), black: t.surface, brightBlack: t["fg-faint"], white: t["fg-row"], brightWhite: t.fg, ...colours };
+}
+
+// ---- SET-004: the first frame already has the saved look ----
+
+/** index.html reads this before anything draws; keep the key in step with its inline script. */
+export const CACHE_KEY = "kolux.look";
+let terminal = terminalFor(readAppearance({}));
+/** The terminal colours in force now; panes listen for TERMINAL_EVENT to follow changes. */
+export const currentTerminal = () => terminal;
+export const TERMINAL_EVENT = "kolux-terminal-theme";
+
+export function themeVars(t: Theme): Record<string, string> {
+  const vars: Record<string, string> = { "--ui-font": uiFont, "--mono-font": monoFont };
+  for (const [name, value] of Object.entries(t)) vars[`--${name}`] = value;
+  return vars;
+}
+
+/** Puts an appearance on the window now and remembers it for the next start's first frame. */
+export function applyAppearance(a: Appearance, root: StyleHost = document.documentElement): void {
+  const vars = themeVars(buildTheme(a));
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ vars, appearance: a }));
+  } catch {
+    /* no storage: the next start shows Classic until settings load */
+  }
+  terminal = terminalFor(a);
+  window.dispatchEvent(new Event(TERMINAL_EVENT));
+}
+
+/** The appearance remembered from the last run (Classic when there is none). */
+export function cachedAppearance(): Appearance {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) ?? "null");
+    if (c?.appearance) return readAppearance(asFields(c.appearance));
+  } catch {
+    /* fall through */
+  }
+  return readAppearance({});
 }

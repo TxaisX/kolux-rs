@@ -289,6 +289,12 @@ refuses the command Kolux starts it with is reported as such ("update Codex"), n
 problem. The Claude card has a "Carry on by itself once a usage limit resets" switch: off unless
 turned on, kept across restarts; it only stores the choice until the resume itself (T-041) lands.
 
+[accounts] Settings has an Appearance page (T-053): Classic plus 16 coloured themes, with tint,
+saturation and depth sliders (greyed out on Classic) and a small preview, and a Terminal colours
+picker with "Match app theme". Every change shows on the whole window at once and is kept. The
+window now starts hidden and appears only once it already wears the saved theme, so the white
+flash before the interface loads is gone too.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -691,7 +697,18 @@ recorded default until told otherwise; nothing here blocks a pass.
   window's copy of the settings now reloads after every save, so one writer no longer drops
   another's field.
 
+- 2026-10-09 · [accounts] T-053 · Settings fields: `appTheme` (lower-case name, anything else is
+  Classic), `themeTint`, `themeSaturation`, `themeDepth`, `terminalScheme` (`default` or `match`).
+  A hued theme recolours only the grey tokens (backgrounds and lines at 30 % saturation times the
+  slider, text at a third of that; depth moves backgrounds 1.2 % lightness per step) and leaves the
+  status colours as they are. The window starts hidden (`visible: false`); main.tsx applies the
+  saved look, renders, and shows the window two frames later, with a 5 s backstop in Rust. The
+  last run's look is also kept in the page's local storage (`kolux.look`) for when the settings
+  answer slowly; it is not relied on, since a killed app may not have written it. There are no
+  pop-out windows yet; any later window loads the same page and gets the same look.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [accounts] T-053 · done: `src/theme.ts` (17 themes in wheel order, `readAppearance` / `writeAppearance` with unknown names as Classic and sliders clamped or defaulted, `buildTheme`, `previewOf`, `terminalFor` with a matched 16-colour palette, `applyAppearance` + `cachedAppearance`), `src/settings/AppearancePage.tsx` (swatches, preview, sliders, terminal picker, live apply and a 250 ms save), Settings gets an Appearance page, open terminals recolour in place, App applies the look on every settings read, the window starts hidden and is shown after the first themed frame (index.html, main.tsx, tauri.conf.json, `core:window:allow-show`, Rust backstop); 7 front-end tests (105 total); live: fresh profile Classic with sliders off, Teal on the whole window inside one frame, Moss saturation 0 grey and back, saturation 500 read as 160 and a word as 100, Match with Sky then Ember recolours a running PowerShell pane (#090e11 then #110b09) and Kolux dark puts it back (#0d0d0d), Rose saved while the app was closed is the first visible frame, an unknown name starts as Classic; build / clippy / 81 Rust tests / 105 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-053.txt, evidence/T-053-*.png
 - 2026-10-09 · [accounts] T-043-d · HAND TO FABLE: Kolux-side renewal means Kolux sending the managed account's refresh credential to Anthropic's token service itself; that service's address, client id and answer are in no public Claude Code doc, so it cannot be built clean-room, and OD-01 (direct provider calls off) argues against building it at all, which is a call for Txais; the macOS keychain rules cannot be run or checked on this Windows PC; the switch alone (`claudeSignInUpkeepByClaudeCode` false) would only turn off Claude Code's upkeep with nothing in its place, so it was not shipped either; nothing changed, left unticked · no evidence
 - 2026-10-09 · [accounts] T-042-b · HAND TO FABLE: Codex's own usage service is not in OpenAI's public Codex docs (only the background process's `account/rateLimits/read`, which T-042-a already uses), so its address and answer cannot be learnt clean-room, and the last route reads Codex's status screen in a hidden terminal (PTY screen parsing); nothing changed, left unticked · no evidence
 - 2026-10-09 · [accounts] T-041 · HAND TO FABLE: blocked on T-025 and T-039 (carrying on after a limit needs the stop reason from the agent status hooks; Claude plan figures and the weekly pill need the status-line channel); the 200k window part could go alone (Claude Code's auto-compact variable, Codex's context-window and auto-compact overrides per run) but was not split off, to keep the task whole; the stored resume switch from T-045 waits for it; nothing changed, left unticked · no evidence

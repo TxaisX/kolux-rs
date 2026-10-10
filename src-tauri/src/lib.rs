@@ -64,6 +64,14 @@ pub fn run() {
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
+            // SET-004: the window starts hidden and the page shows it once its first frame has the saved
+            // look; this is the backstop for a page that never gets that far.
+            if let Some(w) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let _ = w.show();
+                });
+            }
             app.manage(Terminals::default());
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());

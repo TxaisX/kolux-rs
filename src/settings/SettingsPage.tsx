@@ -10,6 +10,7 @@ import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAc
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
+import AppearancePage from "./AppearancePage";
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
@@ -112,7 +113,11 @@ function ClaudeCard() {
   return <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />;
 }
 
+const PAGES = { connections: "AI connections", appearance: "Appearance" } as const;
+type Page = keyof typeof PAGES;
+
 export default function SettingsPage({ onClose }: { onClose: () => void }) {
+  const [page, setPage] = useState<Page>("connections");
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -124,21 +129,32 @@ export default function SettingsPage({ onClose }: { onClose: () => void }) {
     <div className="settings" role="dialog" aria-label="Settings">
       <nav className="settings-nav" aria-label="Settings pages">
         <div className="settings-title">Settings</div>
-        <button className="settings-link" aria-current="page">
-          AI connections
-        </button>
+        {(Object.keys(PAGES) as Page[]).map((p) => (
+          <button key={p} className="settings-link" aria-current={page === p ? "page" : undefined} onClick={() => setPage(p)}>
+            {PAGES[p]}
+          </button>
+        ))}
       </nav>
       <main className="settings-main">
         <header className="settings-head">
-          <h1>AI connections</h1>
+          <h1>{PAGES[page]}</h1>
           <button className="ib" title="Close Settings (Esc)" aria-label="Close Settings" onClick={onClose}>
             ×
           </button>
         </header>
-        <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
-        <ClaudeCard />
-        <ClaudeAccounts />
-        <CodexCard />
+        {page === "connections" ? (
+          <>
+            <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
+            <ClaudeCard />
+            <ClaudeAccounts />
+            <CodexCard />
+          </>
+        ) : (
+          <>
+            <p className="settings-sub">How Kolux looks. Changes show straight away.</p>
+            <AppearancePage />
+          </>
+        )}
       </main>
     </div>
   );

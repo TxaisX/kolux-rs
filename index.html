@@ -4,7 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Kolux RS</title>
-    <style>html, body, #root { margin: 0; height: 100%; overflow: hidden; }</style>
+    <style>html, body, #root { margin: 0; height: 100%; overflow: hidden; } html { background: var(--app-bg, #050405); }</style>
+    <script>
+      // SET-004: the colours and font of the last run go on the root before anything draws, so the
+      // first frame already has the saved look. The key is CACHE_KEY in src/theme.ts.
+      try {
+        var look = JSON.parse(localStorage.getItem("kolux.look") || "null");
+        if (look && look.vars) for (var k in look.vars) document.documentElement.style.setProperty(k, look.vars[k]);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>
