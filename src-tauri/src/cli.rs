@@ -84,7 +84,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble"];
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
@@ -119,6 +119,8 @@ const QUERY: &[(&str, &str, &[&str])] = &[
     ("worktree ps", "worktree.ps", &["repo", "limit"]),
     ("worktree show", "worktree.show", &["worktree"]),
     ("worktree current", "worktree.current", &[]),
+    ("worktree changes", "worktree.changes", &["worktree"]),
+    ("worktree overlap", "worktree.overlap", &["worktree"]),
 ];
 const SEND: &str = "orchestration.send";
 const CHECK: &str = "orchestration.check";
@@ -894,6 +896,52 @@ fn hosts() -> Value {
     json!({ "covered": ["local"], "leftOut": [] })
 }
 
+/// The ref a repo's worktrees are measured against: its saved base while that exists, else the
+/// default branch. Only reads: unlike a create, nothing is fetched.
+fn base_of(ctx: &Ctx, p: &Project) -> Option<String> {
+    let repo = Path::new(&p.path);
+    p.base.as_deref().map(str::trim).filter(|b| !b.is_empty() && ctx.git.rev_exists(repo, b)).map(String::from).or_else(|| ctx.git.default_branch(repo))
+}
+
+fn change_rows(list: &[crate::scm::Change]) -> Vec<Value> {
+    list.iter().map(|c| json!({ "path": c.path, "status": c.status })).collect()
+}
+
+/// CLI-021: the siblings in the same repo (hidden ones too) whose changes share a file with this
+/// worktree's, each with a clash prediction from the committed tips; siblings whose changes could
+/// not be read are listed apart, and then the scan is not complete.
+fn overlap(ctx: &Ctx, p: &Project, w: &Worktree) -> Result<Value, Fail> {
+    let base = base_of(ctx, p);
+    let mine: Vec<String> = crate::scm::changes(Path::new(&w.path), base.as_deref())?.into_iter().map(|c| c.path).collect();
+    let listed = ctx.git.worktrees(Path::new(&p.path));
+    let complete = listed.is_ok();
+    let (mut siblings, mut unreadable, mut checked) = (Vec::new(), Vec::new(), 0);
+    for s in listed.unwrap_or_default().into_iter().filter(|s| !same_dir(&s.path, &w.path)) {
+        let theirs = if Path::new(&s.path).is_dir() { crate::scm::changes(Path::new(&s.path), base.as_deref()) } else { Err("its folder is missing".to_string()) };
+        let theirs = match theirs {
+            Ok(t) => t,
+            Err(why) => {
+                unreadable.push(json!({ "path": s.path, "branch": s.branch, "why": why }));
+                continue;
+            }
+        };
+        checked += 1;
+        // ponytail: a linear scan per sibling; fine for the dozens of files a worktree touches.
+        let shared: Vec<String> = theirs.into_iter().map(|c| c.path).filter(|f| mine.contains(f)).collect();
+        if shared.is_empty() {
+            continue;
+        }
+        let (clash, conflicts, why) = match crate::scm::clash(Path::new(&p.path), &w.head, &s.head) {
+            crate::scm::Clash::Clean => ("clean", Vec::new(), None),
+            crate::scm::Clash::Conflict(files) => ("conflict", files, None),
+            crate::scm::Clash::Unverifiable(why) => ("unverifiable", Vec::new(), Some(why)),
+        };
+        siblings.push(json!({ "path": s.path, "branch": s.branch, "files": shared, "clash": clash, "conflicts": conflicts, "why": why }));
+    }
+    let complete = complete && unreadable.is_empty();
+    Ok(json!({ "worktree": w.path, "branch": w.branch, "base": base, "files": mine.len(), "siblings": siblings, "checked": checked, "unreadable": unreadable, "complete": complete, "hosts": hosts() }))
+}
+
 fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
@@ -914,7 +962,7 @@ fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let p = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
             let count = projects::list_workspaces(ctx.git, &*lock()?, &p)?.len();
             let mut row = repo_row(&p);
-            row["base"] = json!(projects::resolve_base(ctx.git, Path::new(&p.path), &p, None).ok().map(|(b, _)| b));
+            row["base"] = json!(base_of(ctx, &p));
             row["worktrees"] = json!(count);
             Ok(row)
         }
@@ -975,6 +1023,15 @@ fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             rows.truncate(limit.unwrap_or(usize::MAX));
             Ok(json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts() }))
         }
+        "worktree.changes" | "worktree.overlap" => {
+            let (p, w) = pick_worktree(ctx, &text("worktree").unwrap_or_else(|| "current".into()), &req.cwd)?;
+            if req.command == "worktree.overlap" {
+                return overlap(ctx, &p, &w);
+            }
+            let base = base_of(ctx, &p);
+            let files = crate::scm::changes(Path::new(&w.path), base.as_deref())?;
+            Ok(json!({ "worktree": w.path, "branch": w.branch, "base": base, "files": change_rows(&files) }))
+        }
         "worktree.show" | "worktree.current" => {
             let sel = if req.command == "worktree.current" { "current".to_string() } else { text("worktree").unwrap_or_else(|| "current".into()) };
             let (p, w) = pick_worktree(ctx, &sel, &req.cwd)?;
@@ -1029,6 +1086,39 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
                 out.push("(more rows; raise --limit)".into());
             }
             out.push("hosts covered: local; none left out".into());
+            out.join("\n")
+        }
+        "worktree.changes" => {
+            let mut out = vec![match r["base"].as_str() {
+                Some(b) => format!("{} against {b}:", s(r, "worktree")),
+                None => format!("{}: no base branch found, so only uncommitted work is shown:", s(r, "worktree")),
+            }];
+            let list = rows("files");
+            out.extend(list.iter().map(|f| format!("  {} {}", s(f, "status"), s(f, "path"))));
+            if list.is_empty() {
+                out.push("  nothing changed".into());
+            }
+            out.join("\n")
+        }
+        "worktree.overlap" => {
+            let mut out = vec![format!("{} touches {} file(s) against {}", s(r, "worktree"), r["files"], r["base"].as_str().unwrap_or("no base"))];
+            for sib in rows("siblings") {
+                let clash = match sib["clash"].as_str().unwrap_or_default() {
+                    "clean" => "committed work merges cleanly".to_string(),
+                    "conflict" => format!("committed work would conflict in {}", sib["conflicts"].as_array().map(|c| c.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default()),
+                    _ => format!("merge unverifiable: {}", sib["why"].as_str().unwrap_or("git could not check it")),
+                };
+                let files: Vec<String> = sib["files"].as_array().map(|f| f.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default();
+                out.push(format!("  {} [{}] also touches {}; {clash}", s(&sib, "path"), sib["branch"].as_str().unwrap_or("detached"), files.join(", ")));
+            }
+            for u in rows("unreadable") {
+                out.push(format!("  could not read the changes of {}: {}", s(&u, "path"), s(&u, "why")));
+            }
+            if rows("siblings").is_empty() {
+                out.push(if r["complete"] == true { "  no other worktree touches these files".into() } else { "  could not verify that no other worktree touches these files".into() });
+            } else if r["complete"] != true {
+                out.push("  the scan was incomplete; other overlaps may be missing".into());
+            }
             out.join("\n")
         }
         "worktree.show" | "worktree.current" => {
@@ -1822,6 +1912,74 @@ mod tests {
         assert_eq!(twice.code, "ambiguous");
         // ps: no Kolux terminal is open in a test.
         assert_eq!(dispatch(&ctx, &req("worktree.ps", &dir, json!({}))).unwrap()["worktrees"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_worktree_lists_its_changes_and_the_siblings_that_touch_them() {
+        let (_, p) = parse(&words("worktree overlap --worktree name:one --json"));
+        assert_eq!(p.unwrap().unwrap().command, "worktree.overlap");
+        assert!(parse(&words("worktree changes --repo name:x")).1.unwrap_err().message.contains("unknown flag"));
+
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli118-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let commit = |cwd: &Path, file: &str, text: &str| {
+            std::fs::write(cwd.join(file), text).unwrap();
+            git(&["add", "-A"], cwd);
+            git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", file], cwd);
+        };
+        git(&["init", "-q", "-b", "main"], &repo);
+        commit(&repo, "a.txt", "base\n");
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let mut settings = s.settings();
+            settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
+            s.save_settings(&settings).unwrap();
+        }
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None };
+        let make = |name: &str| PathBuf::from(dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": name }))).unwrap()["path"].as_str().unwrap());
+        let (one, two, quiet) = (make("one"), make("two"), make("quiet"));
+        commit(&one, "a.txt", "one\n");
+        std::fs::write(one.join("new.txt"), "untracked\n").unwrap();
+        commit(&two, "a.txt", "two\n");
+        commit(&quiet, "q.txt", "elsewhere\n");
+
+        // changes: committed and uncommitted work together, against the base.
+        let ch = dispatch(&ctx, &req("worktree.changes", &one, json!({}))).unwrap();
+        assert_eq!(ch["base"], "main");
+        assert_eq!(ch["files"], json!([{ "path": "a.txt", "status": "M" }, { "path": "new.txt", "status": "U" }]));
+
+        // overlap: the sibling that edits the same file, and a predicted clash on the committed tips.
+        let ov = dispatch(&ctx, &req("worktree.overlap", &one, json!({}))).unwrap();
+        let sib = ov["siblings"].as_array().unwrap();
+        assert_eq!(sib.len(), 1, "{ov}");
+        assert!(same_dir(sib[0]["path"].as_str().unwrap(), &two.display().to_string()));
+        assert_eq!((&sib[0]["files"], &sib[0]["clash"]), (&json!(["a.txt"]), &json!("conflict")));
+        assert_eq!(ov["complete"], true);
+
+        // A sibling with no history in common: the merge cannot be checked, so it is never clean.
+        let orphan = dir.join("ws").join("orphan");
+        git(&["worktree", "add", "-q", "--orphan", "-b", "orphan", &orphan.display().to_string()], &repo);
+        commit(&orphan, "a.txt", "unrelated\n");
+        // A sibling whose folder is gone: its changes cannot be read, so the scan is incomplete.
+        let gone = make("gone");
+        std::fs::remove_dir_all(&gone).unwrap();
+        let ov = dispatch(&ctx, &req("worktree.overlap", &one, json!({ "worktree": "name:one" }))).unwrap();
+        let un = ov["siblings"].as_array().unwrap().iter().find(|s| s["branch"] == "orphan").cloned().unwrap();
+        assert_eq!(un["clash"], "unverifiable", "{un}");
+        assert_eq!(ov["complete"], false);
+        assert_eq!(ov["unreadable"].as_array().unwrap().len(), 1);
+        let text = text_of("worktree.overlap", &ov);
+        assert!(text.contains("unverifiable") && text.contains("could not"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

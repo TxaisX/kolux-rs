@@ -110,6 +110,52 @@ fn kind(path: &str) -> Kind {
     Kind::Source
 }
 
+/// CLI-021: every file `worktree` differs from `base` in, committed and uncommitted work together
+/// (untracked files as `U`). Committed work counts from where the branch parted from the base, or
+/// from the base itself when they share no history; with no base, only the uncommitted work.
+pub fn changes(worktree: &Path, base: Option<&str>) -> Result<Vec<Change>, String> {
+    let since = match base {
+        Some(b) => run(&["merge-base", b, "HEAD"], Some(worktree)).unwrap_or_else(|_| b.to_string()),
+        None => "HEAD".to_string(),
+    };
+    let mut out = Vec::new();
+    let diff = run(&["diff", "--name-status", "--no-renames", "-z", &since, "--"], Some(worktree))?;
+    let mut parts = diff.split('\0').filter(|s| !s.is_empty());
+    while let (Some(st), Some(path)) = (parts.next(), parts.next()) {
+        out.push(Change { path: path.to_string(), status: st.chars().take(1).collect(), from: None });
+    }
+    for path in run(&["ls-files", "--others", "--exclude-standard", "-z"], Some(worktree))?.split('\0').filter(|s| !s.is_empty()) {
+        out.push(Change { path: path.to_string(), status: "U".into(), from: None });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+/// CLI-021: would two committed tips merge cleanly? Never "clean" unless Git said so.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Clash {
+    Clean,
+    Conflict(Vec<String>),
+    Unverifiable(String),
+}
+
+pub fn clash(repo: &Path, a: &str, b: &str) -> Clash {
+    match command(&["merge-tree", "--write-tree", "--name-only", "--no-messages", a, b], Some(repo)).output() {
+        Err(e) => Clash::Unverifiable(format!("could not run git: {e}")),
+        Ok(o) => clash_of(o.status.code(), &String::from_utf8_lossy(&o.stdout), &String::from_utf8_lossy(&o.stderr)),
+    }
+}
+
+/// `git merge-tree --write-tree`: 0 merges cleanly, 1 conflicts (the tree id, then the files);
+/// anything else (an old Git, unrelated histories, a missing commit) cannot be checked.
+fn clash_of(code: Option<i32>, out: &str, err: &str) -> Clash {
+    match code {
+        Some(0) => Clash::Clean,
+        Some(1) => Clash::Conflict(out.lines().skip(1).take_while(|l| !l.is_empty()).map(String::from).collect()),
+        _ => Clash::Unverifiable(err.lines().next().map(str::trim).filter(|l| !l.is_empty()).unwrap_or("git could not check the merge").to_string()),
+    }
+}
+
 /// VIEW-068: a base pinned for the repository wins; otherwise the branch's upstream when
 /// `upstream` is on and there is one, else the default branch. Lines count the commits since the
 /// branch parted from that ref, so the ref's own new commits show only as "behind".

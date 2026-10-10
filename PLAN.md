@@ -217,7 +217,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-116-c · SET-033 Per-repository page: base branch, setup script, folder (needs the Settings page, T-054, and a setup run: the Setup tab on T-107-b, and the prompt on T-156 before a shared script runs)
 - [x] T-117-a · CLI-009 [compat] Selectors for repos, worktrees and terminals, with the current folder as default · CLI-015 [compat] kolux repo: list, add, show, base ref and ref search · CLI-016 [compat] kolux project list · CLI-017 [compat] kolux worktree list, show, current and ps
 - [ ] T-117-b · CLI-019 [compat] kolux worktree set: rename, link, comment, board status and lineage (board status needs the core lane's Board, T-025..T-030), plus the WSL path rule and the folder: parent form of the selector card on T-117-a (folder workspaces are T-218)
-- [ ] T-118 · CLI-021 [compat] kolux worktree changes and overlap: what a worktree touched and who else touches it
+- [x] T-118 · CLI-021 [compat] kolux worktree changes and overlap: what a worktree touched and who else touches it
 
 ### P1 · theme 3 · Knowing what each agent is doing (57 cards)
 
