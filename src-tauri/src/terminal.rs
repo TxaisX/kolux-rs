@@ -185,10 +185,13 @@ impl Terminals {
         ids.len()
     }
 
-    /// Is `handle` an open terminal whose secret is `key`? (ORCH-001: a pane the runtime saw.)
-    pub fn verify(&self, handle: &str, key: &str) -> bool {
-        let Some(id) = id_of(handle) else { return false };
-        self.inner.lock().map(|i| i.keys.get(&id).is_some_and(|k| !key.is_empty() && k == key)).unwrap_or(false)
+    /// The open terminal whose secret is `key` (ORCH-001: a pane the runtime saw), by its handle.
+    pub fn by_key(&self, key: &str) -> Option<String> {
+        if key.is_empty() {
+            return None;
+        }
+        let inner = self.inner.lock().ok()?;
+        inner.keys.iter().find(|(_, k)| k.as_str() == key).map(|(id, _)| handle_of(*id))
     }
 
     /// ORCH-013: the program a terminal was started with, once it has written and then been quiet

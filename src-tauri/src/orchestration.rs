@@ -80,11 +80,13 @@ fn args(message: impl Into<String>) -> Fail {
 /// Who is calling (ORCH-001): `--from` names an open Kolux terminal; otherwise the handle and
 /// secret pane key every Kolux terminal carries must match a pane the runtime started itself. A
 /// shell outside Kolux (or a guessed key) is nobody: `None`.
-pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, verify: &dyn Fn(&str, &str) -> bool, live: &dyn Fn(&str) -> bool) -> Result<Option<String>, Fail> {
+/// The pane key decides: a handle the environment still names after it went stale is worked out
+/// again from the key (CLI-034); a key the runtime never gave is no one.
+pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, by_key: &dyn Fn(&str) -> Option<String>, live: &dyn Fn(&str) -> bool) -> Result<Option<String>, Fail> {
     if let Some(h) = from.map(str::trim).filter(|h| !h.is_empty()) {
         return if live(h) { Ok(Some(h.to_string())) } else { Err(Fail::new("not_found", format!("no open Kolux terminal is called {h}"))) };
     }
-    Ok(pane.filter(|(h, k)| verify(h, k)).map(|(h, _)| h.to_string()))
+    Ok(pane.and_then(|(_, k)| by_key(k)))
 }
 
 fn finished(d: &Value) -> bool {
@@ -310,7 +312,7 @@ impl Mail {
             o.extend(m.extras.clone());
         }
         // ORCH-006: every delivered message carries the command that answers it.
-        v["reply"] = json!(format!("kolux orchestration reply --id {} --body \"<your answer>\"", m.id));
+        v["reply"] = json!(format!("{CLI} orchestration reply --id {} --body \"<your answer>\"", m.id));
         v
     }
 
@@ -430,6 +432,16 @@ pub fn promote(tasks: &mut [Value]) {
 
 /// ORCH-010: a new task in `run`; ready at once unless it waits on unfinished tasks. Bad or
 /// unknown dependencies, an unknown parent and an oversized text are refused with nothing made.
+/// A list of task ids, as JSON or as PowerShell leaves it with the quotes stripped (`[a, b]`).
+pub fn parse_deps(s: &str) -> Option<Vec<String>> {
+    if let Ok(v) = serde_json::from_str::<Vec<String>>(s) {
+        return Some(v);
+    }
+    let inner = s.trim().strip_prefix('[')?.strip_suffix(']')?;
+    Some(inner.split(',').map(|d| d.trim().trim_matches('"').to_string()).filter(|d| !d.is_empty()).collect())
+}
+
+
 pub fn task_create(tasks: &mut Vec<Value>, a: &Value, run: Option<String>, now: u64) -> Result<Value, Fail> {
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let spec = a["spec"].as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| args("--spec is required"))?;
@@ -438,7 +450,7 @@ pub fn task_create(tasks: &mut Vec<Value>, a: &Value, run: Option<String>, now: 
     }
     let deps: Vec<String> = match text("deps") {
         None => Vec::new(),
-        Some(d) => serde_json::from_str(&d).map_err(|_| args("--deps takes a JSON list of task ids, like [\"task-1\"]"))?,
+        Some(d) => parse_deps(&d).ok_or_else(|| args("--deps takes a JSON list of task ids, like [\"task-1\"]"))?,
     };
     let known = |id: &str| tasks.iter().any(|t| t["id"] == id);
     if let Some(bad) = deps.iter().find(|d| !known(d)) {
@@ -524,8 +536,8 @@ pub struct Brief<'a> {
 // ponytail: questions go out as mail plus `check --wait` until the ask command lands (ORCH-029,
 // T-190); the dispatch pass joins these commands with ORCH-067 (T-155); the sub-worker section,
 // shown only while nesting budget remains, comes with that budget (ORCH-032, T-155). Every worker
-// Kolux can reach today is an agent (dispatch turns shells away, worker-start cannot reuse a
-// shell yet), so the bare-shell "exit after reporting" line comes with terminal reuse (T-089).
+// is an agent: dispatch turns shells away and a reused terminal must run the coordinator's own
+// agent (ORCH-016), so the bare-shell "exit after reporting" line has no worker to go to.
 pub fn brief(task: &Value, b: &Brief) -> String {
     let id = task["id"].as_str().unwrap_or_default();
     let to = b.run.map(|r| format!(" --to run:{r}")).or_else(|| b.coordinator.map(|c| format!(" --to {c}"))).unwrap_or_default();
@@ -574,12 +586,14 @@ mod tests {
 
     #[test]
     fn a_pane_is_tied_only_when_the_runtime_knows_it() {
-        let verify = |h: &str, k: &str| h == "term-1" && k == "s3cret";
-        assert_eq!(caller_of(None, Some(("term-1", "s3cret")), &verify, &live).unwrap().as_deref(), Some("term-1"));
-        assert_eq!(caller_of(None, Some(("term-1", "guess")), &verify, &live).unwrap(), None);
-        assert_eq!(caller_of(None, None, &verify, &live).unwrap(), None);
-        assert_eq!(caller_of(Some("term-4"), None, &verify, &live).unwrap().as_deref(), Some("term-4"));
-        assert_eq!(caller_of(Some("nope"), None, &verify, &live).unwrap_err().code, "not_found");
+        let by_key = |k: &str| (k == "s3cret").then(|| "term-1".to_string());
+        assert_eq!(caller_of(None, Some(("term-1", "s3cret")), &by_key, &live).unwrap().as_deref(), Some("term-1"));
+        // CLI-034: a stale handle is worked out again from the pane key.
+        assert_eq!(caller_of(None, Some(("term-5", "s3cret")), &by_key, &live).unwrap().as_deref(), Some("term-1"));
+        assert_eq!(caller_of(None, Some(("term-1", "guess")), &by_key, &live).unwrap(), None);
+        assert_eq!(caller_of(None, None, &by_key, &live).unwrap(), None);
+        assert_eq!(caller_of(Some("term-4"), None, &by_key, &live).unwrap().as_deref(), Some("term-4"));
+        assert_eq!(caller_of(Some("nope"), None, &by_key, &live).unwrap_err().code, "not_found");
     }
 
     #[test]
@@ -690,7 +704,7 @@ mod tests {
         let id = sent["messageIds"][0].as_str().unwrap().to_string();
         let boxes8 = m.boxes_of("term-8", &[]);
         let got = m.check("term-8", "term-8", &boxes8, Mode::Next, None, None, None).unwrap();
-        assert_eq!(got["messages"][0]["reply"], format!("kolux orchestration reply --id {id} --body \"<your answer>\""));
+        assert_eq!(got["messages"][0]["reply"], format!("{CLI} orchestration reply --id {id} --body \"<your answer>\""));
         let r = m.reply("term-8", &id, "on it", None, 3).unwrap();
         assert_eq!(r["to"], "term:term-1");
         let boxes1 = m.boxes_of("term-1", &[]);
@@ -720,6 +734,10 @@ mod tests {
         assert_eq!(a["status"], "ready");
         let b = task_create(&mut tasks, &json!({ "spec": "b", "deps": format!("[\"{aid}\"]") }), Some("run-1".into()), 2).unwrap();
         assert_eq!(b["status"], "pending");
+        // CLI-034: PowerShell strips the quotes out of a JSON list; the ids still arrive.
+        assert_eq!(parse_deps(&format!("[{aid}, task-9]")), Some(vec![aid.clone(), "task-9".to_string()]));
+        assert_eq!(parse_deps("[]"), Some(vec![]));
+        assert_eq!(parse_deps("task-1"), None);
         assert_eq!(task_create(&mut tasks, &json!({ "spec": "x", "deps": "[\"missing\"]" }), None, 3).unwrap_err().code, "not_found");
         assert_eq!(task_create(&mut tasks, &json!({ "spec": "x", "deps": "nope" }), None, 3).unwrap_err().code, "invalid_arguments");
         assert_eq!(task_create(&mut tasks, &json!({ "spec": "x".repeat(SPEC_MAX + 1) }), None, 3).unwrap_err().code, "too_large");

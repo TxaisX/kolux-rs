@@ -150,7 +150,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-086 · AUTO-016 Automations list with sorting, filters and search · AUTO-019 Run now, pause, edit or delete an automation
 - [x] T-087 · SET-028 Model and effort per tier for orchestration workers
 - [x] T-088 · CLI-007 [compat] kolux works in every Kolux terminal with no setup · CLI-030 [compat] Orchestration runs: start one, bind to one, look one up · CLI-031 [compat] Orchestration messages: send and reply · CLI-032 [compat] Orchestration inbox: check and inbox
-- [ ] T-089 · CLI-033 [compat] Orchestration ask: a question that waits for its answer, and can be resumed · CLI-034 [compat] Orchestration tasks and dispatch · CLI-035 [compat] Orchestration worker-start launches a worker, with model routing · CLI-036 [compat] Orchestration workers: list, show, read, stop, abandon, release and retain
+- [x] T-089-a · CLI-034 [compat] Orchestration tasks and dispatch · CLI-035 [compat] Orchestration worker-start launches a worker, with model routing (task-update waits for the task-state guards in T-071)
+- [ ] T-089-b · CLI-033 [compat] Orchestration ask: a question that waits for its answer, and can be resumed · CLI-036 [compat] Orchestration workers: list, show, read, stop, abandon, release and retain (split from T-089: ask needs the ask flow in T-190; worker show, read, stop and abandon need live worker state and transcripts in T-030, stop in T-071 and abandon in T-155)
 
 ### P0 · theme 8 · Release, update and CI pipeline (7 cards)
 
