@@ -12,7 +12,7 @@ import { markFor, type AgentInfo } from "../launch/PlusMenu";
 const choices = [1, 2, 4, 6];
 
 /** What a new tab runs: an agent, a shell (null), the browser (BROW-001) or a file picked from disk (EDIT-001). */
-export type NewTab = AgentInfo | null | "browser" | "file" | "diff";
+export type NewTab = AgentInfo | null | "browser" | "file" | "diff" | "changes";
 type Props = { count: number; onLayout: (n: number) => void; agents?: AgentInfo[]; onNewTab?: (what: NewTab) => void; open?: boolean };
 
 export default function LayoutStrip({ count, onLayout, agents = [], onNewTab, open = false }: Props) {
@@ -84,6 +84,12 @@ export default function LayoutStrip({ count, onLayout, agents = [], onNewTab, op
                 <FileCode size={14} />
               </span>
               <span className="name">Changed file diff…</span>
+            </button>
+            <button role="menuitem" className="menu-item" onClick={() => pick("changes")}>
+              <span className="agent-mark">
+                <FileCode size={14} />
+              </span>
+              <span className="name">All Changes</span>
             </button>
           </div>
         </>

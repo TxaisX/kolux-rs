@@ -67,6 +67,20 @@ pub fn git_changes(root: String, git: tauri::State<'_, crate::git::Git>) -> Resu
     git.changes(Path::new(&root))
 }
 
+/// Every change of the worktree for All Changes (EDIT-029); see Git::change_entries.
+#[tauri::command]
+pub fn change_entries(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Entry>, String> {
+    git.change_entries(Path::new(&root))
+}
+
+/// One side of a changed image, as bytes (EDIT-029: images load on their own); empty when the
+/// file is not on that side.
+#[tauri::command]
+pub fn diff_image(path: String, staged: bool, new: bool, git: tauri::State<'_, crate::git::Git>) -> Result<tauri::ipc::Response, String> {
+    let (old, now) = git.diff_bytes(Path::new(&path), staged)?;
+    Ok(tauri::ipc::Response::new(if new { now } else { old }))
+}
+
 /// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
 /// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
 /// first save is EDIT-054 (T-237).

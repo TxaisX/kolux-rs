@@ -103,6 +103,8 @@ pub fn run() {
             files::md_new,
             files::diff_sides,
             files::git_changes,
+            files::change_entries,
+            files::diff_image,
             update::update_status,
             update::update_mark,
             update::update_check,

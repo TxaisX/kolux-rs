@@ -26,6 +26,7 @@ import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
 import FilePicker, { type Pick } from "./editor/FilePicker";
 import DiffPane, { diffNav } from "./editor/DiffPane";
+import AllChangesPane from "./editor/AllChangesPane";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -47,13 +48,14 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff"; path?: string; staged?: boolean };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   if (p.kind === "editor") return baseName(p.path ?? "");
   if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
+  if (p.kind === "changes") return "All Changes";
   if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
@@ -262,6 +264,17 @@ function Window() {
     if (what === "diff") {
       if (!activeDir) setToast("Open a workspace to pick one of its changed files.");
       else setPicking("change");
+      return;
+    }
+    if (what === "changes") {
+      // EDIT-029: one All Changes tab per cell; an open one comes to the front.
+      if (!activeDir) return setToast("Open a workspace to see its changes.");
+      const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+      const same = here && panes.find((p) => p.kind === "changes" && groupOf(p) === groupOf(here));
+      if (same) return setFocused(same.key);
+      const key = nextKey.current++;
+      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "changes" }]);
+      setFocused(key);
       return;
     }
     if (what === "file") {
@@ -634,7 +647,7 @@ function Window() {
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
-                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
+                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
@@ -672,6 +685,8 @@ function Window() {
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
                   />
+                ) : p.kind === "changes" && p.cwd ? (
+                  <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.kind === "preview" && p.path ? (
                   <PreviewPane key={p.key} id={p.key} path={p.path} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (

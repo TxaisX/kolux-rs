@@ -215,25 +215,96 @@ impl Git {
     /// file, staged compares HEAD with the index. Git's checkout filters are applied, so line ends
     /// match the working file. A side the file is not on (new, deleted, untracked) is empty.
     pub fn diff_sides(&self, file: &Path, staged: bool) -> Result<(String, String), String> {
-        let not_text = || format!("{} is not UTF-8 text", file.display());
+        let (old, new) = self.diff_bytes(file, staged)?;
+        let text = |b: Vec<u8>| String::from_utf8(b).map_err(|_| format!("{} is not UTF-8 text", file.display()));
+        Ok((text(old)?, text(new)?))
+    }
+
+    /// The same two sides as bytes, for images in All Changes (EDIT-029).
+    pub fn diff_bytes(&self, file: &Path, staged: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
         let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).ok_or_else(|| format!("{} is not a file path", file.display()))?;
         let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         // ponytail: any failure to read a side counts as "not there"; tell the two apart if a real error ever hides behind it
-        let show = |rev: &str| match output(&["cat-file", "--filters", &format!("{rev}:./{name}")], Some(dir)) {
-            Ok(b) => String::from_utf8(b).map_err(|_| not_text()),
-            Err(_) => Ok(String::new()),
-        };
-        let index = show("")?;
+        let show = |rev: &str| output(&["cat-file", "--filters", &format!("{rev}:./{name}")], Some(dir)).unwrap_or_default();
+        let index = show("");
         if staged {
-            return Ok((show("HEAD")?, index));
+            return Ok((show("HEAD"), index));
         }
         let work = match std::fs::read(file) {
-            Ok(b) => String::from_utf8(b).map_err(|_| not_text())?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(format!("{}: {e}", file.display())),
         };
         Ok((index, work))
     }
+
+    /// Every change of the worktree with its size and identity, for All Changes (EDIT-029).
+    pub fn change_entries(&self, worktree: &Path) -> Result<Vec<Entry>, String> {
+        let changes = self.changes(worktree)?;
+        let (staged, unstaged) = (diff_stats(worktree, true)?, diff_stats(worktree, false)?);
+        Ok(changes
+            .into_iter()
+            .map(|c| {
+                let rel = Path::new(&c.path).strip_prefix(worktree).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                let disk = std::fs::metadata(&c.path).ok().map(|m| format!("{}-{:?}", m.len(), m.modified().ok())).unwrap_or_default();
+                if c.code == '?' {
+                    // ponytail: an untracked file is read whole for its line count; cap the read if huge untracked files get common
+                    let bytes = std::fs::read(&c.path).unwrap_or_default();
+                    let binary = bytes.iter().take(8000).any(|&b| b == 0);
+                    let lines = (!binary).then(|| bytes.iter().filter(|&&b| b == b'\n').count() as u64 + u64::from(bytes.last().is_some_and(|&b| b != b'\n')));
+                    return Entry { path: c.path, staged: false, code: c.code, lines, binary, stamp: disk };
+                }
+                let s = (if c.staged { &staged } else { &unstaged }).get(&rel).cloned().unwrap_or_default();
+                let stamp = if c.staged { s.ids } else { format!("{}|{disk}", s.ids) };
+                Entry { path: c.path, staged: c.staged, code: c.code, lines: s.lines, binary: s.binary, stamp }
+            })
+            .collect())
+    }
+}
+
+/// A changed file in All Changes (EDIT-029): `lines` is added plus removed lines (none for a
+/// binary file), and `stamp` changes whenever the change does, so a section reuses what it
+/// fetched only while its change is the same.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Entry {
+    pub path: String,
+    pub staged: bool,
+    pub code: char,
+    pub lines: Option<u64>,
+    pub binary: bool,
+    pub stamp: String,
+}
+
+#[derive(Clone, Default)]
+struct Stat {
+    lines: Option<u64>,
+    binary: bool,
+    ids: String,
+}
+
+/// `git diff [--cached] --numstat` and `--raw` by path (relative to the top, with forward slashes).
+fn diff_stats(worktree: &Path, cached: bool) -> Result<std::collections::HashMap<String, Stat>, String> {
+    let mut map: std::collections::HashMap<String, Stat> = std::collections::HashMap::new();
+    let with = |args: &[&'static str]| -> Vec<&'static str> { args.iter().copied().chain(cached.then_some("--cached")).collect() };
+    let numstat = output(&with(&["diff", "--numstat", "-z", "--no-renames"]), Some(worktree))?;
+    for rec in String::from_utf8_lossy(&numstat).split('\0') {
+        let mut f = rec.splitn(3, '\t');
+        if let (Some(a), Some(r), Some(p)) = (f.next(), f.next(), f.next()) {
+            let s = map.entry(p.to_string()).or_default();
+            s.binary = a == "-";
+            s.lines = a.parse::<u64>().ok().zip(r.parse::<u64>().ok()).map(|(a, r)| a + r);
+        }
+    }
+    let raw = output(&with(&["diff", "--raw", "-z", "--no-abbrev", "--no-renames"]), Some(worktree))?;
+    let text = String::from_utf8_lossy(&raw);
+    let mut parts = text.split('\0');
+    while let (Some(head), Some(p)) = (parts.next(), parts.next()) {
+        let ids: Vec<&str> = head.split(' ').collect();
+        if ids.len() >= 4 {
+            map.entry(p.to_string()).or_default().ids = format!("{}-{}", ids[2], ids[3]);
+        }
+    }
+    Ok(map)
 }
 
 /// Parses `git worktree list --porcelain`: blank-line separated blocks, the first is the main
@@ -360,6 +431,16 @@ mod tests {
         assert_eq!(git.diff_sides(&readme, true).unwrap(), ("hello\n".into(), "hello staged\n".into()));
         assert_eq!(git.diff_sides(&readme, false).unwrap(), ("hello staged\n".into(), "hello staged and more\n".into()));
         assert_eq!(git.diff_sides(&repo.join("new.txt"), false).unwrap(), (String::new(), "fresh\n".into()));
+
+        fs::write(repo.join("blob.bin"), [0u8, 1, 2, 0]).unwrap();
+        let sizes = |git: &Git| git.change_entries(&repo).unwrap().into_iter().map(|e| (e.lines, e.binary, e.stamp)).collect::<Vec<_>>();
+        let before = sizes(&git);
+        assert_eq!(before.iter().map(|(l, b, _)| (*l, *b)).collect::<Vec<_>>(), [(Some(2), false), (Some(2), false), (None, true), (Some(1), false)]);
+        assert!(before.iter().all(|(_, _, s)| !s.is_empty()), "every change has an identity");
+        fs::write(repo.join("README.md"), "hello staged and more, again\n").unwrap();
+        let after = sizes(&git);
+        assert_eq!(after[0].2, before[0].2, "the staged change is the same");
+        assert_ne!(after[1].2, before[1].2, "the unstaged change is not");
         fs::remove_dir_all(&repo).unwrap();
     }
 

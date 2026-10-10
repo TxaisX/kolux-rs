@@ -304,3 +304,30 @@ input { font: inherit; }
 .diff-actions { position: relative; display: inline-flex; }
 .diff-menu { position: absolute; top: 28px; right: 0; }
 .diff-menu .check { width: 14px; flex: none; color: var(--fg); }
+
+/* EDIT-029: All Changes. Sections stack in one scroll; each text diff stops at a ceiling and
+   scrolls inside itself. The file tree sits on the left when shown. */
+.ac-body { display: flex; flex-direction: row; min-height: 0; }
+.ac-tree { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-right: 1px solid var(--line-subtle); min-width: 0; }
+.ac-rows { flex: 1; min-height: 0; overflow-y: auto; }
+.ac-dir { padding: 6px 4px 2px; color: var(--fg-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-row { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 4px; border-radius: 4px; }
+.ac-row:hover { background: var(--row-selected); }
+.ac-jump { flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 0; color: var(--fg-row); font: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ac-code { flex: none; color: var(--fg-muted); font-family: var(--mono-font); font-size: 11px; }
+.ac-handle { flex: none; width: 4px; margin-left: -2px; cursor: col-resize; }
+.ac-handle:hover { background: var(--line-focus); }
+/* Scroll anchoring is off: it moved the view by whole screens as sections drew. Height estimates
+   and the tree jump re-aiming keep the view steady instead. */
+.ac-list { flex: 1; min-width: 0; overflow-y: auto; overflow-anchor: none; padding: 8px; display: flex; flex-direction: column; gap: 10px; }
+.ac-section { flex: none; border: 1px solid var(--line-subtle); border-radius: 6px; overflow: hidden; }
+.ac-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line-subtle); }
+.ac-name { flex: 1; min-width: 0; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-lines { flex: none; color: var(--fg-muted); font-size: 11px; }
+.ac-editor > .cm-editor { max-height: 560px; }
+.ac-editor > .cm-editor .cm-scroller { overflow: auto; }
+.ac-wait { display: flex; align-items: center; gap: 10px; padding: 12px 10px; color: var(--fg-muted); }
+.ac-images { display: flex; flex-wrap: wrap; gap: 16px; padding: 10px; overflow-x: auto; }
+.ac-images figure { margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.ac-images figcaption { color: var(--fg-muted); font-size: 11px; }
+.ac-images img { max-width: none; image-rendering: auto; background: var(--chip-bg); }
