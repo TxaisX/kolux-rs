@@ -26,6 +26,18 @@ struct Inner {
     /// When each program session started and last wrote, so a worker start can tell when its
     /// agent has come up (ORCH-016). Shells are not marked.
     marks: HashMap<u32, Mark>,
+    /// CLI-007 / ORCH-001: each session secret pane key, put in its environment as
+    /// `KOLUX_PANE_KEY` next to its handle, so a command run inside it can prove which pane it is.
+    keys: HashMap<u32, String>,
+}
+
+/// The handle a terminal is known by on the command line (`KOLUX_TERMINAL_HANDLE`).
+pub fn handle_of(id: u32) -> String {
+    format!("term-{id}")
+}
+
+fn id_of(handle: &str) -> Option<u32> {
+    handle.strip_prefix("term-")?.parse().ok()
 }
 
 #[derive(Clone, Copy)]
@@ -59,10 +71,13 @@ impl Terminals {
         let registry = self.inner.clone();
         let out_registry = self.inner.clone();
         let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty());
-        let command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let mut command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => program_command(p, &args, cwd.as_deref()),
             None => shell_command(cwd.as_deref()),
         };
+        let key = crate::cli::secret();
+        command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
+        command.env("KOLUX_PANE_KEY", &key);
         let session = PtySession::spawn(
             command,
             cols.max(2),
@@ -84,11 +99,13 @@ impl Terminals {
                     inner.sessions.remove(&id);
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
+                    inner.keys.remove(&id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
         )?;
         inner.sessions.insert(id, session);
+        inner.keys.insert(id, key);
         if is_program {
             inner.marks.insert(id, Mark { started: Instant::now(), last_output: None });
         }
@@ -113,6 +130,7 @@ impl Terminals {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.dirs.remove(&id);
         inner.marks.remove(&id);
+        inner.keys.remove(&id);
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
@@ -148,10 +166,23 @@ impl Terminals {
         ids.len()
     }
 
+    /// Is `handle` an open terminal whose secret is `key`? (ORCH-001: a pane the runtime saw.)
+    pub fn verify(&self, handle: &str, key: &str) -> bool {
+        let Some(id) = id_of(handle) else { return false };
+        self.inner.lock().map(|i| i.keys.get(&id).is_some_and(|k| !key.is_empty() && k == key)).unwrap_or(false)
+    }
+
+    /// Is `handle` an open terminal? (`--from` names one explicitly.)
+    pub fn live(&self, handle: &str) -> bool {
+        let Some(id) = id_of(handle) else { return false };
+        self.inner.lock().map(|i| i.sessions.contains_key(&id)).unwrap_or(false)
+    }
+
     /// Ends every session: the window is closing, nothing may be left running.
     pub fn kill_all(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.dirs.clear();
+            inner.keys.clear();
             for (_, mut s) in inner.sessions.drain() {
                 s.kill();
             }

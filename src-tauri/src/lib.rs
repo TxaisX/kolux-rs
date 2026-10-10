@@ -6,6 +6,7 @@ mod creatures;
 mod git;
 mod keybindings;
 mod names;
+mod orchestration;
 mod projects;
 mod pty;
 mod routing;
