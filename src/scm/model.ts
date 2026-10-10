@@ -111,3 +111,24 @@ export const summaryLabel = (branch: string | null, s: Summary): string => {
 
 /** What a remote action came to (GIT-007). */
 export type ActionOutcome = { ok: boolean; output: string };
+
+/** EDIT-040: one workspace's handoff note as the back end keeps it. */
+export type Note = { text: string; updated: number | null };
+
+const two = (n: number) => String(n).padStart(2, "0");
+
+/** EDIT-040: the note after handing it to `agent`: a dated line saying who received it. */
+export const handedLine = (text: string, agent: string, at: Date): string => {
+  const line = `— Handed to ${agent} on ${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
+  const kept = text.trimEnd();
+  return kept ? `${kept}\n\n${line}` : line;
+};
+
+/** EDIT-040: how long since the note last changed, in the largest whole unit. */
+export const sinceText = (updated: number, now: number): string => {
+  const min = Math.floor((now - updated) / 60_000);
+  if (min < 1) return "Changed just now";
+  if (min < 60) return `Changed ${min} min ago`;
+  const h = Math.floor(min / 60);
+  return h < 24 ? `Changed ${h} h ago` : `Changed ${Math.floor(h / 24)} d ago`;
+};

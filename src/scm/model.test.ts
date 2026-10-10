@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, emptyStatus, grouped, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { canCommit, emptyStatus, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 
@@ -87,4 +87,18 @@ test("VIEW-068: without a test count the rest is non-generated, and an empty gen
 test("VIEW-068: the screen-reader label carries the split", () => {
   const label = summaryLabel("feat", sum({ ahead: 2, behind: 1, tests: { added: 1200, removed: 3 } }));
   expect(label).toBe("feat, 2 ahead and 1 behind main, 1,210 lines added and 3 removed: source 10 added 0 removed, tests 1,200 added 3 removed");
+});
+
+test("EDIT-040: handing the note over adds a dated line naming who received it", () => {
+  const at = new Date(2026, 9, 9, 14, 5);
+  expect(handedLine("check login\n\n", "Claude Code", at)).toBe("check login\n\n— Handed to Claude Code on 2026-10-09 14:05");
+  expect(handedLine("", "Codex", at)).toBe("— Handed to Codex on 2026-10-09 14:05");
+});
+
+test("EDIT-040: the note says how long since it last changed", () => {
+  const now = Date.UTC(2026, 9, 9, 12, 0);
+  expect(sinceText(now - 20_000, now)).toBe("Changed just now");
+  expect(sinceText(now - 5 * 60_000, now)).toBe("Changed 5 min ago");
+  expect(sinceText(now - 3 * 3_600_000, now)).toBe("Changed 3 h ago");
+  expect(sinceText(now - 2 * 86_400_000, now)).toBe("Changed 2 d ago");
 });

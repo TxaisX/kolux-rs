@@ -130,7 +130,47 @@ pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(),
 pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
     set_name(store, path, None)?;
     set_parent(store, path, None)?;
+    // EDIT-040: a later workspace in the same folder starts with an empty note.
+    store.set(&format!("{NOTE_PREFIX}{}", name_key(path)), "").map_err(|e| e.to_string())?;
     set_origin(store, path, None)
+}
+
+/// EDIT-040: the handoff note of one workspace, stored under its own key (one write each, so a
+/// save is all or nothing) as its text and when it last changed.
+pub const NOTE_PREFIX: &str = "workspaceNote:";
+pub const NOTE_MAX: usize = 256 * 1024;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Note {
+    pub text: String,
+    /// Milliseconds since 1970; None before the first save.
+    pub updated: Option<u64>,
+}
+
+/// The workspace's note; none yet, or a damaged one, reads as empty.
+pub fn workspace_note(store: &Store, path: &str) -> Note {
+    store.get(&format!("{NOTE_PREFIX}{}", name_key(path))).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// Saves the note and returns when; one over 256 KB is refused and the saved one kept.
+pub fn save_workspace_note(store: &Store, path: &str, text: &str) -> Result<u64, String> {
+    if text.len() > NOTE_MAX {
+        return Err(format!("the note is {} KB; a note holds at most 256 KB", text.len().div_ceil(1024)));
+    }
+    let updated = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let note = serde_json::to_string(&Note { text: text.to_string(), updated: Some(updated) }).map_err(|e| e.to_string())?;
+    store.set(&format!("{NOTE_PREFIX}{}", name_key(path)), &note).map_err(|e| e.to_string())?;
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn workspace_note_get(store: StoreState<'_>, path: String) -> Result<Note, String> {
+    Ok(workspace_note(&*store.lock().map_err(|e| e.to_string())?, &path))
+}
+
+#[tauri::command]
+pub fn workspace_note_save(store: StoreState<'_>, path: String, text: String) -> Result<u64, String> {
+    save_workspace_note(&*store.lock().map_err(|e| e.to_string())?, &path, &text)
 }
 
 fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
@@ -1391,6 +1431,29 @@ mod tests {
         let good = profile.join("ws").join("deep");
         let info = set_place(&store, &good.display().to_string(), true).unwrap();
         assert!(good.is_dir() && info.flat && info.dir == good.display().to_string() && info.used == vec![good.display().to_string()]);
+        drop(store);
+        fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn edit040_each_workspace_keeps_its_own_note_within_256_kb() {
+        let profile = temp("note-profile");
+        let store = Store::open(&profile).unwrap();
+        assert_eq!(workspace_note(&store, "C:/ws/app/a"), Note::default(), "no note yet reads as empty");
+        let at = save_workspace_note(&store, "C:/ws/app/a", "check the login flow").unwrap();
+        let note = workspace_note(&store, "C:/ws/app/a");
+        assert_eq!((note.text.as_str(), note.updated), ("check the login flow", Some(at)));
+        assert_eq!(workspace_note(&store, "C:/ws/app/b"), Note::default(), "another worktree has its own, empty note");
+        // A note over 256 KB is refused and the saved one is kept whole.
+        assert!(save_workspace_note(&store, "C:/ws/app/a", &"x".repeat(NOTE_MAX + 1)).is_err());
+        assert_eq!(workspace_note(&store, "C:/ws/app/a").text, "check the login flow");
+        assert!(save_workspace_note(&store, "C:/ws/app/a", &"x".repeat(NOTE_MAX)).is_ok());
+        // A damaged stored note reads as empty instead of failing.
+        store.set(&format!("{NOTE_PREFIX}{}", name_key("C:/ws/app/c")), "{not json").unwrap();
+        assert_eq!(workspace_note(&store, "C:/ws/app/c"), Note::default());
+        // Forgetting a removed workspace forgets its note, so a new one in that folder starts empty.
+        forget_workspace(&store, "C:/ws/app/a").unwrap();
+        assert_eq!(workspace_note(&store, "C:/ws/app/a"), Note::default());
         drop(store);
         fs::remove_dir_all(profile).unwrap();
     }

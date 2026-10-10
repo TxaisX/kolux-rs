@@ -14,6 +14,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
+import type { AgentInfo } from "../launch/PlusMenu";
+import HandoffNote from "./HandoffNote";
 import { canCommit, changeCount, grouped, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
@@ -29,11 +31,14 @@ type Props = {
   /** VIEW-068: the off-by-default setting to measure the summary against the upstream instead. */
   againstUpstream: boolean;
   onAgainstUpstream: (on: boolean) => void;
+  /** EDIT-040: the agents found on this machine, the default first, for Hand to agent. */
+  agents: AgentInfo[];
+  onHand: (agent: AgentInfo, note: string) => void;
 };
 
 type Failure = { title: string; output: string };
 
-export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream }: Props) {
+export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand }: Props) {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -271,6 +276,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               {status && section("Changes", status.changed, true)}
               {status && section("Untracked", status.untracked, true)}
             </div>
+            <HandoffNote dir={dir} agents={agents} onHand={onHand} />
           </>
         )}
       </div>

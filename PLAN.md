@@ -210,7 +210,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-113-a · ACCT-056 A failed scan never drops worktrees from the list (the sidebar half)
 - [ ] T-113-b · The cleanup half of the failed-scan card on T-113-a: cleanup offers and removes only worktrees Kolux can show it made (its origin record), and a worktree Kolux did not create is left in place; built with the cleanup dialog on T-162
 - [ ] T-114 · AUTO-010 Choose whether per-run worktrees run the project setup
-- [ ] T-115 · EDIT-040 [compat] Per-workspace handoff note that can be given to an agent · EDIT-047 Worktree switcher search in the Mod+J palette
+- [x] T-115-a · EDIT-040 [compat] Per-workspace handoff note that can be given to an agent
+- [ ] T-115-b · EDIT-047 Worktree switcher search in the Mod+J palette (needs the worktree palette on T-098)
 - [ ] T-116 · SET-031 Git & worktrees page: branch names and source control defaults · SET-033 Per-repository page: base branch, setup script, folder
 - [ ] T-117 · CLI-009 [compat] Selectors for repos, worktrees and terminals, with the current folder as default · CLI-015 [compat] kolux repo: list, add, show, base ref and ref search · CLI-016 [compat] kolux project list · CLI-017 [compat] kolux worktree list, show, current and ps · CLI-019 [compat] kolux worktree set: rename, link, comment, board status and lineage
 - [ ] T-118 · CLI-021 [compat] kolux worktree changes and overlap: what a worktree touched and who else touches it
