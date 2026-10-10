@@ -107,6 +107,9 @@ function Window() {
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
+  const [hook, setHook] = useState<Record<number, AgentState>>({}); // STAT-001: each pane's last hook-fed state
+  const hookRef = useRef(hook);
+  hookRef.current = hook;
   const runRef = useRef(running); // TERM-118: the last reported running flags, to see a finish
   runRef.current = running;
   const [unreadPanes, setUnreadPanes] = useState<Set<number>>(new Set()); // TERM-118: finished or rang out of view
@@ -537,7 +540,8 @@ function Window() {
   // PROJ-063 / PROJ-050: a workspace row shows the strongest state among its panes, and remembers
   // when that last moved so the smart sort can put the newest change first.
   const byDir: Record<string, AgentState[]> = {};
-  for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(paneState(p.agent, running[p.key]));
+  // STAT-001: a hook-fed state wins over the guess from the program's state.
+  for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
   const rowStates: Record<string, RowInfo> = {};
   for (const [dir, states] of Object.entries(byDir)) {
     const state = strongest(states);
@@ -562,6 +566,26 @@ function Window() {
     if (p.cwd !== null) markDir(p.cwd, true);
     setToast(`${tabName(p, titles)} ${what}`);
   };
+  const noticedRef = useRef(noticed);
+  noticedRef.current = noticed;
+  const panesRef = useRef(panes);
+  panesRef.current = panes;
+  useEffect(() => {
+    // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
+    const off = listen<{ paneKey: number; state: AgentState; boundary: boolean }>("agent-status", (e) => {
+      const { paneKey, state } = e.payload;
+      const prev = hookRef.current[paneKey];
+      if (prev === state) return;
+      if (state === "done" && prev !== undefined && prev !== "done") {
+        const p = panesRef.current.find((x) => x.key === paneKey);
+        if (p) noticedRef.current(p, "finished");
+      }
+      setHook((h) => ({ ...h, [paneKey]: state }));
+    });
+    return () => {
+      off.then((f) => f());
+    };
+  }, []);
   useEffect(() => {
     // Viewing a marked pane in a focused window clears its mark.
     if (!winFocused || unreadPanes.size === 0) return;
@@ -661,7 +685,7 @@ function Window() {
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
                             <VendorMark agent={p.agent} size={12} />
-                            {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key))} />}
+                            {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
@@ -706,7 +730,10 @@ function Window() {
                     onRunning={(on) => {
                       if (runRef.current[p.key] && !on && p.agent !== "shell") noticed(p, "finished");
                       setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }));
+                      // The program is gone: its last hook state goes with it.
+                      if (!on && p.key in hookRef.current) setHook((h) => Object.fromEntries(Object.entries(h).filter(([k]) => Number(k) !== p.key)));
                     }}
+                    hook={hook[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onBell={() => noticed(p, "rang the bell")}
                     unread={unreadPanes.has(p.key)}

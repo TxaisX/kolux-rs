@@ -4,6 +4,7 @@
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
 import { headerOf } from "./status";
+import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
@@ -35,6 +36,8 @@ type Props = {
   onRunning?: (running: boolean) => void;
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
+  /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
+  hook?: AgentState;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -63,7 +66,7 @@ type Props = {
   card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -176,7 +179,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args });
+        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, paneKey: number });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
@@ -222,8 +225,12 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
   // TERM-020/021: a plain shell reads as a terminal with a neutral status; an agent reads
   // Working (working tone) while its program is up, Done (done tone, with its age) after it
-  // ends well. What it needs (permission, waiting, blocked) comes from the status hooks (T-025).
-  const { word, tone, icon, age, needsYou } = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now);
+  // ends well or when its hook says the turn is over; what it needs comes from the hooks (T-025).
+  useEffect(() => {
+    if (hook === "done") setFinishedAt((t) => t ?? Date.now());
+    else if (hook === "working") setFinishedAt(null);
+  }, [hook]);
+  const { word, tone, icon, age, needsYou } = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
   const needs = useRef(onNeedsYou);
   needs.current = onNeedsYou;
   useEffect(() => {

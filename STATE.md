@@ -360,6 +360,26 @@ rang the bell"); looking at the pane in a focused window clears all three. A fin
 being looked at adds no mark. A late event for a pane that is gone or already marked is dropped.
 The desktop notification and its settings are T-026.
 
+[core] T-025-a (STAT-001, STAT-007): agents report their own state through hooks. At start Kolux
+opens a loopback listener (port and token in `agent-hooks-endpoint.txt` in the profile folder,
+removed at exit), writes `~/.kolux-rs/agent-hooks/claude.cmd` and puts one Kolux RS entry under
+each of Claude Code's twelve hook events in the user's Claude settings file (`settings.json`
+beside `.claude.json`, `CLAUDE_CONFIG_DIR` honoured; every other entry stays, a file that is
+not JSON is left alone, the file keeps its indent). Every pane's programs see
+`KOLUX_AGENT_HOOK_PORT`, `KOLUX_AGENT_HOOK_TOKEN`, `KOLUX_PANE_KEY`, `KOLUX_TERMINAL_HANDLE`,
+`KOLUX_HOOK_ENDPOINT` and `KOLUX_HOOK_IDENTITY`. The script guards on those, reads the endpoint
+file, posts the event with the system curl inside 1.5 s and always exits 0. The listener maps
+Claude's events (SessionStart from startup, resume or clear and a manual PostCompact: done with
+a boundary; UserPromptSubmit and PostToolUse: working; PreToolUse: working with the tool, or
+waiting for AskUserQuestion and ExitPlanMode; PermissionRequest: permission; Stop: done;
+StopFailure: blocked; a sub-agent's events are ignored) and raises `agent-status` to the
+window. The pane header shows Needs you, Blocked, Interrupted or Done (with its age) while the
+program still runs, the tab badge shows the check when the turn is over, the workspace row's
+dot takes the hook state over the guess, Ctrl+J visits every pane the hooks say is waiting, and
+a turn ending out of view is noticed like an exit. The hooks are always on (the switch is
+T-120); Codex and the sub-agent roster are T-025-b and T-025-c. Proved with events sent
+through the real script; a real Claude Code session is T-025-d.
+
 [accounts] Secrets are sealed on disk (T-038): the Claude 1-year key and the xAI key live in
 settings.json only as Windows-sealed values (DPAPI, this user only), the window never receives
 them and cannot overwrite them, and a vault folder in the profile holds one sealed file per
@@ -973,7 +993,17 @@ recorded default until told otherwise; nothing here blocks a pass.
   window's copy of the settings now reloads after every save, so one writer no longer drops
   another's field.
 
+- 2026-10-09 · [core] T-025-a: Kolux RS keeps its hook scripts in `~/.kolux-rs/agent-hooks` and
+  adds its own entries beside the old app's in Claude's settings (DT-C1), so both apps can run
+  on this PC until the old one retires; the identity header is built by Kolux into
+  `KOLUX_HOOK_IDENTITY` (DT-C2). The hooks install unconditionally at every start (STAT-002's
+  switch is T-120). The installer has NOT yet run against Txais's own
+  `G:\Dev\claude-config\settings.json`: the auto-mode classifier refused the builder a copy of
+  that file (self-modification), so the live proof used a scratch `CLAUDE_CONFIG_DIR`; the first
+  launch of Kolux RS on this PC will add twelve `.kolux-rs` entries to that file (T-025-d).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [core] T-025-a · done: `src-tauri/src/hooks.rs` (loopback listener, Claude event mapping, hook script, settings installer, pane variables) + 5 tests; `terminal.rs` env list and pane key; `lib.rs` start and exit; `status.ts`, `tabs.ts`, `TerminalPane.tsx`, `App.tsx` hook-fed states + tests; `evidence/T-025-a-needs.png`, `-cycle.png`, `-done.png` (events sent through the real script to the lane app; no real Claude session yet, T-025-d)
 - 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.
 - 2026-10-09 · T-023 · done: `src/terminal/status.ts` (header word, tone, icon, age, needs-you cycle) + `status.test.ts`; `TerminalPane.tsx` finish time, minute tick, glow until focused, `onNeedsYou`; `App.tsx` Ctrl+J handler across workspaces; `styles.css` glow and age. Live: agent workspace via CLI, split shell focused, `/exit` sent to the agent → "Done · just now" with a glow, "1m ago" after a minute, glow gone on focus; Ctrl+J with nothing waiting left focus where it was. Evidence: `evidence/T-023-glow.png`, `evidence/T-023-focused.png`.
 - 2026-10-09 · T-022 · done: `src/projects/rows.ts` (states, ranks, smart order, status and PR groups, setting keys) + `rows.test.ts`; `App.tsx` derives each folder's strongest state and change time from its panes and offers `saveSetting`; `ProjectsPanel.tsx` grouping, sort, filter form, state dots, unread marks, accent bar, 5 s branch poll; `styles.css`. Live: two CLI-made agent workspaces, one agent ended → done above working under Smart; Status grouping headers; hand-marked unread on the shown row; `git checkout -b renamed` in zeta's folder showed on its row. Evidence: `evidence/T-022-status.png`, `evidence/T-022-branch.png`.

@@ -750,7 +750,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
 }
 
 /// A token nobody outside this machine can guess: two hashes seeded from the OS's randomness.
-fn token() -> String {
+pub(crate) fn token() -> String {
     use std::hash::{BuildHasher, Hasher};
     let seed = std::collections::hash_map::RandomState::new();
     let mut h = seed.build_hasher();

@@ -27,3 +27,15 @@ test("the shortcut cycles through every pane that needs you and stays put with n
   expect(nextNeedsYou([1, 2, 3], new Set([2]), 2)).toBe(2);
   expect(nextNeedsYou([1, 2, 3], new Set(), 2)).toBeNull();
 });
+
+test("the hooks feed the header while the program still runs: needs you, blocked, interrupted, done with its age (STAT-001, STAT-007)", () => {
+  expect(headerOf("claude", "running", undefined, false, null, 0, "permission")).toMatchObject({ word: "Needs you", tone: "attention", needsYou: true });
+  expect(headerOf("claude", "running", undefined, false, null, 0, "waiting")).toMatchObject({ word: "Needs you", needsYou: true });
+  expect(headerOf("claude", "running", undefined, false, null, 0, "blocked")).toMatchObject({ word: "Blocked", tone: "attention", needsYou: true });
+  expect(headerOf("claude", "running", undefined, false, null, 0, "interrupted")).toMatchObject({ word: "Interrupted", tone: "attention", needsYou: true });
+  expect(headerOf("claude", "running", undefined, false, 0, 30000, "done")).toMatchObject({ word: "Done", tone: "done", needsYou: false, age: "just now" });
+  expect(headerOf("claude", "running", undefined, false, null, 0, "working")).toMatchObject({ word: "Working", tone: "working", needsYou: false });
+  // The hook never speaks for a shell and never changes an ended program.
+  expect(headerOf("shell", "running", undefined, false, null, 0, "permission")).toMatchObject({ word: "Ready", needsYou: false });
+  expect(headerOf("claude", "ended", 0, false, 0, 0, "permission")).toMatchObject({ word: "Done", needsYou: false });
+});

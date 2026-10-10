@@ -533,7 +533,7 @@ Kolux learns what an agent is doing (working, blocked, waiting for Txais, done) 
 
 ### 3.2 Windows wrapper behaviour
 
-- Each agent gets a batch script in `~/.kolux/agent-hooks` (or a plugin where the agent uses plugins). The agent's config entry points at that script by full path.
+- Each agent gets a batch script in `~/.kolux/agent-hooks` (or a plugin where the agent uses plugins). The agent's config entry points at that script by full path. (Kolux RS, DT-C1: `~/.kolux-rs/agent-hooks` while the old app is installed beside it.)
 - The script runs the guard above before it touches stdin, then reads stdin with the system's built-in pager program called by its full Windows path, so a same-named program in the repo cannot capture the payload.
 - It sends with the system curl, then exits 0, then drains any leftover stdin so the agent never sees a broken pipe.
 - Claude: when Git Bash is present, the settings entry calls the batch script directly; otherwise it goes through an encoded PowerShell launcher. The Claude script skips itself when the Devin project variable is set, because Devin re-runs Claude hooks.

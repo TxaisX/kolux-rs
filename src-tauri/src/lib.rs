@@ -7,6 +7,7 @@ mod codex_accounts;
 mod codex_usage;
 mod creatures;
 mod git;
+mod hooks;
 mod include;
 mod keybindings;
 mod names;
@@ -75,6 +76,11 @@ pub fn run() {
             app.manage(git::Git::detect()?);
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
+            // Agents report their status through hooks (STAT-001): the listener, the script and
+            // Claude Code's settings entries. ponytail: always on; the switch is STAT-002 (T-120).
+            let hooks = hooks::serve(app.handle().clone(), &dir)?;
+            app.manage(hooks);
+            hooks::install_all();
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.
             let handle = app.handle().clone();
@@ -149,6 +155,7 @@ pub fn run() {
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
                     let _ = std::fs::remove_file(dir.join(cli::FILE));
+                    let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));
                 }
             }
         });

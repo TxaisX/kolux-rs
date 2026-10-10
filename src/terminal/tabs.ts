@@ -1,6 +1,8 @@
 // Tab badges (TERM-055) and the unread rule for a finish or a bell (TERM-118). Pure, tested on
 // its own. ponytail: the permission badge is fed by `needs`, which the status hooks fill (T-025).
 
+import type { AgentState } from "../projects/rows";
+
 export type Badge = "working" | "permission" | "unread" | "done" | null;
 
 /**
@@ -8,9 +10,14 @@ export type Badge = "working" | "permission" | "unread" | "done" | null;
  * mark, an unvisited finish (or bell) keeps the bell, a visited finish the check. An idle shell
  * shows only its identity icon.
  */
-export function tabBadge(agent: string, running: boolean | undefined, needs: boolean, unread: boolean): Badge {
+export function tabBadge(agent: string, running: boolean | undefined, needs: boolean, unread: boolean, hook?: AgentState): Badge {
   if (agent === "shell") return unread ? "unread" : null;
-  if (running !== false) return needs ? "permission" : "working";
+  if (running !== false) {
+    if (needs) return "permission";
+    // STAT-001: the hook says the turn is over while the program still runs.
+    if (hook === "done") return unread ? "unread" : "done";
+    return "working";
+  }
   return unread ? "unread" : "done";
 }
 
