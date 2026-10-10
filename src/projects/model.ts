@@ -75,6 +75,12 @@ export function nestRows(others: Worktree[], nest: boolean, folded: ReadonlySet<
   return rows;
 }
 
+const norm = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
+/** PROJ-006 / PROJ-007: after adding a project, the worktree at the folder that became the project, else the main checkout. */
+export function openedWorktree(list: Worktree[], path: string): Worktree | undefined {
+  return list.find((w) => norm(w.path) === norm(path)) ?? list.find((w) => w.isMain);
+}
+
 /** The sentence under the name field: where the branch and folder will go, or why it is refused. */
 export function previewSentence(typed: string, preview: Preview | null, project: Project | null): string {
   if (!project) return "Add a project first.";

@@ -313,6 +313,7 @@ Acceptance:
   - [ ] Pick no prefix → the branch is the bare name.
 Compat: —
 Source: D-01-022
+Amended 2026-10-09 (DT-O1): a refused custom prefix is a warning on create and the bare name is used, per SET-031.
 
 ### PROJ-026 · KOLUX_WORKSPACES_DIR moves the default workspaces folder
 Tier: P1 · Pushed: 2 · State at 0.15.0: live-unverified

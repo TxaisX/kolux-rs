@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { folderName, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { folderName, openedWorktree, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -62,4 +62,12 @@ test("the workspaces-folder field saves on Enter, reverts on Escape and ignores 
   expect(placeFieldAction("Enter", true)).toBeNull();
   expect(placeFieldAction("Escape", true)).toBeNull();
   expect(placeFieldAction("a", false)).toBeNull();
+});
+
+// PROJ-006: a linked worktree added as its own project opens on that folder, not the main checkout.
+test("the workspace opened after adding is the folder picked, else the main checkout", () => {
+  expect(openedWorktree([main, zeta], "c:/ws/app/zeta/")?.path).toBe(zeta.path);
+  expect(openedWorktree([zeta, main], "C:\src\app")?.path).toBe(main.path);
+  expect(openedWorktree([zeta, main], "D:\elsewhere")?.path).toBe(main.path);
+  expect(openedWorktree([], "C:\src\app")).toBeUndefined();
 });

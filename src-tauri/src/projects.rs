@@ -55,6 +55,10 @@ pub struct Place {
     pub root: PathBuf,
     /// Flat: every workspace straight under the root; nested: under a folder named after the project.
     pub flat: bool,
+    /// What new branch names start with (PROJ-022), e.g. `txais-xiong/`; empty for none.
+    pub prefix: String,
+    /// Why the custom prefix is not used, when Git would refuse it.
+    pub prefix_warning: Option<String>,
 }
 
 const PROJECTS_KEY: &str = "projects";
@@ -71,6 +75,9 @@ const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 const LAYOUT_SETTING: &str = "workspacesLayout";
 /// Workspaces folders used before, newest first, so they can be picked again (PROJ-025).
 const USED_DIRS_SETTING: &str = "workspacesDirsUsed";
+/// PROJ-022: "user" (the Git user name, the default), "custom" or "none".
+pub const PREFIX_SETTING: &str = "branchPrefix";
+pub const PREFIX_CUSTOM_SETTING: &str = "branchPrefixCustom";
 
 /// Compares two folders the way Windows does: same canonical path, letter case ignored.
 fn same_folder(a: &Path, b: &Path) -> bool {
@@ -136,8 +143,7 @@ pub fn set_origin(store: &Store, path: &str, origin: Option<&serde_json::Value>)
     store.set(ORIGINS_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
-/// ponytail: read by tests only until the sidebar draws lineage (PROJ-047, T-077).
-#[cfg(test)]
+/// How the workspace at `path` came to be, when Kolux recorded it.
 pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
     load_origins(store).remove(&name_key(path))
 }
@@ -148,11 +154,12 @@ pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let main = Path::new(&project.path);
-    Ok(git
-        .worktrees(main)?
+    let all = git.worktrees(Path::new(&project.path))?;
+    // The scratch folders sit in the main checkout even when the project is a linked worktree (PROJ-006).
+    let main = all.iter().find(|w| w.is_main).map(|w| PathBuf::from(&w.path)).unwrap_or_else(|| PathBuf::from(&project.path));
+    Ok(all
         .into_iter()
-        .filter(|w| !Path::new(&w.path).strip_prefix(main).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))))
+        .filter(|w| !Path::new(&w.path).strip_prefix(&main).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))))
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
@@ -162,14 +169,15 @@ pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Ve
 }
 
 /// Registers the repository that holds `path`; an already-registered one is handed back, not
-/// added again. New projects go first (the Recent order). The project's folder is the main
-/// checkout, whichever of its worktrees was picked (PROJ-007: chosen on purpose, never the
-/// first one listed by chance; Git lists the main checkout first).
+/// added again. New projects go first (the Recent order). Picking the main checkout or any folder
+/// inside it makes the main checkout the project (PROJ-007).
+/// PROJ-006: a linked worktree whose repository is already a project selects that project (the
+/// match is on the main checkout, never the folder picked); otherwise the folder picked is added.
 pub fn add_project(git: &Git, store: &Store, path: &Path) -> Result<Project, String> {
-    let picked = git.toplevel(path)?;
-    let top = git.worktrees(&picked)?.into_iter().find(|w| w.is_main).map(|w| PathBuf::from(w.path)).unwrap_or(picked);
+    let top = git.toplevel(path)?;
+    let main = git.worktrees(&top)?.into_iter().find(|w| w.is_main).map(|w| PathBuf::from(w.path)).unwrap_or_else(|| top.clone());
     let mut projects = load_projects(store);
-    if let Some(existing) = projects.iter().find(|p| same_folder(Path::new(&p.path), &top)) {
+    if let Some(existing) = projects.iter().find(|p| same_folder(Path::new(&p.path), &main) || same_folder(Path::new(&p.path), &top)) {
         return Ok(existing.clone());
     }
     let name = top.file_name().map(|n| n.to_string_lossy().trim_end_matches(".git").to_string()).unwrap_or_else(|| top.display().to_string());
@@ -214,7 +222,30 @@ pub fn workspaces_dir(store: &Store) -> PathBuf {
 /// project root (joining an absolute one leaves it as it is).
 pub fn place_for(store: &Store, project: &Project) -> Place {
     let own = project.workspaces_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
-    Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: store.settings()[LAYOUT_SETTING].as_str() == Some("flat") }
+    let settings = store.settings();
+    let user = || crate::git::run(&["config", "user.name"], Some(Path::new(&project.path))).ok();
+    let (prefix, prefix_warning) = branch_prefix(settings[PREFIX_SETTING].as_str(), settings[PREFIX_CUSTOM_SETTING].as_str(), user, &|p| crate::git::run(&["check-ref-format", "--branch", &format!("{p}x")], None).is_ok());
+    Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning }
+}
+
+/// PROJ-022 / SET-031: the branch prefix for `mode`. The Git user name (the default) is cleaned
+/// like a typed name, and no user name means no prefix; custom text loses surrounding spaces and
+/// trailing slashes (only slashes means none); a prefix Git refuses is not used, with a warning.
+pub fn branch_prefix(mode: Option<&str>, custom: Option<&str>, user: impl Fn() -> Option<String>, git_ok: &dyn Fn(&str) -> bool) -> (String, Option<String>) {
+    let p = match mode {
+        Some("none") => return (String::new(), None),
+        Some("custom") => custom.unwrap_or("").trim().trim_end_matches('/').to_string(),
+        _ => user().and_then(|u| safe_name(&u)).unwrap_or_default(),
+    };
+    if p.is_empty() {
+        return (String::new(), None);
+    }
+    let p = format!("{p}/");
+    if git_ok(&p) {
+        (p, None)
+    } else {
+        (String::new(), Some(format!("the branch prefix \"{p}\" is not a name Git accepts, so this branch has no prefix")))
+    }
 }
 
 pub fn used_dirs(store: &Store) -> Vec<String> {
@@ -284,13 +315,14 @@ pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name:
             let d = workspace_path(place, project, &s);
             (s, d)
         })
-        .find(|(s, d)| !d.exists() && !git.branch_taken(repo, s))
+        .find(|(s, d)| !d.exists() && !git.branch_taken(repo, &format!("{}{s}", place.prefix)))
         .ok_or("no free name")?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    git.worktree_add(repo, &dest, &safe, &from)?;
-    let warnings = crate::include::bring_along(repo, &dest);
+    git.worktree_add(repo, &dest, &format!("{}{safe}", place.prefix), &from)?;
+    let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().collect();
+    warnings.extend(crate::include::bring_along(repo, &dest));
     let worktree = git
         .worktrees(repo)?
         .into_iter()
@@ -351,7 +383,18 @@ pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects:
 
 /// GIT-067: uncommitted work (submodule work included) stops the removal unless `force`; the
 /// branch goes with the folder unless another worktree still has it checked out.
+#[cfg(test)]
 pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str, force: bool) -> Result<(), String> {
+    remove_worktree(git, project, worktree_path, force, false)
+}
+
+/// PROJ-030: a workspace opened on a branch that already existed keeps that branch when it goes.
+pub fn keeps_branch(store: &Store, path: &str) -> bool {
+    origin(store, path).is_some_and(|o| o["existingBranch"] == true)
+}
+
+/// `remove_workspace`, keeping the branch when `keep_branch`.
+pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<(), String> {
     let repo = Path::new(&project.path);
     let target = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(worktree_path))).ok_or_else(|| format!("{worktree_path} is not a worktree of {}", project.name))?;
     if target.is_main {
@@ -361,7 +404,59 @@ pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str, force
         return Err(format!("{} has uncommitted changes", target.branch.as_deref().unwrap_or(worktree_path)));
     }
     crate::include::unlink_shared(repo, Path::new(&target.path));
-    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref()).map(|_| ())
+    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch)).map(|_| ())
+}
+
+/// PROJ-030: a workspace on a branch that exists already, locally or only on a remote (Git then
+/// makes the local branch that tracks it). The folder takes `folder` when given, else the
+/// branch's name, numbered when taken; the branch itself never changes and is kept at removal.
+pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch: &str, folder: Option<&str>) -> Result<Created, String> {
+    let branch = branch.trim();
+    let repo = Path::new(&project.path);
+    if branch.is_empty() || !git.branch_taken(repo, branch) {
+        return Err(format!("there is no branch {branch} in {}", project.name));
+    }
+    let base = safe_name(folder.map(str::trim).filter(|f| !f.is_empty()).unwrap_or(branch)).ok_or("that folder name leaves nothing usable; use some letters or digits")?;
+    let turn = repo_turn(repo);
+    let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    let dest = (1..)
+        .map(|n| workspace_path(place, project, &if n == 1 { base.clone() } else { format!("{base}-{n}") }))
+        .find(|d| !d.exists())
+        .ok_or("no free folder")?;
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo))?;
+    let warnings = crate::include::bring_along(repo, &dest);
+    let worktree = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), &dest)).ok_or_else(|| "the worktree was created but Git does not list it".to_string())?;
+    Ok(Created { worktree, base: branch.to_string(), note: None, warnings })
+}
+
+/// The branches a workspace can be opened on (PROJ-030): local ones, then remote ones by their
+/// short name (`origin/feat-x`), without the remotes' HEAD pointers.
+pub fn branches(repo: &Path) -> Result<Vec<String>, String> {
+    let out = crate::git::run(&["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"], Some(repo))?;
+    Ok(out.lines().filter(|l| !l.ends_with("/HEAD")).filter_map(|l| l.strip_prefix("refs/heads/").or_else(|| l.strip_prefix("refs/remotes/"))).map(str::to_string).collect())
+}
+
+#[tauri::command]
+pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<Vec<String>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    branches(Path::new(&project.path))
+}
+
+#[tauri::command]
+pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>) -> Result<Created, String> {
+    let (project, place) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let project = find_project(&store, &project_id)?;
+        let place = place_for(&store, &project);
+        (project, place)
+    };
+    let made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
+    let store = store.lock().map_err(|e| e.to_string())?;
+    set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
+    Ok(made)
 }
 
 fn find_project(store: &Store, id: &str) -> Result<Project, String> {
@@ -409,7 +504,9 @@ pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option
     let folder = match project_id.filter(|id| !id.is_empty()) {
         Some(id) => {
             let project = find_project(&store, &id)?;
-            workspace_path(&place_for(&store, &project), &project, &branch).display().to_string()
+            let place = place_for(&store, &project);
+            let folder = workspace_path(&place, &project, &branch).display().to_string();
+            return Ok(Some(Preview { branch: format!("{}{branch}", place.prefix), folder }));
         }
         None => String::new(),
     };
@@ -485,7 +582,8 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     }
     // A shell still sitting in the folder would keep Windows from deleting it.
     terminals.kill_under(Path::new(&path));
-    remove_workspace(&git, &project, &path, force)?;
+    let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
+    remove_worktree(&git, &project, &path, force, keep)?;
     let store = store.lock().map_err(|e| e.to_string())?;
     forget_workspace(&store, &path)
 }
@@ -625,7 +723,7 @@ mod tests {
     }
 
     fn nested(root: &Path) -> Place {
-        Place { root: root.to_path_buf(), flat: false }
+        Place { root: root.to_path_buf(), flat: false, prefix: String::new(), prefix_warning: None }
     }
 
     #[test]
@@ -644,6 +742,93 @@ mod tests {
         drop(store);
         for d in [profile, repo, plain] {
             fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_linked_worktree_selects_its_repository_or_is_added_itself() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("link-a");
+        let linked = temp("link-wt").join("w");
+        git_in(&repo, &["worktree", "add", "-q", "-b", "side", &linked.to_string_lossy()]);
+        // PROJ-006: A is a project already → picking A's linked worktree gives A, no duplicate.
+        let profile = temp("link-p1");
+        let store = Store::open(&profile).unwrap();
+        let a = add_project(&git, &store, &repo).unwrap();
+        assert_eq!(add_project(&git, &store, &linked).unwrap(), a);
+        assert_eq!(load_projects(&store).len(), 1);
+        drop(store);
+        // A not added → the linked worktree folder itself becomes the project.
+        let profile2 = temp("link-p2");
+        let store = Store::open(&profile2).unwrap();
+        let w = add_project(&git, &store, &linked).unwrap();
+        assert!(same_folder(Path::new(&w.path), &linked), "{} is the folder picked", w.path);
+        drop(store);
+        git_in(&repo, &["worktree", "remove", "--force", &linked.to_string_lossy()]);
+        for d in [profile, profile2, repo] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn the_branch_prefix_is_the_user_name_custom_text_or_nothing() {
+        let ok = |p: &str| crate::git::run(&["check-ref-format", "--branch", &format!("{p}x")], None).is_ok();
+        let user = || Some("Txais Xiong".to_string());
+        assert_eq!(branch_prefix(None, None, user, &ok), ("txais-xiong/".into(), None), "the user name by default");
+        assert_eq!(branch_prefix(Some("user"), None, || None, &ok), (String::new(), None), "no user name: the bare name");
+        assert_eq!(branch_prefix(Some("custom"), Some(" tx// "), user, &ok).0, "tx/");
+        assert_eq!(branch_prefix(Some("custom"), Some("tx"), user, &ok).0, "tx/");
+        assert_eq!(branch_prefix(Some("custom"), Some("///"), user, &ok), (String::new(), None), "only slashes: none");
+        assert_eq!(branch_prefix(Some("none"), Some("tx"), user, &ok), (String::new(), None));
+        let (p, warn) = branch_prefix(Some("custom"), Some("a b"), user, &ok);
+        assert!(p.is_empty() && warn.unwrap().contains("not a name Git accepts"), "Git refuses spaces");
+        // The prefix goes on the branch only; the folder keeps the bare name.
+        let git = Git::detect().unwrap();
+        let profile = temp("prefix");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("prefix-r");
+        let root = temp("prefix-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = Place { prefix: "tx/".into(), ..nested(&root) };
+        let made = create_workspace(&git, &place, &project, "Fix login", None).unwrap();
+        assert_eq!(made.worktree.branch.as_deref(), Some("tx/fix-login"));
+        assert!(same_folder(Path::new(&made.worktree.path), &workspace_path(&place, &project, "fix-login")));
+        let bad = Place { prefix_warning: Some("w".into()), ..nested(&root) };
+        assert_eq!(create_workspace(&git, &bad, &project, "two", None).unwrap().warnings, vec!["w".to_string()]);
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn a_workspace_opens_on_an_existing_branch_and_keeps_it() {
+        let git = Git::detect().unwrap();
+        let profile = temp("open-b");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("open-r");
+        let root = temp("open-root");
+        git_in(&repo, &["checkout", "-q", "-b", "feat/x"]);
+        fs::write(repo.join("b.txt"), "b").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-q", "-m", "earlier work"]);
+        git_in(&repo, &["checkout", "-q", "main"]);
+        let tip = rev(&repo, "feat/x");
+        let project = add_project(&git, &store, &repo).unwrap();
+        assert!(branches(&repo).unwrap().contains(&"feat/x".to_string()));
+        assert!(open_branch_workspace(&git, &nested(&root), &project, "nope", None).unwrap_err().contains("no branch nope"));
+        // PROJ-030: a different folder name still checks out feat/x itself, with its commits.
+        let made = open_branch_workspace(&git, &nested(&root), &project, "feat/x", Some("Review X")).unwrap();
+        assert_eq!(made.worktree.branch.as_deref(), Some("feat/x"));
+        assert_eq!(rev(Path::new(&made.worktree.path), "HEAD"), tip);
+        assert!(made.worktree.path.replace(std::path::MAIN_SEPARATOR, "/").ends_with("/review-x"), "{}", made.worktree.path);
+        set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "existingBranch": true }))).unwrap();
+        assert!(keeps_branch(&store, &made.worktree.path));
+        remove_worktree(&git, &project, &made.worktree.path, false, keeps_branch(&store, &made.worktree.path)).unwrap();
+        assert_eq!(rev(&repo, "feat/x"), tip, "the branch stays when the workspace goes");
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
         }
     }
 
@@ -748,7 +933,7 @@ mod tests {
         fs::write(repo.join(".env"), "SECRET=1\n").unwrap();
         fs::write(repo.join("tracked.txt"), "edited in main\n").unwrap();
         let project = add_project(&git, &store, &repo).unwrap();
-        let place = Place { root: temp("ws8"), flat: true };
+        let place = Place { root: temp("ws8"), flat: true, prefix: String::new(), prefix_warning: None };
 
         let made = create_workspace(&git, &place, &project, "feat", None).unwrap();
         let dest = PathBuf::from(&made.worktree.path);
@@ -778,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn a_picked_worktree_registers_its_main_checkout_and_scratch_worktrees_stay_hidden() {
+    fn a_picked_worktree_is_added_itself_and_scratch_worktrees_stay_hidden() {
         let git = Git::detect().unwrap();
         let profile = temp("profile5");
         let store = Store::open(&profile).unwrap();
@@ -790,7 +975,7 @@ mod tests {
         git.worktree_add(&repo, &scratch, "scratch", "HEAD").unwrap();
 
         let project = add_project(&git, &store, &zeta).unwrap();
-        assert!(same_folder(Path::new(&project.path), &repo), "picked a linked worktree, got the main checkout: {}", project.path);
+        assert!(same_folder(Path::new(&project.path), &zeta), "PROJ-006: A not added, so the picked worktree folder itself is the project: {}", project.path);
         let names: Vec<_> = list_workspaces(&git, &store, &project).unwrap().into_iter().map(|w| (w.branch.unwrap_or_default(), w.is_main)).collect();
         assert_eq!(names, vec![("main".to_string(), true), ("zeta".to_string(), false)], "a tool's scratch worktree is not listed");
 
@@ -912,7 +1097,7 @@ mod tests {
 
     #[test]
     fn saving_a_folder_that_cannot_be_made_fails_and_keeps_the_old_one() {
-        let profile = temp("profile4");
+        let profile = temp("profile-place");
         let store = Store::open(&profile).unwrap();
         let bad = profile.join("file-not-folder");
         fs::write(&bad, "x").unwrap();

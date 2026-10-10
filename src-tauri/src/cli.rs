@@ -797,7 +797,8 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 return Err(Fail { code: "dirty", message: format!("{shown} has uncommitted changes"), data: json!({ "hint": "add --force to remove it anyway, changes and all" }) });
             }
             ctx.terminals.kill_under(Path::new(&w.path));
-            projects::remove_workspace(ctx.git, &project, &w.path, true)?;
+            let keep = projects::keeps_branch(&*ctx.store.lock().map_err(|e| e.to_string())?, &w.path);
+            projects::remove_worktree(ctx.git, &project, &w.path, true, keep)?;
             {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
                 projects::forget_workspace(&store, &w.path)?;
@@ -1511,6 +1512,7 @@ mod tests {
             let s = store.lock().unwrap();
             let mut settings = s.settings();
             settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
             s.save_settings(&settings).unwrap();
         }
         let events = Mutex::new(Vec::<Value>::new());
