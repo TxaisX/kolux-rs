@@ -84,7 +84,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble"];
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
@@ -106,6 +106,19 @@ const MAIL: &[(&str, &str, &[&str])] = &[
     // commands (CLI-036) are T-089-b.
     ("orchestration dispatch", "orchestration.dispatch", &["task", "to", "from", "run", "inject", "dry-run", "return-preamble", "retry-request"]),
     ("orchestration dispatch-show", "orchestration.dispatch-show", &["task", "preamble", "from"]),
+];
+/// CLI-015..017: the repo, project and worktree lookups and their flags.
+const QUERY: &[(&str, &str, &[&str])] = &[
+    ("repo list", "repo.list", &[]),
+    ("repo add", "repo.add", &["path"]),
+    ("repo show", "repo.show", &["repo"]),
+    ("repo set-base-ref", "repo.set-base-ref", &["repo", "ref"]),
+    ("repo search-refs", "repo.search-refs", &["repo", "query", "limit"]),
+    ("project list", "project.list", &[]),
+    ("worktree list", "worktree.list", &["repo", "limit"]),
+    ("worktree ps", "worktree.ps", &["repo", "limit"]),
+    ("worktree show", "worktree.show", &["worktree"]),
+    ("worktree current", "worktree.current", &[]),
 ];
 const SEND: &str = "orchestration.send";
 const CHECK: &str = "orchestration.check";
@@ -191,6 +204,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             "worktree create" => ("worktree.create", CREATE_FLAGS),
             "worktree rm" | "worktree remove" | "worktree delete" => ("worktree.rm", RM_FLAGS),
             "orchestration worker-start" => (WORKER_START, WORKER_FLAGS),
+            other if QUERY.iter().any(|(w, _, _)| *w == other) => QUERY.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
             other if MAIL.iter().any(|(w, _, _)| *w == other) => MAIL.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
             _ => return Err(Fail::args(format!("unknown command `{joined}`; run kolux-dev --help"))),
         };
@@ -303,6 +317,21 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                 if text(k).is_some_and(|v| v.parse::<u64>().map(|n| n == 0).unwrap_or(true)) {
                     return Err(Fail::args(format!("--{k} takes a number above zero")));
                 }
+            }
+        } else if QUERY.iter().any(|(_, c, _)| *c == command) {
+            for (k, v) in &flags {
+                if v.as_str().is_some_and(|s| s.trim().is_empty()) {
+                    return Err(Fail::args(format!("--{k} cannot be empty")));
+                }
+                args.insert(camel(k), v.clone());
+            }
+            match command {
+                "repo.add" if text("path").is_none() => return Err(Fail::args("--path is required: the folder of a Git repository")),
+                "repo.set-base-ref" if text("ref").is_none() => return Err(Fail::args("--ref is required: the branch, tag or commit new worktrees start from")),
+                _ => {}
+            }
+            if text("limit").is_some_and(|v| v.parse::<u64>().map(|n| n == 0).unwrap_or(true)) {
+                return Err(Fail::args("--limit takes a number above zero"));
             }
         } else {
             if text("worktree").map(str::trim).unwrap_or_default().is_empty() {
@@ -430,6 +459,9 @@ fn request_id() -> String {
 
 /// What a success looks like without `--json`.
 fn text_of(command: &str, r: &Value) -> String {
+    if let Some(t) = query_text(command, r) {
+        return t;
+    }
     let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
     match command {
         "worktree.create" => {
@@ -664,10 +696,16 @@ fn under(dir: &str, cwd: &str) -> bool {
     c == d || c.strip_prefix(&d).is_some_and(|rest| rest.starts_with(['\\', '/']))
 }
 
-fn selector(s: &str) -> (&str, &str) {
-    match s.split_once(':') {
-        Some((p, v)) if ["id", "name", "path", "branch", "identity", "issue"].contains(&p) => (p, v.trim()),
-        _ => ("name", s.trim()),
+const REPO_FORMS: &str = "id:<repo-id>, name:<name> or path:<folder>";
+const WORKTREE_FORMS: &str = "active, current, id:<repo-id>::<path>, identity:<repo-id>::<path>, name:<name>, branch:<branch>, issue:<number> or path:<folder>";
+
+/// CLI-009: a selector's kind and value. A bare value is refused, never guessed: `42` could be
+/// an issue, a name or an id.
+fn selector<'a>(s: &'a str, flag: &str, kinds: &[&str], forms: &str) -> Result<(&'a str, &'a str), Fail> {
+    match s.trim().split_once(':') {
+        Some((k, v)) if kinds.contains(&k) && !v.trim().is_empty() => Ok((k, v.trim())),
+        Some(("folder", _)) => Err(Fail::args("folder: selectors need folder workspaces, which are not built yet")),
+        _ => Err(Fail { code: "invalid_arguments", message: format!("\"{s}\" is not a selector for --{flag}; it takes {forms}"), data: json!({ "value": s, "accepted": forms }) }),
     }
 }
 
@@ -677,14 +715,20 @@ fn pick_project(ctx: &Ctx, repo: Option<&str>, cwd: &str) -> Result<Project, Fai
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let projects = projects::load_projects(&store);
     if let Some(sel) = repo {
-        let (kind, v) = selector(sel);
-        let hit = projects.iter().find(|p| match kind {
-            "id" => p.id == v,
-            "name" => p.name.eq_ignore_ascii_case(v),
-            "path" => under(&p.path, v) || projects::list_workspaces(ctx.git, &store, p).map(|ws| ws.iter().any(|w| under(&w.path, v))).unwrap_or(false),
-            _ => false,
-        });
-        return hit.cloned().ok_or_else(|| Fail::new("not_found", format!("no project matches --repo {sel}")));
+        let (kind, v) = selector(sel, "repo", &["id", "name", "path"], REPO_FORMS)?;
+        let mut hits: Vec<&Project> = projects
+            .iter()
+            .filter(|p| match kind {
+                "id" => p.id == v,
+                "name" => p.name.eq_ignore_ascii_case(v),
+                _ => under(&p.path, v) || projects::list_workspaces(ctx.git, &store, p).map(|ws| ws.iter().any(|w| under(&w.path, v))).unwrap_or(false),
+            })
+            .collect();
+        return match hits.len() {
+            0 => Err(Fail::new("not_found", format!("no project matches --repo {sel}"))),
+            1 => Ok(hits.remove(0).clone()),
+            n => Err(Fail { code: "ambiguous", message: format!("{n} projects match --repo {sel}; use id:"), data: json!({ "ids": hits.iter().map(|p| p.id.clone()).collect::<Vec<_>>() }) }),
+        };
     }
     for p in &projects {
         if under(&p.path, cwd) {
@@ -706,26 +750,44 @@ fn calling_worktree(ctx: &Ctx, project: &Project, cwd: &str) -> Result<Option<St
     Ok(inside.into_iter().next())
 }
 
-/// The worktree `--worktree` means: `current` is the one the call was made in; `name:` matches
-/// the typed name, the branch or the folder name; `branch:` and `path:` match exactly.
+/// The worktree `--worktree` means (CLI-009): `current` and `active` are the innermost one the
+/// call was made in; `name:` matches the typed name, the branch or the folder name; `branch:`
+/// and `path:` match exactly; `issue:` is the GitHub issue it was made for; `id:` and
+/// `identity:` are `<repo-id>::<path>` as the listings print it.
 fn pick_worktree(ctx: &Ctx, sel: &str, cwd: &str) -> Result<(Project, Worktree), Fail> {
+    pick_in(ctx, sel, cwd, false)
+}
+
+/// `parent`: a parent selector, which also takes `worktree:<repo-id>::<path>`.
+// ponytail: identity: is the id form until worktrees carry an identity of their own (hosts are local only).
+fn pick_in(ctx: &Ctx, sel: &str, cwd: &str, parent: bool) -> Result<(Project, Worktree), Fail> {
+    let here = ["current", "active"].contains(&sel.trim());
+    let kinds: &[&str] = if parent { &["id", "identity", "worktree", "name", "branch", "issue", "path"] } else { &["id", "identity", "name", "branch", "issue", "path"] };
+    let (kind, v) = if here { ("current", cwd) } else { selector(sel, "worktree", kinds, WORKTREE_FORMS)? };
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut hits: Vec<(Project, Worktree)> = Vec::new();
     for p in projects::load_projects(&store) {
         for w in projects::list_workspaces(ctx.git, &store, &p)? {
             let folder = Path::new(&w.path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
-            let ok = match (sel, selector(sel)) {
-                ("current", _) => under(&w.path, cwd),
-                ("active", _) => return Err(Fail::args("`active` is not known to the command line yet; use current, name:, branch: or path:")),
-                (_, ("name", v)) => w.name.as_deref() == Some(v) || w.branch.as_deref() == Some(v) || folder == v,
-                (_, ("branch", v)) => w.branch.as_deref() == Some(v),
-                (_, ("path", v)) => under(&w.path, v) && under(v, &w.path),
-                (_, ("id", v)) => v.split_once("::").is_some_and(|(id, path)| id == p.id && under(&w.path, path) && under(path, &w.path)),
-                (_, (k, _)) => return Err(Fail::args(format!("{k}: selectors are not supported yet; use current, name:, branch: or path:"))),
+            let same = |x: &str| under(&w.path, x) && under(x, &w.path);
+            let ok = match kind {
+                "current" => under(&w.path, v),
+                "name" => w.name.as_deref() == Some(v) || w.branch.as_deref() == Some(v) || folder == v,
+                "branch" => w.branch.as_deref() == Some(v),
+                "path" => same(v),
+                "issue" => v.parse::<u64>().is_ok_and(|n| projects::origin(&store, &w.path).and_then(|o| o["issue"].as_u64()) == Some(n)),
+                _ => v.split_once("::").is_some_and(|(id, path)| id == p.id && same(path)),
             };
             if ok {
                 hits.push((p.clone(), w));
             }
+        }
+    }
+    if kind == "current" {
+        hits.sort_by_key(|(_, w)| std::cmp::Reverse(w.path.len()));
+        hits.truncate(1);
+        if hits.is_empty() {
+            return Err(Fail { code: "not_found", message: format!("{cwd} is not inside a worktree of any project"), data: json!({ "hint": "run it inside a worktree's folder, or name one with --worktree id:|name:|branch:|path:" }) });
         }
     }
     match hits.len() {
@@ -751,7 +813,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let parent = if a["noParent"].as_bool().unwrap_or(false) {
                 None
             } else if let Some(sel) = text("parentWorktree") {
-                let (owner, w) = pick_worktree(ctx, &sel, &req.cwd)?;
+                let (owner, w) = pick_in(ctx, &sel, &req.cwd, true)?;
                 if owner.id != project.id {
                     return Err(Fail::args(format!("--parent-worktree {sel} is in project {}, not {}", owner.name, project.name)));
                 }
@@ -807,9 +869,180 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id }))
         }
         WORKER_START => worker_start(ctx, req),
+        c if QUERY.iter().any(|(_, w, _)| *w == c) => query(ctx, req),
         c if c.starts_with("orchestration.") => mail(ctx, req),
         other => Err(Fail::args(format!("unknown command {other}"))),
     }
+}
+
+// ---------------------------------------------------------------- repos, projects, worktrees (CLI-015..017)
+
+fn repo_row(p: &Project) -> Value {
+    json!({ "id": p.id, "selector": format!("id:{}", p.id), "name": p.name, "path": p.path, "baseRef": p.base })
+}
+
+/// A worktree as the listings show it: its selector id, lineage both ways, and its repo.
+fn worktree_row(p: &Project, w: &Worktree, all: &[Worktree]) -> Value {
+    let id = format!("{}::{}", p.id, w.path);
+    let children: Vec<&str> = all.iter().filter(|c| c.parent.as_deref().is_some_and(|x| same_dir(x, &w.path))).map(|c| c.path.as_str()).collect();
+    json!({ "id": id, "selector": format!("id:{id}"), "repoId": p.id, "repo": p.name, "path": w.path, "name": w.name, "branch": w.branch, "head": w.head, "isMain": w.is_main, "kind": w.kind, "parent": w.parent, "children": children })
+}
+
+/// Which hosts a listing looked at, so an empty one is never read as the whole picture.
+// ponytail: local only; remote hosts were dropped (CLI-051), so nothing is ever left out.
+fn hosts() -> Value {
+    json!({ "covered": ["local"], "leftOut": [] })
+}
+
+fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    let a = &req.args;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let limit = text("limit").and_then(|l| l.parse::<usize>().ok());
+    let lock = || ctx.store.lock().map_err(|e| Fail::from(e.to_string()));
+    match req.command.as_str() {
+        "repo.list" | "project.list" => {
+            let rows: Vec<Value> = projects::load_projects(&*lock()?).iter().map(repo_row).collect();
+            Ok(if req.command == "repo.list" { json!({ "repos": rows }) } else { json!({ "projects": rows }) })
+        }
+        "repo.add" => {
+            let path = text("path").ok_or_else(|| Fail::args("--path is required"))?;
+            let p = projects::add_project(ctx.git, &*lock()?, &Path::new(&req.cwd).join(path))?;
+            (ctx.notify)(json!({ "kind": "repo", "projectId": p.id }));
+            Ok(repo_row(&p))
+        }
+        "repo.show" => {
+            let p = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
+            let count = projects::list_workspaces(ctx.git, &*lock()?, &p)?.len();
+            let mut row = repo_row(&p);
+            row["base"] = json!(projects::resolve_base(ctx.git, Path::new(&p.path), &p, None).ok().map(|(b, _)| b));
+            row["worktrees"] = json!(count);
+            Ok(row)
+        }
+        "repo.set-base-ref" => {
+            let r = text("ref").ok_or_else(|| Fail::args("--ref is required"))?;
+            let p = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
+            if !ctx.git.base_available(Path::new(&p.path), &r) {
+                return Err(Fail::new("not_found", format!("{r} is not a branch, tag or commit in {}", p.name)));
+            }
+            let p = projects::set_base(&*lock()?, &p.id, Some(&r))?;
+            (ctx.notify)(json!({ "kind": "repo", "projectId": p.id }));
+            Ok(repo_row(&p))
+        }
+        "repo.search-refs" => {
+            let p = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
+            let q = text("query").unwrap_or_default().to_lowercase();
+            let out = crate::git::run(&["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes", "refs/tags"], Some(Path::new(&p.path)))?;
+            let refs: Vec<Value> = out
+                .lines()
+                .filter_map(|full| {
+                    let (kind, name) = [("branch", "refs/heads/"), ("remote", "refs/remotes/"), ("tag", "refs/tags/")].into_iter().find_map(|(k, pre)| full.strip_prefix(pre).map(|n| (k, n)))?;
+                    (!name.ends_with("/HEAD") && name.to_lowercase().contains(&q)).then(|| json!({ "name": name, "kind": kind }))
+                })
+                .take(limit.unwrap_or(20))
+                .collect();
+            Ok(json!({ "repoId": p.id, "refs": refs }))
+        }
+        "worktree.list" | "worktree.ps" => {
+            let ps = req.command == "worktree.ps";
+            let only = text("repo").map(|r| pick_project(ctx, Some(&r), &req.cwd)).transpose()?;
+            let mut lists = Vec::new();
+            {
+                let store = lock()?;
+                for p in projects::load_projects(&store).into_iter().filter(|p| only.as_ref().is_none_or(|o| o.id == p.id)) {
+                    let all = projects::list_workspaces(ctx.git, &store, &p)?;
+                    lists.push((p, all));
+                }
+            }
+            // ps: each open session goes to the innermost worktree its folder is in.
+            let sessions = if ps { ctx.terminals.sessions() } else { Vec::new() };
+            let home = |dir: &str| lists.iter().flat_map(|(_, all)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
+            let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
+            let mut rows = Vec::new();
+            for (p, all) in &lists {
+                for w in all {
+                    let mut row = worktree_row(p, w, all);
+                    if ps {
+                        let mine: Vec<Value> = sessions.iter().zip(&homes).filter(|(_, h)| h.as_deref() == Some(w.path.as_str())).map(|((handle, _, program), _)| json!({ "terminal": handle, "program": program })).collect();
+                        if mine.is_empty() {
+                            continue;
+                        }
+                        row["sessions"] = json!(mine);
+                    }
+                    rows.push(row);
+                }
+            }
+            let truncated = limit.is_some_and(|n| rows.len() > n);
+            rows.truncate(limit.unwrap_or(usize::MAX));
+            Ok(json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts() }))
+        }
+        "worktree.show" | "worktree.current" => {
+            let sel = if req.command == "worktree.current" { "current".to_string() } else { text("worktree").unwrap_or_else(|| "current".into()) };
+            let (p, w) = pick_worktree(ctx, &sel, &req.cwd)?;
+            let all = projects::list_workspaces(ctx.git, &*lock()?, &p)?;
+            Ok(worktree_row(&p, &w, &all))
+        }
+        other => Err(Fail::args(format!("unknown command {other}"))),
+    }
+}
+
+/// The text of the lookups above, one line per row.
+fn query_text(command: &str, r: &Value) -> Option<String> {
+    let s = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
+    let repo = |v: &Value| format!("{}  {}  ({}{})", s(v, "name"), s(v, "path"), s(v, "selector"), v["baseRef"].as_str().map(|b| format!(", base {b}")).unwrap_or_default());
+    let label = |v: &Value| v["name"].as_str().or(v["branch"].as_str()).unwrap_or("(detached)").to_string();
+    let rows = |k: &str| r[k].as_array().cloned().unwrap_or_default();
+    Some(match command {
+        "repo.list" | "project.list" => {
+            let list = rows(if command == "repo.list" { "repos" } else { "projects" });
+            if list.is_empty() {
+                "no repos yet; add one with kolux-dev repo add --path <folder>".into()
+            } else {
+                list.iter().map(repo).collect::<Vec<_>>().join("\n")
+            }
+        }
+        "repo.add" => format!("added {}", repo(r)),
+        "repo.set-base-ref" => format!("{}: new worktrees start from {}", s(r, "name"), s(r, "baseRef")),
+        "repo.show" => format!("{}\nbase {}; {} worktree(s)", repo(r), r["base"].as_str().unwrap_or("none found"), r["worktrees"]),
+        "repo.search-refs" => {
+            let list = rows("refs");
+            if list.is_empty() {
+                "no refs match".into()
+            } else {
+                list.iter().map(|x| format!("{:<7} {}", s(x, "kind"), s(x, "name"))).collect::<Vec<_>>().join("\n")
+            }
+        }
+        "worktree.list" | "worktree.ps" => {
+            let mut out: Vec<String> = rows("worktrees")
+                .iter()
+                .map(|w| {
+                    let mut line = format!("{}  [{}]  {}  ({})", label(w), w["branch"].as_str().unwrap_or("detached"), s(w, "path"), s(w, "selector"));
+                    if let Some(list) = w["sessions"].as_array() {
+                        line.push_str(&format!("\n    {}", list.iter().map(|x| format!("{} {}", s(x, "terminal"), x["program"].as_str().unwrap_or("shell"))).collect::<Vec<_>>().join(", ")));
+                    }
+                    line
+                })
+                .collect();
+            if out.is_empty() {
+                out.push(if command == "worktree.ps" { "no sessions are running".into() } else { "no worktrees".into() });
+            }
+            if r["truncated"] == true {
+                out.push("(more rows; raise --limit)".into());
+            }
+            out.push("hosts covered: local; none left out".into());
+            out.join("\n")
+        }
+        "worktree.show" | "worktree.current" => {
+            let mut out = vec![format!("{}  [{}]  {}", label(r), r["branch"].as_str().unwrap_or("detached"), s(r, "path")), format!("selector {}", s(r, "selector"))];
+            if let Some(p) = r["parent"].as_str() {
+                out.push(format!("parent {p}"));
+            }
+            for c in rows("children") {
+                out.push(format!("child {}", c.as_str().unwrap_or_default()));
+            }
+            out.join("\n")
+        }
+        _ => return None,
+    })
 }
 
 // ---------------------------------------------------------------- mail (ORCH-001..005)
@@ -1495,6 +1728,101 @@ mod tests {
     fn git(args: &[&str], cwd: &Path) {
         let out = Command::new("git").args(args).current_dir(cwd).output().unwrap();
         assert!(out.status.success(), "git {:?}: {}", args, String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[test]
+    fn repos_projects_and_worktrees_are_listed_and_picked_by_selector() {
+        let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
+        let (_, p) = parse(&words("repo search-refs --repo name:x --query de --limit 5"));
+        assert_eq!(p.unwrap().unwrap().command, "repo.search-refs");
+        assert!(refused("repo set-base-ref --repo name:x").contains("--ref"));
+        assert!(refused("repo add").contains("--path"));
+        assert!(refused("worktree list --limit 0").contains("above zero"));
+        assert!(refused("worktree current --worktree name:a").contains("unknown flag"));
+
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli117-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        let other = dir.join("other");
+        for r in [&repo, &other] {
+            std::fs::create_dir_all(r).unwrap();
+            git(&["init", "-q", "-b", "main"], r);
+            git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"], r);
+        }
+        git(&["branch", "develop"], &repo);
+        git(&["checkout", "-q", "develop"], &repo);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "on develop"], &repo);
+        git(&["checkout", "-q", "main"], &repo);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let mut settings = s.settings();
+            settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
+            s.save_settings(&settings).unwrap();
+        }
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None };
+
+        // CLI-015: a relative path counts from the folder the command ran in.
+        let added = dispatch(&ctx, &req("repo.add", &dir, json!({ "path": "other" }))).unwrap();
+        assert_eq!(added["name"], "other");
+        let repos = dispatch(&ctx, &req("repo.list", &dir, json!({}))).unwrap();
+        assert_eq!(repos["repos"].as_array().unwrap().len(), 2);
+        // CLI-016: the projects the app shows.
+        let listed = dispatch(&ctx, &req("project.list", &dir, json!({}))).unwrap();
+        assert_eq!(listed["projects"].as_array().unwrap().len(), 2);
+        let id = repos["repos"].as_array().unwrap().iter().find(|r| r["name"] == "repo").unwrap()["id"].as_str().unwrap().to_string();
+        let shown = dispatch(&ctx, &req("repo.show", &dir, json!({ "repo": format!("id:{id}") }))).unwrap();
+        assert_eq!(shown["name"], "repo");
+        let refs = dispatch(&ctx, &req("repo.search-refs", &repo, json!({ "query": "DEV" }))).unwrap();
+        assert_eq!(refs["refs"], json!([{ "name": "develop", "kind": "branch" }]));
+        assert!(dispatch(&ctx, &req("repo.set-base-ref", &repo, json!({ "ref": "nope" }))).unwrap_err().message.contains("nope"));
+        dispatch(&ctx, &req("repo.set-base-ref", &repo, json!({ "repo": "name:repo", "ref": "develop" }))).unwrap();
+        let made = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "same", "issue": "7" }))).unwrap();
+        let develop = Command::new("git").args(["rev-parse", "develop"]).current_dir(&repo).output().unwrap();
+        assert_eq!(made["head"], String::from_utf8_lossy(&develop.stdout).trim(), "the new worktree starts from the new base");
+        let path = PathBuf::from(made["path"].as_str().unwrap());
+        dispatch(&ctx, &req("worktree.create", &other, json!({ "name": "same" }))).unwrap();
+
+        // CLI-017: one repo's worktrees, with lineage and the hosts covered.
+        let list = dispatch(&ctx, &req("worktree.list", &dir, json!({ "repo": "name:repo" }))).unwrap();
+        let rows = list["worktrees"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r["repoId"] == json!(id)));
+        assert_eq!(rows[0]["children"], json!([made["path"]]));
+        assert_eq!(list["hosts"], json!({ "covered": ["local"], "leftOut": [] }));
+        let capped = dispatch(&ctx, &req("worktree.list", &dir, json!({ "limit": "1" }))).unwrap();
+        assert_eq!((capped["worktrees"].as_array().unwrap().len(), &capped["truncated"]), (1, &json!(true)));
+
+        // CLI-009: current and active mean the worktree around the folder; issue: finds the link.
+        let inner = path.join("src");
+        std::fs::create_dir_all(&inner).unwrap();
+        for sel in [None, Some("active")] {
+            let args = sel.map(|s| json!({ "worktree": s })).unwrap_or(json!({}));
+            let cmd = if sel.is_some() { "worktree.show" } else { "worktree.current" };
+            assert_eq!(dispatch(&ctx, &req(cmd, &inner, args)).unwrap()["path"], made["path"]);
+        }
+        assert_eq!(dispatch(&ctx, &req("worktree.show", &dir, json!({ "worktree": "issue:7" }))).unwrap()["path"], made["path"]);
+        let wid = rows[1]["id"].as_str().unwrap().to_string();
+        for form in [format!("id:{wid}"), format!("identity:{wid}")] {
+            assert_eq!(dispatch(&ctx, &req("worktree.show", &dir, json!({ "worktree": form }))).unwrap()["path"], made["path"]);
+        }
+        let outside = dispatch(&ctx, &req("worktree.current", &dir, json!({}))).unwrap_err();
+        assert!(outside.data["hint"].as_str().unwrap().contains("--worktree"), "{:?}", outside.data);
+        let bare = dispatch(&ctx, &req("worktree.show", &dir, json!({ "worktree": "42" }))).unwrap_err();
+        assert_eq!(bare.code, "invalid_arguments");
+        assert!(bare.message.contains("\"42\"") && bare.message.contains("name:") && bare.message.contains("path:"), "{}", bare.message);
+        assert!(dispatch(&ctx, &req("repo.show", &dir, json!({ "repo": "repo" }))).unwrap_err().message.contains("id:"));
+        let twice = dispatch(&ctx, &req("worktree.show", &dir, json!({ "worktree": "name:same" }))).unwrap_err();
+        assert_eq!(twice.code, "ambiguous");
+        // ps: no Kolux terminal is open in a test.
+        assert_eq!(dispatch(&ctx, &req("worktree.ps", &dir, json!({}))).unwrap()["worktrees"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -746,6 +746,17 @@ pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, projec
     create_fresh(&git, &store, &project_id)
 }
 
+/// PROJ-028 / CLI-015: saves the ref new workspaces of project `id` start from; None goes back to
+/// the default branch Git reports.
+pub fn set_base(store: &Store, id: &str, base: Option<&str>) -> Result<Project, String> {
+    let mut projects = load_projects(store);
+    let project = projects.iter_mut().find(|p| p.id == id).ok_or("that project is no longer registered")?;
+    project.base = base.map(String::from);
+    let project = project.clone();
+    save_projects(store, &projects)?;
+    Ok(project)
+}
+
 /// PROJ-025 / PROJ-028: a project's own workspaces folder and base ref; empty clears either.
 #[tauri::command]
 pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: String, base: String) -> Result<Project, String> {
