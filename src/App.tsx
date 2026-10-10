@@ -18,6 +18,8 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
+import { readLook, startScreen } from "./settings/general";
+import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -48,10 +50,11 @@ function tabName(p: Pane, titles: Record<number, string>): string {
 type StartLine = { args: string[]; typed: string | null };
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
-export default function App() {
+/** `initial`: the settings read before the first frame (main.tsx), so the first screen is right at once. */
+export default function App({ initial = {} }: { initial?: Record<string, unknown> }) {
   return (
     <KeymapProvider>
-      <Window />
+      <Window initial={initial} />
     </KeymapProvider>
   );
 }
@@ -61,11 +64,12 @@ export function nextScreen(s: Screen): Screen {
   return screens[(screens.findIndex((x) => x.id === s) + 1) % screens.length].id;
 }
 
-function Window() {
+function Window({ initial }: { initial: Record<string, unknown> }) {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [screen, setScreen] = useState<Screen>("terminals");
+  const [screen, setScreen] = useState<Screen>(() => startScreen(initial)); // SET-037
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsAt, setSettingsAt] = useState<{ target: SettingsTarget | null; n: number }>({ target: null, n: 0 }); // SET-006: a link's page and section
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
@@ -82,7 +86,8 @@ function Window() {
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [settings, setSettings] = useState<Record<string, unknown>>({});
+  const [settings, setSettings] = useState<Record<string, unknown>>(initial);
+  const classic = readLook(settings) === "classic";
   const defaultId = defaultAgentId(settings);
   const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -133,9 +138,23 @@ function Window() {
   }, []);
 
   // T-005: the shortcuts file is read at start; what it got wrong is said once, in the notice.
+  const keymapNotice = keymap.errors.join(" ");
   useEffect(() => {
-    if (keymap.errors.length) setNotice(keymap.errors.join(" "));
-  }, [keymap]);
+    if (keymapNotice) setNotice(keymapNotice);
+  }, [keymapNotice]);
+  // SET-037: under Classic there is only the Terminals screen.
+  useEffect(() => {
+    if (classic) setScreen("terminals");
+  }, [classic]);
+  // SET-006: a link anywhere in the app opens Settings at its page and section.
+  useEffect(() => {
+    const open = (e: Event) => {
+      setSettingsAt((a) => ({ target: (e as CustomEvent<SettingsTarget>).detail, n: a.n + 1 }));
+      setSettingsOpen(true);
+    };
+    window.addEventListener(OPEN_SETTINGS, open);
+    return () => window.removeEventListener(OPEN_SETTINGS, open);
+  }, []);
 
   // Global-scope shortcuts are pressed here, wherever focus is (the terminal policy comes with
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
@@ -161,6 +180,7 @@ function Window() {
           void invoke("browser_go", { id: focused, what: "reload" });
           break;
         case "app.settings":
+          if (!settingsOpen) setSettingsAt((a) => ({ target: null, n: a.n }));
           setSettingsOpen(true);
           break;
         case "sidebar.left.toggle":
@@ -172,7 +192,7 @@ function Window() {
           setCreateRequest((n) => n + 1);
           break;
         case "view.cycleWorkspaceView":
-          setScreen((s) => nextScreen(s));
+          if (!classic) setScreen((s) => nextScreen(s));
           break;
         case "tab.newTerminal":
           void newTab(null);
@@ -453,9 +473,9 @@ function Window() {
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
   return (
     <div className="app">
-      <TopBar screen={screen} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
+      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
       <div className="body">
-        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
+        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
         {terminals && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
@@ -490,6 +510,11 @@ function Window() {
               {notice && (
                 <div className="notice" role="alert">
                   {notice}
+                  {notice === keymapNotice && (
+                    <button className="btn link" onClick={() => openSettings("shortcuts", "shortcuts-file")}>
+                      Shortcuts settings
+                    </button>
+                  )}
                   <button className="ib" onClick={() => setNotice(null)} title="Dismiss">
                     ×
                   </button>

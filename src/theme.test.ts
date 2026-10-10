@@ -1,6 +1,6 @@
 import design from "../design/DESIGN.md?raw";
 import { expect, test } from "vitest";
-import { applyTheme, buildTheme, classic, coreTokens, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance } from "./theme";
+import { applyTheme, buildTheme, classic, coreTokens, isDark, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance } from "./theme";
 
 /** The `| \`--token\` | \`#hex\` |` rows of DESIGN.md section 2, as a name-to-hex map. */
 function designPalette(): Record<string, string> {
@@ -82,4 +82,27 @@ test("terminal colours follow the app hue only on Match", () => {
   expect(sky.background).not.toBe(ember.background);
   expect(sky.blue).not.toBe(ember.blue);
   expect(Object.keys(sky)).toEqual(expect.arrayContaining(["black", "red", "brightCyan", "brightWhite"]));
+});
+
+test("SET-005: System by default, saved modes kept, light turns the greys over", () => {
+  expect(look().mode).toBe("system");
+  expect(look({ appearanceMode: "light" }).mode).toBe("light");
+  expect(look({ appearanceMode: "dim" }).mode).toBe("system");
+  expect(writeAppearance({}, look({ appearanceMode: "dark" }))).toMatchObject({ appearanceMode: "dark", terminalLightScheme: true });
+  expect(isDark(look(), false)).toBe(false);
+  expect(isDark(look(), true)).toBe(true);
+  expect(isDark(look({ appearanceMode: "light" }), true)).toBe(false);
+  const light = buildTheme(look(), false);
+  const lum = (h: string) => parseInt(h.slice(1, 3), 16);
+  expect(lum(light["app-bg"])).toBeGreaterThan(240);
+  expect(lum(light.fg)).toBeLessThan(16);
+  expect(lum(light["pane-bg"])).toBeLessThan(lum(light["app-bg"]));
+  expect(buildTheme(look(), true)).toEqual({ ...classic });
+});
+
+test("SET-005: light mode terminals use the light scheme unless it is turned off", () => {
+  const on = terminalFor(look({ appearanceMode: "light" }), false);
+  expect(parseInt(on.background!.slice(1, 3), 16)).toBeGreaterThan(200);
+  expect(terminalFor(look({ appearanceMode: "light", terminalLightScheme: false }), false).background).toBe(classic["pane-bg"]);
+  expect(terminalFor(look({ appearanceMode: "dark" }), true).background).toBe(classic["pane-bg"]);
 });

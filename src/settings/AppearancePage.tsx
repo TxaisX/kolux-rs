@@ -3,7 +3,10 @@
 // once on the whole window; the save follows a moment later so a slider drag is one write.
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { applyAppearance, buildTheme, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, writeAppearance, type Appearance, type TerminalScheme } from "../theme";
+import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, writeAppearance, type Appearance, type Mode, type TerminalScheme } from "../theme";
+import { Segmented } from "./GeneralPage";
+
+const MODE_LABEL: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
 
 const SLIDERS = [
   { key: "tint", label: "Tint", unit: "°" },
@@ -14,7 +17,7 @@ const SLIDERS = [
 /** A small window drawn in the given look, beside the swatches. */
 export function ThemePreview({ look }: { look: Appearance }) {
   return (
-    <div className="look-preview" style={themeVars(buildTheme(previewOf(look))) as CSSProperties} aria-label={`Preview: ${themeLabel(previewOf(look).theme)}`}>
+    <div className="look-preview" style={themeVars(buildTheme(previewOf(look), isDark(look))) as CSSProperties} aria-label={`Preview: ${themeLabel(previewOf(look).theme)}`}>
       <div className="lp-top" />
       <div className="lp-body">
         <div className="lp-side">
@@ -35,7 +38,15 @@ export function AppearanceView({ look, onChange }: { look: Appearance; onChange:
   const classic = look.theme === "classic";
   return (
     <>
-      <section className="conn-card">
+      <section className="conn-card" data-section="interface">
+        <h2 className="conn-name">Interface</h2>
+        <div className="look-select">
+          <span>Mode</span>
+          <Segmented<Mode> label="Mode" options={MODES.map((m) => ({ id: m, label: MODE_LABEL[m] }))} value={look.mode} onPick={(mode) => onChange({ ...look, mode })} />
+        </div>
+        {look.mode === "system" && <p className="conn-detail">Follows Windows, also while Kolux is running.</p>}
+      </section>
+      <section className="conn-card" data-section="theme">
         <h2 className="conn-name">Colour theme</h2>
         <div className="look-row">
           <div className="look-swatches" role="radiogroup" aria-label="Colour theme">
@@ -58,16 +69,23 @@ export function AppearanceView({ look, onChange }: { look: Appearance; onChange:
         ))}
         {classic && <p className="conn-detail">Classic keeps the original neutral look; pick a colour to use the sliders.</p>}
       </section>
-      <section className="conn-card">
+      <section className="conn-card" data-section="terminal-colours">
         <h2 className="conn-name">Terminal colours</h2>
         <label className="look-select">
           <span>Colour scheme</span>
           <select value={look.terminal} onChange={(e) => onChange({ ...look, terminal: e.target.value as TerminalScheme })}>
-            <option value="default">Kolux dark</option>
+            <option value="default">Kolux</option>
             <option value="match">Match app theme</option>
           </select>
         </label>
         <p className="conn-detail">Match app theme works the terminal background, text and colours out of the app's colour, and follows it as it changes.</p>
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={look.lightTerminal} onChange={(e) => onChange({ ...look, lightTerminal: e.target.checked })} />
+          <span>
+            Light scheme in light mode
+            <small>Terminals turn light with the app. Off keeps the same scheme in both modes.</small>
+          </span>
+        </label>
       </section>
     </>
   );

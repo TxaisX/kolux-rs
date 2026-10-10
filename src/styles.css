@@ -298,3 +298,26 @@ input { font: inherit; }
 .look-slider output { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
 .look-select { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--fg-row); }
 .look-select select { height: 28px; padding: 0 8px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+
+/* SET-004 / SET-005: a switch between light and dark shows at once, with no colour transition. */
+.no-anim, .no-anim * { transition: none !important; }
+/* SET-005: the colours written as literals above, as tokens in light mode (dark keeps the measured
+   values as they are). */
+[data-mode="light"] .usage-part.warn, [data-mode="light"] .conn-chip.expired, [data-mode="light"] .conn-chip.attention,
+[data-mode="light"] .conn-detail.warn, [data-mode="light"] .note.warn, [data-mode="light"] .signin-notice span { color: var(--warn); }
+[data-mode="light"] .note.error, [data-mode="light"] .btn.danger, [data-mode="light"] .notice { color: var(--danger); }
+[data-mode="light"] .btn.danger, [data-mode="light"] .notice, [data-mode="light"] .sb-form.warn, [data-mode="light"] .signin-notice { border-color: var(--danger-line); }
+[data-mode="light"] .btn.danger:hover:not(:disabled), [data-mode="light"] .branch:hover, [data-mode="light"] .sess:hover { background: var(--kbd-bg); }
+[data-mode="light"] .sb-tabs button, [data-mode="light"] .sb-next { color: var(--fg-nav); }
+[data-mode="light"] .branch .chev { color: var(--fg-label); }
+[data-mode="light"] .menu { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14); }
+/* Settings: a row of buttons acting as one choice (General's look, Appearance's mode). */
+.seg-row { display: inline-flex; gap: 2px; padding: 2px; background: var(--tab-track); border: 1px solid var(--tab-track-border); border-radius: 8px; }
+.seg-row button { height: 24px; padding: 0 12px; border-radius: 6px; font-size: 12px; color: var(--fg-muted); }
+.seg-row button[aria-checked="true"] { background: var(--seg-active); color: var(--fg); font-weight: 500; }
+.seg-row button:disabled { color: var(--fg-disabled); cursor: default; }
+.settings-group { padding: 12px 9px 4px; font-size: 11px; font-weight: 600; color: var(--fg-label); text-transform: uppercase; letter-spacing: 0.04em; }
+.settings-section-flash { outline: 1px solid var(--line-focus); }
+.keys-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.keys-table td { padding: 4px 0; border-top: 1px solid var(--line-subtle); color: var(--fg-row); }
+.keys-table td:last-child { text-align: right; }

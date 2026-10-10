@@ -295,6 +295,14 @@ picker with "Match app theme". Every change shows on the whole window at once an
 window now starts hidden and appears only once it already wears the saved theme, so the white
 flash before the interface loads is gone too.
 
+[accounts] Settings now has its ten pages (General, Appearance, Accounts & keys, Agents, Terminal &
+sessions, Git & worktrees, Safety, Notifications, Shortcuts, Usage) plus one small page per
+repository, and opens on the page used last (T-054). Appearance has a Mode switch: System (the
+default, follows Windows while the app runs), Light or Dark, and terminals turn light with the
+app unless that is switched off. General has the Classic or New look and the screen that opens
+first; under Classic the Agents / Board / Terminals switcher is gone and the window stays on
+Terminals. Pages with nothing built yet say so.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -707,7 +715,23 @@ recorded default until told otherwise; nothing here blocks a pass.
   answer slowly; it is not relied on, since a killed app may not have written it. There are no
   pop-out windows yet; any later window loads the same page and gets the same look.
 
+- 2026-10-09 · [accounts] T-054 · Settings fields: `appearanceMode` (`system` | `light` | `dark`,
+  anything else is System), `terminalLightScheme` (true unless false), `uiLook` (`classic` | `new`),
+  `firstScreen` (`agents` | `board` | `terminals`). A profile whose settings already hold anything
+  but have no `uiLook` is Classic; an empty one is New; main.tsx writes the answer down on the
+  first start so it does not change later. NOTE for the merge: every existing dev profile
+  (main checkout included) therefore opens Classic, without the screen switcher, until New is
+  picked in Settings > General. Light mode turns the grey tokens over (backgrounds 1 - 0.7 x
+  lightness, text 1 - lightness) and darkens status colours by a quarter; warn / danger literals
+  became tokens for light mode only (dark keeps the measured values). The window sets
+  `data-mode` and `color-scheme` on the root. Settings links: `openSettings(page, section)` in
+  `src/settings/pages.ts`; sections carry `data-section`. The shortcut-policy setting itself
+  does not exist yet; the link is proved on Shortcuts > Commands and keys, and the keymap
+  notice's "Shortcuts settings" button opens the Shortcuts file section. The terminal picker's
+  "Kolux dark" is now called "Kolux", since it turns light in light mode.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [accounts] T-054 · done: `src/theme.ts` (mode and light-terminal fields, `isDark`, light `buildTheme`, light terminal scheme, `followSystemMode`, two-frame transition hold on a light/dark switch), `src/settings/pages.ts` (ten pages, repo pages, `openSettings`, last page), `src/settings/general.ts` + `GeneralPage.tsx` (look and first screen), `ShortcutsPage.tsx` (file, errors, every command and its keys), SettingsPage rebuilt on the page list with lazily loaded pages and scroll-to-section, Appearance gets Interface > Mode and the light-scheme switch, App starts on the saved first screen and hides the switcher under Classic, the screen-cycle shortcut does nothing under Classic; 7 new front-end tests (112 total); live: existing profile opens Classic with System = light (Windows is in light mode) and the General page greys Agents and Board, New brings the switcher back, Board saved as first screen shows first after a restart, a fresh profile is written as New, Dark applies at once and System follows an emulated Windows switch to dark and back (#050405 / #fcfcfc), transitions held for two frames, light scheme on gives a #f6f6f6 terminal and off #0d0d0d, a link opens Shortcuts scrolled to its section, a repository adds an 11th entry with its own page; build / clippy / 81 Rust tests / 112 front-end tests / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-054.txt, evidence/T-054-*.png
 - 2026-10-09 · [accounts] T-053 · done: `src/theme.ts` (17 themes in wheel order, `readAppearance` / `writeAppearance` with unknown names as Classic and sliders clamped or defaulted, `buildTheme`, `previewOf`, `terminalFor` with a matched 16-colour palette, `applyAppearance` + `cachedAppearance`), `src/settings/AppearancePage.tsx` (swatches, preview, sliders, terminal picker, live apply and a 250 ms save), Settings gets an Appearance page, open terminals recolour in place, App applies the look on every settings read, the window starts hidden and is shown after the first themed frame (index.html, main.tsx, tauri.conf.json, `core:window:allow-show`, Rust backstop); 7 front-end tests (105 total); live: fresh profile Classic with sliders off, Teal on the whole window inside one frame, Moss saturation 0 grey and back, saturation 500 read as 160 and a word as 100, Match with Sky then Ember recolours a running PowerShell pane (#090e11 then #110b09) and Kolux dark puts it back (#0d0d0d), Rose saved while the app was closed is the first visible frame, an unknown name starts as Classic; build / clippy / 81 Rust tests / 105 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-053.txt, evidence/T-053-*.png
 - 2026-10-09 · [accounts] T-043-d · HAND TO FABLE: Kolux-side renewal means Kolux sending the managed account's refresh credential to Anthropic's token service itself; that service's address, client id and answer are in no public Claude Code doc, so it cannot be built clean-room, and OD-01 (direct provider calls off) argues against building it at all, which is a call for Txais; the macOS keychain rules cannot be run or checked on this Windows PC; the switch alone (`claudeSignInUpkeepByClaudeCode` false) would only turn off Claude Code's upkeep with nothing in its place, so it was not shipped either; nothing changed, left unticked · no evidence
 - 2026-10-09 · [accounts] T-042-b · HAND TO FABLE: Codex's own usage service is not in OpenAI's public Codex docs (only the background process's `account/rateLimits/read`, which T-042-a already uses), so its address and answer cannot be learnt clean-room, and the last route reads Codex's status screen in a hidden terminal (PTY screen parsing); nothing changed, left unticked · no evidence

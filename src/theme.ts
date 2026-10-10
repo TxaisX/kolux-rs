@@ -44,6 +44,10 @@ export const classic = {
   "dot-idle": "#3c3c3c",
   gauge: "#8beeb0",
   "gauge-text": "#83e4a6",
+  // warnings and danger (used as literals before SET-005; light mode needs them as tokens)
+  warn: "#fdc030",
+  danger: "#f0a07a",
+  "danger-line": "#7a3b1e",
 } as const;
 
 export type Theme = Record<keyof typeof classic, string>;
@@ -85,9 +89,13 @@ export const swatch = (t: ThemeName) => (t === "classic" ? classic["seg-active"]
 
 /** SET-003: "default" is Kolux's own dark terminal scheme, "match" follows the app hue. */
 export type TerminalScheme = "default" | "match";
-export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme };
+/** SET-005: System follows the operating system, also while running. */
+export type Mode = "system" | "light" | "dark";
+export const MODES: Mode[] = ["system", "light", "dark"];
+/** `lightTerminal`: in light mode terminals use the light scheme; off keeps one scheme for both. */
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean };
 /** The settings fields the appearance lives in. */
-export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme" } as const;
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme" } as const;
 export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0] } as const;
 
 /** Out of span is pulled to the nearest end; anything not a number falls back to the default. */
@@ -104,6 +112,8 @@ export function readAppearance(s: Record<string, unknown>): Appearance {
     saturation: clampNum(s[FIELD.saturation], SPAN.saturation),
     depth: clampNum(s[FIELD.depth], SPAN.depth),
     terminal: s[FIELD.terminal] === "match" ? "match" : "default",
+    mode: s[FIELD.mode] === "light" || s[FIELD.mode] === "dark" ? (s[FIELD.mode] as Mode) : "system",
+    lightTerminal: s[FIELD.lightTerminal] !== false,
   };
 }
 
@@ -138,17 +148,28 @@ const BASE_SAT = 0.3;
 /** The theme's hue after tint, or null for Classic (no hue). */
 export const themeHue = (a: Appearance) => (a.theme === "classic" ? null : (((HUE[a.theme] + a.tint) % 360) + 360) % 360);
 
+/** Whether the operating system asks for dark (dark when there is no way to tell). */
+export const systemDark = () => typeof matchMedia !== "function" || matchMedia("(prefers-color-scheme: dark)").matches;
+export const isDark = (a: Appearance, system = systemDark()) => a.mode === "dark" || (a.mode === "system" && system);
+
 /** Every token for an appearance: Classic as measured; a hued theme recolours the neutral greys
- *  (backgrounds, lines, text) and leaves the status colours alone so their meaning holds. */
-export function buildTheme(a: Appearance): Theme {
+ *  (backgrounds, lines, text) and leaves the status colours alone so their meaning holds. Light
+ *  mode turns the greys over (backgrounds light, text dark) and darkens the status colours a
+ *  quarter so they still read on a light ground. */
+export function buildTheme(a: Appearance, dark = true): Theme {
   const hue = themeHue(a);
-  if (hue === null) return { ...classic };
-  const sat = a.theme === "graphite" ? 0 : (BASE_SAT * a.saturation) / 100;
+  if (hue === null && dark) return { ...classic };
+  const sat = hue === null || a.theme === "graphite" ? 0 : (BASE_SAT * a.saturation) / 100;
   const out = { ...classic } as Theme;
   for (const [k, hex] of Object.entries(classic) as [keyof Theme, string][]) {
-    const [, s, l] = toHsl(hex);
-    if (s > 0.12) continue; // a status colour
-    out[k] = l < 0.5 ? hsl(hue, clamp01(sat), clamp01(l + a.depth * DEPTH_STEP)) : hsl(hue, clamp01(sat / 3), l);
+    const [h, s, l] = toHsl(hex);
+    if (s > 0.12) {
+      if (!dark) out[k] = hsl(h, s, l * 0.75); // a status colour
+      continue;
+    }
+    const bg = l < 0.5;
+    const lit = bg && hue !== null ? clamp01(l + a.depth * DEPTH_STEP) : l;
+    out[k] = hsl(hue ?? 0, clamp01(bg ? sat : sat / 3), dark ? lit : bg ? 1 - lit * 0.7 : 1 - lit);
   }
   return out;
 }
@@ -165,18 +186,23 @@ function mix(a: string, b: string, t: number): string {
 const ANSI = { red: 0, green: 135, yellow: 45, blue: 215, magenta: 300, cyan: 185 } as const;
 
 /** SET-003: the terminal colours for an appearance. "match" works background, text and the 16-colour
- *  palette out of the app hue; "default" is Kolux's own dark scheme whatever the app hue. */
-export function terminalFor(a: Appearance): ITheme {
-  if (a.terminal !== "match") return terminalTheme(classic);
-  const t = buildTheme(a);
-  const hue = themeHue(a);
-  const pull = (h: number, l: number) => (hue === null || a.theme === "graphite" ? hsl(h, 0.6, l) : mix(hsl(h, 0.6, l), hsl(hue, 0.6, l), 0.2));
+ *  palette out of the app hue; "default" is Kolux's own dark scheme whatever the app hue. SET-005: in
+ *  light mode, with the light scheme on, either one becomes its light form. */
+export function terminalFor(a: Appearance, dark = isDark(a)): ITheme {
+  const light = !dark && a.lightTerminal;
+  if (a.terminal !== "match" && !light) return terminalTheme(classic);
+  const base: Appearance = a.terminal === "match" ? a : { ...a, theme: "classic" };
+  const t = buildTheme(base, !light);
+  const hue = themeHue(base);
+  const pull = (h: number, l: number) => (hue === null || base.theme === "graphite" ? hsl(h, 0.6, l) : mix(hsl(h, 0.6, l), hsl(hue, 0.6, l), 0.2));
+  const [lo, hi] = light ? [0.38, 0.3] : [0.55, 0.7];
   const colours: Record<string, string> = {};
   for (const [name, h] of Object.entries(ANSI)) {
-    colours[name] = pull(h, 0.55);
-    colours["bright" + name[0].toUpperCase() + name.slice(1)] = pull(h, 0.7);
+    colours[name] = pull(h, lo);
+    colours["bright" + name[0].toUpperCase() + name.slice(1)] = pull(h, hi);
   }
-  return { ...terminalTheme(t), black: t.surface, brightBlack: t["fg-faint"], white: t["fg-row"], brightWhite: t.fg, ...colours };
+  const greys = light ? { black: t.fg, brightBlack: t["fg-muted"], white: t["seg-active"], brightWhite: t["line-strong"] } : { black: t.surface, brightBlack: t["fg-faint"], white: t["fg-row"], brightWhite: t.fg };
+  return { ...terminalTheme(t), ...greys, ...colours };
 }
 
 // ---- SET-004: the first frame already has the saved look ----
@@ -194,16 +220,39 @@ export function themeVars(t: Theme): Record<string, string> {
   return vars;
 }
 
+let last: Appearance | null = null;
+let lastDark: boolean | null = null;
+
+/** SET-004: a switch between light and dark shows at once; transitions are held off two frames. */
+function holdTransitions() {
+  const el = document.documentElement;
+  el.classList.add("no-anim");
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove("no-anim")));
+}
+
+/** SET-005: on System the window follows the operating system while it runs. Call once. */
+export function followSystemMode(): void {
+  if (typeof matchMedia !== "function") return;
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (last?.mode === "system") applyAppearance(last);
+  });
+}
+
 /** Puts an appearance on the window now and remembers it for the next start's first frame. */
 export function applyAppearance(a: Appearance, root: StyleHost = document.documentElement): void {
-  const vars = themeVars(buildTheme(a));
+  const dark = isDark(a);
+  if (lastDark !== null && lastDark !== dark && typeof document !== "undefined") holdTransitions();
+  last = a;
+  lastDark = dark;
+  const vars = { ...themeVars(buildTheme(a, dark)), "color-scheme": dark ? "dark" : "light" };
+  if (typeof document !== "undefined") document.documentElement.dataset.mode = dark ? "dark" : "light";
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({ vars, appearance: a }));
   } catch {
     /* no storage: the next start shows Classic until settings load */
   }
-  terminal = terminalFor(a);
+  terminal = terminalFor(a, dark);
   window.dispatchEvent(new Event(TERMINAL_EVENT));
 }
 
