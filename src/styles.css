@@ -86,6 +86,10 @@ input { font: inherit; }
 .sb-notice:hover { color: var(--fg); }
 .vis-row { display: flex; align-items: center; gap: 6px; }
 .vis-row .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vis-row .field { flex: 1; min-width: 0; }
+.preview.warn { color: #f0a07a; word-break: normal; }
+.sb-form .link { align-self: flex-start; padding: 0; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; }
+.sb-form .link:hover { color: var(--fg); }
 .proj { display: flex; align-items: center; height: 32px; padding: 0 4px 0 8px; font-size: 14px; font-weight: 500; color: var(--fg-row); white-space: nowrap; }
 .proj .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .proj .ib { opacity: 0; }

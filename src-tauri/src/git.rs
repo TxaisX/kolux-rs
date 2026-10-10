@@ -28,6 +28,10 @@ pub struct Worktree {
     pub parent: Option<String>,
     /// The user hid it from the sidebar (PROJ-042); the main checkout never is.
     pub hidden: bool,
+    /// PROJ-044: "main", "managed" (Kolux made it) or "external"; empty until the project's list sets it.
+    pub kind: String,
+    /// For an external worktree, where its visibility comes from (`visibility.rs`).
+    pub source: Option<String>,
 }
 
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
@@ -223,7 +227,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, hidden: false });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, hidden: false, kind: String::new(), source: None });
         }
     }
     out

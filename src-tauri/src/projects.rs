@@ -74,7 +74,7 @@ const ORIGINS_KEY: &str = "workspaceOrigins";
 const SEEN_KEY: &str = "worktreesSeen";
 /// Worktrees the user hid from the sidebar (PROJ-042), keyed like the names.
 const HIDDEN_KEY: &str = "worktreesHidden";
-const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
+pub(crate) const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 /// "nested" (the default) or "flat" (PROJ-025).
 const LAYOUT_SETTING: &str = "workspacesLayout";
 /// Workspaces folders used before, newest first, so they can be picked again (PROJ-025).
@@ -101,7 +101,7 @@ fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
     store.get(NAMES_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-fn name_key(path: &str) -> String {
+pub(crate) fn name_key(path: &str) -> String {
     path.replace('/', "\\").trim_end_matches('\\').to_lowercase()
 }
 
@@ -151,14 +151,11 @@ fn load_map(store: &Store, key: &str) -> serde_json::Map<String, serde_json::Val
     store.get(key).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
-/// PROJ-042: hides the worktree at `path` from the sidebar, or shows it again.
+/// PROJ-042: hides the worktree at `path` from the sidebar, or shows it again. The choice is
+/// kept either way, so it wins over its source's visibility (`visibility.rs`).
 pub fn set_hidden(store: &Store, path: &str, hidden: bool) -> Result<(), String> {
     let mut all = load_map(store, HIDDEN_KEY);
-    if hidden {
-        all.insert(name_key(path), true.into());
-    } else {
-        all.remove(&name_key(path));
-    }
+    all.insert(name_key(path), hidden.into());
     store.set(HIDDEN_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
@@ -172,8 +169,12 @@ fn save_seen<'a>(store: &Store, project: &Project, keys: impl IntoIterator<Item 
     store.set(SEEN_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
-/// A worktree Kolux itself just made is never offered as new (PROJ-041).
+/// A worktree Kolux itself just made is never offered as new (PROJ-041), and its record makes it
+/// managed wherever it sits (PROJ-044); a more detailed origin written by the caller is kept.
 pub fn note_seen(store: &Store, project: &Project, path: &str) -> Result<(), String> {
+    if origin(store, path).is_none() {
+        set_origin(store, path, Some(&serde_json::json!({ "madeBy": "app" })))?;
+    }
     match seen_of(store, project) {
         Some(mut seen) => {
             seen.insert(name_key(path));
@@ -216,22 +217,18 @@ pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
 }
 
 /// The workspaces of a project as the sidebar lists them (PROJ-007): Git's list with the typed
-/// names and parents laid over, minus scratch worktrees a coding tool keeps for its own sub-agents, which
-/// live under a dot-folder inside the main checkout (Claude Code's `.claude/worktrees/`).
+/// names and parents laid over, and kind, source and visibility from `visibility::apply`, which
+/// also drops the scratch worktrees other coding tools keep under a dot-folder of the main checkout.
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let hidden = load_map(store, HIDDEN_KEY);
     let all = git.worktrees(Path::new(&project.path))?;
-    // The scratch folders sit in the main checkout even when the project is a linked worktree (PROJ-006).
-    let main = all.iter().find(|w| w.is_main).map(|w| PathBuf::from(&w.path)).unwrap_or_else(|| PathBuf::from(&project.path));
-    Ok(all
+    Ok(crate::visibility::apply(store, project, &hidden, all)?
         .into_iter()
-        .filter(|w| !Path::new(&w.path).strip_prefix(&main).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))))
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
-            w.hidden = !w.is_main && hidden.contains_key(&name_key(&w.path));
             w
         })
         .collect())
@@ -257,6 +254,8 @@ pub fn add_project(git: &Git, store: &Store, path: &Path) -> Result<Project, Str
         name,
         path: top.display().to_string(),
     };
+    // Projects already there keep their earlier visibility; this one follows the defaults (PROJ-042).
+    crate::visibility::ensure(store, &projects)?;
     projects.insert(0, project.clone());
     save_projects(store, &projects)?;
     Ok(project)
@@ -271,7 +270,7 @@ pub fn default_workspaces_dir() -> PathBuf {
 
 pub const WORKSPACES_DIR_ENV: &str = "KOLUX_WORKSPACES_DIR";
 
-fn non_blank(s: Option<&str>) -> Option<&str> {
+pub(crate) fn non_blank(s: Option<&str>) -> Option<&str> {
     s.map(str::trim).filter(|s| !s.is_empty())
 }
 
@@ -567,6 +566,30 @@ pub fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_id: St
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = find_project(&store, &project_id)?;
     mark_all_seen(&git, &store, &project)
+}
+
+/// SET-032 / PROJ-042: the visibility sources, with the global choice and `project_id`'s own.
+#[tauri::command]
+pub fn visibility_get(store: StoreState<'_>, project_id: Option<String>) -> Result<Vec<crate::visibility::Source>, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let project = project_id.map(|id| find_project(&store, &id)).transpose()?;
+    Ok(crate::visibility::sources(&store, project.as_ref()))
+}
+
+/// Sets the global choice for a source, or a project's own (`show` empty: back to the global).
+#[tauri::command]
+pub fn visibility_set(store: StoreState<'_>, project_id: Option<String>, source: String, show: Option<bool>) -> Result<(), String> {
+    crate::visibility::set_choice(&*store.lock().map_err(|e| e.to_string())?, project_id.as_deref(), &source, show)
+}
+
+#[tauri::command]
+pub fn visibility_root_add(store: StoreState<'_>, path: String) -> Result<(), String> {
+    crate::visibility::add_root(&*store.lock().map_err(|e| e.to_string())?, &path)
+}
+
+#[tauri::command]
+pub fn visibility_root_remove(store: StoreState<'_>, path: String) -> Result<(), String> {
+    crate::visibility::remove_root(&*store.lock().map_err(|e| e.to_string())?, &path)
 }
 
 /// PROJ-042: hide a worktree from the sidebar, or show it again.
@@ -927,6 +950,92 @@ mod tests {
     }
 
     #[test]
+    fn own_worktrees_are_managed_and_outside_ones_follow_the_visibility_choice() {
+        use crate::visibility as vis;
+        let git = Git::detect().unwrap();
+        let profile = temp("vis");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("vis-r");
+        let root = temp("vis-root");
+        let side = temp("vis-side");
+        let p = |d: &Path| d.to_string_lossy().to_string();
+        store.save_settings(&serde_json::json!({ "workspacesDir": p(&root) })).unwrap();
+        // A fresh profile: a project added now starts with worktrees made elsewhere hidden.
+        let project = add_project(&git, &store, &repo).unwrap();
+        let made = create_fresh_workspace(&git, &store, &nested(&root), &load_projects(&store), &project, None).unwrap();
+        let hand = root.join("by-hand");
+        let claude = repo.join(".claude").join("worktrees").join("agent-1");
+        let scratch = repo.join(".tool").join("x");
+        let away = side.join("away");
+        for (b, d) in [("hand", &hand), ("cc", &claude), ("scr", &scratch), ("away", &away)] {
+            git_in(&repo, &["worktree", "add", "-q", "-b", b, &p(d)]);
+        }
+        let look = |store: &Store, project: &Project| -> Vec<(String, String, Option<String>, bool)> {
+            list_workspaces(&git, store, project).unwrap().into_iter().map(|w| (w.branch.clone().unwrap_or_default(), w.kind.clone(), w.source.clone(), w.hidden)).collect()
+        };
+        let row = |rows: &[(String, String, Option<String>, bool)], b: &str| rows.iter().find(|r| r.0 == b).cloned();
+        let rows = look(&store, &project);
+        assert_eq!(row(&rows, "main").unwrap().1, "main");
+        let mine = row(&rows, made.branch.as_deref().unwrap()).unwrap();
+        assert_eq!((mine.1.as_str(), mine.3), ("managed", false), "Kolux's own is managed and shown");
+        assert_eq!(row(&rows, "hand"), Some(("hand".into(), "external".into(), Some("other".into()), true)), "by hand inside the workspaces folder is external");
+        assert_eq!(row(&rows, "cc"), Some(("cc".into(), "external".into(), Some("claude".into()), true)));
+        assert_eq!(row(&rows, "away"), Some(("away".into(), "external".into(), Some("other".into()), true)));
+        assert!(row(&rows, "scr").is_none(), "another tool's scratch folder is never listed");
+        // Moved workspaces folder: Kolux's own record still makes it managed.
+        store.save_settings(&serde_json::json!({ "workspacesDir": p(&side.join("elsewhere")) })).unwrap();
+        assert_eq!(row(&look(&store, &project), made.branch.as_deref().unwrap()).unwrap().1, "managed");
+        // A base folder set on purpose beats the scratch rule.
+        store.save_settings(&serde_json::json!({ "workspacesDir": p(&repo.join(".tool")) })).unwrap();
+        assert_eq!(row(&look(&store, &project), "scr").map(|r| r.2), Some(Some("other".into())));
+        store.save_settings(&serde_json::json!({ "workspacesDir": p(&root) })).unwrap();
+        // Global and per-project choices; the global never overwrites the project's own.
+        vis::set_choice(&store, None, "other", Some(true)).unwrap();
+        assert!(!row(&look(&store, &project), "hand").unwrap().3);
+        vis::set_choice(&store, Some(&project.id), "other", Some(false)).unwrap();
+        vis::set_choice(&store, None, "other", Some(false)).unwrap();
+        vis::set_choice(&store, None, "other", Some(true)).unwrap();
+        assert!(row(&look(&store, &project), "hand").unwrap().3, "the project's own choice stays");
+        let src = vis::sources(&store, Some(&project));
+        let other = src.iter().find(|s| s.key == "other").unwrap();
+        assert_eq!((other.global, other.own), (true, Some(false)), "the override shows the global value it replaces");
+        vis::set_choice(&store, Some(&project.id), "other", None).unwrap();
+        assert!(!row(&look(&store, &project), "hand").unwrap().3, "reset: back to the global choice");
+        // Extra root folders start hidden, at most 32, each mistake its own error.
+        vis::add_root(&store, &p(&side)).unwrap();
+        let r = row(&look(&store, &project), "away").unwrap();
+        assert!(r.2.as_deref().unwrap().starts_with("root:") && r.3, "{r:?}");
+        assert!(vis::add_root(&store, "relative\\folder").unwrap_err().contains("not a folder"));
+        assert!(vis::add_root(&store, &p(&side)).unwrap_err().contains("already"));
+        for i in 1..32 {
+            let d = side.join(format!("r{i}"));
+            fs::create_dir_all(&d).unwrap();
+            vis::add_root(&store, &p(&d)).unwrap();
+        }
+        let d = side.join("r32");
+        fs::create_dir_all(&d).unwrap();
+        assert!(vis::add_root(&store, &p(&d)).unwrap_err().contains("at most 32"));
+        // One worktree shown by hand wins over its source's choice.
+        set_hidden(&store, &p(&claude), false).unwrap();
+        assert!(!row(&look(&store, &project), "cc").unwrap().3);
+        // A profile that had projects before this choice existed keeps showing them.
+        let profile2 = temp("vis-old");
+        let old = Store::open(&profile2).unwrap();
+        let project2 = add_project(&git, &old, &repo).unwrap();
+        old.set("worktreeVisibility", "null").unwrap();
+        assert!(!row(&look(&old, &project2), "hand").unwrap().3, "an earlier project keeps its earlier behaviour");
+        assert!(row(&look(&old, &project2), "cc").unwrap().3, "Claude Code's scratch stayed hidden before, and still does");
+        drop(store);
+        drop(old);
+        for d in [&hand, &claude, &scratch, &away] {
+            let _ = git.worktree_remove(&repo, d, None);
+        }
+        for d in [profile, profile2, repo, root, side] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
     fn worktrees_made_outside_kolux_are_noticed_once_and_can_be_hidden() {
         let git = Git::detect().unwrap();
         let profile = temp("unseen");
@@ -953,7 +1062,9 @@ mod tests {
         assert!(unseen(&git, &store, &project).unwrap().is_empty());
         git_in(&repo, &["worktree", "add", "-q", &side.join("a").to_string_lossy(), "a"]);
         assert_eq!(unseen(&git, &store, &project).unwrap().len(), 1);
-        // PROJ-042: hide one, show it again; the main checkout is never hidden.
+        // PROJ-042: hide one, show it again; the main checkout is never hidden. (Worktrees made
+        // elsewhere start hidden in a new project, so show them first.)
+        crate::visibility::set_choice(&store, None, "other", Some(true)).unwrap();
         let b = side.join("b").to_string_lossy().to_string();
         let hidden = |store: &Store| list_workspaces(&git, store, &project).unwrap().into_iter().filter(|w| w.hidden).map(|w| w.branch.unwrap()).collect::<Vec<_>>();
         set_hidden(&store, &b, true).unwrap();
@@ -1111,8 +1222,9 @@ mod tests {
 
         let project = add_project(&git, &store, &zeta).unwrap();
         assert!(same_folder(Path::new(&project.path), &zeta), "PROJ-006: A not added, so the picked worktree folder itself is the project: {}", project.path);
-        let names: Vec<_> = list_workspaces(&git, &store, &project).unwrap().into_iter().map(|w| (w.branch.unwrap_or_default(), w.is_main)).collect();
-        assert_eq!(names, vec![("main".to_string(), true), ("zeta".to_string(), false)], "a tool's scratch worktree is not listed");
+        crate::visibility::set_choice(&store, None, "other", Some(true)).unwrap();
+        let names: Vec<_> = list_workspaces(&git, &store, &project).unwrap().into_iter().filter(|w| !w.hidden).map(|w| (w.branch.unwrap_or_default(), w.is_main)).collect();
+        assert_eq!(names, vec![("main".to_string(), true), ("zeta".to_string(), false)], "Claude Code's scratch worktree stays hidden");
 
         drop(store);
         git.worktree_remove(&repo, &scratch, Some("scratch")).unwrap();

@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { nestRows, openedWorktree, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
+import { nestRows, openedWorktree, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
@@ -80,6 +80,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
   const [review, setReview] = useState<string | null>(null); // project id whose new-worktree review is open
   const [hiddenPage, setHiddenPage] = useState(0);
+  const [visGlobal, setVisGlobal] = useState<VisSource[]>([]); // SET-032: the global choice per source
+  const [visOwn, setVisOwn] = useState<VisSource[]>([]); // PROJ-042: the open project's own, over the global
+  const [rootPath, setRootPath] = useState("");
+  const [rootError, setRootError] = useState("");
   const [place, setPlace] = useState<PlaceInfo>({ dir: "", flat: false, used: [], fromEnv: false });
   const [rootDraft, setRootDraft] = useState("");
   const [flatDraft, setFlatDraft] = useState(false);
@@ -264,6 +268,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   // (empty: the default branch Git reports).
   const openSettings = (p: Project) => {
     setSettingsFor(p.id);
+    loadVis(p.id);
     setDirDraft(p.workspacesDir ?? "");
     setProjectBaseDraft(p.base ?? "");
   };
@@ -390,7 +395,120 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       fail(err);
     }
   };
-  // ponytail: the global and per-source visibility defaults (and the link to them) are T-107-e / T-108.
+  // SET-032 / PROJ-042: which worktrees made outside Kolux show, per source, globally and per project.
+  const loadVis = async (projectId: string | null) => {
+    try {
+      const list = await invoke<VisSource[]>("visibility_get", { projectId });
+      if (projectId) setVisOwn(list);
+      else setVisGlobal(list);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const setVis = async (projectId: string | null, source: string, show: boolean | null) => {
+    try {
+      await invoke("visibility_set", { projectId, source, show });
+      await loadVis(projectId);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const addRoot = async () => {
+    try {
+      await invoke("visibility_root_add", { path: rootPath });
+      setRootPath("");
+      setRootError("");
+      await loadVis(null);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      setRootError(String(err));
+    }
+  };
+  const removeRoot = async (path: string) => {
+    try {
+      await invoke("visibility_root_remove", { path });
+      await loadVis(null);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const showWord = (b: boolean) => (b ? "Shown" : "Hidden");
+  const globalVis = () => (
+    <div data-visibility-defaults>
+      <label>Worktrees Kolux did not make, by default</label>
+      {visGlobal.map((s) => (
+        <div key={s.key}>
+          <div className="preview" title={s.root ?? s.label}>
+            {s.label}
+          </div>
+          <div className="vis-row">
+          <select aria-label={`default for ${s.label}`} className="field" value={s.global ? "show" : "hide"} onChange={(e) => setVis(null, s.key, e.target.value === "show")}>
+            <option value="hide">Hidden</option>
+            <option value="show">Shown</option>
+          </select>
+          {s.root && (
+            <button className="ib" title={`Stop treating ${s.root} as its own source`} onClick={() => removeRoot(s.root!)}>
+              <Close size={11} />
+            </button>
+          )}
+          </div>
+        </div>
+      ))}
+      <input
+        aria-label="extra root folder"
+        className="field"
+        placeholder="another folder that holds worktrees (starts hidden)"
+        value={rootPath}
+        onChange={(e) => {
+          setRootPath(e.target.value);
+          setRootError("");
+        }}
+        onKeyDown={(e) => e.key === "Enter" && addRoot()}
+      />
+      {rootError && <div className="preview warn">{rootError}</div>}
+      <div className="btn-row">
+        <button className="btn" onClick={addRoot} disabled={!rootPath.trim()}>
+          Add folder
+        </button>
+      </div>
+    </div>
+  );
+  const ownVis = (p: Project) => (
+    <>
+      <label>Worktrees Kolux did not make, in {p.name}</label>
+      {visOwn.map((s) => (
+        <div key={s.key}>
+          <div className="preview" title={s.root ?? s.label}>
+            {s.label}
+          </div>
+          <div className="vis-row">
+          <select aria-label={`${p.name}: ${s.label}`} className="field" value={s.own === null ? "global" : s.own ? "show" : "hide"} onChange={(e) => setVis(p.id, s.key, e.target.value === "global" ? null : e.target.value === "show")}>
+            <option value="global">As global: {showWord(s.global)}</option>
+            <option value="hide">Hidden</option>
+            <option value="show">Shown</option>
+          </select>
+          {s.own !== null && (
+            <button className="btn" title={`Back to the global choice (${showWord(s.global)})`} onClick={() => setVis(p.id, s.key, null)}>
+              Reset
+            </button>
+          )}
+          </div>
+        </div>
+      ))}
+      <button
+        className="link"
+        onClick={() => {
+          setSettingsFor(null);
+          loadVis(null);
+          setShowAdd(true);
+        }}
+      >
+        Global defaults…
+      </button>
+    </>
+  );
   const PAGE = 10;
   const hiddenList = (p: Project) => {
     const all = hiddenWts[p.id] ?? [];
@@ -465,6 +583,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} />
           <span className="name">{worktreeLabel(w)}</span>
+          {w.kind === "external" && (
+            <span className="hint" title="Made outside Kolux (plain Git or another tool); Kolux has no record of making it">
+              external
+            </span>
+          )}
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
           {!asking && (
             <button
@@ -627,6 +750,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                 <input type="checkbox" checked={nest} onChange={(e) => onNest(e.target.checked)} />
                 Nest child workspaces under their parent
               </label>
+              {globalVis()}
             </div>
           )}
 
@@ -686,6 +810,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                       <label>Workspaces folder for {p.name}</label>
                       <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
                       {hiddenList(p)}
+                      {ownVis(p)}
                       <label>Base ref</label>
                       <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
                       <div className="btn-row">
@@ -783,7 +908,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           />
         )}
         <div className="sb-foot">
-          <button className="ib" title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`} aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
+          <button
+            className="ib"
+            title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`}
+            aria-pressed={showAdd}
+            onClick={() => {
+              if (!showAdd) loadVis(null);
+              setShowAdd((s) => !s);
+            }}
+          >
             <Gear />
           </button>
           <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>

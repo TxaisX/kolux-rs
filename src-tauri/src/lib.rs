@@ -22,6 +22,7 @@ mod state;
 mod sysmem;
 mod terminal;
 mod trust;
+mod visibility;
 
 use state::Store;
 use std::sync::Mutex;
@@ -116,6 +117,10 @@ pub fn run() {
             projects::workspace_unseen,
             projects::workspace_seen,
             projects::workspace_hide,
+            projects::visibility_get,
+            projects::visibility_set,
+            projects::visibility_root_add,
+            projects::visibility_root_remove,
             projects::workspace_create_fresh,
             projects::handoff_note_prepare,
             projects::workspace_remove,
