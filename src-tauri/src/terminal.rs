@@ -120,6 +120,14 @@ impl Terminals {
         pid.and_then(crate::procs::has_children).unwrap_or(false)
     }
 
+    /// APP-054: every session with its process id and the folder it was started in.
+    pub fn list(&self) -> Vec<(u32, Option<u32>, Option<String>)> {
+        match self.inner.lock() {
+            Ok(inner) => inner.sessions.iter().map(|(id, s)| (*id, s.pid(), inner.dirs.get(id).cloned())).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// Ends one session. Its exit event follows from the waiter thread.
     pub fn kill(&self, id: u32) -> Result<(), String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;

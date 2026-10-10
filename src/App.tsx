@@ -681,7 +681,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           </div>
         </div>
       </div>
-      <StatusBar terminals={live.length} agents={live.filter((p) => p.agent !== "shell").length} />
+      <StatusBar
+        terminals={live.length}
+        agents={live.filter((p) => p.agent !== "shell").length}
+        names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
+        workspaces={Object.keys(owner)}
+      />
     </div>
   );
 }

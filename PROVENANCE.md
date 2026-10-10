@@ -363,3 +363,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-09 · T-055 · rules from the PROJ-070 card; `git worktree list --porcelain` (its `locked` line), `git worktree lock --reason` / `unlock` and `git status --porcelain` from the public Git documentation; the stamp and the field name were chosen for this task; no old Kolux source read
 
 > 2026-10-09 · T-036 · rules from the SET-027 card; Tauri events (`emit` / `listen` from @tauri-apps/api/event) from the public Tauri documentation; the field names were chosen for this task; no old Kolux source read
+
+> 2026-10-09 · T-037 · rules from the APP-054 card; Win32 CreateToolhelp32Snapshot, OpenProcess, K32GetProcessMemoryInfo, GetProcessTimes and GlobalMemoryStatusEx from the public Microsoft documentation through windows-sys; `ps -o` fields and /proc/meminfo from their public man pages; no old Kolux source read

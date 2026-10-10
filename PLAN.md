@@ -80,7 +80,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-034 · GIT-040 [compat] Review notes on diff lines · GIT-041 [compat] Gather review notes and send them to the agent
 - [ ] T-035 · EDIT-041 [compat] Open in Code and Answer in Code jump to the agent's pane
 - [x] T-036 · SET-027 [compat] Agents page: which agents, the default one, and how they start
-- [ ] T-037 · APP-054 Resource Manager: memory per session, with a way to end one
+- [x] T-037 · APP-054 Resource Manager: memory per session, with a way to end one
 
 ### P0 · theme 4 · Accounts, sign-in and usage limits (20 cards)
 
@@ -419,7 +419,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-282 · EDIT-008 Huge pastes keep the window responsive or are turned away
 - [ ] T-283 · BROW-010 Pages are checked again after the computer wakes · BROW-043 Leftover browser helper processes are cleaned up
 - [ ] T-284 · SKILL-023 An interrupted skill delete is undone or completed on restart
-- [ ] T-285 · SET-042 End every terminal session in one go · SET-060 Restart the background terminal service · SET-062 macOS warns when terminal commands lose the app's permission grants
+- [ ] T-285 · SET-042 End every terminal session in one go · SET-060 Restart the background terminal service · SET-062 macOS warns when terminal commands lose the app's permission grants · also: the rest of T-037's card: the Resource Manager offers to restart the terminal service, asking first; on macOS its free memory follows memory pressure (it shows unknown there now)
 - [ ] T-286 · APP-003 Startup failures and stray background errors never silently kill the app · APP-017 After sleep the window repaints, and hidden windows stop doing interface work · APP-040 Only real crashes are recorded, with useful context · APP-051 Stale worktree records are cleaned up safely
 - [ ] T-287 · CLI-041 [compat] kolux diagnostics memory
 

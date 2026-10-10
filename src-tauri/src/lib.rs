@@ -10,6 +10,7 @@ mod git;
 mod keybindings;
 mod names;
 mod procs;
+mod resources;
 mod projects;
 mod pty;
 mod secrets;
@@ -74,6 +75,7 @@ pub fn run() {
                 });
             }
             app.manage(Terminals::default());
+            app.manage(resources::Sampler::default());
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());
             app.manage(codex_accounts::SignIns::default());
@@ -101,6 +103,7 @@ pub fn run() {
             get_settings,
             save_settings,
             sysmem::process_memory,
+            resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_resize,
