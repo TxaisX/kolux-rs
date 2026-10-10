@@ -97,6 +97,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [owner, setOwner] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
+  const [deleteRequest, setDeleteRequest] = useState(0); // PROJ-070: Mod+Shift+Backspace asks to delete the shown workspace
+  const recentDirs = useRef<string[]>([]); // PROJ-070: workspaces shown, newest first
+  const activeRef = useRef<string | null>(null);
+  activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -189,6 +193,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
+          break;
+        case "workspace.delete":
+          setScreen("terminals");
+          setSidebarOpen(true);
+          setDeleteRequest((n) => n + 1);
           break;
         case "workspace.create":
           setScreen("terminals");
@@ -382,6 +391,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
   const select = (dir: string, branch: string | null) => {
+    recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
     setActiveDir(dir);
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else addShell(dir, branch);
@@ -389,9 +399,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
 
   // PROJ-066: removing a workspace closes every pane in it, wherever it was; the view stays
   // unless it was the one removed, then it falls back to the home group.
+  // PROJ-070: the removed one gives way to the sibling used last that still has panes; the shown
+  // workspace is read when the delete finishes, so a user who went elsewhere meanwhile stays there.
   const removed = (path: string) => {
     const left = withoutDir(panes, path);
-    const next = activeAfterRemove(activeDir, path);
+    const pid = projectOf(path);
+    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !sameDir(d, path) && panesIn(left, d).length > 0).map(([d]) => d);
+    const next = activeAfterRemove(activeRef.current, path, recentDirs.current, siblings);
     setPanes(left);
     setActiveDir(next);
     setFocused((f) => focusIn(left, next, f));
@@ -518,6 +532,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onChoose={addChooser}
             refresh={refresh}
             createRequest={createRequest}
+            deleteRequest={deleteRequest}
             onStartIn={startIn}
             onIndex={(list, dirs) => {
               setProjects(list);

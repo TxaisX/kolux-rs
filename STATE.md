@@ -308,6 +308,14 @@ Terminals. Pages with nothing built yet say so.
 at once. The tab's x, the pane's close button and Ctrl+W all ask the same way, and Settings >
 Terminal & sessions has a switch to turn the question off.
 
+[accounts] Deleting a workspace now looks first (T-055): the question lists the uncommitted and
+untracked files that would be lost, and Remove refuses unless "Delete my changes too" is ticked.
+A locked workspace, or one holding another workspace's folder, cannot be deleted from Kolux at all,
+and if the workspace changed while the question was open the delete is refused and the question
+shows it as it is now. Ctrl+Shift+Backspace asks to delete the workspace shown. Settings > Git &
+worktrees can switch the question off for clean workspaces. After a delete the window moves to
+the workspace in the same project used last, and the list keeps its scroll position.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -744,7 +752,17 @@ recorded default until told otherwise; nothing here blocks a pass.
   tab) but has nothing to act on yet; the rest is named on T-102. Settings pages now share
   `src/settings/useSettings.ts`.
 
+- 2026-10-09 · [accounts] T-055 · Settings field `confirmWorkspaceDelete` (false skips the question
+  for a clean workspace only). `workspace_remove` now takes `force` and `stamp` and re-checks before
+  deleting; the stamp is HEAD plus the porcelain lines, so any new, changed or committed file
+  refuses a delete asked about earlier. The CLI's remove (cli.rs) still deletes as before, forced.
+  Nested means another worktree of the same repository inside the folder; other projects'
+  folders inside it are not looked for (ponytail note in projects.rs). No delete animation exists,
+  so reduced motion has nothing to turn off. The move-to-sibling only picks a sibling that still
+  has panes, so the window never lands on an empty workspace.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [accounts] T-055 · done: `git.rs` (worktree `locked` read from `git worktree list --porcelain`, `changes` keeps the porcelain lines' leading space), `projects.rs` (`RemoveCheck`, `remove_check`, `removal_refused`: stamp, nested, locked never forced, changes need force; new `workspace_remove_check`, `workspace_remove` checks again before deleting), `src/projects/deleting.ts` (question rules), ProjectsPanel question lists up to five changes with a force box and shows a refusal in place, `workspace.delete` shortcut wired, `src/settings/GitPage.tsx`, `activeAfterRemove` picks the sibling used last; 1 Rust test (83 total), 4 front-end tests (119 total); live: lima with a changed and an untracked file listed both, Remove without the box refused and kept the folder, a file added while asking refused with the stamp message and listed three, forced delete removed it and moved to kilo with the list still at scroll 200, a locked workspace showed its reason with Remove disabled and a direct forced call was refused, the question switched off in Settings deleted clean golf from Ctrl+Shift+Backspace at once while dirty hotel still asked; build / clippy / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-055.txt, evidence/T-055-*.png
 - 2026-10-09 · [accounts] T-057 · done: `src-tauri/src/procs.rs` (has a process started a child), `terminal_busy` command and `Terminals::busy` (program panes live while running, shells while they have a child, ended or failed reads idle), each session keeps its process id, `src/terminal/closing.ts` + `CloseAsk.tsx` (the question naming the tab), every close in App goes through `closeTab`, the pane's own Close defers to the window, Settings > Terminal & sessions gets the switch; 1 Rust test (82 total), 3 front-end tests (115 total); live: a background tab running ping closed from its x asks "Close “Terminal 1”?" with Close tab focused, Escape keeps it, Close tab removes it and ping is gone, an idle shell closes with Ctrl+W without a question, Ctrl+W and the pane header's close button on a busy tab ask too, with the switch off a busy tab closes at once; build / clippy / 82 Rust tests / 115 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process · evidence/T-057.txt, evidence/T-057-*.png
 - 2026-10-09 · [accounts] T-056 · NOT BUILT, left unticked, needs Txais: the permission check that guards this build session refused the edit that gives more agents their no-prompt start (Gemini CLI `--yolo`, Aider `--yes-always`, Goose `GOOSE_MODE` auto) as an unsafe-agent change, so nothing was changed. Claude Code (`--permission-mode auto`) and Codex (`--dangerously-bypass-approvals-and-sandbox`) already start that way from the agent catalogue. The rest of the card (the user's default arguments replacing the built-in ones, Kilo Code's refused argument dropped) waits with it. Txais decides: allow it for the build agent, or build it in a session of his own · no evidence
 - 2026-10-09 · [accounts] T-054 · done: `src/theme.ts` (mode and light-terminal fields, `isDark`, light `buildTheme`, light terminal scheme, `followSystemMode`, two-frame transition hold on a light/dark switch), `src/settings/pages.ts` (ten pages, repo pages, `openSettings`, last page), `src/settings/general.ts` + `GeneralPage.tsx` (look and first screen), `ShortcutsPage.tsx` (file, errors, every command and its keys), SettingsPage rebuilt on the page list with lazily loaded pages and scroll-to-section, Appearance gets Interface > Mode and the light-scheme switch, App starts on the saved first screen and hides the switcher under Classic, the screen-cycle shortcut does nothing under Classic; 7 new front-end tests (112 total); live: existing profile opens Classic with System = light (Windows is in light mode) and the General page greys Agents and Board, New brings the switcher back, Board saved as first screen shows first after a restart, a fresh profile is written as New, Dark applies at once and System follows an emulated Windows switch to dark and back (#050405 / #fcfcfc), transitions held for two frames, light scheme on gives a #f6f6f6 terminal and off #0d0d0d, a link opens Shortcuts scrolled to its section, a repository adds an 11th entry with its own page; build / clippy / 81 Rust tests / 112 front-end tests / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-054.txt, evidence/T-054-*.png

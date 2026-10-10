@@ -20,6 +20,8 @@ pub struct Worktree {
     pub is_main: bool,
     /// The name the user typed when creating it (PROJ-021); the branch is shown when there is none.
     pub name: Option<String>,
+    /// PROJ-070: set when Git has the worktree locked; the reason, empty when none was given.
+    pub locked: Option<String>,
 }
 
 fn command(args: &[&str], cwd: Option<&Path>) -> Command {
@@ -39,9 +41,14 @@ fn command(args: &[&str], cwd: Option<&Path>) -> Command {
 
 /// Runs git and returns its stdout, trimmed; a non-zero exit becomes an error carrying stderr.
 fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+    run_untrimmed(args, cwd).map(|s| s.trim().to_string())
+}
+
+/// `run` keeping leading spaces, which `git status --porcelain` lines carry meaning in.
+fn run_untrimmed(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         Err(if err.is_empty() { format!("git {} failed ({})", args.join(" "), out.status) } else { err })
@@ -112,6 +119,11 @@ impl Git {
         Ok(())
     }
 
+    /// PROJ-070: the checkout's uncommitted and untracked changes, one `git status --porcelain` line each.
+    pub fn changes(&self, worktree: &Path) -> Result<Vec<String>, String> {
+        run_untrimmed(&["status", "--porcelain"], Some(worktree)).map(|s| s.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+    }
+
     /// Does the checkout hold changes Git does not have yet (modified or untracked files)?
     pub fn dirty(&self, worktree: &Path) -> Result<bool, String> {
         run(&["status", "--porcelain"], Some(worktree)).map(|s| !s.is_empty())
@@ -165,6 +177,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
         let mut path = None;
         let mut head = String::new();
         let mut branch = None;
+        let mut locked = None;
         for line in block.lines() {
             let line = line.trim_end_matches('\r');
             if let Some(p) = line.strip_prefix("worktree ") {
@@ -173,10 +186,14 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
                 head = h.to_string();
             } else if let Some(b) = line.strip_prefix("branch ") {
                 branch = Some(b.strip_prefix("refs/heads/").unwrap_or(b).to_string());
+            } else if line == "locked" {
+                locked = Some(String::new());
+            } else if let Some(r) = line.strip_prefix("locked ") {
+                locked = Some(r.to_string());
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, locked });
         }
     }
     out

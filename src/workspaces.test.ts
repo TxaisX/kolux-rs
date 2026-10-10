@@ -46,3 +46,13 @@ test("removing a workspace drops every pane in it and nothing else; the view fal
   expect(activeAfterRemove("C:\\repo\\ws\\beta", "C:\\repo\\ws\\alpha")).toBe("C:\\repo\\ws\\beta");
   expect(activeAfterRemove(null, "C:\\repo\\ws\\alpha")).toBeNull();
 });
+
+test("removing the shown workspace moves to the most recently used sibling in its project", () => {
+  const recent = ["C:/repo/ws/alpha", "D:/other/x", "C:/repo/ws/gamma", "C:/repo/ws/beta"];
+  const siblings = ["C:/repo", "C:/repo/ws/beta", "C:/repo/ws/gamma"];
+  expect(activeAfterRemove("C:/repo/ws/alpha", "C:/repo/ws/alpha", recent, siblings)).toBe("C:/repo/ws/gamma");
+  // a user who went elsewhere meanwhile stays there
+  expect(activeAfterRemove("D:/other/x", "C:/repo/ws/alpha", recent, siblings)).toBe("D:/other/x");
+  // no sibling used yet: the home group
+  expect(activeAfterRemove("C:/repo/ws/alpha", "C:/repo/ws/alpha", ["C:/repo/ws/alpha"], siblings)).toBeNull();
+});

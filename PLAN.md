@@ -111,7 +111,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 5 · Safety and trust (20 cards)
 
-- [ ] T-055 · PROJ-070 [compat] Delete a workspace safely
+- [x] T-055 · PROJ-070 [compat] Delete a workspace safely
 - [ ] T-056 · SESS-027 [compat] Agents start in their own no-prompt approval mode by default
 - [x] T-057 · TERM-045 Confirm before closing a terminal with a live program
 - [ ] T-058 · SAFE-009 [compat] Claude stops and asks before running a protected shell command · SAFE-010 Built-in rules protect git history: force-push to main and discarding uncommitted work · SAFE-011 Built-in rule: pause before dropping or emptying database objects · SAFE-012 Built-in rules protect live services: Stripe, infrastructure and production deploys
@@ -327,7 +327,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-214 · PROJ-003 Clone a repository from a URL into a suggested folder · PROJ-004 Start a brand-new empty project from a name · PROJ-005 A folder without Git can be opened as a folder project · PROJ-008 Remove a project from Kolux · PROJ-010 [compat] The `kolux repo` commands
 - [ ] T-215 · PROJ-011 [compat] The `kolux project list` command · PROJ-012 Scan a parent folder for the repositories inside it · PROJ-013 Import found repositories as one group or as separate projects · PROJ-014 Project groups organise the sidebar · PROJ-015 Delete a project group, with or without its projects
 - [ ] T-216 · PROJ-016 Drag project and group headers into order · PROJ-046 Pin workspaces to a pinned section · PROJ-049 Manual order: drag workspaces into a custom order · PROJ-051 Recent sort orders by last activity · PROJ-052 Filter the workspace list
-- [ ] T-217 · PROJ-053 [compat] Put a workspace to sleep · PROJ-056 [compat] Back and forward through visited workspaces · PROJ-059 [compat] Rename a workspace inline · PROJ-060 Workspace details: name, linked item and notes · PROJ-065 Workspace context menu · also passes: VIEW-053 Show or hide sleeping workspaces
+- [ ] T-217 · PROJ-053 [compat] Put a workspace to sleep · PROJ-056 [compat] Back and forward through visited workspaces · PROJ-059 [compat] Rename a workspace inline · PROJ-060 Workspace details: name, linked item and notes · PROJ-065 Workspace context menu · also passes: VIEW-053 Show or hide sleeping workspaces · also: the rest of T-055's card: Delete in the workspace menu; a workspace with children offers only to delete them all, children first and the parent last; a parent or a batch always asks even with the question switched off
 - [ ] T-218 · PROJ-071 Delete many workspaces at once · PROJ-076 Forget a workspace locally without touching disk · PROJ-083 Space view: what each workspace costs on disk · PROJ-084 Workspace statuses form a workflow · PROJ-086 Folder workspaces for projects without Git · also passes: VIEW-014 Space view: disk use per worktree and bulk delete
 - [ ] T-219 · TERM-037 Fork or continue an agent session · TERM-042 Type a URL or path in the new tab box · TERM-043 Choose the Windows shell for a new terminal · TERM-050 [compat] Switch to the recent tab with Ctrl+Tab · TERM-051 [compat] Cycle tabs by type
 - [ ] T-220 · TERM-052 [compat] Go to a tab by number · TERM-059 [compat] Floating workspace panel · TERM-060 [compat] Move, resize and maximize the floating panel · TERM-061 Floating panel tabs and close behaviour · TERM-070 Paste a screenshot as a file path

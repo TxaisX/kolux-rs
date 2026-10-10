@@ -113,6 +113,7 @@ pub fn run() {
             projects::workspace_create,
             projects::workspace_create_fresh,
             projects::workspace_remove,
+            projects::workspace_remove_check,
             projects::project_set,
             agents::agent_list,
             agents::agent_start_line,

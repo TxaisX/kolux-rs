@@ -284,6 +284,55 @@ pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str) -> Re
     git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref())
 }
 
+/// PROJ-070: what deleting a workspace would lose or run into, read when the question opens.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveCheck {
+    /// Uncommitted and untracked changes, as `git status --porcelain` lists them.
+    pub changes: Vec<String>,
+    /// The lock reason when Git has the worktree locked (empty when none was given).
+    pub locked: Option<String>,
+    /// Other worktrees of the repository that sit inside this folder.
+    pub nested: Vec<String>,
+    /// What the workspace looked like when asked; a delete carrying another stamp is refused.
+    pub stamp: String,
+}
+
+pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result<RemoveCheck, String> {
+    let all = git.worktrees(Path::new(&project.path))?;
+    let target = all.iter().find(|w| same_folder(Path::new(&w.path), Path::new(worktree_path))).ok_or_else(|| format!("{worktree_path} is not a worktree of {}", project.name))?;
+    if target.is_main {
+        return Err("the main checkout cannot be removed; remove the project instead".to_string());
+    }
+    let changes = git.changes(Path::new(&target.path))?;
+    let here = Path::new(&target.path);
+    // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
+    let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();
+    let stamp = format!("{}|{}", target.head, changes.join("|"));
+    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp })
+}
+
+/// Why a delete must not go ahead (PROJ-070), or `None` when it may: the workspace changed
+/// since the question was asked, holds another worktree, is locked (never forced), or has
+/// changes and the user did not choose to lose them.
+pub fn removal_refused(now: &RemoveCheck, force: bool, asked: &str) -> Option<String> {
+    if now.stamp != asked {
+        return Some("This workspace changed after you were asked. Look again before deleting it.".into());
+    }
+    if let Some(first) = now.nested.first() {
+        return Some(format!("This folder holds another workspace ({first}). Delete that one first."));
+    }
+    if let Some(reason) = &now.locked {
+        let why = if reason.is_empty() { String::new() } else { format!(" ({reason})") };
+        return Some(format!("This workspace is locked{why}, and Kolux never force-deletes a locked one. Unlock it with git worktree unlock first."));
+    }
+    if !now.changes.is_empty() && !force {
+        let n = now.changes.len();
+        return Some(format!("{n} uncommitted or untracked change{} would be lost. Tick Delete my changes too to delete it anyway.", if n == 1 { "" } else { "s" }));
+    }
+    None
+}
+
 fn find_project(store: &Store, id: &str) -> Result<Project, String> {
     load_projects(store).into_iter().find(|p| p.id == id).ok_or_else(|| "that project is no longer registered".to_string())
 }
@@ -385,11 +434,26 @@ pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: St
 }
 
 #[tauri::command]
-pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String) -> Result<(), String> {
+pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String) -> Result<RemoveCheck, String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
     };
+    remove_check(&git, &project, &path)
+}
+
+/// PROJ-070: deletes the workspace only when the check made just now still matches `stamp` (what
+/// the question showed) and nothing refuses it; `force` loses uncommitted changes.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String) -> Result<(), String> {
+    let project = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        find_project(&store, &project_id)?
+    };
+    if let Some(why) = removal_refused(&remove_check(&git, &project, &path)?, force, &stamp) {
+        return Err(why);
+    }
     // A shell still sitting in the folder would keep Windows from deleting it.
     terminals.kill_under(Path::new(&path));
     remove_workspace(&git, &project, &path)?;
@@ -691,5 +755,48 @@ mod tests {
         assert_eq!(workspaces_dir(&store), default_workspaces_dir());
         drop(store);
         fs::remove_dir_all(profile).unwrap();
+    }
+    #[test]
+    fn a_delete_is_refused_for_changes_a_lock_a_nested_workspace_or_a_changed_stamp() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile055");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("repo055");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&temp("ws055"));
+        let ws = create_workspace(&git, &place, &project, "dirty", None).unwrap().worktree.path;
+        // clean: nothing refuses it
+        let clean = remove_check(&git, &project, &ws).unwrap();
+        assert!(clean.changes.is_empty() && clean.locked.is_none() && clean.nested.is_empty());
+        assert_eq!(removal_refused(&clean, false, &clean.stamp), None);
+        // an untracked file: warned, refused without force, allowed with it
+        fs::write(Path::new(&ws).join("new.txt"), "n").unwrap();
+        fs::write(Path::new(&ws).join("a.txt"), "changed").unwrap();
+        let dirty = remove_check(&git, &project, &ws).unwrap();
+        assert_eq!(dirty.changes, vec![" M a.txt".to_string(), "?? new.txt".to_string()]);
+        assert!(removal_refused(&dirty, false, &dirty.stamp).unwrap().contains("2 uncommitted"));
+        assert_eq!(removal_refused(&dirty, true, &dirty.stamp), None);
+        // the question showed the clean state: the stamp no longer matches
+        assert!(removal_refused(&dirty, true, &clean.stamp).unwrap().contains("changed after"));
+        // locked: refused even when forced
+        git_in(&repo, &["worktree", "lock", "--reason", "on a stick", &ws]);
+        let locked = remove_check(&git, &project, &ws).unwrap();
+        assert_eq!(locked.locked.as_deref(), Some("on a stick"));
+        assert!(removal_refused(&locked, true, &locked.stamp).unwrap().contains("locked (on a stick)"));
+        git_in(&repo, &["worktree", "unlock", &ws]);
+        // a workspace folder inside this one: refused
+        let inner = Path::new(&ws).join("inner");
+        git_in(&repo, &["worktree", "add", "-q", "-b", "inner", &inner.to_string_lossy()]);
+        let outer = remove_check(&git, &project, &ws).unwrap();
+        assert_eq!(outer.nested.len(), 1);
+        assert!(removal_refused(&outer, true, &outer.stamp).unwrap().contains("holds another workspace"));
+        // the main checkout is never offered
+        assert!(remove_check(&git, &project, &repo.to_string_lossy()).is_err());
+        remove_workspace(&git, &project, &inner.to_string_lossy()).unwrap();
+        remove_workspace(&git, &project, &ws).unwrap();
+        drop(store);
+        for d in [profile, repo, place.root] {
+            let _ = fs::remove_dir_all(d);
+        }
     }
 }

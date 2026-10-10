@@ -18,6 +18,7 @@ const AppearancePage = lazy(() => import("./AppearancePage"));
 const GeneralPage = lazy(() => import("./GeneralPage"));
 const ShortcutsPage = lazy(() => import("./ShortcutsPage"));
 const TerminalPage = lazy(() => import("./TerminalPage"));
+const GitPage = lazy(() => import("./GitPage"));
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
@@ -220,7 +221,8 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           )}
           {page === "shortcuts" && <ShortcutsPage />}
           {page === "terminal" && <TerminalPage />}
-          {(page === "agents" || page === "git" || page === "safety" || page === "notifications" || page === "usage") && later}
+          {page === "git" && <GitPage />}
+          {(page === "agents" || page === "safety" || page === "notifications" || page === "usage") && later}
           {repo && <RepoPage project={repo} />}
         </Suspense>
       </main>
