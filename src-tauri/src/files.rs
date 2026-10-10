@@ -48,6 +48,25 @@ pub fn md_list(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<N
     Ok(Notes { files, capped })
 }
 
+/// The two texts of a diff tab (EDIT-027); see Git::diff_sides.
+#[derive(serde::Serialize)]
+pub struct Sides {
+    original: String,
+    modified: String,
+}
+
+#[tauri::command]
+pub fn diff_sides(path: String, staged: bool, git: tauri::State<'_, crate::git::Git>) -> Result<Sides, String> {
+    let (original, modified) = git.diff_sides(Path::new(&path), staged)?;
+    Ok(Sides { original, modified })
+}
+
+/// The changed files the diff picker lists (EDIT-027).
+#[tauri::command]
+pub fn git_changes(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Change>, String> {
+    git.changes(Path::new(&root))
+}
+
 /// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
 /// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
 /// first save is EDIT-054 (T-237).

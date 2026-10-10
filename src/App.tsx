@@ -24,7 +24,8 @@ import BrowserPane from "./browser/BrowserPane";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
-import NotePicker from "./editor/NotePicker";
+import FilePicker, { type Pick } from "./editor/FilePicker";
+import DiffPane, { diffNav } from "./editor/DiffPane";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -46,13 +47,14 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview"; path?: string };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff"; path?: string; staged?: boolean };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   if (p.kind === "editor") return baseName(p.path ?? "");
   if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
+  if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** SESS-051: a seat's start line as the back end builds it. */
@@ -92,7 +94,7 @@ function Window() {
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
-  const [picking, setPicking] = useState(false); // EDIT-012: the Mod+Shift+O markdown picker is open
+  const [picking, setPicking] = useState<"markdown" | "change" | null>(null); // EDIT-012 / EDIT-027: which file picker is open
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const defaultId = defaultAgentId(settings);
@@ -148,7 +150,7 @@ function Window() {
       // the ones Kolux has no action for yet are left to CodeMirror.
       const hit =
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, kind === "editor" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+        matchEvent(keymap, e, kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
@@ -189,6 +191,13 @@ function Window() {
         case "tab.newBrowser":
           void newTab("browser");
           break;
+        case "editor.nextChange":
+        case "editor.previousChange": {
+          const step = diffNav.get(focused);
+          if (!step) return;
+          step(hit.id === "editor.nextChange" ? 1 : -1);
+          break;
+        }
         case "editor.markdownPreview": {
           const p = panes.find((x) => x.key === focused);
           if (!p?.path || !isMarkdown(p.path)) return;
@@ -197,7 +206,7 @@ function Window() {
         }
         case "tab.openMarkdown":
           if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
-          else setPicking(true);
+          else setPicking("markdown");
           break;
         case "tab.newMarkdown":
           if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
@@ -250,6 +259,11 @@ function Window() {
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
   // workspace an agent has no folder to work in, so it gets a fresh worktree instead (SESS-004).
   const newTab = async (what: NewTab) => {
+    if (what === "diff") {
+      if (!activeDir) setToast("Open a workspace to pick one of its changed files.");
+      else setPicking("change");
+      return;
+    }
     if (what === "file") {
       const path = await open({ multiple: false, directory: false, defaultPath: activeDir ?? undefined, title: "Open a file" }).catch(() => null);
       if (typeof path === "string") openFile(path);
@@ -284,6 +298,17 @@ function Window() {
     if (same) return setFocused(same.key);
     const key = nextKey.current++;
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path }]);
+    setFocused(key);
+  };
+
+  // EDIT-027: a changed file's diff opens as a tab beside the focused pane; its staged and
+  // unstaged diffs are separate tabs, and one already open in that cell comes to the front.
+  const openDiff = (path: string, staged: boolean) => {
+    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const same = here && panes.find((p) => p.kind === "diff" && !!p.staged === staged && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
+    if (same) return setFocused(same.key);
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "diff", path, staged }]);
     setFocused(key);
   };
 
@@ -537,7 +562,24 @@ function Window() {
           {terminals && (
             <>
               <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />
-              {picking && activeDir && <NotePicker root={activeDir} onPick={openFile} onClose={() => setPicking(false)} />}
+              {picking === "markdown" && activeDir && (
+                <FilePicker
+                  root={activeDir}
+                  what="markdown file"
+                  load={() => invoke<{ files: string[]; capped: boolean }>("md_list", { root: activeDir }).then((n) => ({ items: n.files.map((path) => ({ path })), capped: n.capped }))}
+                  onPick={(f) => openFile(f.path)}
+                  onClose={() => setPicking(null)}
+                />
+              )}
+              {picking === "change" && activeDir && (
+                <FilePicker
+                  root={activeDir}
+                  what="changed file"
+                  load={() => invoke<{ path: string; staged: boolean; code: string }[]>("git_changes", { root: activeDir }).then((cs) => ({ items: cs.map((c): Pick => ({ path: c.path, staged: c.staged, tag: c.staged ? "Staged" : c.code === "?" ? "Untracked" : "Unstaged" })), capped: false }))}
+                  onPick={(f) => openDiff(f.path, !!f.staged)}
+                  onClose={() => setPicking(null)}
+                />
+              )}
               {toast && (
                 <div className="toast" role="status">
                   {toast}
@@ -592,7 +634,7 @@ function Window() {
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
-                            {p.kind === "editor" || p.kind === "preview" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
+                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
@@ -610,6 +652,19 @@ function Window() {
                     key={p.key}
                     id={p.key}
                     path={p.path}
+                    hidden={!terminals || p.key !== active}
+                    focused={p.key === focused}
+                    onFocus={() => setFocused(p.key)}
+                    onClose={() => closePane(p.key)}
+                    onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
+                    onToast={setToast}
+                  />
+                ) : p.kind === "diff" && p.path ? (
+                  <DiffPane
+                    key={p.key}
+                    id={p.key}
+                    path={p.path}
+                    staged={!!p.staged}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}

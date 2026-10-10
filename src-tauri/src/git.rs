@@ -37,15 +37,53 @@ fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     cmd
 }
 
-/// Runs git and returns its stdout, trimmed; a non-zero exit becomes an error carrying stderr.
-fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+/// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
+fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        Ok(out.stdout)
     } else {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
         Err(if err.is_empty() { format!("git {} failed ({})", args.join(" "), out.status) } else { err })
     }
+}
+
+/// Runs git and returns its stdout, trimmed.
+fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+    output(args, cwd).map(|o| String::from_utf8_lossy(&o).trim().to_string())
+}
+
+/// One changed file on one side of the index (EDIT-027): `code` is git's status letter.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Change {
+    pub path: String,
+    pub staged: bool,
+    pub code: char,
+}
+
+/// Parses `git status --porcelain=v1 -z`. A file with staged and unstaged changes gives two
+/// entries; an untracked file is an unstaged one with code `?`.
+pub fn parse_status(text: &str, worktree: &Path) -> Vec<Change> {
+    let mut list = Vec::new();
+    let mut parts = text.split('\0');
+    while let Some(entry) = parts.next() {
+        let b = entry.as_bytes();
+        if b.len() < 4 {
+            continue;
+        }
+        let (x, y) = (b[0] as char, b[1] as char);
+        if x == 'R' || x == 'C' {
+            parts.next(); // the old name follows a rename or a copy
+        }
+        let path = worktree.join(native(&entry[3..])).to_string_lossy().into_owned();
+        if !matches!(x, ' ' | '?' | '!') {
+            list.push(Change { path: path.clone(), staged: true, code: x });
+        }
+        if !matches!(y, ' ' | '!') {
+            list.push(Change { path, staged: false, code: y });
+        }
+    }
+    list
 }
 
 /// Git's own path spelling (forward slashes, no `\\?\` prefix) turned back into a native path.
@@ -166,6 +204,36 @@ impl Git {
         let capped = names.len() > cap;
         Ok((names.into_iter().take(cap).map(|n| worktree.join(native(n)).to_string_lossy().into_owned()).collect(), capped))
     }
+
+    /// The worktree's changed files, staged and unstaged, for the diff picker (EDIT-027).
+    pub fn changes(&self, worktree: &Path) -> Result<Vec<Change>, String> {
+        let out = output(&["status", "--porcelain=v1", "-z", "--untracked-files=all"], Some(worktree))?;
+        Ok(parse_status(&String::from_utf8_lossy(&out), worktree))
+    }
+
+    /// The two texts of a file's diff (EDIT-027): unstaged compares the index with the working
+    /// file, staged compares HEAD with the index. Git's checkout filters are applied, so line ends
+    /// match the working file. A side the file is not on (new, deleted, untracked) is empty.
+    pub fn diff_sides(&self, file: &Path, staged: bool) -> Result<(String, String), String> {
+        let not_text = || format!("{} is not UTF-8 text", file.display());
+        let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).ok_or_else(|| format!("{} is not a file path", file.display()))?;
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // ponytail: any failure to read a side counts as "not there"; tell the two apart if a real error ever hides behind it
+        let show = |rev: &str| match output(&["cat-file", "--filters", &format!("{rev}:./{name}")], Some(dir)) {
+            Ok(b) => String::from_utf8(b).map_err(|_| not_text()),
+            Err(_) => Ok(String::new()),
+        };
+        let index = show("")?;
+        if staged {
+            return Ok((show("HEAD")?, index));
+        }
+        let work = match std::fs::read(file) {
+            Ok(b) => String::from_utf8(b).map_err(|_| not_text())?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(format!("{}: {e}", file.display())),
+        };
+        Ok((index, work))
+    }
 }
 
 /// Parses `git worktree list --porcelain`: blank-line separated blocks, the first is the main
@@ -274,6 +342,32 @@ mod tests {
         let (one, capped) = git.markdown_files(&repo, 1).unwrap();
         assert_eq!((one.len(), capped), (1, true));
         fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn changes_list_both_sides_and_diff_sides_read_head_index_and_disk() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("diff");
+        run(&["config", "core.autocrlf", "false"], Some(&repo)).unwrap(); // the line ends as written
+        fs::write(repo.join("README.md"), "hello staged\n").unwrap();
+        run(&["add", "README.md"], Some(&repo)).unwrap();
+        fs::write(repo.join("README.md"), "hello staged and more\n").unwrap();
+        fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+        let rel = |c: &Change| (PathBuf::from(&c.path).strip_prefix(&repo).unwrap().to_string_lossy().into_owned(), c.staged, c.code);
+        let list: Vec<_> = git.changes(&repo).unwrap().iter().map(rel).collect();
+        assert_eq!(list, [("README.md".into(), true, 'M'), ("README.md".into(), false, 'M'), ("new.txt".into(), false, '?')]);
+        let readme = repo.join("README.md");
+        assert_eq!(git.diff_sides(&readme, true).unwrap(), ("hello\n".into(), "hello staged\n".into()));
+        assert_eq!(git.diff_sides(&readme, false).unwrap(), ("hello staged\n".into(), "hello staged and more\n".into()));
+        assert_eq!(git.diff_sides(&repo.join("new.txt"), false).unwrap(), (String::new(), "fresh\n".into()));
+        fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn status_parsing_skips_a_renames_old_name() {
+        let list = parse_status("R  b.txt\0a.txt\0 D gone.txt\0", Path::new("r"));
+        let got: Vec<_> = list.iter().map(|c| (c.path.ends_with("b.txt") || c.path.ends_with("gone.txt"), c.staged, c.code)).collect();
+        assert_eq!(got, [(true, true, 'R'), (true, false, 'D')]);
     }
 
     #[test]

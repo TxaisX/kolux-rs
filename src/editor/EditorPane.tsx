@@ -21,7 +21,7 @@ import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from ".
 export const editors = new Map<number, () => Promise<void>>();
 
 const lang = new Compartment();
-const look = EditorView.theme(
+export const look = EditorView.theme(
   {
     "&": { height: "100%", background: "var(--pane-bg)", color: "var(--fg)", fontSize: "13px" },
     ".cm-scroller": { fontFamily: "var(--mono-font)", lineHeight: "1.5" },

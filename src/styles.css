@@ -295,3 +295,12 @@ input { font: inherit; }
 .picker-list .menu-item.at { background: var(--row-selected); }
 .picker-list .menu-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
+
+/* EDIT-027: the diff tab. Its body scrolls (both columns move together in side by side). */
+.diff-body { display: flex; flex-direction: column; }
+.diff-body > .cm-editor, .diff-body > .cm-mergeView { flex: 1; min-height: 0; }
+.diff-body > .cm-mergeView { overflow: auto; }
+.diff-body > .cm-mergeView .cm-editor { height: auto; }
+.diff-actions { position: relative; display: inline-flex; }
+.diff-menu { position: absolute; top: 28px; right: 0; }
+.diff-menu .check { width: 14px; flex: none; color: var(--fg); }

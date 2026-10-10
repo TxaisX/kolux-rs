@@ -101,6 +101,8 @@ pub fn run() {
             files::file_write,
             files::md_list,
             files::md_new,
+            files::diff_sides,
+            files::git_changes,
             update::update_status,
             update::update_mark,
             update::update_check,
