@@ -20,8 +20,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { nestRows, openedWorktree, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
+import { matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
 
@@ -69,6 +70,25 @@ type Props = {
   onNest: (on: boolean) => void;
 };
 
+// SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
+const RECENT_KEY = "kolux.composer.recentProjects";
+const ADD_ITEM = "+add";
+const readRecent = (): string[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+};
+const noteRecent = (id: string) => {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...readRecent().filter((x) => x !== id)].slice(0, 5)));
+  } catch {
+    // a remembered order is a convenience; without storage the list keeps its own order
+  }
+};
+
 export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, onStartIn, nest, onNest }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -102,6 +122,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [name, setName] = useState("");
   const [existing, setExisting] = useState(false); // PROJ-030: open a branch that already exists instead of making one
   const [branchList, setBranchList] = useState<string[]>([]);
+  const [branchDraft, setBranchDraft] = useState(""); // SESS-037: Advanced branch name (the branch to reuse with existing)
+  const [parentDraft, setParentDraft] = useState<string | null>(null); // SESS-037: the parent worktree, none by default
+  const [advanced, setAdvanced] = useState(false);
+  const [more, setMore] = useState(false); // SESS-038: Create more
+  const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   // GIT-067: `dirty` is set once the back end refused because of uncommitted work; the form then asks again.
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; dirty?: boolean } | null>(null);
@@ -190,20 +215,21 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       return;
     }
     let live = true;
-    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null }).then((s) => live && setPreview(s)).catch(fail);
+    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null, branch: existing ? null : branchDraft.trim() || null }).then((s) => live && setPreview(s)).catch(fail);
     return () => {
       live = false;
     };
-  }, [name, creating]);
+  }, [name, creating, branchDraft, existing]);
 
   useEffect(() => {
-    if (!existing || !creating) return;
+    // SESS-036: the name field suggests the project's branches too.
+    if (!creating) return;
     let live = true;
     invoke<string[]>("workspace_branches", { projectId: creating }).then((b) => live && setBranchList(b)).catch(fail);
     return () => {
       live = false;
     };
-  }, [existing, creating]);
+  }, [creating]);
 
   // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
   const addPath = async (path: string) => {
@@ -293,31 +319,45 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const fallbackAgent = installed.find((a) => a.id === defaultId) ?? installed[0] ?? null;
   const create = async (project: Project) => {
     const base = baseDraft.trim();
-    if (existing ? !base : !name.trim() || preview === null) return;
+    const branch = branchDraft.trim();
+    // SESS-036: a name that is an existing branch opens that branch rather than making a new one.
+    const reuse = existing ? branch : branchList.includes(name.trim()) ? name.trim() : "";
+    if (existing ? !reuse : !name.trim() || preview === null) return;
+    const keepOpen = more; // SESS-038: Create more keeps the composer open for the next one
+    const typed = name.trim();
+    const parent = parentDraft;
     const from = shown.current;
     const prompt = promptDraft.trim();
     const agent = agentDraft ? (installed.find((a) => a.id === agentDraft) ?? null) : prompt ? fallbackAgent : null;
     setBusy("creating");
-    setPending({ projectId: project.id, name: name.trim() || base });
+    setPending({ projectId: project.id, name: typed || reuse });
     setName("");
-    setBaseDraft("");
+    setBranchDraft("");
     setPromptDraft("");
-    setCreating(null);
+    if (!keepOpen) {
+      setCreating(null);
+      setBaseDraft("");
+      setParentDraft(null);
+    }
     try {
-      const wt = existing
-        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: base, folder: name.trim() || null })
-        : await invoke<Created>("workspace_create", { projectId: project.id, name, base: base || null });
+      const wt = reuse
+        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent })
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent });
+      noteRecent(project.id);
       const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
       say(extra ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${extra ? ` · ${extra}` : ""}`);
       await reload();
-      // The agent's tab is the workspace's first; a shell is only opened when no agent runs.
-      if (agent) onStartIn(agent, wt.path, wt.branch, prompt, shown.current === from);
-      else if (shown.current === from) onSelect(wt.path, wt.branch);
+      // The agent's tab is the workspace's first; a shell is only opened when no agent runs. With
+      // Create more the new workspace does not take the front, so the next name can be typed.
+      const front = !keepOpen && shown.current === from;
+      if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
+      else if (front) onSelect(wt.path, wt.branch);
     } catch (err) {
       fail(err);
     } finally {
       setPending(null);
       setBusy("");
+      if (keepOpen) nameRef.current?.focus();
     }
   };
 
@@ -326,20 +366,59 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   useEffect(() => {
     if (createRequest > 0) setCreating(projectInFront());
   }, [createRequest]);
+  // SESS-035: Recent (projects the composer made workspaces in), then the rest by match, then Add project.
+  const projectItems = (q: string): PickItem[] => {
+    const hints = pathHints(projects);
+    const r = rankProjects(projects, q, readRecent());
+    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: m.p.name, hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
+    return [...r.recent.map(item("Recent")), ...r.rest.map(item("Projects")), { key: ADD_ITEM, label: "Add project…" }];
+  };
+  const pickProject = (id: string) => {
+    if (id === ADD_ITEM) {
+      setCreating(null);
+      setShowAdd(true);
+    } else if (id !== creating) {
+      setCreating(id);
+      setParentDraft(null); // the parent belongs to the old project
+    }
+  };
+  // SESS-037: any workspace of the project but its main checkout can be the parent.
+  const parentItems = (p: Project) => (q: string): PickItem[] => [
+    ...(q.trim() ? [] : [{ key: "", label: "No parent" }]),
+    ...(worktrees[p.id] ?? []).flatMap((w) => {
+      const hits = w.isMain ? null : q.trim() ? matchLetters(q.trim(), worktreeLabel(w)) : [];
+      return hits ? [{ key: w.path, label: worktreeLabel(w), hits, title: w.path }] : [];
+    }),
+  ];
+  const parentLabel = (p: Project) => {
+    const w = parentDraft ? (worktrees[p.id] ?? []).find((x) => same(x.path, parentDraft)) : undefined;
+    return w ? worktreeLabel(w) : "No parent";
+  };
+  // SESS-038: Enter submits from the name and branch fields only, never mid input-method composition.
+  const submitKeys = (p: Project | null) => (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "Enter" && p) create(p);
+    else if (e.key === "Escape") setCreating(null);
+  };
+  const reusing = !existing && branchList.includes(name.trim());
   const nameField = (p: Project | null) => (
-    <div className="sb-form" data-create={p?.id ?? ""}>
-      <label className="check">
-        <input type="checkbox" aria-label="open an existing branch" checked={existing} onChange={(e) => setExisting(e.target.checked)} />
-        Open an existing branch
-      </label>
-      <input aria-label="workspace name" className="field" placeholder={existing ? "folder name (optional: the branch name)" : "name, e.g. Fix login"} value={name} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
-      <div className="preview">{existing ? (baseDraft.trim() ? `checks out ${baseDraft.trim()} as it is, its commits kept` : "Pick the branch to open.") : previewSentence(name, preview, p)}</div>
-      <input aria-label={existing ? "existing branch" : "start from"} className="field" list={existing ? "branch-list" : undefined} placeholder={existing ? "branch, e.g. feat/x" : p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
-      <datalist id="branch-list">
-        {branchList.map((b) => (
-          <option key={b} value={b} />
-        ))}
-      </datalist>
+    <div className="sb-form composer" data-create={p?.id ?? ""}>
+      <Picker key={`project-${p?.id ?? ""}`} name="Project" value={p?.name ?? "pick a project"} items={projectItems} onPick={pickProject} startOpen={!p} />
+      <input
+        ref={nameRef}
+        aria-label="workspace name"
+        className="field"
+        list="branch-list"
+        placeholder={existing ? "folder name (optional: the branch name)" : "name, or an existing branch"}
+        value={name}
+        autoFocus={!!p}
+        onChange={(e) => setName(shortcodes(e.target.value))}
+        onKeyDown={submitKeys(p)}
+      />
+      <div className="preview">
+        {existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
+      </div>
+      {p && <Picker key={`parent-${p.id}`} name="Parent" value={parentLabel(p)} items={parentItems(p)} onPick={(k) => setParentDraft(k || null)} onEmptyEnter={() => setParentDraft(null)} />}
       <select aria-label="agent" className="field" value={agentDraft} onChange={(e) => setAgentDraft(e.target.value)}>
         <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a shell"}</option>
         {installed.map((a) => (
@@ -348,14 +427,47 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           </option>
         ))}
       </select>
-      <textarea aria-label="first prompt" className="field multi" placeholder="first prompt for the agent (optional)" value={promptDraft} onChange={(e) => setPromptDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setCreating(null)} />
+      <textarea aria-label="note" className="field multi grow" placeholder="note: the first prompt for the agent (optional)" value={promptDraft} onChange={(e) => setPromptDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setCreating(null)} />
+      <button className="link" aria-expanded={advanced || existing} onClick={() => setAdvanced(!(advanced || existing))}>
+        {advanced || existing ? "Hide advanced" : "Advanced…"}
+      </button>
+      {(advanced || existing) && (
+        <div className="composer-advanced" data-advanced>
+          <label>Branch name</label>
+          <input
+            aria-label="branch name"
+            className="field"
+            list={existing ? "branch-list" : undefined}
+            placeholder={existing ? "existing branch, e.g. feat/x" : `from the name${preview && name.trim() ? `: ${preview.branch}` : ""}`}
+            value={branchDraft}
+            onChange={(e) => setBranchDraft(e.target.value)}
+            onKeyDown={submitKeys(p)}
+          />
+          <label className="check">
+            <input type="checkbox" aria-label="reuse an existing branch" checked={existing} onChange={(e) => setExisting(e.target.checked)} />
+            Reuse an existing branch (check it out, make none)
+          </label>
+          {!existing && (
+            <input aria-label="start from" className="field" placeholder={p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={submitKeys(p)} />
+          )}
+        </div>
+      )}
+      <datalist id="branch-list">
+        {branchList.map((b) => (
+          <option key={b} value={b} />
+        ))}
+      </datalist>
       <div className="btn-row">
-        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || !p || (existing ? !baseDraft.trim() : preview === null)}>
-          Create
+        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || !p || (existing ? !branchDraft.trim() : !name.trim() || preview === null)}>
+          Create workspace
         </button>
         <button className="btn" onClick={() => setCreating(null)}>
           Cancel
         </button>
+        <label className="check">
+          <input type="checkbox" aria-label="create more" checked={more} onChange={(e) => setMore(e.target.checked)} />
+          Create more
+        </label>
       </div>
     </div>
   );

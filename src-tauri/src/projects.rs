@@ -371,7 +371,8 @@ pub fn resolve_base(git: &Git, repo: &Path, project: &Project, chosen: Option<&s
 }
 
 pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>) -> Result<Created, String> {
-    let base = safe_name(typed_name).ok_or_else(|| format!("\"{}\" leaves nothing usable for a branch name; use some letters or digits", typed_name.trim()))?;
+    // SESS-036: a name that cleans up to nothing becomes "workspace" (numbered when taken).
+    let base = safe_name(typed_name).unwrap_or_else(|| "workspace".to_string());
     let repo = Path::new(&project.path);
     let turn = repo_turn(repo);
     let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
@@ -516,17 +517,21 @@ pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<V
 }
 
 #[tauri::command]
-pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>) -> Result<Created, String> {
+pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>) -> Result<Created, String> {
     let (project, place) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let project = find_project(&store, &project_id)?;
         let place = place_for(&store, &project);
         (project, place)
     };
-    let made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
+    let mut made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
     let store = store.lock().map_err(|e| e.to_string())?;
     set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
     note_seen(&store, &project, &made.worktree.path)?;
+    if let Some(parent) = non_blank(parent.as_deref()) {
+        set_parent(&store, &made.worktree.path, Some(parent))?;
+        made.worktree.parent = Some(parent.to_string());
+    }
     Ok(made)
 }
 
@@ -606,7 +611,7 @@ pub fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: St
 }
 
 /// What a typed name becomes (PROJ-021 / PROJ-025): the branch, and the folder it would get in
-/// the project; none when the name has nothing usable.
+/// the project; `branch` (Advanced) names the branch instead of the name (SESS-037).
 #[derive(serde::Serialize)]
 pub struct Preview {
     pub branch: String,
@@ -614,8 +619,9 @@ pub struct Preview {
 }
 
 #[tauri::command]
-pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option<String>) -> Result<Option<Preview>, String> {
-    let Some(branch) = safe_name(&name) else { return Ok(None) };
+pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option<String>, branch: Option<String>) -> Result<Option<Preview>, String> {
+    let typed = non_blank(branch.as_deref()).unwrap_or(&name);
+    let branch = safe_name(typed).unwrap_or_else(|| "workspace".to_string());
     let store = store.lock().map_err(|e| e.to_string())?;
     let folder = match project_id.filter(|id| !id.is_empty()) {
         Some(id) => {
@@ -630,15 +636,16 @@ pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option
 }
 
 /// Makes a workspace in a registered project and keeps the typed name (the sidebar's Create and
-/// `kolux-dev worktree create` both come through here).
-pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>) -> Result<Created, String> {
+/// `kolux-dev worktree create` both come through here). `branch` (the composer's Advanced) names
+/// the branch in place of the name (SESS-037).
+pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>, branch: Option<&str>) -> Result<Created, String> {
     let (project, place) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let project = find_project(&store, project_id)?;
         let place = place_for(&store, &project);
         (project, place)
     };
-    let mut made = create_workspace(git, &place, &project, name, base)?;
+    let mut made = create_workspace(git, &place, &project, non_blank(branch).unwrap_or(name), base)?;
     note_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &made.worktree.path)?;
     let typed = name.trim();
     if typed != made.worktree.branch.as_deref().unwrap_or_default() {
@@ -650,8 +657,14 @@ pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &st
 }
 
 #[tauri::command]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>) -> Result<Created, String> {
-    create_named(&git, &store, &project_id, &name, base.as_deref())
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>) -> Result<Created, String> {
+    let mut made = create_named(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref())?;
+    // SESS-037: the parent picked in the composer (PROJ-047 nests it there).
+    if let Some(parent) = non_blank(parent.as_deref()) {
+        set_parent(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path, Some(parent))?;
+        made.worktree.parent = Some(parent.to_string());
+    }
+    Ok(made)
 }
 
 /// A fresh creature-named workspace in project `project_id`. The store stays locked while Git
@@ -1079,6 +1092,27 @@ mod tests {
     }
 
     #[test]
+    fn sess037_the_advanced_branch_name_wins_and_the_typed_name_stays_the_label() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile-sess037");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("repo-sess037");
+        let root = temp("root-sess037");
+        let mut settings = store.settings();
+        settings["branchPrefix"] = serde_json::json!("none");
+        settings[WORKSPACES_DIR_SETTING] = serde_json::json!(root.to_string_lossy());
+        store.save_settings(&settings).unwrap();
+        let project = add_project(&git, &store, &repo).unwrap();
+        let store = Mutex::new(store);
+        let made = create_named(&git, &store, &project.id, "Fix login", None, Some("feat/x")).unwrap().worktree;
+        assert_eq!(made.branch.as_deref(), Some("feat-x"));
+        assert_eq!(made.name.as_deref(), Some("Fix login"));
+        let plain = create_named(&git, &store, &project.id, "Fix login", None, None).unwrap().worktree;
+        assert_eq!(plain.branch.as_deref(), Some("fix-login"));
+        assert_eq!(plain.name.as_deref(), Some("Fix login"));
+    }
+
+    #[test]
     fn create_and_remove_workspace_through_the_project() {
         let git = Git::detect().unwrap();
         let profile = temp("profile2");
@@ -1088,7 +1122,9 @@ mod tests {
         let project = add_project(&git, &store, &repo).unwrap();
         let place = nested(&root);
 
-        assert!(create_workspace(&git, &place, &project, "???", None).unwrap_err().contains("nothing usable"));
+        // SESS-036: a name that cleans up to nothing becomes "workspace".
+        let blank = create_workspace(&git, &place, &project, "???", None).unwrap().worktree;
+        assert_eq!(blank.branch.as_deref(), Some("workspace"));
         let wt = create_workspace(&git, &place, &project, "Fix login \u{1F525}", None).unwrap().worktree;
         assert_eq!(wt.branch.as_deref(), Some("fix-login-fire"));
         let expected = workspace_path(&place, &project, "fix-login-fire");

@@ -760,7 +760,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 calling_worktree(ctx, &project, &req.cwd)?
             };
             let issue = text("issue").and_then(|v| v.parse::<u64>().ok());
-            let made = projects::create_named(ctx.git, ctx.store, &project.id, &name, text("baseBranch").as_deref())?;
+            let made = projects::create_named(ctx.git, ctx.store, &project.id, &name, text("baseBranch").as_deref(), None)?;
             // The calling terminal, when the runtime vouches for it; a shell outside Kolux records none.
             let terminal = caller(ctx, req).ok().flatten();
             let pane_key = terminal.as_ref().and(req.pane.as_ref()).map(|p| p.key.clone());
@@ -1199,7 +1199,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         let project = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
         let parent = if placement == NEW_CHILD { pick_worktree(ctx, "current", &req.cwd).ok().filter(|(p, _)| p.id == project.id).map(|(_, w)| w.path) } else { None };
         let wt = match text("name") {
-            Some(name) => projects::create_named(ctx.git, ctx.store, &project.id, &name, text("baseBranch").as_deref())?.worktree,
+            Some(name) => projects::create_named(ctx.git, ctx.store, &project.id, &name, text("baseBranch").as_deref(), None)?.worktree,
             None => projects::create_fresh(ctx.git, ctx.store, &project.id)?,
         };
         let wt = match text("displayName") {

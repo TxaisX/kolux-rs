@@ -398,3 +398,18 @@ input { font: inherit; }
 .conn-switch { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--chip-bg); cursor: pointer; }
 .conn-switch input { margin-top: 2px; accent-color: var(--done); }
 .conn-switch small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: 12px; }
+/* SESS-035 / SESS-037: the new workspace composer's pickers */
+.picker { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field.pick { display: flex; align-items: center; gap: 4px; text-align: left; cursor: pointer; min-width: 0; }
+.pick-name { color: var(--fg-muted); flex: none; }
+.pick-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pick-list { max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+.pick-group { padding: 4px 6px 2px; font-size: 11px; color: var(--fg-faint); }
+.pick-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 6px; border-radius: 4px; cursor: pointer; color: var(--fg); min-width: 0; }
+.pick-item[aria-selected="true"] { background: var(--input-bg); outline: 1px solid var(--line-focus); }
+.pick-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pick-item .hint { margin-left: auto; flex: none; font-size: 11px; color: var(--fg-muted); }
+.pick-item mark { background: none; color: var(--fg); font-weight: 700; text-decoration: underline; }
+.composer-advanced { display: flex; flex-direction: column; gap: 6px; }
+.field.multi.grow { field-sizing: content; max-height: 160px; resize: none; }
+.composer .btn-row { flex-wrap: wrap; align-items: center; }

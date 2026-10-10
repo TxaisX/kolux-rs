@@ -108,3 +108,76 @@ export type CliWorkspace =
   | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean }
   | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null }
   | { kind: "removed"; path: string };
+
+// SESS-035: the composer's project search. The typed letters in order inside `text`: one run when
+// they appear together, else the first letters that fit; null when they are not all there.
+export function matchLetters(query: string, text: string): number[] | null {
+  const q = query.toLowerCase();
+  const t = text.toLowerCase();
+  const at = t.indexOf(q);
+  if (at >= 0) return [...q].map((_, i) => at + i);
+  const hits: number[] = [];
+  for (let i = 0; i < t.length && hits.length < q.length; i++) if (t[i] === q[hits.length]) hits.push(i);
+  return hits.length === q.length ? hits : null;
+}
+
+const matchScore = (hits: number[], text: string) => {
+  const run = hits.every((h, i) => i === 0 || h === hits[i - 1] + 1);
+  return (run ? 1000 : 500) - hits[0] * 10 - (hits[hits.length - 1] - hits[0]) - text.length;
+};
+
+type Named = { id: string; name: string; path: string };
+export type ProjectMatch<P extends Named> = { p: P; hits: number[] };
+
+/** Recent projects first (in the order they were used), then match quality; no query keeps the list order. */
+export function rankProjects<P extends Named>(projects: P[], query: string, recent: string[]) {
+  const q = query.trim();
+  const found: (ProjectMatch<P> & { score: number })[] = [];
+  for (const p of projects) {
+    const hits = q ? matchLetters(q, p.name) : [];
+    if (hits) found.push({ p, hits, score: q ? matchScore(hits, p.name) : 0 });
+  }
+  const byScore = (a: { score: number }, b: { score: number }) => b.score - a.score;
+  const isRecent = (m: { p: P }) => recent.includes(m.p.id);
+  return {
+    recent: found.filter(isRecent).sort((a, b) => (q ? byScore(a, b) : recent.indexOf(a.p.id) - recent.indexOf(b.p.id))),
+    rest: found.filter((m) => !isRecent(m)).sort((a, b) => (q ? byScore(a, b) : 0)),
+  };
+}
+
+/** `s` cut to `max` characters by taking out its middle. */
+export function middle(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const keep = max - 1;
+  return `${s.slice(0, Math.ceil(keep / 2))}…${s.slice(s.length - Math.floor(keep / 2))}`;
+}
+
+/** For projects that share a name, the fewest trailing folders of their parent path that tell them apart. */
+export function pathHints(projects: Named[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const groups = new Map<string, Named[]>();
+  for (const p of projects) groups.set(p.name.toLowerCase(), [...(groups.get(p.name.toLowerCase()) ?? []), p]);
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const parts = group.map((p) => p.path.split(/[\\/]/).filter(Boolean).slice(0, -1));
+    const most = Math.max(...parts.map((x) => x.length));
+    for (let k = 1; k <= most; k++) {
+      const tails = parts.map((x) => x.slice(-k).join("/"));
+      if (new Set(tails).size === tails.length || k === most) {
+        group.forEach((p, i) => (out[p.id] = p.path.includes("\\") ? tails[i].replace(/\//g, "\\") : tails[i]));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+// SESS-036: a few common shortcodes; others stay as typed.
+const SHORTCODES: Record<string, string> = {
+  bug: "\u{1F41B}", rocket: "\u{1F680}", fire: "\u{1F525}", sparkles: "\u{2728}", tada: "\u{1F389}", zap: "\u{26A1}",
+  wrench: "\u{1F527}", hammer: "\u{1F528}", memo: "\u{1F4DD}", lock: "\u{1F512}", art: "\u{1F3A8}", lipstick: "\u{1F484}",
+  recycle: "\u{267B}\u{FE0F}", construction: "\u{1F6A7}", white_check_mark: "\u{2705}", x: "\u{274C}", warning: "\u{26A0}\u{FE0F}",
+  rotating_light: "\u{1F6A8}", books: "\u{1F4DA}", package: "\u{1F4E6}", test_tube: "\u{1F9EA}", broom: "\u{1F9F9}",
+  star: "\u{2B50}", heart: "\u{2764}\u{FE0F}", eyes: "\u{1F440}", bulb: "\u{1F4A1}", gear: "\u{2699}\u{FE0F}", boom: "\u{1F4A5}",
+};
+export const shortcodes = (s: string) => s.replace(/:([a-z0-9_+-]+):/g, (all, code: string) => SHORTCODES[code] ?? all);
