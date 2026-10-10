@@ -432,3 +432,6 @@ input { font: inherit; }
 .scm-handoff .field.multi { min-height: 96px; margin-top: 6px; }
 .scm-handoff .btn-row { display: flex; gap: 6px; margin-top: 6px; }
 .scm-handoff .btn-row select { flex: 1; min-width: 0; }
+/* SET-031: the Git & worktrees part of the sidebar gear form, until the Settings page holds it. */
+.sb-form-head { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line-subtle); font-weight: 600; color: var(--fg); }
+.sb-form [data-prefix-sample] code { color: var(--fg); }

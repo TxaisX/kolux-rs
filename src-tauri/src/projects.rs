@@ -332,7 +332,7 @@ pub fn place_for(store: &Store, project: &Project) -> Place {
     let own = project.workspaces_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
     let settings = store.settings();
     let user = || crate::git::run(&["config", "user.name"], Some(Path::new(&project.path))).ok();
-    let (prefix, prefix_warning) = branch_prefix(settings[PREFIX_SETTING].as_str(), settings[PREFIX_CUSTOM_SETTING].as_str(), user, &|p| crate::git::run(&["check-ref-format", "--branch", &format!("{p}x")], None).is_ok());
+    let (prefix, prefix_warning) = branch_prefix(settings[PREFIX_SETTING].as_str(), settings[PREFIX_CUSTOM_SETTING].as_str(), user, &git_accepts);
     Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning }
 }
 
@@ -354,6 +354,26 @@ pub fn branch_prefix(mode: Option<&str>, custom: Option<&str>, user: impl Fn() -
     } else {
         (String::new(), Some(format!("the branch prefix \"{p}\" is not a name Git accepts, so this branch has no prefix")))
     }
+}
+
+/// Whether Git takes `prefix` at the start of a branch name.
+fn git_accepts(prefix: &str) -> bool {
+    crate::git::run(&["check-ref-format", "--branch", &format!("{prefix}x")], None).is_ok()
+}
+
+/// SET-031: what the prefix field's draft comes to, for the live sample: the prefix new branches
+/// would get (the global Git user name for the default), and whether Git refused it.
+#[derive(serde::Serialize)]
+pub struct PrefixCheck {
+    pub prefix: String,
+    pub refused: bool,
+}
+
+#[tauri::command]
+pub fn branch_prefix_check(mode: Option<String>, custom: Option<String>) -> PrefixCheck {
+    let user = || crate::git::run(&["config", "user.name"], None).ok();
+    let (prefix, warning) = branch_prefix(mode.as_deref(), custom.as_deref(), user, &git_accepts);
+    PrefixCheck { prefix, refused: warning.is_some() }
 }
 
 pub fn used_dirs(store: &Store) -> Vec<String> {

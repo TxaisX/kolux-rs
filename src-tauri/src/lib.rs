@@ -123,6 +123,7 @@ pub fn run() {
             projects::visibility_root_remove,
             projects::workspace_note_get,
             projects::workspace_note_save,
+            projects::branch_prefix_check,
             projects::workspace_create_fresh,
             projects::handoff_note_prepare,
             projects::workspace_remove,

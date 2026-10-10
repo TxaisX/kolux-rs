@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -122,4 +122,12 @@ test("ACCT-056: a failed scan keeps the worktrees already known; a scan that wor
   expect(afterScan(known, null)).toBe(known);
   expect(afterScan(undefined, null)).toEqual([]);
   expect(afterScan(known, [])).toEqual([]);
+});
+
+test("SET-031: the prefix field shows the next branch name and says when the prefix is not used", () => {
+  expect(prefixSample("custom", "tx", { prefix: "tx/", refused: false })).toEqual({ sample: "tx/<name>", note: null });
+  expect(prefixSample("custom", "a b", { prefix: "", refused: true })).toEqual({ sample: "<name>", note: 'Git does not accept "a b" in a branch name, so new branches get no prefix.' });
+  expect(prefixSample("custom", " /// ", { prefix: "", refused: false }).note).toBe("A prefix of only slashes is no prefix, so new branches get the bare name.");
+  expect(prefixSample("user", "", { prefix: "txais-xiong/", refused: false })).toEqual({ sample: "txais-xiong/<name>", note: null });
+  expect(prefixSample("none", "tx", null)).toEqual({ sample: "<name>", note: null });
 });

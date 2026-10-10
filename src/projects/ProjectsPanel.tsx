@@ -20,7 +20,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
+import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
+import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
@@ -141,6 +142,20 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const sortBy = sortFromSetting(settings[SORT_SETTING]);
   // PROJ-022: how new branches begin; read by the backend at create time. T-116 moves it to the Git page.
   const prefixMode = typeof settings.branchPrefix === "string" ? settings.branchPrefix : "user";
+  // SET-031: the custom prefix as typed (saved on blur) and what the back end makes of it, for the sample.
+  const [prefixDraft, setPrefixDraft] = useState(String(settings.branchPrefixCustom ?? ""));
+  const [prefixCheck, setPrefixCheck] = useState<PrefixCheck | null>(null);
+  useEffect(() => {
+    if (!showAdd) return;
+    let live = true;
+    invoke<PrefixCheck>("branch_prefix_check", { mode: prefixMode, custom: prefixDraft })
+      .then((c) => live && setPrefixCheck(c))
+      .catch(() => live && setPrefixCheck(null));
+    return () => {
+      live = false;
+    };
+  }, [showAdd, prefixMode, prefixDraft]);
+  const sample = prefixSample(prefixMode, prefixDraft, prefixCheck);
   // PROJ-050: an old "Recent" choice is moved to Smart once and saved that way.
   useEffect(() => {
     if (settings[SORT_SETTING] === "recent") onSetting(SORT_SETTING, "smart");
@@ -854,13 +869,27 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   Use default
                 </button>
               </div>
+              <div className="sb-form-head">Git &amp; worktrees</div>
               <label>Branch prefix</label>
               <select aria-label="branch prefix" className="field" value={prefixMode} onChange={(e) => onSetting("branchPrefix", e.target.value)}>
                 <option value="user">Git user name, e.g. txais-xiong/</option>
                 <option value="custom">Custom text</option>
                 <option value="none">None: the bare name</option>
               </select>
-              {prefixMode === "custom" && <input aria-label="custom branch prefix" className="field" placeholder="e.g. tx/" defaultValue={String(settings.branchPrefixCustom ?? "")} onBlur={(e) => onSetting("branchPrefixCustom", e.target.value)} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />}
+              {prefixMode === "custom" && <input aria-label="custom branch prefix" className="field" placeholder="e.g. tx/" value={prefixDraft} onChange={(e) => setPrefixDraft(e.target.value)} onBlur={() => prefixDraft !== String(settings.branchPrefixCustom ?? "") && onSetting("branchPrefixCustom", prefixDraft)} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />}
+              <div className="note" data-prefix-sample>
+                Next branch: <code>{sample.sample}</code>
+              </div>
+              {sample.note && (
+                <div className="note warn" role="alert">
+                  {sample.note}
+                </div>
+              )}
+              <label>Default compare base</label>
+              <select aria-label="default compare base" className="field" value={settings[SUMMARY_UPSTREAM_KEY] === true ? "upstream" : "default"} onChange={(e) => onSetting(SUMMARY_UPSTREAM_KEY, e.target.value === "upstream")}>
+                <option value="default">Repository default</option>
+                <option value="upstream">Branch upstream</option>
+              </select>
               <label className="check">
                 <input type="checkbox" checked={nest} onChange={(e) => onNest(e.target.checked)} />
                 Nest child workspaces under their parent

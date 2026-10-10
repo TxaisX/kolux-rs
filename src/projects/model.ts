@@ -185,3 +185,16 @@ export const shortcodes = (s: string) => s.replace(/:([a-z0-9_+-]+):/g, (all, co
 /** ACCT-056: what the sidebar lists after a scan; one that failed (null) keeps the worktrees
  * already known instead of emptying the project. */
 export const afterScan = (known: Worktree[] | undefined, scanned: Worktree[] | null): Worktree[] => scanned ?? known ?? [];
+
+/** SET-031: what the back end makes of a branch prefix: the prefix new branches get, and whether Git refused it. */
+export type PrefixCheck = { prefix: string; refused: boolean };
+
+/** SET-031: the live sample of the next branch name under the prefix field, and why a prefix is not used. */
+export function prefixSample(mode: string, custom: string, check: PrefixCheck | null): { sample: string; note: string | null } {
+  const sample = `${check?.prefix ?? ""}<name>`;
+  const typed = custom.trim();
+  if (mode !== "custom") return { sample, note: null };
+  if (check?.refused) return { sample, note: `Git does not accept "${typed}" in a branch name, so new branches get no prefix.` };
+  if (/^\/+$/.test(typed)) return { sample, note: "A prefix of only slashes is no prefix, so new branches get the bare name." };
+  return { sample, note: null };
+}
