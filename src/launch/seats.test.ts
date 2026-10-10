@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, resizeSeats, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, type Seat } from "./seats";
+import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, type Seat } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -67,4 +67,46 @@ test("SESS-014: separate copies for 2+ seats in Git, the shared folder otherwise
   expect(sharedWarning("separate", 3, true)).toBe(false);
   expect(sharedWarning("shared", 1, true)).toBe(false);
   expect(sharedWarning("shared", 3, false)).toBe(false);
+});
+
+test("SESS-012: Swarm gives five seats labelled scout, builder, builder, tester, reviewer; more seats wrap round", () => {
+  const swarm = pickShape("swarm", [claude]);
+  expect(swarm.map((s) => s.role)).toEqual(["scout", "builder", "builder", "tester", "reviewer"]);
+  expect(swarm[0]).toMatchObject(claude);
+  const grown = resizeLineup("swarm", swarm, 7);
+  expect(grown.shape).toBe("swarm");
+  expect(grown.seats.map((s) => s.role)).toEqual(["scout", "builder", "builder", "tester", "reviewer", "scout", "builder"]);
+  expect(pickShape("custom", swarm).every((s) => s.role === undefined)).toBe(true);
+  expect(pickShape("custom", swarm)).toHaveLength(5);
+});
+
+test("SESS-012: Workbench then a count of 2 reads Custom with no roles; Pair raised to 3 stays Pair", () => {
+  const bench = pickShape("workbench", [claude]);
+  expect(bench.map((s) => s.role)).toEqual(["scout", "builder", "reviewer"]);
+  const two = resizeLineup("workbench", bench, 2);
+  expect(two.shape).toBe("custom");
+  expect(two.seats).toHaveLength(2);
+  expect(two.seats.every((s) => s.role === undefined)).toBe(true);
+  const three = resizeLineup("pair", pickShape("pair", [claude]), 3);
+  expect(three.shape).toBe("pair");
+  expect(three.seats.map((s) => s.role)).toEqual(["builder", "reviewer", "builder"]);
+});
+
+test("SESS-012: the first message is the role brief, then the shared task, then the seat prompt; the brief alone with no task", () => {
+  const reviewer: Seat = { ...claude, role: "reviewer" };
+  expect(openingPrompt(reviewer, "Fix the login page", null)).toBe(`${ROLE_BRIEFS.reviewer}\n\nFix the login page`);
+  expect(openingPrompt(reviewer, "  ", null)).toBe(ROLE_BRIEFS.reviewer);
+  expect(openingPrompt({ ...reviewer, prompt: "Look at auth first" }, "Fix it", null)).toBe(`${ROLE_BRIEFS.reviewer}\n\nFix it\n\nLook at auth first`);
+  expect(openingPrompt(claude, "", null)).toBe("");
+});
+
+test("SESS-025: the rules block follows the task, names the note, and is cut off wherever the prompt is shown", () => {
+  const rules = rulesBlock("C:\src\shop\.kolux\handoffs\gentle-squid.md");
+  for (const words of ["alongside", "worktree", "handoff note", "C:\src\shop\.kolux\handoffs\gentle-squid.md", "documentation"]) expect(rules).toContain(words);
+  const full = openingPrompt({ ...claude, role: "builder" }, "Fix the login page", rules);
+  expect(full.startsWith(`${ROLE_BRIEFS.builder}\n\nFix the login page\n\n`)).toBe(true);
+  expect(full.endsWith(rules)).toBe(true);
+  expect(withoutRules(full)).toBe(`${ROLE_BRIEFS.builder}\n\nFix the login page`);
+  expect(withoutRules("Fix it")).toBe("Fix it");
+  expect(openingPrompt(claude, "", rules)).toBe("");
 });

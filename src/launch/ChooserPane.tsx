@@ -3,11 +3,12 @@
 // Start stays disabled until every seat has both picks. A count row (SESS-013) grows the seat
 // list with empty seats or shrinks it from the bottom. Native radios and a number field carry the
 // keyboard and screen-reader behaviour. The close button is absent when this is the grid's only
-// pane.
+// pane. A shape row (SESS-012) gives the seats roles, each shown on its seat, and one task box
+// holds the task every seat shares, so the whole lineup is in view before Start.
 import { Close } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
-import { allReady, modelsFor, NOT_GIT, QUICK_COUNTS, resizeSeats, sameForAll, seatReady, sharedWarning, TERMINAL, type Copies, type Seat } from "./seats";
+import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, resizeLineup, sameForAll, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
 
 type Props = {
   /** The session's number, shown in the header. */
@@ -18,6 +19,12 @@ type Props = {
   agents: AgentInfo[];
   seats: Seat[];
   onSeats: (seats: Seat[]) => void;
+  /** SESS-012: the launch shape; a shape pick or a count change sets the shape and the seats together. */
+  shape: Shape;
+  onLineup: (shape: Shape, seats: Seat[]) => void;
+  /** SESS-012: the task every seat shares; blank means none. */
+  task: string;
+  onTask: (task: string) => void;
   onStart: (seats: Seat[]) => void;
   /** SESS-014: where the AIs work; `inGit` false disables the separate copies. */
   copies: Copies;
@@ -30,15 +37,19 @@ type Props = {
   onFocus?: () => void;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus }: Props) {
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const ready = allReady(seats) && !busy;
   const anyReady = seats.some(seatReady);
   // The free field applies on Enter or blur, not per keystroke: typing "15" must not pass
   // through a one-seat moment that drops the picks of seats 2 and up.
+  const recount = (n: number) => {
+    const next = resizeLineup(shape, seats, n);
+    onLineup(next.shape, next.seats);
+  };
   const applyCount = (e: { currentTarget: HTMLInputElement }) => {
     const n = e.currentTarget.valueAsNumber;
-    if (Number.isFinite(n) && n >= 1 && n !== seats.length) onSeats(resizeSeats(seats, n));
+    if (Number.isFinite(n) && n >= 1 && n !== seats.length) recount(n);
     else e.currentTarget.value = String(seats.length);
   };
   return (
@@ -56,10 +67,18 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
       </header>
       <div className="chooser-body">
         <p className="caption">Every seat starts blank. Kolux never picks an AI or a model for you.</p>
+        <div className="count-row" role="group" aria-label="Launch shape">
+          <span className="label">Shape</span>
+          {SHAPES.map((s) => (
+            <button key={s.id} className="btn" aria-pressed={shape === s.id} title={s.roles.length ? s.roles.join(", ") : "No roles"} onClick={() => onLineup(s.id, pickShape(s.id, seats))}>
+              {s.label}
+            </button>
+          ))}
+        </div>
         <div className="count-row" role="group" aria-label="How many sessions">
           <span className="label">Sessions</span>
           {QUICK_COUNTS.map((n) => (
-            <button key={n} className="btn" aria-pressed={seats.length === n} onClick={() => onSeats(resizeSeats(seats, n))}>
+            <button key={n} className="btn" aria-pressed={seats.length === n} onClick={() => recount(n)}>
               {n}
             </button>
           ))}
@@ -104,11 +123,24 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
             </button>
           </div>
         )}
+        <textarea
+          className="seat-prompt"
+          rows={2}
+          placeholder="Task for every seat (optional)"
+          aria-label="Task for every seat"
+          value={task}
+          onChange={(e) => onTask(e.currentTarget.value)}
+        />
         <div className="seats">
           {seats.map((seat, i) => (
             <div key={i} className="seat">
               <div className="seat-head">
                 <span className="seat-title">Seat {i + 1}</span>
+                {seat.role && (
+                  <span className="chip seat-role" title="This seat's role">
+                    {seat.role}
+                  </span>
+                )}
                 <input
                   className="seat-job"
                   type="text"

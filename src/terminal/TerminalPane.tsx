@@ -14,6 +14,8 @@ import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
 import { monoFont, terminalTheme } from "../theme";
 import { folderName } from "../projects/model";
+import { withoutRules } from "../launch/seats";
+import { modelOf } from "../settings/routing";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
@@ -234,6 +236,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   // name); else "Terminal N" (SESS-024).
   const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
+  // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
+  const model = agent === "shell" ? null : modelOf(args);
 
   return (
     <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
@@ -252,8 +256,10 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             {branch}
           </span>
         )}
-        <span className="word" title={program ? [program, ...args].join(" ") : undefined}>
+        {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
+        <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
           {programWord(agent)}
+          {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`}>{word}</span>
         {age && (

@@ -10,16 +10,23 @@
 // T-014-a: the name field also takes a start ref, an agent and a first prompt (PROJ-028,
 // PROJ-038); the footer gear sets the global workspaces folder and layout, a project's own gear
 // its folder and base ref (PROJ-025).
+// T-077: a child workspace sits indented under the one it was made from and folds with it; the
+// gear's checkbox switches nesting off (PROJ-047). Folding hides child rows only; the agent summary
+// a card can show (PROJ-062, T-266) must stay open when its parent folds, and is built there.
+// ponytail: which rows are folded lasts until the window closes; nothing saves it.
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
-import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
+import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
+
+/** The pages that open over the content column from the sidebar footer. */
+export type Page = "automations" | "routing";
 
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
@@ -45,6 +52,10 @@ type Props = {
   defaultId: string;
   onSetDefault: (id: string) => void;
   onChoose: () => void;
+  /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
+  /** Which page (Automations, Model routing) is open over the content column, if any. */
+  page: Page | null;
+  onPage: (page: Page) => void;
   /** Bump to reload the list after something outside the sidebar made a workspace. */
   refresh: number;
   /** Hands the window the project list and which project owns each workspace folder. */
@@ -53,9 +64,13 @@ type Props = {
   createRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
+  /** PROJ-047: child workspaces nest under their parent unless this is off. */
+  nest: boolean;
+  onNest: (on: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, onStartIn, nest, onNest }: Props) {
+  const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -340,14 +355,29 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const order = (xs: Entry[]) => (sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry));
   const toggleFold = (title: string) => setFolded((f) => new Set(f.has(title) ? [...f].filter((t) => t !== title) : [...f, title]));
 
-  // One workspace row: its state dot, name, unread mark, and the Remove and Mark unread buttons.
-  const row = ({ p, w }: Entry) => {
+  // One workspace row: its state dot, name, unread mark, and the Remove and Mark unread buttons;
+  // under a project, a child sits `depth` steps in and a parent with `kids` folds them (PROJ-047).
+  const row = ({ p, w }: Entry, depth = 0, kids = false) => {
     const asking = confirm?.path === w.path;
     const info = infoOf(w);
     const un = isUnread(w);
+    const shut = shutKids.has(w.path);
     return (
-      <div key={w.path} data-worktree={worktreeLabel(w)}>
-        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state}>
+      <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth}>
+        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+          {kids && (
+            <button
+              className={`fold${shut ? " shut" : ""}`}
+              aria-expanded={!shut}
+              title={shut ? "Show the workspaces made from this one" : "Fold away the workspaces made from this one"}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShutKids((f) => new Set(shut ? [...f].filter((x) => x !== w.path) : [...f, w.path]));
+              }}
+            >
+              <ChevronDown size={12} />
+            </button>
+          )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} />
           <span className="name">{worktreeLabel(w)}</span>
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
@@ -489,6 +519,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   Use default
                 </button>
               </div>
+              <label className="check">
+                <input type="checkbox" checked={nest} onChange={(e) => onNest(e.target.checked)} />
+                Nest child workspaces under their parent
+              </label>
             </div>
           )}
 
@@ -561,7 +595,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   )}
                   {opening && nameField(p)}
                   {standIn(p)}
-                  {others.map(row)}
+                  {nestRows(others.map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p, w: r.w }, r.depth, r.kids))}
                 </div>
               );
             })}
@@ -586,7 +620,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                     </span>
                   </button>
                 )}
-                {!folded.has(g.title) && g.rows.map(row)}
+                {!folded.has(g.title) && g.rows.map((x) => row(x))}
               </div>
             ))}
 
@@ -623,6 +657,13 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         <div className="sb-foot">
           <button className="ib" title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`} aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
             <Gear />
+          </button>
+          <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
+            <Clock />
+          </button>
+          {/* SET-028: until Settings > Agents exists (T-036, T-054), model routing opens from here. */}
+          <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
+            <Sliders size={14} />
           </button>
           <button className="ib" title="Help (not built yet)">
             <Help />

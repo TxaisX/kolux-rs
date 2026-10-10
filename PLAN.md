@@ -143,19 +143,21 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
-- [ ] T-077 · PROJ-047 Child workspaces nest under their parent
-- [ ] T-078 · SESS-012 Launch shapes Solo, Pair, Workbench and Swarm assign roles · SESS-025 [compat] Agents launched side by side get a rules block and keep a handoff note
+- [x] T-077 · PROJ-047 Child workspaces nest under their parent
+- [x] T-078 · SESS-012 Launch shapes Solo, Pair, Workbench and Swarm assign roles · SESS-025 [compat] Agents launched side by side get a rules block and keep a handoff note
 - [ ] T-079 · TERM-125 [compat] Terminal commands in the CLI
 - [ ] T-080 · VIEW-020 Hand one agent's result to another agent
-- [ ] T-081 · ACCT-034 [compat] Model routing tiers per provider for workers
-- [ ] T-082 · ORCH-001 [compat] A coordinator opens a Run and its terminal becomes the Run's home · ORCH-002 [compat] Switch between, inspect and list Runs from the coordinator terminal · ORCH-003 [compat] Send typed mail to a Run, a worker, a terminal or a group · ORCH-005 [compat] check reads the mailbox oldest batch first and repeats it until acknowledged
-- [ ] T-083 · ORCH-006 [compat] Answer a message, and browse recent mail · ORCH-010 [compat] Tasks can wait on each other and become ready when their dependencies finish · ORCH-011 [compat] List a Run's tasks, filtered or compact · ORCH-013 [compat] Hand a task to an agent terminal that already exists
-- [ ] T-084 · ORCH-014 [compat] A worker's brief tells it how to report, ask and stay in touch · ORCH-018 [compat] Choose a worker's model by work tier instead of by name
-- [ ] T-085 · AUTO-001 [compat] Launch an agent with a saved prompt on a timetable · AUTO-004 [compat] Event triggers: pull request opened, checks failed, agent finished · AUTO-005 [compat] One dialog to create or edit an automation · AUTO-011 Runs launch in the background and never take focus
-- [ ] T-086 · AUTO-016 Automations list with sorting, filters and search · AUTO-019 Run now, pause, edit or delete an automation
-- [ ] T-087 · SET-028 Model and effort per tier for orchestration workers
-- [ ] T-088 · CLI-007 [compat] kolux works in every Kolux terminal with no setup · CLI-030 [compat] Orchestration runs: start one, bind to one, look one up · CLI-031 [compat] Orchestration messages: send and reply · CLI-032 [compat] Orchestration inbox: check and inbox · also: `worktree create` records the calling terminal's handle and pane key in the workspace origin once the terminal carries them (the calling-terminal rule of the worktree-create card on T-021; the calling folder is recorded already)
-- [ ] T-089 · CLI-033 [compat] Orchestration ask: a question that waits for its answer, and can be resumed · CLI-034 [compat] Orchestration tasks and dispatch · CLI-035 [compat] Orchestration worker-start launches a worker, with model routing · CLI-036 [compat] Orchestration workers: list, show, read, stop, abandon, release and retain
+- [x] T-081 · ACCT-034 [compat] Model routing tiers per provider for workers
+- [x] T-082 · ORCH-001 [compat] A coordinator opens a Run and its terminal becomes the Run's home · ORCH-002 [compat] Switch between, inspect and list Runs from the coordinator terminal · ORCH-003 [compat] Send typed mail to a Run, a worker, a terminal or a group · ORCH-005 [compat] check reads the mailbox oldest batch first and repeats it until acknowledged
+- [x] T-083 · ORCH-006 [compat] Answer a message, and browse recent mail · ORCH-010 [compat] Tasks can wait on each other and become ready when their dependencies finish · ORCH-011 [compat] List a Run's tasks, filtered or compact · ORCH-013 [compat] Hand a task to an agent terminal that already exists
+- [x] T-084 · ORCH-014 [compat] A worker's brief tells it how to report, ask and stay in touch · ORCH-018 [compat] Choose a worker's model by work tier instead of by name
+- [x] T-085-a · AUTO-001 [compat] Launch an agent with a saved prompt on a timetable · AUTO-005 [compat] One dialog to create or edit an automation (also from T-086: the Automations page's New Automation button and row Edit open this dialog, and the upcoming time is worked out again after every run)
+- [ ] T-085-b · AUTO-004 [compat] Event triggers: pull request opened, checks failed, agent finished · AUTO-011 Runs launch in the background and never take focus (split from T-085: also RRULE lines with INTERVAL, COUNT, UNTIL, BYSETPOS, DTSTART or numbered weekdays; needs T-025 hooks for agent finished and T-176 PR status polling)
+- [x] T-086 · AUTO-016 Automations list with sorting, filters and search · AUTO-019 Run now, pause, edit or delete an automation
+- [x] T-087 · SET-028 Model and effort per tier for orchestration workers
+- [x] T-088 · CLI-007 [compat] kolux works in every Kolux terminal with no setup · CLI-030 [compat] Orchestration runs: start one, bind to one, look one up · CLI-031 [compat] Orchestration messages: send and reply · CLI-032 [compat] Orchestration inbox: check and inbox · also: `worktree create` records the calling terminal's handle and pane key in the workspace origin once the terminal carries them (the calling-terminal rule of the worktree-create card on T-021; the calling folder is recorded already)
+- [x] T-089-a · CLI-034 [compat] Orchestration tasks and dispatch · CLI-035 [compat] Orchestration worker-start launches a worker, with model routing (task-update waits for the task-state guards in T-071)
+- [ ] T-089-b · CLI-033 [compat] Orchestration ask: a question that waits for its answer, and can be resumed · CLI-036 [compat] Orchestration workers: list, show, read, stop, abandon, release and retain (split from T-089: ask needs the ask flow in T-190; worker show, read, stop and abandon need live worker state and transcripts in T-030, stop in T-071 and abandon in T-155)
 
 ### P0 · theme 8 · Release, update and CI pipeline (7 cards)
 

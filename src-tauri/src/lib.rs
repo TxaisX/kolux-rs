@@ -1,4 +1,5 @@
 mod agents;
+mod automations;
 mod browser;
 pub mod cli;
 mod claude_accounts;
@@ -10,9 +11,12 @@ mod git;
 mod include;
 mod keybindings;
 mod names;
+mod orchestration;
 mod projects;
 mod scm;
 mod pty;
+mod routing;
+mod schedule;
 mod secrets;
 mod state;
 mod sysmem;
@@ -75,6 +79,8 @@ pub fn run() {
             app.manage(git::Git::detect()?);
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
+            // AUTO-001: the automations clock.
+            automations::start_clock(app.handle().clone());
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.
             let handle = app.handle().clone();
@@ -106,6 +112,7 @@ pub fn run() {
             projects::workspace_preview,
             projects::workspace_create,
             projects::workspace_create_fresh,
+            projects::handoff_note_prepare,
             projects::workspace_remove,
             projects::project_set,
             agents::agent_list,
@@ -122,6 +129,13 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_go,
             browser::browser_close,
+            automations::automations_list,
+            automations::automation_set_enabled,
+            automations::automation_delete,
+            automations::automation_run_now,
+            automations::automation_preview,
+            automations::automation_save,
+            routing::routing_catalog,
             secrets::secret_status,
             secrets::secret_set,
             secrets::secret_clear,

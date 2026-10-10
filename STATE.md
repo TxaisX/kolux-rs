@@ -214,7 +214,7 @@ T-016 adds `kolux-dev orchestration worker-start` (ORCH-016): `--spec <text>` ma
 (`task-N`, title from `--task-title` or the brief's first line) or `--task <id>` takes an
 existing one; `--agent <id>` names who runs it, or `--tier major|deep|build|light` picks the
 model and effort from the shipped routing (Claude: fable/high, opus/high, sonnet/medium,
-haiku; Codex: gpt-5.6-sol/high, gpt-5.6-terra/high, gpt-5.6-terra/medium, gpt-5.6-luna/low).
+haiku; Codex since T-081: gpt-6-sol at high, high, medium, low; see Model routing below).
 `--worktree` defaults to `new-top-level`: a fresh creature-named worktree (or `--name`/
 `--base-branch`/`--display-name` for a shaped one); `current` or a selector reuses one. The app
 opens the worker as a background tab named after the task, with the brief as the first prompt,
@@ -242,6 +242,134 @@ itself writes. The file is edited with `toml_edit`, so every other line, comment
 order stay byte for byte; an already-trusted folder changes nothing; a file that is not valid
 TOML is left alone. Same batch rules and the same one lock as Claude (`checked_keys`,
 `write_whole` shared by both). Cursor and Copilot still get nothing (T-017-c).
+
+T-086 (orchestration lane) adds the Automations page (AUTO-016, AUTO-019): the clock
+button in the sidebar footer opens it over the content column (the pane grid stays alive
+underneath; picking a workspace closes the page). A toolbar holds a search box (focused on open;
+it looks at name, project, worktree, agent and the first 2,048 characters of the prompt, ignores
+case and extra spaces, keeps its text across Refresh, refuses more than 200 characters), filters
+(on / paused, last run's result, several agents at once), Refresh, and Runs / New Automation,
+present but greyed until T-130 / T-085. The table keeps its header and first column in view,
+sorts names the way people count ("Report 2" before "Report 10") and by last run with never-run
+ones last; the first row is selected on open and the detail shows the on/off switch, Run now,
+the prompt and the numbered runs. Each row's menu (Run now, Pause/Resume, Edit greyed until
+T-085, Delete) acts without changing the selection. Delete asks first in an inline bar with
+"Don't ask again" (setting `confirmAutomationDelete`, on out of the box); deleting removes the
+automation's runs too. There are three different empty states: nothing created, nothing matches,
+and a load failure with Retry. Run now works on a paused automation as well: `automations.rs`
+records a manual run with its own number (numbers only go up), places it in the automation's
+worktree or a fresh one, trusts the folder, and opens a background tab named after the
+automation that runs the prompt. If the project is gone the run is marked skipped, and if the agent is
+missing it is marked failed. Automations live under `automations` / `automations.runs` in the store; the clock that
+starts them on time is T-085.
+
+T-087 (orchestration lane) adds Model routing (SET-028): the sliders button in the sidebar
+footer opens a page with one tab per provider that can route by tier (Claude Code, Codex) and a
+row per tier (Major, Deep, Build, Light), each with a model picker ("Provider default" first) and
+an effort picker. A model with no effort levels (Claude Haiku) hides the effort picker, and a new
+model keeps the effort while it still offers that level, otherwise the effort goes back to
+Default. Picks are saved in settings under `modelRouting`; a tier nothing was saved for uses the
+shipped ladder (`src-tauri/src/routing.rs`, the same table ORCH-018 used). `kolux-dev
+orchestration worker-start --tier <t>` now reads those picks, so the worker starts with the
+picked model. Every agent pane started with `--model` (a seat's pick or a worker's tier) names the
+model in its header ("Claude · haiku"). The reset button and the "not on this computer" mark are
+still to come in T-081.
+
+T-081 (orchestration lane) completes Model routing for ACCT-034: each provider tab carries a
+"Not detected" mark when this computer lacks that program, and stays selectable. "Reset <provider>"
+(greyed when nothing was changed) puts back that provider's shipped ladder and leaves the other
+provider alone. Codex's ladder now follows DT-12: the newest Codex model, gpt-6-sol, at high for
+Major and Deep, medium for Build and low for Light. Its model list (GPT-6 Sol / Astra / Luna,
+GPT-5.6 Sol / Terra / Luna, GPT-5.5) and each model's effort levels come from Codex's own models
+cache on this PC. Claude's levels come from `claude --help` (low to max). A 0.15.0 profile's
+routing table is carried over by the settings importer (T-181).
+
+T-077 (orchestration lane) nests child workspaces under their parent (PROJ-047). A worker started
+with `orchestration worker-start --worktree new-child` from inside a workspace gets a new
+workspace listed indented under the one it was called from, to any depth (child, grandchild...).
+A row with children has a chevron that folds them away and back. When a parent is removed, its
+children move to the top level. The footer gear has a checkbox, "Nest child workspaces under their
+parent"; unticked, every workspace sits at one level. The parent is remembered in the app's store
+(`workspaceParents`) and forgotten when the workspace is removed.
+
+T-085-a (orchestration lane) makes automations on a timetable (AUTO-001, AUTO-005). New
+Automation and a row's Edit open one dialog: a name, a large prompt editor (Ctrl+F opens a find bar;
+Escape shuts the find bar first, then the dialog), the agent, the project, an existing worktree (the
+main one preselected) or a new worktree for every run cut from a base branch (empty means the
+project's default), and a timetable: every hour, every day, Monday to Friday, once a week, or a
+custom cron line or RRULE, in a time zone that starts as the computer's. Under the timetable a live
+preview reads it back in words with the next run ("Monday to Friday at 09:00 (America/Los_Angeles),
+Next run: Monday 09:00"); a line that cannot work (minute 61, 30 February) shows why and Save stays
+off. The list shows that sentence and "Monday 09:00 · in 3 days". A clock in the app checks every
+30 seconds and starts what is due, works out the next time after every run, never starts a paused
+automation, and moves on a due time more than two minutes old instead of running it late.
+
+T-078 (orchestration lane) gives a lineup of sessions a shape (SESS-012, SESS-025). The chooser
+has a Shape row (Solo, Pair, Workbench, Swarm, Custom) and one "Task for every seat" box. Swarm
+makes five seats marked scout, builder, builder, tester, reviewer; more seats than roles start the
+roles again; dropping below the shape's count turns it into Custom, which has no roles. Each AI
+seat starts with its role's short brief, then the task, then its own opening prompt, and its tab
+is named after the role unless it has a job title. With two or more AI seats, every agent also gets
+a short rules block (others are working alongside, stay in your worktree, keep your handoff note
+current, check libraries against current docs), and Kolux makes each one's handoff note first, in
+the project's `.kolux/handoffs/<worktree>.md`, never overwriting one. The start line Kolux shows
+on hover leaves the rules block out. A single seat gets no rules block.
+
+T-082 (orchestration lane) gives agents a mailbox. Every Kolux terminal now carries
+KOLUX_TERMINAL_HANDLE (term-<n>) and a secret KOLUX_PANE_KEY, so `kolux-dev orchestration` knows which
+pane is calling. From a Kolux terminal, run-create opens a Run and ties that terminal to it;
+run-current, run-list (newest first, pages with a cursor), run-show and run-use (switch) follow.
+send stores typed mail for a Run (run:<id>), a worker (dispatch:<id>) or another terminal, with
+kind, priority and the report extras; check hands out the oldest unacknowledged batch under one
+delivery id and repeats it until --ack, with --peek, --unread, --all and --types; check --wait
+blocks until mail comes or the timeout passes, writing a keepalive line every 15 seconds. A shell
+Kolux did not start is turned away instead of being tied to a guess, and a retry request id makes
+create, use and send safe to repeat.
+
+T-083 (orchestration lane) lets a coordinator hand out tasks and talk back and forth with its
+agents (ORCH-006, ORCH-010, ORCH-011, ORCH-013). `kolux orchestration task-create` adds a task to the
+Run; a task that waits on others (`--deps '["task-1"]'`) stays pending until they finish, and a
+task that names an unknown task, has bad JSON or is bigger than 4 MiB is refused with nothing made.
+`task-list` shows the Run's tasks, `--ready` only the ones that can start, `--brief` a short form,
+and a task held by an agent shows that agent's pane until the pane closes. `dispatch --task <id> --to
+<pane>` hands a ready task to the agent running in another pane; `--inject` types the brief straight
+into it as one paste (Claude Code received a multi-line brief whole), `--dry-run` shows the plan and
+changes nothing, and fixed refusals cover a waiting or taken task, the coordinator's own pane, a pane
+with no agent and a busy agent. `dispatch-show` gives the task's latest hand-off. Every delivered
+message now carries the command that answers it: `reply --id <msg>` sends the answer back to the
+sender on the same thread, and `inbox` shows the newest mail, bodies cut to 120 characters unless
+`--full`.
+
+T-084 (orchestration lane) gives every worker a real brief and picks its model by tier from
+the coordinator's own agent (ORCH-014, ORCH-018). Whether a worker is started with `worker-start` or
+handed a task with `dispatch`, it now reads, ahead of its task: the exact one-line commands to report
+done (succeeded or failed), to send a heartbeat about every five minutes, and to ask the coordinator
+a question, each carrying its task, dispatch and Run; to look for mail between steps; and to wait
+at its prompt after reporting. When its worktree is behind its base, a "Base drift" line says by
+how many commits. The task text always comes last, under a divider. `dispatch-show --preamble`
+prints that brief. `worker-start --tier light` from a Claude coordinator's pane starts a Claude
+worker on Haiku with no effort setting; naming a different agent with a tier, or a tier with a
+model, is turned away. The commands say `kolux-dev` in development builds and `kolux` in releases.
+
+T-088 (orchestration lane) makes the command line work in every terminal Kolux opens, with no
+setup (CLI-007). Each new pane, shell or agent, has Kolux's own program folder first on its search
+path, so typing `kolux-dev` (or `kolux` in a release) runs the copy that ships with this app even
+when an older one is installed system-wide, and the pane is told which running app to talk to, so a
+development or side-by-side build answers its own panes. Sends are now checked before anything else:
+a heartbeat or done report addressed to a group (`@all`, `@worktree:`) is turned away, and so is a
+message that gives its details both as flags (`--task-id` and the like) and as `--payload` JSON
+(CLI-031). Runs, sends, replies, check and inbox (CLI-030, CLI-032) were already in place from T-082
+and T-083.
+
+T-089-a (orchestration lane) lets a coordinator hand a task to an agent tab that is already open
+(CLI-035): `worker-start --task <id> --terminal <handle> --worktree current` types the worker brief
+into that tab, provided it runs in the named worktree and runs the coordinator's own agent, and the
+receipt says it reused the tab. A fresh worker's receipt now says which way it was launched and where
+to find its background tab in the sidebar. `dispatch --task <id> --dry-run` needs no recipient and
+prints the opening text without handing anything on (CLI-034). Task dependency lists still arrive
+when PowerShell strips their quotes, `task-create` from outside any Kolux terminal is turned away
+and every task records the terminal that made it, and a terminal whose handle has gone stale is
+recognised again from its pane key. The reply hint on delivered mail names this build's own command.
 
 **Source Control (T-018-a, GIT-002 / GIT-004).** Mod+Shift+G, Mod+L or the top bar's right panel
 button opens a 320 px card right of the content with the workspace in front's changes under
@@ -896,6 +1024,52 @@ recorded default until told otherwise; nothing here blocks a pass.
   as someone using the mouse while the app was in front, not a code path. The evidence harness
   note was extended: `type.ps1` needs the window activated first.
 
+- [orchestration] T-086: the Automations page (DT-17) is reached from a clock button in the sidebar footer until AUTO-023's optional sidebar row (T-291) and the command palette exist.
+- [orchestration] T-086: the "ask before deleting an automation" switch is the setting `confirmAutomationDelete` (on by default); the confirm bar's "Don't ask again" turns it off.
+- [orchestration] T-086: Runs, New Automation and row Edit are shown but greyed until T-130 (runs page) and T-085 (create/edit dialog) build them.
+- [orchestration] T-086: a search longer than 200 characters is refused (the box says so) instead of being run.
+
+- [orchestration] T-087: Model routing is a page of its own, opened from a sliders button in the sidebar footer, until Settings > Agents exists (T-036 / T-054); it should move there then.
+- [orchestration] T-087: the per-tier picks are saved in settings as `modelRouting.<provider>.<tier> = { model, effort }`; an empty model means the provider's own default (no `--model`, no effort).
+- [orchestration] T-087: when a new model does not offer the current effort, the effort goes back to "Default" (no effort flag) rather than to some other level.
+- [orchestration] T-087: effort levels offered are low / medium / high / xhigh / max for Claude Fable, Opus and Sonnet, none for Haiku, and low / medium / high / xhigh for the Codex models.
+
+- [orchestration] T-081: Codex's default ladder is gpt-6-sol at high / high / medium / low (DT-12: "newest Codex model"; Codex's own models cache on this PC lists gpt-6-sol, gpt-6-astra and gpt-6-luna as the newest, and `~/.codex/config.toml` uses gpt-6-sol). This replaces T-016's gpt-5.6-sol / terra / terra / luna ladder.
+- [orchestration] T-081: the Reset button is greyed while the chosen provider has no pick of its own.
+- [orchestration] T-081 for the coordinator: the importer task T-181 (SET-035) should bring a 0.15.0 profile's routing table into `modelRouting` (COMPAT 5.7, ACCT-034 row). It was not added to T-181's line because that line is outside this lane's section of PLAN.md.
+
+- [orchestration] T-077: `worker-start --worktree new-child` called from outside one of the project's workspaces makes a top-level workspace (no parent) instead of refusing; called from the main checkout it is top level too, since main is never a parent row.
+- [orchestration] T-077: the nesting switch is a checkbox in the footer gear form (setting `workspaceNesting`, on unless false) until a Settings page holds workspace options. Folded rows are not saved; they reset when the window closes. A loop of parents (should one ever be written) is listed flat rather than hidden.
+
+- [orchestration] T-085: split in place. T-085-a is the timetable and the dialog (AUTO-001, AUTO-005); T-085-b keeps event triggers and background runs (AUTO-004, AUTO-011), which need T-025's hooks and T-176's PR polling, plus RRULE lines with INTERVAL other than 1, COUNT, UNTIL, BYSETPOS, DTSTART or numbered weekdays, which are refused with a message until then.
+- [orchestration] T-085-a: a timetable that is not one of the presets is described as "Custom: <line> (zone)" rather than turned into a sentence; an RRULE that leaves out BYHOUR / BYMINUTE runs at minute 0 / hour 0; a due time more than 2 minutes old (Kolux was closed or asleep) is skipped to the next one, and the grace window for those is T-175 (AUTO-007); the clock checks every 30 seconds. `jiff` (already in the lock tree through another crate, MIT/Unlicense) is now a direct dependency for time zones. Editing an automation that waits for an event turns it into a timed one until T-085-b adds events to the dialog.
+
+- [orchestration] T-078: a new chooser starts on Custom, so nothing changes for someone who never picks a shape; the role briefs are Kolux's own one-sentence wording (the card names the roles, not their text). Handoff notes live in the main checkout's `.kolux/handoffs/` (or the chooser's folder outside any project); when the seats share one folder each note is named `<folder>-seat-<n>`, so no two agents share a note. The rules block names the note's full path as the one file outside the worktree the agent may write. Kolux cannot hide the prompt inside the agent's own screen (Claude Code echoes it in full); what Kolux itself shows, the start line on hover, has the block cut. Multi-line opening prompts reach a typed-route agent or a .cmd shim only up to the first line break until T-163 (SESS-032).
+
+- [orchestration] T-082: terminal handles are `term-<n>` (the pane number); the pane key is a 128-bit secret made at spawn and forgotten when the pane closes. `--from <handle>` is accepted for any open Kolux terminal (the CLI token already limits callers to this machine and user); per-Run authority over another pane or Run (`check --terminal`, `--run`) is ORCH-033 (T-155). A terminal handle is its own mailbox (term:<handle>), read by that pane on check next to its Run and its active dispatch, so a handle can never be ambiguous between Runs. check --wait polls the app every half second from the command line (the app answers one request at a time) and defaults to 5 minutes without --timeout-ms; a timed-out wait is a success with `timedOut: true` (exit 0). `check --ack <id>` acknowledges and then returns the next batch. Group addresses (@all and the rest, ORCH-004) are refused as unsupported until T-190 (done reports and heartbeats are refused for groups outright, as the card says); the pointer typed into an idle pane is ORCH-007 (T-030). worker-start now stamps the calling Run on its dispatch so a worker that names no recipient writes to its Run; tasks scoped to a Run (task-list per Run, ORCH-011) come with T-083.
+
+- [orchestration] T-083: dispatch refusals use fixed codes (not_found, task_waiting, task_taken, task_not_ready, own_pane, not_an_agent, busy) so scripts can match them. Kolux counts a pane as an agent only when Kolux started that agent program there and it has written output and then been quiet for 1 s; an agent typed into a plain shell is not counted. `--inject` types the brief as one bracketed paste followed by Enter. `inbox` is newest first, 20 by default, 200 at most, bodies cut at 120 characters. `--deps` must name tasks that already exist. Task text is capped at 4 MiB. Each hand-off is stamped with the running app's process so a pane number reused after a restart is not mistaken for the old worker. Handing a task to the coordinator's own pane inside the nesting budget waits for T-155 (ORCH-032). Marking a task finished from a live agent waits for task-update (ORCH-012, T-071); promotion of waiting tasks is covered by unit tests.
+
+- [orchestration] T-084: brief commands carry no `--from`; the worker's own pane variables tie them to it. Without a Run, reports go to the coordinator's pane. Questions go out as `send --type question` plus `check --wait` until the ask command lands (ORCH-029, T-190); the dispatch pass joins the commands with ORCH-067 (T-155); the sub-worker section waits for the nesting budget (ORCH-032, T-155); the bare-shell "exit after reporting" line waits for terminal reuse in worker-start (T-089), since no worker today can be a bare shell. WSL workers do not exist yet, so the command is never a WSL path. Base drift is counted against the project's saved base, else its default branch, with no fetch. With a tier and no `--agent`, the worker runs on the agent Kolux started in the coordinator's pane, else the default agent; `--agent` with a tier is refused only when it differs from a known coordinator agent (a call from outside any agent pane may still name one). Seen live: a worker in a dev build ran the installed `kolux` because `kolux-dev` is not on PATH inside Kolux terminals; that is CLI-007 (T-088), and until it lands workers' reports from dev builds go nowhere useful.
+
+- [orchestration] T-088: every terminal gets `KOLUX_APP_DIR` (a new name, next to the kept `KOLUX_TERMINAL_HANDLE` and `KOLUX_PANE_KEY`) naming the data folder of the app that opened it; the CLI prefers it over the installed app's folder, which is what lets a dev or lane build's workers reach their own app (the T-084 finding is fixed). The folder put first on PATH is the running app's own executable folder; in a development build that folder holds `kolux-dev.exe`, and the release launcher (`kolux.cmd`/`kolux.exe`, CLI-006) and the Linux `kolux` launcher folder come with T-185. `kolux status` (CLI-012, T-076) and `--version` (CLI-001, T-250) do not exist yet, so the live proof used `Get-Command kolux-dev` and `run-create`/`run-current` instead. Group addresses still wait for ORCH-004 (T-190) and `--dispatch-capability` for ORCH-067 (T-155); multi-line bodies on Windows need the native launcher (CLI-006, T-185).
+
+- [orchestration] T-089 split: T-089-a (CLI-034, CLI-035) done; T-089-b (CLI-033 ask, CLI-036 worker list/show/read/stop/abandon/release/retain) waits for the ask flow (T-190), live worker state and transcripts (T-030), stop (T-071) and abandon (T-155). `task-update` waits for the task-state guards (ORCH-012, T-071). A reused terminal must already run an agent Kolux recognises, in the worktree named with `--worktree` (new worktrees are refused with `--terminal`); if the caller's pane runs a different agent, or `--agent` names one, it is refused. When `--spec` made a task and the hand-off then fails, the error names the task and the dispatch command that finishes it. Because a reused terminal must run the coordinator's agent and dispatch turns shells away, no worker can be a bare shell, so ORCH-014's "exit after reporting" line is not written anywhere. The pane key alone now identifies the caller (the handle in the environment is only a label). Structured chat sessions and older app versions (CLI-035's refusal and quiet-drop rules) do not exist in this build.
+
+## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [orchestration] T-089-a · done (T-089 split; T-089-b left): `reuse` for `worker-start --terminal`, dispatch dry run without `--to` (always returns the opening text), `parse_deps`, `Terminals::by_key` and key-only `caller_of`, task creator recorded and required, `launch`/`reveal` on receipts, reply hint uses the build's CLI name (1 new test plus extended ones, 82 Rust); live: a PowerShell coordinator made run-1, task-1 and task-2 (deps typed as '["task-1"]'), `task-list --ready` showed only task-1, `dispatch --dry-run` printed the opening text and task-1 stayed ready, `--effort high` without `--model` was refused, `worker-start --task task-1 --terminal term-2 --worktree current` typed the brief into the open Claude tab ("worker ready ... reused"), Claude answered and its done report reached the lane app through kolux-dev (CLI-007 end to end) · evidence/T-089-a-tasks-reuse.png, T-089-a-done-report.png
+- 2026-10-09 · [orchestration] T-088 · done: `cli_first` and the PATH/`KOLUX_APP_DIR` setup in terminal.rs spawn, `data_dir_of` and `APP_DIR_ENV` in cli.rs, send refusals for group heartbeats/done reports and flags-plus-`--payload` at parse time (2 new tests, 81 Rust); live: a fresh PowerShell pane with no alias and no APPDATA override showed KOLUX_APP_DIR set to the lane's own folder, target\debug first on PATH, `Get-Command kolux-dev` resolving there, run-create and run-current answered by the lane app, and both refusals printed · evidence/T-088-cli-path.png
+- 2026-10-09 · [orchestration] T-084 · done: `Brief`, `brief`, `CLI`, `DIVIDER` and `tier_agent` in orchestration.rs (2 new tests), `Git::behind`, `Terminals::dir_of`, `pane_agent` and `drift` in cli.rs, worker-start sends the brief and stores it on the dispatch; live: `--tier light --agent codex` from a Claude pane refused, `--tier deep --model opus` refused, `--tier light` on a worktree 2 commits behind master started Claude on haiku (effort null), dispatch-show --preamble printed the done, heartbeat and question commands with dispatch-1 and run-1, the drift line and the task last; the worker's own screen showed the same brief · evidence/T-084-tier.png, T-084-brief-drift.png, T-084-worker-brief.png
+- 2026-10-09 · [orchestration] T-083 · done: `Mail::reply` / `Mail::inbox`, reply hint on every delivered message, `promote`, `task_create`, `task_list`, `dispatch_check`, `brief` and the restart stamp in orchestration.rs (3 new tests), `program_of` in terminal.rs, reply, inbox, task-create, task-list, dispatch, dispatch-show in cli.rs (parser test extended); live: task-2 pending on task-1, unknown and bad-JSON deps refused, task_waiting, own_pane and not_an_agent refused, dry run left task-1 ready, `--inject` delivered the brief whole and Claude Code wrote haiku.txt, task-list showed [dispatch-1 in term-2], busy refused, dispatch-show --preamble printed the brief, reply landed on thread msg-2 with inReplyTo, a 2000-character task listed cut at 160, closing the Claude pane dropped the worker · evidence/T-083-refusals.png, T-083-inject.png, T-083-held.png, T-083-reply-compact.png, T-083-worker-gone.png
+- 2026-10-09 · [orchestration] T-082 · done: pane handle and secret key in every terminal environment (terminal.rs), `orchestration.rs` (Runs, bindings with a fence epoch, typed messages, deliveries, retry answers; 6 tests), run-create, run-use, run-current, run-list, run-show, send and check in cli.rs (1 parser test) with the waiting check and its keepalive lines in the command line; live in an app terminal: run-create with a retry id twice gave run-1 both times and run-current printed run-1; a guessed key and a shell without the variables were both turned away (unbound_caller) and run-list still showed one Run; two sends to run:run-1 came back under delivery dlv-4 twice, a done report without an outcome and a heartbeat to @all were refused; after --ack the check was empty; check --wait --timeout-ms 40000 printed two keepalive lines then timed out after 40 s; a waiting check was fenced when its pane was tied to a new Run; run-list --limit 1 paged with a cursor; run-use switched back to run-1 · evidence/T-082-run-create.png, T-082-unbound.png, T-082-send-check.png, T-082-ack-wait.png, T-082-runs.png
+- 2026-10-09 · [orchestration] T-080 · HAND TO FABLE: VIEW-020 drops a finished result into another session composer; it needs the chat composer and chat bridge of VIEW-019 (T-050, not built) and a finished run result from the status cards (T-028 and hooks); neither exists yet, so there is nothing to hand over or to receive it · none
+- 2026-10-09 · [orchestration] T-078 · done: shapes, roles, briefs, rules block and `withoutRules` in `seats.ts` (4 new tests), Shape row, task box and role chips in `ChooserPane.tsx` (1 new test), `prepare_handoff` / `handoff_note_prepare` in projects.rs (1 test: made once, never overwritten, unsafe names cleaned), notes and prompts composed in `App.startSeats`, the hover start line cut in TerminalPane; live: Swarm showed scout, builder, builder, tester, reviewer; Workbench then 2 read Custom with no roles; a Pair with a task started two Claude agents whose real start lines held brief, task, then the rules block naming hazel-beluga.md and dusky-squid.md, both notes on disk before the agents ran, hover start lines without the block; a Solo with a task had no rules block · evidence/T-078-swarm.png, T-078-custom.png, T-078-pair-lineup.png, T-078-pair-launched.png, T-078-solo-lineup.png, T-078-solo-launched.png
+- 2026-10-09 · [orchestration] T-085-a · done: `schedule.rs` (cron + RRULE parser, next run in a zone, words; 5 tests incl. 29 Feb, DST, minute 61), `automations.rs` save / preview / clock `tick` (2 new tests: validation + doubled create, due / paused / missed), `create_fresh_from` in projects.rs, `AutomationDialog.tsx` + test, model labels; live: weekday 09:00 saved on Friday reads "Monday 09:00 · in 3 days", double-clicked Save left 1 automation, minute 61 refused, 0 0 29 2 * next run 29 Feb 2028 00:00, Escape shut find then the dialog, a * * * * * automation started run #1 "by the timetable" at 16:57:16 and none after it was paused · evidence/T-085-dialog.png, T-085-cron-61.png, T-085-leap-day.png, T-085-find.png, T-085-saved-list.png, T-085-edit.png, T-085-clock-run.png
+- 2026-10-09 · [orchestration] T-079 · not built, left unticked. HAND TO FABLE: TERM-125 is terminal grid + PTY + two-way IPC. The Rust side keeps no screen of a terminal (output only streams to xterm in the window), so show/read/--cursor/--screen need either a terminal-emulator crate (a new dependency to clear with cargo-deny) or a round trip asking the window's xterm buffer; tabs, splits, titles and focus live only in App.tsx, so list/split/switch/rename/close --tab need the window to report its layout to Rust and take orders back over `cli-workspace`-style events; wait --for tui-idle needs a quiet-screen rule. Nothing was changed · no evidence
+- 2026-10-09 · [orchestration] T-077 · done: `nestRows` in `src/projects/model.ts` (3 new tests: depth, fold, orphan, nesting off, loop), fold chevron and nesting checkbox in `ProjectsPanel.tsx`, `workspaceParents` store with `set_parent` / `forget_workspace` in `projects.rs`, worker-start records the calling workspace as parent (cli.rs test extended); live: P > sandy-beluga > nimble-crab, nimble-tuna nested, P folded hid all three, nesting off listed five flat, removing sandy-beluga put its two children at the top · evidence/T-077-nested.png, T-077-folded.png, T-077-nesting-off.png, T-077-parent-gone.png
+- 2026-10-09 · [orchestration] T-081 · done: `resetProvider` / `isCustom` in `src/settings/routing.ts` (1 new test), Reset button and "Not detected" tab mark on `RoutingPage.tsx` (1 new render test), Codex models and DT-12 ladder in `routing.rs` (Rust tests updated); live: Claude Build set to Opus/high and Codex Light to GPT-6 Luna, Reset Claude Code put Build back to Sonnet/medium and left Codex's pick saved. This PC has Codex, so the not-detected mark is shown by the render test only · evidence/T-081-codex.png, T-081-before-reset.png, T-081-after-reset.png
+- 2026-10-09 · [orchestration] T-087 · done: new `src-tauri/src/routing.rs` (catalogue of routable providers, models, effort levels and the shipped ladder; `route` reads `modelRouting` from settings and drops an effort the model lacks; 3 Rust tests) used by `worker-start --tier` (CLI test now expects the saved Sonnet/low pick); `src/settings/routing.ts` (3 tests) + `RoutingPage.tsx` (1 render test), sliders button in the sidebar footer, model shown in the pane header; live: defaults table, Build set to Haiku hides its effort picker and saves, `kolux-dev orchestration worker-start --tier build` started a worker whose header reads "Claude · haiku" (Claude itself reports Haiku) · evidence/T-087-routing.png, T-087-no-effort.png, T-087-worker-header.png
+- 2026-10-09 · [orchestration] T-086 · done: new `src-tauri/src/automations.rs` (list / pause / delete / Run now commands, numbered manual runs, placement + trust + background tab via the cli-workspace event, skipped when the project is gone, failed when the agent is missing; 3 Rust tests), `src/automations/model.ts` (natural sort, last-run sort, filters, search, 5 tests) and `AutomationsPage.tsx` (3 render tests), clock button in the sidebar footer; live: list, search on prompt text, last-run sort, Run now on a paused row, delete confirm + Don't ask again, the background run tab, failed-load Retry · evidence/T-086-list.png, T-086-search.png, T-086-sort.png, T-086-runnow.png, T-086-confirm.png, T-086-deleted.png, T-086-run-tab.png, T-086-failed.png
 - 2026-10-09 · [accounts] T-038 · How secrets are sealed: Windows DPAPI (current-user scope)
   through `windows-sys` 0.61 (MIT/Apache-2.0, already in the lock through Tauri); the profile folder
   is limited to the user with `icacls /inheritance:r /grant:r <user>:(OI)(CI)F`, so every file

@@ -26,12 +26,32 @@ struct Inner {
     /// When each program session started and last wrote, so a worker start can tell when its
     /// agent has come up (ORCH-016). Shells are not marked.
     marks: HashMap<u32, Mark>,
+    /// CLI-007 / ORCH-001: each session secret pane key, put in its environment as
+    /// `KOLUX_PANE_KEY` next to its handle, so a command run inside it can prove which pane it is.
+    keys: HashMap<u32, String>,
 }
 
-#[derive(Clone, Copy)]
+/// `dir` at the front of a search path (CLI-007).
+fn cli_first(dir: &std::path::Path, path: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    let rest: Vec<std::path::PathBuf> = path.map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(rest)).unwrap_or_else(|_| dir.as_os_str().to_os_string())
+}
+
+/// The handle a terminal is known by on the command line (`KOLUX_TERMINAL_HANDLE`).
+pub fn handle_of(id: u32) -> String {
+    format!("term-{id}")
+}
+
+fn id_of(handle: &str) -> Option<u32> {
+    handle.strip_prefix("term-")?.parse().ok()
+}
+
+#[derive(Clone)]
 struct Mark {
     started: Instant,
     last_output: Option<Instant>,
+    /// The program the session runs (ORCH-013 tells agents from other programs by it).
+    program: String,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -64,6 +84,20 @@ impl Terminals {
             Some(p) => program_command(p, &args, cwd.as_deref()),
             None => shell_command(cwd.as_deref()),
         };
+        let key = crate::cli::secret();
+        command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
+        command.env("KOLUX_PANE_KEY", &key);
+        // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
+        // registered system-wide, and it is told which app folder to call. ponytail: the folder
+        // is the app's own; the release launcher (CLI-006, T-185) and the Linux `kolux` launcher
+        // folder land with the packaged build.
+        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
+            let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+            command.env("PATH", path);
+        }
+        if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
+            command.env(crate::cli::APP_DIR_ENV, dir);
+        }
         if let Some((k, v)) = env {
             // A pane on a managed Claude account must not be overridden by a 1-year key that
             // Kolux itself was started with (Claude Code prefers the variable).
@@ -93,13 +127,15 @@ impl Terminals {
                     inner.sessions.remove(&id);
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
+                    inner.keys.remove(&id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
         )?;
         inner.sessions.insert(id, session);
+        inner.keys.insert(id, key);
         if is_program {
-            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None });
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string() });
         }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
@@ -122,6 +158,7 @@ impl Terminals {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.dirs.remove(&id);
         inner.marks.remove(&id);
+        inner.keys.remove(&id);
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
@@ -157,10 +194,44 @@ impl Terminals {
         ids.len()
     }
 
+    /// The open terminal whose secret is `key` (ORCH-001: a pane the runtime saw), by its handle.
+    pub fn by_key(&self, key: &str) -> Option<String> {
+        if key.is_empty() {
+            return None;
+        }
+        let inner = self.inner.lock().ok()?;
+        inner.keys.iter().find(|(_, k)| k.as_str() == key).map(|(id, _)| handle_of(*id))
+    }
+
+    /// ORCH-013: the program a terminal was started with, once it has written and then been quiet
+    /// for `settle` (fully started; part of a banner is not enough). Shells have none: what is
+    /// typed into a shell, or a pane title, proves nothing.
+    // ponytail: quiet after first output stands in for an idle detector (the STAT status cards).
+    pub fn program_of(&self, handle: &str, settle: std::time::Duration) -> Option<String> {
+        let id = id_of(handle)?;
+        let inner = self.inner.lock().ok()?;
+        let m = inner.marks.get(&id).filter(|_| inner.sessions.contains_key(&id))?;
+        m.last_output.filter(|t| t.elapsed() >= settle)?;
+        Some(m.program.clone())
+    }
+
+    /// The folder terminal `handle` was started in (ORCH-014 checks it for base drift).
+    pub fn dir_of(&self, handle: &str) -> Option<String> {
+        let id = id_of(handle)?;
+        self.inner.lock().ok()?.dirs.get(&id).cloned()
+    }
+
+    /// Is `handle` an open terminal? (`--from` names one explicitly.)
+    pub fn live(&self, handle: &str) -> bool {
+        let Some(id) = id_of(handle) else { return false };
+        self.inner.lock().map(|i| i.sessions.contains_key(&id)).unwrap_or(false)
+    }
+
     /// Ends every session: the window is closing, nothing may be left running.
     pub fn kill_all(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.dirs.clear();
+            inner.keys.clear();
             for (_, mut s) in inner.sessions.drain() {
                 s.kill();
             }
@@ -196,6 +267,21 @@ pub fn terminal_write(terminals: tauri::State<'_, Terminals>, id: u32, data: Str
 #[tauri::command]
 pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     terminals.resize(id, cols, rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bundled_cli_folder_comes_first_on_the_search_path() {
+        let dir = std::path::Path::new("D:\\app");
+        let rest = std::env::join_paths(["C:\\old\\kolux", "C:\\Windows"]).unwrap();
+        let path = cli_first(dir, Some(rest));
+        let parts: Vec<_> = std::env::split_paths(&path).collect();
+        assert_eq!(parts, ["D:\\app", "C:\\old\\kolux", "C:\\Windows"].map(std::path::PathBuf::from));
+        assert_eq!(std::env::split_paths(&cli_first(dir, None)).count(), 1);
+    }
 }
 
 #[tauri::command]

@@ -24,6 +24,8 @@ pub struct Worktree {
     pub is_main: bool,
     /// The name the user typed when creating it (PROJ-021); the branch is shown when there is none.
     pub name: Option<String>,
+    /// The workspace it was made from (PROJ-047), by path; the sidebar nests it there.
+    pub parent: Option<String>,
 }
 
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
@@ -152,6 +154,11 @@ impl Git {
         !rev.is_empty() && !rev.starts_with('-') && !rev.contains("..") && !rev.chars().any(|c| c.is_whitespace() || c.is_control())
     }
 
+    /// How many commits `base` has that the worktree's HEAD does not (ORCH-014's base drift).
+    pub fn behind(&self, worktree: &Path, base: &str) -> Option<u32> {
+        run(&["rev-list", "--count", &format!("HEAD..{base}")], Some(worktree)).ok()?.parse().ok()
+    }
+
     /// Does `rev` name a commit here: a branch, tag, remote branch or id?
     pub fn rev_exists(&self, repo: &Path, rev: &str) -> bool {
         Self::ref_ok(rev) && run(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")], Some(repo)).is_ok()
@@ -214,7 +221,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None });
         }
     }
     out

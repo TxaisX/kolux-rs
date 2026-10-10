@@ -26,7 +26,9 @@ import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neig
 import StatusBar from "./chrome/StatusBar";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
-import ProjectsPanel from "./projects/ProjectsPanel";
+import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
+import AutomationsPage from "./automations/AutomationsPage";
+import RoutingPage from "./settings/RoutingPage";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
@@ -35,8 +37,8 @@ import { nextNeedsYou } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
-import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
+import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { matchEvent } from "./keys/keymap";
@@ -44,7 +46,7 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -91,6 +93,10 @@ function Window() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
+  // the grid stays mounted (hidden) behind it.
+  // SET-028: Model routing opens the same way until Settings > Agents exists.
+  const [page, setPage] = useState<Page | null>(null);
   const [scmOpen, setScmOpen] = useState(false);
   // GIT-004: a half-written commit message per worktree, kept through closing the panel.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -335,6 +341,7 @@ function Window() {
   };
 
   const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
+  const setChooser = (key: number, patch: Partial<Pane>) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, ...patch } : p)));
 
   // SESS-014: a chooser can copy only inside a Git project: its workspace, or (outside any
   // workspace) the registered projects.
@@ -344,7 +351,11 @@ function Window() {
   // every agent seat gets a fresh creature-named worktree of its own (SESS-023), made one after
   // another so no two pick one name; with the shared folder agent seats run in the chooser's
   // workspace, or in one fresh worktree together when the chooser sits outside any workspace.
-  // Terminal seats always open in the chooser's folder.
+  // Terminal seats always open in the chooser's folder. A seat's first message is its role's brief,
+  // the shared task and its own prompt (SESS-012); with two or more AI seats each also gets the
+  // rules block and a handoff note made before it starts (SESS-025), in the project's main checkout
+  // (or the chooser's folder outside any project), named after its worktree, or after the folder
+  // and its seat number when the seats share one folder.
   const startSeats = async (key: number, seats: Seat[]) => {
     const chooser = panes.find((p) => p.key === key);
     if (!chooser) return;
@@ -354,8 +365,8 @@ function Window() {
       const missing = seats.find((s, i) => s.agent !== TERMINAL && !picked[i]);
       if (missing) throw new Error(`${missing.agent} is not installed.`);
       const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
+      const pid = projectOf(chooser.cwd) ?? projectFor(null);
       const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
-        const pid = projectOf(chooser.cwd) ?? projectFor(null);
         if (!pid) throw new Error("Add a project first: an agent needs a repository to work in.");
         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
         return { cwd: wt.path, branch: wt.branch };
@@ -371,12 +382,22 @@ function Window() {
       for (const id of new Set(picked.flatMap((a) => (a ? [a.id] : [])))) await pretrust(id, picked.map((a, i) => (a?.id === id ? places[i].cwd : null)));
       // SESS-051: each agent's start line comes from the catalogue, prompt route included; a
       // refused line (Hermes past its limit) stops the whole Start before any pane is made.
-      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: modelArgs(seats[i].model), prompt: seats[i].prompt ?? "" }) : null)));
+      const side = picked.filter(Boolean).length >= 2;
+      const root = projects.find((p) => p.id === pid)?.path ?? chooser.cwd;
+      if (side && !root) throw new Error("Add a project first: agents side by side keep their handoff notes in it.");
+      const task = chooser.task ?? "";
+      const prompts: string[] = [];
+      for (const [i, a] of picked.entries()) {
+        const cwd = places[i].cwd ?? "";
+        const note = a && side ? await invoke<string>("handoff_note_prepare", { root, name: separate ? folderName(cwd) : `${folderName(cwd)}-seat-${i + 1}` }) : null;
+        prompts.push(a ? openingPrompt(seats[i], task, note && rulesBlock(note)) : "");
+      }
+      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: modelArgs(seats[i].model), prompt: prompts[i] }) : null)));
       const made: Pane[] = seats.map((s, i) => {
         const a = picked[i];
         const line = lines[i];
         const k = nextKey.current++;
-        const title = s.title?.trim() || undefined;
+        const title = s.title?.trim() || (s.role && s.role[0].toUpperCase() + s.role.slice(1)) || undefined;
         const { cwd, branch } = places[i];
         return a && line
           ? { key: k, cwd, branch, agent: markFor(a.id), program: a.program, args: line.args, title, batch, typed: line.typed ?? undefined }
@@ -415,6 +436,7 @@ function Window() {
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
   const select = (dir: string, branch: string | null) => {
+    setPage(null);
     setActiveDir(dir);
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else addShell(dir, branch);
@@ -586,12 +608,20 @@ function Window() {
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}
+            nest={settings[NESTING_KEY] !== false}
+            onNest={(on) => {
+              const next = { ...settings, [NESTING_KEY]: on };
+              setSettings(next);
+              invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+            }}
             agents={agents}
             defaultId={defaultId}
             onSetDefault={setDefault}
             launching={launching}
             onLaunch={launch}
             onChoose={addChooser}
+            page={page}
+            onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}
             createRequest={createRequest}
             onStartIn={startIn}
@@ -603,9 +633,30 @@ function Window() {
         )}
         <div className="content">
           <SignInNotice />
+          {terminals && page === "automations" && (
+            <AutomationsPage
+              projects={projects}
+              agents={agents}
+              settings={settings}
+              onSettings={(next) => {
+                setSettings(next);
+                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              }}
+            />
+          )}
+          {terminals && page === "routing" && (
+            <RoutingPage
+              agents={agents}
+              settings={settings}
+              onSettings={(next) => {
+                setSettings(next);
+                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              }}
+            />
+          )}
           {terminals && (
             <>
-              <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />
+              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />}
               {toast && (
                 <div className="toast" role="status">
                   {toast}
@@ -635,7 +686,7 @@ function Window() {
           )}
           <div
             className={board ? "board" : "grid"}
-            hidden={!terminals && !board}
+            hidden={(!terminals && !board) || (terminals && page !== null)}
             style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` } : undefined}
           >
               {terminals && shown.length === 0 && (
@@ -683,6 +734,10 @@ function Window() {
                     agents={agents.filter((a) => a.installed)}
                     seats={clearMissing(p.seats, installedIds)}
                     onSeats={(s) => setSeats(p.key, s)}
+                    shape={p.shape ?? "custom"}
+                    onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
+                    task={p.task ?? ""}
+                    onTask={(task) => setChooser(p.key, { task })}
                     onStart={(s) => void startSeats(p.key, s)}
                     copies={p.copies ?? defaultCopies(p.seats.length, inGitFor(p))}
                     inGit={inGitFor(p)}

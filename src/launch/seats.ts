@@ -5,8 +5,9 @@
 /** `agent` is an agent id, "terminal" for a plain shell, or null while unpicked. `model` is a
  * model id, "default" for "the program's own default" (an explicit pick), or null. `title` is
  * the seat's job title (SESS-024): it names the pane; blank means none. `prompt` is the opening
- * prompt (SESS-051), handed to the agent by its own route; blank means none. */
-export type Seat = { agent: string | null; model: string | null; title?: string; prompt?: string };
+ * prompt (SESS-051), handed to the agent by its own route; blank means none. `role` is the seat's
+ * role in a launch shape (SESS-012); none in Custom. */
+export type Seat = { agent: string | null; model: string | null; title?: string; prompt?: string; role?: Role };
 
 export const TERMINAL = "terminal";
 
@@ -102,4 +103,73 @@ export function modelsFor(agentId: string): ModelChoice[] {
 /** The arguments a model pick adds to the start line; none for the program's own default. */
 export function modelArgs(model: string | null): string[] {
   return model === null || model === DEFAULT_MODEL ? [] : ["--model", model];
+}
+
+/** SESS-012: the four roles, each with its own short brief that goes ahead of the shared task. */
+export type Role = "builder" | "reviewer" | "scout" | "tester";
+export const ROLE_BRIEFS: Record<Role, string> = {
+  builder: "You are the builder. Make the change the task asks for in small steps, and keep the project working after each one.",
+  reviewer: "You are the reviewer. Read what the builders change, look for bugs, gaps and risky shortcuts, and say plainly what must be fixed before the task is done.",
+  scout: "You are the scout. Before anyone builds, explore the code and the documentation the task touches, then write down what the others need to know: where things live, what already exists, and what could go wrong.",
+  tester: "You are the tester. Write and run tests for what the task asks, try the edge cases, and report each failure with the exact steps that show it.",
+};
+
+/** SESS-012: a launch shape and the roles of its seats in order; Custom carries none. */
+export type Shape = "solo" | "pair" | "workbench" | "swarm" | "custom";
+export const SHAPES: Array<{ id: Shape; label: string; roles: Role[] }> = [
+  { id: "solo", label: "Solo", roles: ["builder"] },
+  { id: "pair", label: "Pair", roles: ["builder", "reviewer"] },
+  { id: "workbench", label: "Workbench", roles: ["scout", "builder", "reviewer"] },
+  { id: "swarm", label: "Swarm", roles: ["scout", "builder", "builder", "tester", "reviewer"] },
+  { id: "custom", label: "Custom", roles: [] },
+];
+const rolesOf = (shape: Shape): Role[] => SHAPES.find((s) => s.id === shape)?.roles ?? [];
+/** Seats past the end of the role list wrap round to its first role again. */
+const withRoles = (seats: Seat[], roles: Role[]): Seat[] => seats.map((s, i) => ({ ...s, role: roles.length ? roles[i % roles.length] : undefined }));
+
+/** SESS-012: picking a shape sets the count to its number of roles; Custom keeps the count. */
+export function pickShape(shape: Shape, seats: Seat[]): Seat[] {
+  const roles = rolesOf(shape);
+  return withRoles(roles.length ? resizeSeats(seats, roles.length) : seats, roles);
+}
+
+/** SESS-012: a new count keeps the shape when it is at least the shape's number of roles;
+ * below that the shape turns into Custom and the roles go. */
+export function resizeLineup(shape: Shape, seats: Seat[], count: number): { shape: Shape; seats: Seat[] } {
+  const next = resizeSeats(seats, count);
+  const roles = rolesOf(shape);
+  return next.length < roles.length ? { shape: "custom", seats: withRoles(next, []) } : { shape, seats: withRoles(next, roles) };
+}
+
+/** SESS-025: the first line of the rules block, which is how a shown prompt finds and cuts it. */
+export const RULES_MARK = "--- Kolux: you are working alongside other agents ---";
+
+/** SESS-025: the rules every agent of a 2+ seat launch gets after its task. `note` is the path of
+ * its own handoff note, made before the agent starts. */
+export function rulesBlock(note: string): string {
+  return [
+    RULES_MARK,
+    "Other agents are working on this task alongside you at the same time.",
+    "Stay inside your own worktree, the folder you started in. The one file outside it you may write is your handoff note.",
+    `Your handoff note is ${note}. It exists already. Keep it current after each change: the files you added, updated and removed, and what is left to do. Never edit another agent's note.`,
+    "Before you say you are done, check how you use every library against its up-to-date documentation.",
+  ].join("\n");
+}
+
+/** SESS-012 / SESS-025: a seat's first message: its role's brief, then the shared task, then the
+ * seat's own opening prompt (SESS-051), blank parts left out; then the rules block when given.
+ * Empty when there is nothing to say, so no rules block goes out alone. */
+// ponytail: a prompt with line breaks reaches a typed-route agent, or one started through a .cmd
+// shim, only up to its first line break; T-163 (SESS-032) delivers it as one pasted block.
+export function openingPrompt(seat: Seat, task: string, rules: string | null): string {
+  const body = [seat.role ? ROLE_BRIEFS[seat.role] : "", task.trim(), seat.prompt?.trim() ?? ""].filter(Boolean).join("\n\n");
+  return body && rules ? `${body}\n\n${rules}` : body;
+}
+
+/** SESS-025: a prompt as it is shown back to the user: everything from the rules block on is cut.
+ * The pane tooltip shows the task alone; the status of STAT-025 (T-123) and the session rows of
+ * VIEW-084 (T-127) run prompts through this. */
+export function withoutRules(text: string): string {
+  const at = text.indexOf(RULES_MARK);
+  return at < 0 ? text : text.slice(0, at).trimEnd();
 }

@@ -61,6 +61,8 @@ const PROJECTS_KEY: &str = "projects";
 /// Typed workspace names by folder (PROJ-021): the branch and folder carry the cleaned form,
 /// the row shows exactly what was typed.
 const NAMES_KEY: &str = "workspaceNames";
+/// Child workspace path (as `name_key` writes it) to its parent's path (PROJ-047).
+const PARENTS_KEY: &str = "workspaceParents";
 /// How each workspace came to be (CLI-018): who made it, its parent worktree, the calling folder,
 /// an issue number and a comment, keyed like the names. Lineage views (PROJ-047) read it.
 const ORIGINS_KEY: &str = "workspaceOrigins";
@@ -102,6 +104,24 @@ pub fn set_name(store: &Store, path: &str, name: Option<&str>) -> Result<(), Str
     store.set(NAMES_KEY, &serde_json::Value::Object(names).to_string()).map_err(|e| e.to_string())
 }
 
+/// Remembers (or with `None`, forgets) which workspace `path` was made from (PROJ-047).
+pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(), String> {
+    let mut parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    match parent {
+        Some(p) => parents.insert(name_key(path), serde_json::Value::String(p.to_string())),
+        None => parents.remove(&name_key(path)),
+    };
+    store.set(PARENTS_KEY, &serde_json::Value::Object(parents).to_string()).map_err(|e| e.to_string())
+}
+
+/// Drops what Kolux remembers about a removed workspace, so a later one in the same folder starts
+/// clean: its typed name, its parent and its origin.
+pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
+    set_name(store, path, None)?;
+    set_parent(store, path, None)?;
+    set_origin(store, path, None)
+}
+
 fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
     store.get(ORIGINS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
@@ -123,10 +143,11 @@ pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
 }
 
 /// The workspaces of a project as the sidebar lists them (PROJ-007): Git's list with the typed
-/// names laid over, minus scratch worktrees a coding tool keeps for its own sub-agents, which
+/// names and parents laid over, minus scratch worktrees a coding tool keeps for its own sub-agents, which
 /// live under a dot-folder inside the main checkout (Claude Code's `.claude/worktrees/`).
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
     let names = load_names(store);
+    let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let main = Path::new(&project.path);
     Ok(git
         .worktrees(main)?
@@ -134,6 +155,7 @@ pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Ve
         .filter(|w| !Path::new(&w.path).strip_prefix(main).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))))
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
+            w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w
         })
         .collect())
@@ -318,12 +340,13 @@ pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> 
 }
 
 /// A workspace an agent launch makes for itself: a creature name nobody uses, branched from the
-/// main checkout. The clock seeds the pick so launches do not always start at the same pair.
-pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects: &[Project], project: &Project) -> Result<Worktree, String> {
+/// main checkout, or from `base` when given (AUTO-005). The clock seeds the pick so launches do
+/// not always start at the same pair.
+pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects: &[Project], project: &Project, base: Option<&str>) -> Result<Worktree, String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let name = fresh_name(git, store, projects, seed);
     remember_retired(store, &name)?;
-    create_workspace(git, place, project, &name, None).map(|c| c.worktree)
+    create_workspace(git, place, project, &name, base).map(|c| c.worktree)
 }
 
 /// GIT-067: uncommitted work (submodule work included) stops the removal unless `force`; the
@@ -420,10 +443,15 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
 /// A fresh creature-named workspace in project `project_id`. The store stays locked while Git
 /// works so two launches at once never pick one name.
 pub fn create_fresh(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<Worktree, String> {
+    create_fresh_from(git, store, project_id, None)
+}
+
+/// As `create_fresh`, cut from `base` (a ref) when given, else the project's base (AUTO-005).
+pub fn create_fresh_from(git: &Git, store: &Mutex<Store>, project_id: &str, base: Option<&str>) -> Result<Worktree, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = find_project(&store, project_id)?;
     let place = place_for(&store, &project);
-    create_fresh_workspace(git, &store, &place, &load_projects(&store), &project)
+    create_fresh_workspace(git, &store, &place, &load_projects(&store), &project, base)
 }
 
 #[tauri::command]
@@ -459,8 +487,7 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     terminals.kill_under(Path::new(&path));
     remove_workspace(&git, &project, &path, force)?;
     let store = store.lock().map_err(|e| e.to_string())?;
-    set_origin(&store, &path, None)?;
-    set_name(&store, &path, None)
+    forget_workspace(&store, &path)
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
@@ -514,10 +541,55 @@ fn set_place(store: &Store, dir: &str, flat: bool) -> Result<PlaceInfo, String> 
     Ok(place_info(store))
 }
 
+/// SESS-025: the handoff note of one agent launched side by side: `<repo>/.kolux/handoffs/<name>.md`
+/// (COMPAT.md: one Markdown note per worktree, in the project's hidden Kolux folder, named after the
+/// worktree). It is made before the agent starts, holding the headings the agent keeps current; an
+/// existing note is never overwritten, so a relaunch keeps what the last agent wrote.
+// ponytail: the notes sit untracked in the main checkout; add `.kolux/` to the repo's ignore list
+// if they ever clutter its status.
+pub fn prepare_handoff(repo: &Path, name: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+    let file = safe_name(name).ok_or_else(|| format!("{name} cannot name a handoff note"))?;
+    let dir = repo.join(".kolux").join("handoffs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
+    let path = dir.join(format!("{file}.md"));
+    let note = format!("# Handoff: {name}\n\n## Files added\n\n## Files updated\n\n## Files removed\n\n## Left to do\n");
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut f) => f.write_all(note.as_bytes()).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("cannot write {}: {e}", path.display())),
+    }
+    Ok(path)
+}
+
+/// SESS-025: makes (or keeps) the handoff note `name` under `root` (the project's main checkout,
+/// or the chooser's folder outside any project); its path.
+#[tauri::command]
+pub fn handoff_note_prepare(root: String, name: String) -> Result<String, String> {
+    prepare_handoff(Path::new(&root), &name).map(|p| p.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn sess025_handoff_note_is_made_once_and_never_overwritten() {
+        let repo = temp("handoff");
+        let path = prepare_handoff(&repo, "gentle-squid").unwrap();
+        assert_eq!(path, repo.join(".kolux").join("handoffs").join("gentle-squid.md"));
+        let text = fs::read_to_string(&path).unwrap();
+        for heading in ["## Files added", "## Files updated", "## Files removed", "## Left to do"] {
+            assert!(text.contains(heading), "{heading} in {text}");
+        }
+        fs::write(&path, "kept").unwrap();
+        assert_eq!(prepare_handoff(&repo, "gentle-squid").unwrap(), path);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "kept");
+        let odd = prepare_handoff(&repo, "../escape").unwrap();
+        assert_eq!(odd.parent().unwrap(), repo.join(".kolux").join("handoffs"));
+        assert!(prepare_handoff(&repo, "///").is_err());
+    }
     use std::process::Command;
 
     fn temp(name: &str) -> PathBuf {
@@ -599,9 +671,17 @@ mod tests {
         let listed = list_workspaces(&git, &store, &project).unwrap();
         assert_eq!(listed.iter().find(|w| w.path == wt.path).unwrap().name.as_deref(), Some("Fix login \u{1F525}"), "the typed name is shown");
         assert_eq!(listed.iter().find(|w| w.path == again.path).unwrap().name, None);
+        // PROJ-047: a workspace made from another one is listed with that parent, and removing it
+        // forgets the link so a later workspace in the same folder starts at the top level.
+        set_parent(&store, &third.path, Some(&wt.path)).unwrap();
+        let listed = list_workspaces(&git, &store, &project).unwrap();
+        assert_eq!(listed.iter().find(|w| w.path == third.path).unwrap().parent.as_deref(), Some(wt.path.as_str()));
+        assert_eq!(listed.iter().find(|w| w.path == again.path).unwrap().parent, None);
         for w in [&again, &third] {
             remove_workspace(&git, &project, &w.path, false).unwrap();
+            forget_workspace(&store, &w.path).unwrap();
         }
+        assert!(store.get("workspaceParents").unwrap().unwrap() == "{}");
 
         assert!(remove_workspace(&git, &project, &project.path, false).unwrap_err().contains("main checkout"));
         remove_workspace(&git, &project, &wt.path, false).unwrap();
@@ -623,8 +703,8 @@ mod tests {
         let project = add_project(&git, &store, &repo).unwrap();
         let projects = load_projects(&store);
 
-        let first = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project).unwrap();
-        let second = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project).unwrap();
+        let first = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project, None).unwrap();
+        let second = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project, None).unwrap();
         let name_of = |w: &Worktree| Path::new(&w.path).file_name().unwrap().to_string_lossy().to_string();
         assert_ne!(name_of(&first), name_of(&second), "two launches never share a name");
         for w in [&first, &second] {
