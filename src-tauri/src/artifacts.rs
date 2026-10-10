@@ -14,6 +14,26 @@ const MAX_PAGE: u64 = 10 * 1024 * 1024;
 const MAX_ASSETS: usize = 100;
 const MAX_ASSET: u64 = 10 * 1024 * 1024;
 const MAX_TOTAL: u64 = 50 * 1024 * 1024;
+/// Script hosts whose files are fetched into an entry so it still runs offline (SKILL-035).
+const CDNS: [&str; 5] = ["https://cdnjs.cloudflare.com/", "https://cdn.jsdelivr.net/npm/", "https://unpkg.com/", "https://cdn.tailwindcss.com", "https://code.jquery.com/"];
+const MAX_SCRIPTS: usize = 16;
+const MAX_SCRIPT: usize = 5 * 1024 * 1024;
+
+/// Where a page came from: a file added by hand, or a Claude publish (one entry per URL).
+pub struct Origin {
+    pub origin: String,
+    pub source: &'static str,
+    pub project: Option<String>,
+    pub session: Option<String>,
+    /// When it was added or published, in milliseconds since 1970: an older publish never replaces a newer one.
+    pub at: u64,
+}
+
+impl Origin {
+    pub fn hand(src: &Path) -> Origin {
+        Origin { origin: src.to_string_lossy().into_owned(), source: "hand", project: None, session: None, at: now_ms() }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +41,7 @@ pub struct Entry {
     /// Stable for one origin, so adding or publishing the same page again refreshes its entry.
     pub id: String,
     pub title: String,
-    /// "hand" for Add artifact; capture from Claude sessions comes with SKILL-035.
+    /// "hand" for Add artifact, "claude" for a page a Claude session published.
     pub source: String,
     /// The file path (or, for a publish, the URL) the page came from: one entry per origin.
     pub origin: String,
@@ -59,7 +79,7 @@ fn id_of(origin: &str) -> String {
     format!("{h:016x}")
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
@@ -177,6 +197,66 @@ fn inside(base: &Path, rel: &str) -> Option<PathBuf> {
     Some(p)
 }
 
+/// The spans of script src values that point at an allow-listed CDN.
+pub fn cdn_scripts(html: &str) -> Vec<(usize, usize)> {
+    let low = html.to_ascii_lowercase();
+    let b = html.as_bytes();
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(k) = low[from..].find("<script") {
+        let open = from + k;
+        let close = low[open..].find('>').map_or(low.len(), |c| open + c);
+        from = open + 7;
+        let Some(at) = (open..close.saturating_sub(4)).find(|&i| b[i].is_ascii_whitespace() && low[i + 1..].starts_with("src=")) else { continue };
+        let mut i = at + 5;
+        let q = b.get(i).copied().filter(|&c| c == b'"' || c == b'\'');
+        if q.is_some() {
+            i += 1;
+        }
+        let start = i;
+        while i < close && (if let Some(q) = q { b[i] != q } else { !b[i].is_ascii_whitespace() }) {
+            i += 1;
+        }
+        if CDNS.iter().any(|c| low[start..i].starts_with(c)) {
+            out.push((start, i));
+        }
+    }
+    out
+}
+
+/// Copies of the page's CDN scripts under `cdn/`, and the page pointing at them; None when none
+/// was fetched. A script that cannot be fetched keeps its original address.
+fn vendor_scripts(html: &str, tmp: &Path, fetch: &dyn Fn(&str) -> Option<Vec<u8>>, total: &mut u64) -> Option<String> {
+    let mut page = html.to_string();
+    let mut fetched = false;
+    for (n, (start, end)) in cdn_scripts(html).into_iter().take(MAX_SCRIPTS).enumerate().collect::<Vec<_>>().into_iter().rev() {
+        let Some(body) = fetch(&unescape(&html[start..end])).filter(|b| b.len() <= MAX_SCRIPT) else { continue };
+        if *total + body.len() as u64 > MAX_TOTAL || fs::create_dir_all(tmp.join("cdn")).is_err() || fs::write(tmp.join("cdn").join(format!("{n}.js")), &body).is_err() {
+            continue;
+        }
+        *total += body.len() as u64;
+        page.replace_range(start..end, &format!("cdn/{n}.js"));
+        fetched = true;
+    }
+    fetched.then_some(page)
+}
+
+/// Fetches one CDN script for an entry, within the size cap; None on any failure.
+pub fn fetch_script(url: &str) -> Option<Vec<u8>> {
+    if !CDNS.iter().any(|c| url.starts_with(c)) {
+        return None;
+    }
+    tauri::async_runtime::block_on(async {
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(20)).build().ok()?;
+        let r = client.get(url).send().await.ok()?;
+        if !r.status().is_success() || r.content_length().is_some_and(|n| n > MAX_SCRIPT as u64) {
+            return None;
+        }
+        let body = r.bytes().await.ok()?;
+        (body.len() <= MAX_SCRIPT).then(|| body.to_vec())
+    })
+}
+
 impl Library {
     pub fn new(dir: PathBuf) -> Library {
         Library { dir, lock: Mutex::new(()) }
@@ -205,14 +285,20 @@ impl Library {
     }
 
     /// Stores a page and the files it points to by relative path inside its own folder, under the
-    /// caps; a page on a network share gets an "unavailable" entry without being read. The newest
-    /// store of an origin replaces the old one.
-    pub fn add(&self, src: &Path, source: &str, project: Option<String>, session: Option<String>) -> Result<Entry, String> {
-        let origin = src.to_string_lossy().into_owned();
-        let id = id_of(&origin);
+    /// caps, plus copies of the scripts it loads from the allow-listed CDNs (`fetch` gets one).
+    /// A page on a network share gets an "unavailable" entry without being read, and a path this
+    /// machine cannot read (a WSL or SSH machine's) a "remote" one. The newest store of an origin
+    /// replaces the old one; an older one is ignored.
+    pub fn add(&self, src: &Path, from: Origin, fetch: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Entry, String> {
+        let id = id_of(&from.origin);
+        if let Some(newer) = self.read().into_iter().find(|e| e.id == id && e.added > from.at) {
+            return Ok(newer);
+        }
         let name = file_name(src);
-        let mut entry = Entry { id: id.clone(), title: name.clone(), source: source.into(), origin, project, session, added: now_ms(), size: 0, page: name.clone(), state: "unavailable".into() };
-        if !on_network_share(src) {
+        let mut entry = Entry { id: id.clone(), title: name.clone(), source: from.source.into(), origin: from.origin, project: from.project, session: from.session, added: from.at, size: 0, page: name.clone(), state: "unavailable".into() };
+        if !src.is_absolute() {
+            entry.state = "remote".into();
+        } else if !on_network_share(src) {
             let len = fs::metadata(src).map_err(|e| format!("could not read {name}: {e}"))?.len();
             if len > MAX_PAGE {
                 return Err(format!("{name} is larger than 10 MB"));
@@ -225,8 +311,10 @@ impl Library {
             let tmp = self.dir.join(format!(".new-{id}"));
             let _ = fs::remove_dir_all(&tmp);
             fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-            fs::write(tmp.join(&name), &html).map_err(|e| e.to_string())?;
-            entry.size = self.copy_assets(src, &text, &name, &tmp, html.len() as u64);
+            let mut size = self.copy_assets(src, &text, &name, &tmp, html.len() as u64);
+            let page = vendor_scripts(&text, &tmp, fetch, &mut size);
+            fs::write(tmp.join(&name), page.as_ref().map_or(&html[..], |p| p.as_bytes())).map_err(|e| e.to_string())?;
+            entry.size = size;
             let dest = self.dir.join(&id);
             let _ = fs::remove_dir_all(&dest);
             fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
@@ -333,7 +421,8 @@ pub fn serve(lib: &Library, req: &tauri::http::Request<Vec<u8>>) -> tauri::http:
         body.extend_from_slice(link_script(&base).as_bytes());
     }
     let only = format!("{ORIGIN}{base}");
-    let csp = format!("default-src {only} 'unsafe-inline' 'unsafe-eval' data: blob:; form-action 'none'");
+    let cdns = CDNS.map(|c| c.trim_end_matches('/')).join(" ");
+    let csp = format!("default-src {only} 'unsafe-inline' 'unsafe-eval' data: blob:; script-src {only} 'unsafe-inline' 'unsafe-eval' data: blob: {cdns}; form-action 'none'");
     Response::builder().header("Content-Type", kind).header("Content-Security-Policy", csp).header("Access-Control-Allow-Origin", "*").body(body).unwrap()
 }
 
@@ -345,7 +434,7 @@ pub fn artifacts_list(lib: tauri::State<'_, Library>) -> Vec<Listed> {
 #[tauri::command]
 pub async fn artifact_add(app: tauri::AppHandle, path: String) -> Result<Entry, String> {
     use tauri::Manager;
-    tauri::async_runtime::spawn_blocking(move || app.state::<Library>().add(Path::new(&path), "hand", None, None)).await.map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || app.state::<Library>().add(Path::new(&path), Origin::hand(Path::new(&path)), &fetch_script)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -416,23 +505,62 @@ mod tests {
         fs::write(site.join("img").join("a.png"), "png").unwrap();
         fs::write(site.join("page.html"), "<title>One</title><img src=\"img/a.png\"><img src=\"../secret.txt\">").unwrap();
         let lib = Library::new(root.join("lib"));
-        let e = lib.add(&site.join("page.html"), "hand", None, None).unwrap();
+        let e = lib.add(&site.join("page.html"), Origin::hand(&site.join("page.html")), &|_| None).unwrap();
         assert_eq!((e.title.as_str(), e.state.as_str()), ("One", "ok"));
         assert!(lib.file(&format!("/{}/img/a.png", e.id)).is_some());
         assert!(lib.file(&format!("/{}/../secret.txt", e.id)).is_none());
         assert!(!root.join("lib").join(&e.id).join("secret.txt").exists());
         assert!(fs::read_dir(root.join("lib").join(&e.id)).unwrap().count() == 2);
         fs::write(site.join("page.html"), "<title>Two</title>").unwrap();
-        let again = lib.add(&site.join("page.html"), "hand", None, None).unwrap();
+        let again = lib.add(&site.join("page.html"), Origin::hand(&site.join("page.html")), &|_| None).unwrap();
         assert_eq!(again.id, e.id);
         let list = lib.list();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].entry.title, "Two");
         assert!(!root.join("lib").join(&e.id).join("img").exists());
-        assert!(lib.add(&site.join("missing.html"), "hand", None, None).is_err());
+        assert!(lib.add(&site.join("missing.html"), Origin::hand(&site.join("missing.html")), &|_| None).is_err());
         assert_eq!(lib.list().len(), 1);
         lib.remove(&e.id).unwrap();
         assert!(lib.list().is_empty() && !root.join("lib").join(&e.id).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cdn_scripts_are_kept_offline_and_a_failed_fetch_keeps_the_address() {
+        let html = "<script src=\"https://cdn.jsdelivr.net/npm/a@1/a.js\"></script><script src='https://evil.example/x.js'></script><script defer src=https://unpkg.com/b@2></script><script>var s='src=https://unpkg.com/c'</script><script src=\"https://cdnjs.cloudflare.com/ajax/libs/gone/1/g.js\"></script>";
+        let spans: Vec<&str> = cdn_scripts(html).into_iter().map(|(a, b)| &html[a..b]).collect();
+        assert_eq!(spans, ["https://cdn.jsdelivr.net/npm/a@1/a.js", "https://unpkg.com/b@2", "https://cdnjs.cloudflare.com/ajax/libs/gone/1/g.js"]);
+        let root = temp_dir("cdn");
+        let fetch = |u: &str| (!u.contains("gone")).then(|| format!("/* {u} */").into_bytes());
+        let mut total = 0;
+        let page = vendor_scripts(html, &root, &fetch, &mut total).unwrap();
+        assert!(page.contains("src=\"cdn/0.js\"") && page.contains("src=cdn/1.js>"), "{page}");
+        assert!(page.contains("https://cdnjs.cloudflare.com/ajax/libs/gone/1/g.js") && page.contains("https://evil.example/x.js"));
+        assert_eq!(fs::read_to_string(root.join("cdn").join("1.js")).unwrap(), "/* https://unpkg.com/b@2 */");
+        assert!(vendor_scripts("<script src=\"https://cdn.jsdelivr.net/npm/x\"></script>", &root, &|_| None, &mut total).is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn one_entry_per_publish_url_newest_wins_and_remote_paths_are_not_read() {
+        let root = temp_dir("publish");
+        let page = root.join("p.html");
+        let lib = Library::new(root.join("lib"));
+        let from = |at: u64| Origin { origin: "https://claude.ai/artifact/abc".into(), source: "claude", project: Some("repo".into()), session: Some("s1".into()), at };
+        fs::write(&page, "<title>First</title>").unwrap();
+        lib.add(&page, from(1000), &|_| None).unwrap();
+        fs::write(&page, "<title>Second</title>").unwrap();
+        lib.add(&page, from(2000), &|_| None).unwrap();
+        fs::write(&page, "<title>Replayed</title>").unwrap();
+        lib.add(&page, from(1500), &|_| None).unwrap();
+        let list = lib.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].entry.title.as_str(), list[0].entry.source.as_str(), list[0].entry.added), ("Second", "claude", 2000));
+        let remote = if cfg!(windows) { "/home/me/site/page.html" } else { "C:\\site\\page.html" };
+        let mut o = from(3000);
+        o.origin = "https://claude.ai/artifact/remote".into();
+        let e = lib.add(Path::new(remote), o, &|_| panic!("a remote page is never read")).unwrap();
+        assert_eq!((e.state.as_str(), e.size), ("remote", 0));
         let _ = fs::remove_dir_all(&root);
     }
 }

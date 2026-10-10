@@ -1,5 +1,6 @@
 mod agents;
 mod artifacts;
+mod capture;
 mod browser;
 pub mod cli;
 mod creatures;
@@ -59,6 +60,8 @@ pub fn run() {
             app.manage(Mutex::new(store));
             app.manage(Terminals::default());
             app.manage(artifacts::Library::new(dir.join("artifacts")));
+            // Pages Claude sessions publish are kept in the library as they happen (SKILL-035).
+            capture::start(app.handle().clone());
             app.manage(update::Updates::default());
             // Git is checked once here; every project and workspace action runs through it.
             app.manage(git::Git::detect()?);

@@ -4,6 +4,7 @@
 // entry comes back here as a message and opens in the system browser.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export type Artifact = {
@@ -51,6 +52,9 @@ export default function ArtifactsPage({ onToast }: Props) {
   const refresh = () => invoke<Artifact[]>("artifacts_list").then(setList, (e) => onToast(`Could not read the library: ${e}`));
   useEffect(() => {
     void refresh();
+    // A Claude session published a page (SKILL-035).
+    const off = listen("artifacts-changed", () => void refresh());
+    return () => void off.then((f) => f());
   }, []);
 
   // A link clicked inside the viewer: only messages from our own frame count.
@@ -113,7 +117,7 @@ export default function ArtifactsPage({ onToast }: Props) {
                 {a.state === "unavailable" && <span className="preview-tag">Unavailable</span>}
               </div>
               <div className="art-meta">
-                {[a.project ?? (a.source === "hand" ? "Added by hand" : "Claude"), a.session, new Date(a.added).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }), sizeText(a.size)].filter(Boolean).join(" · ")}
+                {[a.project ?? (a.source === "hand" ? "Added by hand" : "Claude"), a.session && "session " + a.session.slice(0, 8), new Date(a.added).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }), sizeText(a.size)].filter(Boolean).join(" · ")}
               </div>
               <button
                 className="ib art-remove"
@@ -138,7 +142,8 @@ export default function ArtifactsPage({ onToast }: Props) {
           <>
             {loaded !== current.id && <div className="art-loading menu-hint">Loading…</div>}
             <iframe
-              key={current.id}
+              // A republished page has a newer time: show the new version.
+              key={`${current.id}-${current.added}`}
               ref={frame}
               name={`artifact-${current.id}`}
               title={current.title}

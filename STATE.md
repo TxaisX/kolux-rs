@@ -281,6 +281,10 @@ T-095-a adds the Artifacts page (SKILL-036, VIEW-012). The sidebar's Artifacts b
 saved web pages beside a viewer. Add artifact copies a page and its pictures into Kolux so it opens offline;
 links inside a page open in the system browser. Automatic capture of pages Claude publishes is T-095-b.
 
+T-095-b fills the Artifacts page by itself (SKILL-035). Every page a Claude Code session publishes with
+the Artifact tool lands there within a couple of seconds, labelled with its project and session, and opens
+offline, scripts from the usual CDNs included. Publishing the same page again updates its one entry.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -317,6 +321,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-09 · [release] T-094-b2 · Mod+C / Mod+V copy into the highlighted folder, with no cut; a taken name becomes "name copy"; drags and desktop drops land in the folder under the pointer, a file row meaning its folder and empty space the root; drags use pointer events (DT-R19).
 - 2026-10-09 · [release] T-094-c · Quick Open ranks name-prefix, name, letters-in-name, folder, letters-in-path; 50 results, list capped at 200,000; the markdown and changed-file pickers rank and show paths the same way (DT-R20).
 - 2026-10-09 · [release] T-095-a · Artifacts are stored per page path under the app data folder with capped assets from the page's own folder; the viewer is a sandboxed frame on a kolux-artifact scheme limited to the entry's files; outside links go to the system browser (DT-R21).
+- 2026-10-09 · [release] T-095-b · Claude publishes are read from session transcripts only, from each file's end at start, with publishes over 60 s older than start ignored as replay; one entry per URL, newest wins; CDN scripts from Claude's own allow-list are stored offline; paths this machine cannot read are remote (DT-R22).
 - 2026-10-07 · Task size: tasks group neighbouring cards of one tier, theme and area, at most 4 P0
   cards, 5 P1, 6 P2 or 5 H cards per task. That gives 338 tasks; at 6 passes a day the plan runs
   about 57 days if every task takes one pass. A task that proves too big is split in place.
@@ -613,6 +618,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [release] T-095-b · done: with a made-up Claude config folder, a publish written before start was ignored and a new one turned up within a poll as "Launch Plan · repo · session 7c371ba6" with its image and an offline copy of its jsdelivr script (the failed cdnjs one kept its address, a file outside the folder was not copied); a Bash look-alike, prose and a failed publish were ignored; publishing again kept one entry and refreshed the open viewer to v3; a replayed old publish in a resumed file was ignored; a subagent's publish was kept; a network-share page was listed Unavailable and a WSL path Remote · evidence/T-095-b-*.png, T-095-b-live.txt
 - 2026-10-09 · [release] T-095-a · done: two pages added through the real Windows file dialog listed newest first and opened in the viewer offline with their stored image; a file outside the page's folder was not copied and the frame could not fetch it or another entry's files; a link to example.com opened in Chrome while a link outside the entry did nothing; "sales quarterly" hid the other row and "sales quarterly chart" showed the no-match message; an 11 MB page gave an error toast and left the list alone; a network-share page was listed Unavailable without being read; removing the open entry closed the preview and deleted its stored folder · evidence/T-095-a-*.png, T-095-a-live.txt
 - 2026-10-09 · [release] T-094-c · done: Ctrl+P then "panel" listed panel.tsx and sidepanel.md before ui/panel/util.ts and index.ts; the hover tooltip moved with the pointer across four points and showed the full path with the name in bold; Enter opened panel.tsx; with no ripgrep on PATH the dialog said how to install it, offered Retry and listed git's files; with a portable ripgrep it left out .next, .vscode and a nested worktree and put mod9 before mod10; 100,000 files listed in about 0.7 s on a debug build and ranked in 15-18 ms a keystroke · evidence/T-094-c-*.png, T-094-c-live.txt
 - 2026-10-09 · [release] T-094-b2 · done: Ctrl+C then Ctrl+V copied a file into another folder and, pasted again where the name was taken, as "taken copy.txt" with the original untouched; dragging a folder together with one of its own files moved only the folder, and Ctrl+Z moved it back still open; holding a drag at the tree's bottom edge scrolled it 792 px in 2 s; a folder dropped in from the desktop onto a root that already held one of that name arrived as "lib copy" with its contents, and a junction in the same drop was refused; undo sent the dropped copy to the trash. The drop was driven by emitting Tauri's own drag events (a real desktop drag could not be aimed at this window from here) · evidence/T-094-b2-*.png, T-094-b2-live.txt
