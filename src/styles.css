@@ -413,3 +413,14 @@ input { font: inherit; }
 .composer-advanced { display: flex; flex-direction: column; gap: 6px; }
 .field.multi.grow { field-sizing: content; max-height: 160px; resize: none; }
 .composer .btn-row { flex-wrap: wrap; align-items: center; }
+/* VIEW-068: the branch summary at the top of Source Control. */
+.scm-summary { margin: 8px 8px 0; padding: 6px 8px; border: 1px solid var(--line-subtle); border-radius: 8px; font-size: 12px; color: var(--fg-muted); }
+.scm-summary summary { display: flex; align-items: center; gap: 8px; cursor: pointer; min-width: 0; }
+.scm-summary .branch { color: var(--fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.scm-summary .ab { white-space: nowrap; }
+.scm-summary .lines { margin-left: auto; white-space: nowrap; font: 11.5px var(--mono-font); }
+.scm-summary .add { color: #73c991; }
+.scm-summary .del { color: #f0a07a; }
+.scm-sum-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 3px 0 0 16px; font: 11.5px var(--mono-font); }
+.scm-sum-row span:first-child { font-family: var(--ui-font); }
+.scm-summary .check { display: flex; gap: 6px; align-items: center; margin-top: 6px; }

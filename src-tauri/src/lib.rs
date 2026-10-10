@@ -128,7 +128,7 @@ pub fn run() {
             agents::agent_list,
             agents::agent_start_line,
             trust::trust_folders_cmd,
-            scm::scm_status,
+            scm::scm_status, scm::scm_summary,
             scm::scm_stage,
             scm::scm_commit, scm::scm_remote,
             keybindings::keybindings_read,

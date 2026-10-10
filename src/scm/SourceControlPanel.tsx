@@ -5,7 +5,8 @@
 // the next step, a remote menu whose labels carry counts and whose disabled items say why, and a
 // notice when an action fails or a hook refuses a commit, with a Fix with AI action. The draft
 // message is the window's, keyed by worktree, so it survives closing the panel and switching
-// workspaces. Every call names the worktree.
+// workspaces. Every call names the worktree. VIEW-068: a branch summary on top (ahead / behind
+// the base and the lines changed, split into source, tests and generated).
 // ponytail: the list refreshes after each action and every 4 s while the panel is open; the
 // watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033), the bulk
 // bar for several selected rows with T-018-c, and the pull-request step (create, merged, loading)
@@ -13,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
-import { canCommit, changeCount, isCommitShortcut, nextStep, remoteItems, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status } from "./model";
+import { canCommit, changeCount, grouped, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -23,11 +24,16 @@ type Props = {
   onClose: () => void;
   /** GIT-004: starts an agent primed with what git and its hooks printed. */
   onFix: (output: string) => void;
+  /** VIEW-068: the base pinned for the workspace's project, which the summary measures against. */
+  pinnedBase: string | null;
+  /** VIEW-068: the off-by-default setting to measure the summary against the upstream instead. */
+  againstUpstream: boolean;
+  onAgainstUpstream: (on: boolean) => void;
 };
 
 type Failure = { title: string; output: string };
 
-export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix }: Props) {
+export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream }: Props) {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -57,6 +63,22 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     const timer = window.setInterval(() => void load(), 4000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  // VIEW-068: the branch summary is measured while the panel is open, when HEAD moves and at
+  // least every 30 s; the last one stays on screen while the next is worked out.
+  const [summary, setSummary] = useState<Summary | null>(null);
+  useEffect(() => setSummary(null), [dir]);
+  const head = status?.head ?? null;
+  useEffect(() => {
+    if (dir === null) return;
+    const measure = () =>
+      void invoke<Summary>("scm_summary", { worktree: dir, pinned: pinnedBase, upstream: againstUpstream })
+        .then(setSummary)
+        .catch(() => setSummary(null));
+    measure();
+    const timer = window.setInterval(measure, 30000);
+    return () => window.clearInterval(timer);
+  }, [dir, head, pinnedBase, againstUpstream]);
 
   /** Runs one back-end call with the busy flag held, then reloads. */
   const guarded = async (work: () => Promise<void>) => {
@@ -165,6 +187,30 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
           <div className="sb-hint">Open a workspace to see its changes.</div>
         ) : (
           <>
+            {summary && (
+              <details className="scm-summary" data-summary>
+                <summary aria-label={summaryLabel(status?.branch ?? null, summary)} title={`against ${summary.against}`}>
+                  <span className="branch">{status?.branch ?? "Detached HEAD"}</span>
+                  <span className="ab">
+                    ↑{summary.ahead} ↓{summary.behind} {summary.against}
+                  </span>
+                  <span className="lines">
+                    <span className="add">+{grouped(summaryTotal(summary).added)}</span> <span className="del">−{grouped(summaryTotal(summary).removed)}</span>
+                  </span>
+                </summary>
+                {summaryRows(summary).map((r) => (
+                  <div key={r.label} className="scm-sum-row" data-row={r.label}>
+                    <span>{r.label}</span>
+                    <span className="add">+{grouped(r.added)}</span>
+                    <span className="del">−{grouped(r.removed)}</span>
+                  </div>
+                ))}
+                <label className="check">
+                  <input type="checkbox" aria-label="compare with the upstream" checked={againstUpstream} onChange={(e) => onAgainstUpstream(e.target.checked)} />
+                  Compare with the upstream{pinnedBase ? ` (the pinned base ${pinnedBase} wins)` : ""}
+                </label>
+              </details>
+            )}
             <div className="scm-commit">
               <textarea className="field multi" placeholder={status?.branch ? `Message (Ctrl+Enter to commit on ${status.branch})` : "Message (Ctrl+Enter to commit)"} value={draft} onChange={(e) => onDraft(e.target.value)} />
               <div className="scm-main">

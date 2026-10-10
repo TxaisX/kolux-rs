@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, emptyStatus, isCommitShortcut, nextStep, remoteItems, type Status } from "./model";
+import { canCommit, emptyStatus, grouped, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 
@@ -61,4 +61,30 @@ test("the remote menu carries counts and gives every disabled item its reason", 
   expect(by({ ...pushed, branch: null }).publish.reason).toBe("No branch checked out");
   expect(by({ ...pushed, branch: "main", upstream: "origin/main" }).rebase.reason).toBe("This is the base branch");
   expect(by(null).push.reason).toBe("Loading");
+});
+
+const sum = (over: Partial<Summary> = {}): Summary => ({ against: "main", ahead: 1, behind: 0, source: { added: 10, removed: 0 }, tests: { added: 0, removed: 0 }, generated: { added: 0, removed: 0 }, ...over });
+
+test("VIEW-068: the branch summary totals its rows, in full with grouped digits", () => {
+  expect(summaryTotal(sum())).toEqual({ added: 10, removed: 0 });
+  expect(grouped(8312)).toBe("8,312");
+  expect(grouped(1234567)).toBe("1,234,567");
+  const big = sum({ source: { added: 8312, removed: 40 }, tests: { added: 1200, removed: 3 }, generated: { added: 1500, removed: 0 } });
+  expect(summaryTotal(big)).toEqual({ added: 11012, removed: 43 });
+  expect(summaryRows(big)).toEqual([
+    { label: "Source", added: 8312, removed: 40 },
+    { label: "Tests", added: 1200, removed: 3 },
+    { label: "Generated", added: 1500, removed: 0 },
+  ]);
+});
+
+test("VIEW-068: without a test count the rest is non-generated, and an empty generated row is left out", () => {
+  expect(summaryRows(sum())).toEqual([{ label: "Non-generated", added: 10, removed: 0 }]);
+  expect(summaryRows(sum({ generated: { added: 3, removed: 1 } })).map((r) => r.label)).toEqual(["Non-generated", "Generated"]);
+  expect(summaryRows(sum({ tests: { added: 2, removed: 0 } })).map((r) => r.label)).toEqual(["Source", "Tests"]);
+});
+
+test("VIEW-068: the screen-reader label carries the split", () => {
+  const label = summaryLabel("feat", sum({ ahead: 2, behind: 1, tests: { added: 1200, removed: 3 } }));
+  expect(label).toBe("feat, 2 ahead and 1 behind main, 1,210 lines added and 3 removed: source 10 added 0 removed, tests 1,200 added 3 removed");
 });

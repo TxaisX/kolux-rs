@@ -12,13 +12,15 @@ export type Status = {
   /** GIT-006: after a rebase, the upstream holds only patches HEAD already has. */
   rewritten: boolean;
   base: string | null;
+  /** The commit HEAD points at; VIEW-068 measures the branch again when it moves. */
+  head: string | null;
   staged: Change[];
   changed: Change[];
   untracked: Change[];
   conflicts: Change[];
 };
 
-export const emptyStatus: Status = { branch: null, upstream: null, ahead: 0, behind: 0, rewritten: false, base: null, staged: [], changed: [], untracked: [], conflicts: [] };
+export const emptyStatus: Status = { branch: null, upstream: null, ahead: 0, behind: 0, rewritten: false, base: null, head: null, staged: [], changed: [], untracked: [], conflicts: [] };
 
 /** What a commit attempt came to (GIT-004): `id` when it worked, else git's words and whether a hook refused. */
 export type CommitOutcome = { id: string | null; blocked: boolean; output: string };
@@ -75,6 +77,36 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
     { id: "publish", label: "Publish branch", reason: noBranch ?? (st.upstream !== null ? "Already published" : null) },
     { id: "rebase", label: st.base ? `Rebase from ${st.base}` : "Rebase from base", reason: noBranch ?? (st.base === null ? "No base branch" : onBase ? "This is the base branch" : null) },
   ];
+};
+
+/** VIEW-068: lines added and removed in one row of the branch summary. */
+export type Lines = { added: number; removed: number };
+
+/** VIEW-068: the branch against `against` (the pinned base, the upstream or the default branch). */
+export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines };
+
+/** The settings key of the off-by-default choice to measure against the branch's upstream. */
+export const SUMMARY_UPSTREAM_KEY = "scmSummaryUpstream";
+
+/** Full numbers with grouped digits, never 8.3k. */
+export const grouped = (n: number): string => n.toLocaleString("en-US");
+
+export const summaryTotal = (s: Summary): Lines => ({ added: s.source.added + s.tests.added + s.generated.added, removed: s.source.removed + s.tests.removed + s.generated.removed });
+
+const empty = (l: Lines) => l.added + l.removed === 0;
+
+/** The rows that add up to the total: source, tests and generated; with no test lines the rest is
+ * "Non-generated", and an empty generated row is left out. */
+export const summaryRows = (s: Summary): (Lines & { label: string })[] => [
+  ...(empty(s.tests) ? [{ label: "Non-generated", ...s.source }] : [{ label: "Source", ...s.source }, { label: "Tests", ...s.tests }]),
+  ...(empty(s.generated) ? [] : [{ label: "Generated", ...s.generated }]),
+];
+
+/** What a screen reader hears on the summary, collapsed or not: the totals and the split. */
+export const summaryLabel = (branch: string | null, s: Summary): string => {
+  const t = summaryTotal(s);
+  const split = summaryRows(s).map((r) => `${r.label.toLowerCase()} ${grouped(r.added)} added ${grouped(r.removed)} removed`).join(", ");
+  return `${branch ?? "Detached HEAD"}, ${s.ahead} ahead and ${s.behind} behind ${s.against}, ${grouped(t.added)} line${t.added === 1 ? "" : "s"} added and ${grouped(t.removed)} removed: ${split}`;
 };
 
 /** What a remote action came to (GIT-007). */

@@ -204,7 +204,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-109-b · The GitHub half of the composer (the rest of the name-source and Create cards on T-109-a): issue and pull-request suggestions in the name field from the chosen project's own repository, a pasted GitHub link resolves to its item and seeds the name, overlong lookup text is refused, Create more drops the linked item, and switching project drops a GitHub item of the old repository but keeps a tracker link bound to none
 - [ ] T-109-c · The rest of the Create card on T-109-a: a failed worktree creation is retried according to policy, and cancelling mid-submit leaves no half-built workspace
 - [ ] T-110 · STAT-039 The agent's first real work names a new worktree · STAT-055 [compat] Setup and archive scripts for worktrees
-- [ ] T-111 · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette · VIEW-048 [compat] Delete-workspace and rename-tab shortcuts · VIEW-068 Branch summary against the base branch
+- [x] T-111-a · VIEW-068 Branch summary against the base branch
+- [ ] T-111-b · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette · VIEW-048 [compat] Delete-workspace and rename-tab shortcuts (needs the worktree palette on T-098, a tab-rename field, and workspace delete on T-055)
 - [ ] T-112 · VIEW-076 Folder workspaces: attached worktrees and PR checks · VIEW-112 [compat] Import setup scripts from other tools' configs
 - [ ] T-113 · ACCT-056 A failed scan never drops worktrees from the list
 - [ ] T-114 · AUTO-010 Choose whether per-run worktrees run the project setup
