@@ -1,4 +1,4 @@
-//! Orchestration mail (ORCH-001, ORCH-002, ORCH-003, ORCH-005): Runs, which pane is tied to which
+//! Orchestration mail and tasks (ORCH-001..006, ORCH-010, ORCH-011, ORCH-013): Runs, which pane is tied to which
 //! Run, typed messages, and the batches `check` hands out until they are acknowledged. All of it
 //! is one JSON value in the store; the command line reaches it through `cli::dispatch`.
 
@@ -91,7 +91,12 @@ fn finished(d: &Value) -> bool {
     FINISHED.contains(&d["status"].as_str().unwrap_or_default())
 }
 
+/// The handle of a dispatch's terminal, while it can still be that terminal: handles count up
+/// again from term-1 when Kolux restarts, so one stamped by an earlier run of the app is no one.
 fn terminal_of(d: &Value) -> Option<String> {
+    if d["runtime"].as_u64().is_some_and(|r| r != u64::from(std::process::id())) {
+        return None;
+    }
     d["terminal"].as_u64().map(|t| crate::terminal::handle_of(t as u32))
 }
 
@@ -304,6 +309,8 @@ impl Mail {
         if let Some(o) = v.as_object_mut() {
             o.extend(m.extras.clone());
         }
+        // ORCH-006: every delivered message carries the command that answers it.
+        v["reply"] = json!(format!("kolux orchestration reply --id {} --body \"<your answer>\"", m.id));
         v
     }
 
@@ -347,6 +354,157 @@ impl Mail {
         let mode = format!("{mode:?}").to_lowercase();
         Ok(json!({ "deliveryId": delivery, "messages": shown, "terminal": reader, "mailboxes": boxes, "mode": mode, "epoch": self.epoch(pane), "acknowledged": ack }))
     }
+}
+
+/// ORCH-006: bodies longer than this are cut in `inbox` unless `--full` is given.
+const SHORT_BODY: usize = 120;
+/// ORCH-010: a task text bigger than this is turned away before anything is touched.
+pub const SPEC_MAX: usize = 4 * 1024 * 1024;
+/// ORCH-011: the compact form cuts each task text here.
+const BRIEF_CHARS: usize = 160;
+pub const TASK_STATES: &[&str] = &["pending", "ready", "dispatched", "completed", "failed", "blocked"];
+
+/// `s` cut to at most `n` characters, an ellipsis marking the cut.
+fn cut(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}\u{2026}", s.chars().take(n - 1).collect::<String>())
+    }
+}
+
+impl Mail {
+    /// ORCH-006: the answer goes to whoever sent `id`, on the thread of the message it answers.
+    pub fn reply(&mut self, from: &str, id: &str, body: &str, run: Option<&str>, now: u64) -> Result<Value, Fail> {
+        let m = self.messages.iter().find(|m| m.id == id).cloned().ok_or_else(|| Fail::new("not_found", format!("no message {id}")))?;
+        if let Some(n) = run.filter(|n| m.run.as_deref() != Some(*n)) {
+            return Err(Fail::new("run_mismatch", format!("{id} does not belong to the Run named with --run ({n})")));
+        }
+        let thread = m.extras.get("threadId").and_then(Value::as_str).unwrap_or(&m.id).to_string();
+        let to = format!("term:{}", m.from);
+        let subject = if m.subject.starts_with("Re: ") { m.subject.clone() } else { format!("Re: {}", m.subject) };
+        let mut extras = Map::new();
+        extras.insert("threadId".into(), json!(thread));
+        extras.insert("inReplyTo".into(), json!(m.id));
+        let new = self.next("msg");
+        self.messages.push(Message { id: new.clone(), to: to.clone(), run: m.run.clone(), from: from.to_string(), subject, body: body.to_string(), kind: "status".into(), priority: "normal".into(), extras, at: now });
+        Ok(json!({ "messageIds": [new], "to": to, "runId": m.run, "threadId": thread }))
+    }
+
+    /// ORCH-006: the newest mail in `boxes`, newest first, bodies cut unless `full`; it only reads.
+    pub fn inbox(&self, reader: &str, boxes: &[String], limit: usize, full: bool) -> Value {
+        let shown: Vec<Value> = self
+            .messages
+            .iter()
+            .rev()
+            .filter(|m| boxes.contains(&m.to))
+            .take(limit)
+            .map(|m| {
+                let mut v = Self::view(m);
+                if !full {
+                    v["body"] = json!(cut(&m.body, SHORT_BODY));
+                }
+                v
+            })
+            .collect();
+        json!({ "terminal": reader, "mailboxes": boxes, "messages": shown, "full": full })
+    }
+}
+
+// ---------------------------------------------------------------- tasks (ORCH-010, ORCH-011, ORCH-013)
+
+fn status(t: &Value) -> &str {
+    t["status"].as_str().unwrap_or_default()
+}
+
+/// ORCH-010: every pending task whose dependencies have all completed turns ready.
+pub fn promote(tasks: &mut [Value]) {
+    let done: std::collections::HashSet<String> = tasks.iter().filter(|t| status(t) == "completed").filter_map(|t| t["id"].as_str().map(str::to_string)).collect();
+    for t in tasks.iter_mut() {
+        let free = t["deps"].as_array().into_iter().flatten().all(|d| d.as_str().is_some_and(|d| done.contains(d)));
+        if status(t) == "pending" && free {
+            t["status"] = json!("ready");
+        }
+    }
+}
+
+/// ORCH-010: a new task in `run`; ready at once unless it waits on unfinished tasks. Bad or
+/// unknown dependencies, an unknown parent and an oversized text are refused with nothing made.
+pub fn task_create(tasks: &mut Vec<Value>, a: &Value, run: Option<String>, now: u64) -> Result<Value, Fail> {
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let spec = a["spec"].as_str().filter(|s| !s.trim().is_empty()).ok_or_else(|| args("--spec is required"))?;
+    if spec.len() > SPEC_MAX {
+        return Err(Fail::new("too_large", format!("the task text is {} bytes; Kolux stores at most {SPEC_MAX}", spec.len())));
+    }
+    let deps: Vec<String> = match text("deps") {
+        None => Vec::new(),
+        Some(d) => serde_json::from_str(&d).map_err(|_| args("--deps takes a JSON list of task ids, like [\"task-1\"]"))?,
+    };
+    let known = |id: &str| tasks.iter().any(|t| t["id"] == id);
+    if let Some(bad) = deps.iter().find(|d| !known(d)) {
+        return Err(Fail::new("not_found", format!("no task {bad} to wait on")));
+    }
+    if let Some(p) = text("parent").filter(|p| !known(p)) {
+        return Err(Fail::new("not_found", format!("no parent task {p}")));
+    }
+    let id = crate::cli::next_id(tasks, "task-");
+    tasks.push(json!({ "id": id, "runId": run, "title": text("taskTitle"), "displayName": text("displayName"), "spec": spec, "status": "pending", "deps": deps, "parent": text("parent"), "created": now }));
+    promote(tasks);
+    Ok(tasks.last().cloned().unwrap_or_default())
+}
+
+/// ORCH-011: the tasks of `run` (or of no Run), filtered, with the worker holding each one while
+/// that worker's terminal is still open.
+pub fn task_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, a: &Value, live: &dyn Fn(&str) -> bool) -> Result<Value, Fail> {
+    let want = a["status"].as_str();
+    if want.is_some_and(|s| !TASK_STATES.contains(&s)) {
+        return Err(args(format!("--status takes one of {}", TASK_STATES.join(", "))));
+    }
+    let (ready, brief) = (a["ready"] == true, a["brief"] == true);
+    let rows: Vec<Value> = tasks
+        .iter()
+        .filter(|t| t["runId"].as_str() == run && want.is_none_or(|s| status(t) == s) && (!ready || status(t) == "ready"))
+        .map(|t| {
+            let spec = t["spec"].as_str().unwrap_or_default();
+            let folded = spec.split_whitespace().collect::<Vec<_>>().join(" ");
+            let name = t["displayName"].as_str().or(t["title"].as_str()).map(str::to_string).unwrap_or_else(|| cut(&folded, 60));
+            let holder = dispatches.iter().rev().find(|d| d["taskId"] == t["id"] && !finished(d) && terminal_of(d).is_some_and(|h| live(&h)));
+            json!({
+                "id": t["id"], "name": name, "title": t["title"], "status": t["status"], "deps": t["deps"], "parent": t["parent"], "runId": t["runId"],
+                "spec": if brief { cut(&folded, BRIEF_CHARS) } else { spec.to_string() },
+                "worker": holder.map(|d| json!({ "dispatchId": d["id"], "terminal": terminal_of(d) })),
+            })
+        })
+        .collect();
+    Ok(json!({ "runId": run, "tasks": rows, "brief": brief }))
+}
+
+/// ORCH-013: may `task` go to the agent in terminal `to`? Gives the task index and the agent.
+/// The codes and messages are fixed so scripts can match on them.
+// ponytail: a context-only dispatch to the caller itself inside the nesting budget (ORCH-032,
+// T-155) is refused with the rest of own_pane until that budget exists.
+pub fn dispatch_check(tasks: &[Value], dispatches: &[Value], task: &str, to: &str, caller: Option<&str>, agent_of: &dyn Fn(&str) -> Option<String>) -> Result<(usize, String), Fail> {
+    let i = tasks.iter().position(|t| t["id"] == task).ok_or_else(|| Fail::new("not_found", format!("no task {task}")))?;
+    match status(&tasks[i]) {
+        "ready" => {}
+        "pending" => return Err(Fail::new("task_waiting", format!("{task} is still waiting on its dependencies"))),
+        "dispatched" => return Err(Fail::new("task_taken", format!("{task} already has a worker ({})", tasks[i]["dispatchId"].as_str().unwrap_or("?")))),
+        s => return Err(Fail::new("task_not_ready", format!("{task} is {s}, not ready"))),
+    }
+    if caller == Some(to) {
+        return Err(Fail::new("own_pane", "a coordinator cannot hand a task to its own pane"));
+    }
+    let agent = agent_of(to).ok_or_else(|| Fail::new("not_an_agent", format!("{to} is not running an agent Kolux recognises, or the agent has not finished starting")))?;
+    if let Some(d) = dispatches.iter().find(|d| !finished(d) && terminal_of(d).as_deref() == Some(to)) {
+        return Err(Fail::new("busy", format!("{to} is already working on {}", d["id"].as_str().unwrap_or("?"))));
+    }
+    Ok((i, agent))
+}
+
+/// The text a dispatched agent is given. ORCH-014 (T-084) adds how to report, ask and keep in touch.
+pub fn brief(task: &Value, dispatch: &str, run: Option<&str>) -> String {
+    let run = run.map(|r| format!(", Run {r}")).unwrap_or_default();
+    format!("Kolux task {} ({dispatch}{run}):\n\n{}", task["id"].as_str().unwrap_or_default(), task["spec"].as_str().unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -469,5 +627,93 @@ mod tests {
         let ok = m.send("term-2", &json!({ "to": "term-8", "subject": "hi", "filesModified": "a.rs, b.rs", "outcome": "succeeded", "type": "worker_done" }), &d, &live, 5).unwrap();
         assert_eq!(ok["to"], "term:term-8");
         assert_eq!(m.messages.last().unwrap().extras["filesModified"], json!(["a.rs", "b.rs"]));
+    }
+
+    #[test]
+    fn a_reply_goes_back_on_the_thread_and_inbox_only_reads() {
+        let mut m = Mail::default();
+        m.run_create("term-1", "o", 1);
+        let sent = m.send("term-1", &json!({ "to": "term-8", "subject": "go", "body": "start" }), &[], &live, 2).unwrap();
+        let id = sent["messageIds"][0].as_str().unwrap().to_string();
+        let boxes8 = m.boxes_of("term-8", &[]);
+        let got = m.check("term-8", "term-8", &boxes8, Mode::Next, None, None, None).unwrap();
+        assert_eq!(got["messages"][0]["reply"], format!("kolux orchestration reply --id {id} --body \"<your answer>\""));
+        let r = m.reply("term-8", &id, "on it", None, 3).unwrap();
+        assert_eq!(r["to"], "term:term-1");
+        let boxes1 = m.boxes_of("term-1", &[]);
+        let back = m.check("term-1", "term-1", &boxes1, Mode::Next, None, None, None).unwrap();
+        assert_eq!(back["messages"][0]["threadId"], id.as_str());
+        assert_eq!(back["messages"][0]["subject"], "Re: go");
+        assert_eq!(back["messages"][0]["body"], "on it");
+        assert_eq!(m.reply("term-8", "msg-99", "x", None, 4).unwrap_err().code, "not_found");
+        assert_eq!(m.reply("term-8", &id, "x", Some("run-9"), 4).unwrap_err().code, "run_mismatch");
+        for i in 0..7 {
+            m.send("term-1", &json!({ "to": "term-8", "subject": format!("n{i}"), "body": "x".repeat(300) }), &[], &live, 10 + i).unwrap();
+        }
+        let before = m.deliveries.clone();
+        let five = m.inbox("term-8", &boxes8, 5, false);
+        assert_eq!(five["messages"].as_array().unwrap().len(), 5);
+        assert_eq!(five["messages"][0]["subject"], "n6");
+        assert!(five["messages"][0]["body"].as_str().unwrap().chars().count() <= 120);
+        assert_eq!(m.inbox("term-8", &boxes8, 5, true)["messages"][0]["body"].as_str().unwrap().len(), 300);
+        assert_eq!(m.deliveries, before);
+    }
+
+    #[test]
+    fn tasks_wait_on_their_dependencies_and_list_per_run() {
+        let mut tasks = Vec::new();
+        let a = task_create(&mut tasks, &json!({ "spec": "build a" }), Some("run-1".into()), 1).unwrap();
+        let aid = a["id"].as_str().unwrap().to_string();
+        assert_eq!(a["status"], "ready");
+        let b = task_create(&mut tasks, &json!({ "spec": "b", "deps": format!("[\"{aid}\"]") }), Some("run-1".into()), 2).unwrap();
+        assert_eq!(b["status"], "pending");
+        assert_eq!(task_create(&mut tasks, &json!({ "spec": "x", "deps": "[\"missing\"]" }), None, 3).unwrap_err().code, "not_found");
+        assert_eq!(task_create(&mut tasks, &json!({ "spec": "x", "deps": "nope" }), None, 3).unwrap_err().code, "invalid_arguments");
+        assert_eq!(task_create(&mut tasks, &json!({ "spec": "x".repeat(SPEC_MAX + 1) }), None, 3).unwrap_err().code, "too_large");
+        assert_eq!(tasks.len(), 2);
+        tasks[0]["status"] = json!("completed");
+        promote(&mut tasks);
+        assert_eq!(tasks[1]["status"], "ready");
+        let long = format!("word  {}\n\tend", "y ".repeat(1000));
+        task_create(&mut tasks, &json!({ "spec": long, "displayName": "Long one" }), Some("run-1".into()), 4).unwrap();
+        task_create(&mut tasks, &json!({ "spec": "elsewhere" }), Some("run-2".into()), 5).unwrap();
+        let none = |_: &str| false;
+        let all = task_list(&tasks, &[], Some("run-1"), &json!({ "brief": true }), &none).unwrap();
+        let rows = all["tasks"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        let compact = rows[2]["spec"].as_str().unwrap();
+        assert!(compact.chars().count() <= 160 && compact.chars().count() > 150, "{compact}");
+        assert!(!compact.contains('\n') && !compact.contains("  "));
+        assert_eq!(rows[2]["name"], "Long one");
+        assert_eq!(rows[1]["name"], "b");
+        let ready = task_list(&tasks, &[], Some("run-1"), &json!({ "ready": true }), &none).unwrap();
+        assert_eq!(ready["tasks"].as_array().unwrap().len(), 2);
+        assert!(task_list(&tasks, &[], None, &json!({ "status": "odd" }), &none).is_err());
+        let d = vec![json!({ "id": "dispatch-1", "taskId": "task-2", "status": "running", "terminal": 8 })];
+        let held = task_list(&tasks, &d, Some("run-1"), &json!({}), &live).unwrap();
+        assert_eq!(held["tasks"][1]["worker"]["terminal"], "term-8");
+        assert_eq!(held["tasks"][1]["worker"]["dispatchId"], "dispatch-1");
+        let gone = task_list(&tasks, &d, Some("run-1"), &json!({}), &none).unwrap();
+        assert_eq!(gone["tasks"][1]["worker"], Value::Null);
+        let before_restart = vec![json!({ "id": "dispatch-1", "taskId": "task-2", "status": "running", "terminal": 8, "runtime": u64::from(std::process::id()) + 1 })];
+        assert_eq!(task_list(&tasks, &before_restart, Some("run-1"), &json!({}), &live).unwrap()["tasks"][1]["worker"], Value::Null);
+    }
+
+    #[test]
+    fn dispatch_turns_away_what_it_must() {
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), None, 1).unwrap();
+        task_create(&mut tasks, &json!({ "spec": "b", "deps": "[\"task-1\"]" }), None, 2).unwrap();
+        let agent = |h: &str| (h == "term-5" || h == "term-6").then(|| "claude".to_string());
+        let d = vec![json!({ "id": "dispatch-1", "taskId": "task-9", "status": "running", "terminal": 6 })];
+        let code = |t: &str, to: &str| dispatch_check(&tasks, &d, t, to, Some("term-1"), &agent).unwrap_err().code;
+        assert_eq!(code("task-2", "term-5"), "task_waiting");
+        assert_eq!(code("task-1", "term-1"), "own_pane");
+        assert_eq!(code("task-1", "term-4"), "not_an_agent");
+        assert_eq!(code("task-1", "term-6"), "busy");
+        assert_eq!(code("task-7", "term-5"), "not_found");
+        assert_eq!(dispatch_check(&tasks, &d, "task-1", "term-5", Some("term-1"), &agent).unwrap(), (0, "claude".to_string()));
+        let b = brief(&tasks[0], "dispatch-2", Some("run-1"));
+        assert!(b.contains("task-1") && b.contains("dispatch-2") && b.ends_with('a'), "{b}");
     }
 }

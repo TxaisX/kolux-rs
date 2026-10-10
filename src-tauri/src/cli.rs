@@ -82,11 +82,11 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> --to <handle> [--inject] [--dry-run] [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
-const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait"];
-/// ORCH-001, ORCH-002, ORCH-003, ORCH-005 / CLI-030, CLI-031, CLI-032: the mail commands and their
-/// flags. `--dispatch-capability` is accepted and unused until the dispatch pass (ORCH-067, T-155).
+const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble"];
+/// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
+/// and their flags. `--dispatch-capability` is accepted and unused until the dispatch pass (ORCH-067, T-155).
 const MAIL: &[(&str, &str, &[&str])] = &[
     ("orchestration run-create", "orchestration.run-create", &["objective", "from", "retry-request"]),
     ("orchestration run-use", "orchestration.run-use", &["id", "from", "takeover-legacy", "retry-request"]),
@@ -95,6 +95,12 @@ const MAIL: &[(&str, &str, &[&str])] = &[
     ("orchestration run-show", "orchestration.run-show", &["id"]),
     ("orchestration send", SEND, &["to", "run", "from", "subject", "body", "type", "priority", "thread-id", "payload", "task-id", "dispatch-id", "dispatch-capability", "retry-request", "outcome", "files-modified", "report-path", "phase"]),
     ("orchestration check", CHECK, &["terminal", "run", "ack", "unread", "peek", "all", "types", "format", "wait", "timeout-ms", "retry-request"]),
+    ("orchestration reply", "orchestration.reply", &["id", "body", "run", "from", "retry-request"]),
+    ("orchestration inbox", "orchestration.inbox", &["limit", "terminal", "full"]),
+    ("orchestration task-create", "orchestration.task-create", &["spec", "task-title", "display-name", "deps", "parent", "run", "from", "retry-request"]),
+    ("orchestration task-list", "orchestration.task-list", &["status", "ready", "brief", "run", "from"]),
+    ("orchestration dispatch", "orchestration.dispatch", &["task", "to", "from", "run", "inject", "dry-run", "return-preamble", "retry-request"]),
+    ("orchestration dispatch-show", "orchestration.dispatch-show", &["task", "preamble", "from"]),
 ];
 const SEND: &str = "orchestration.send";
 const CHECK: &str = "orchestration.check";
@@ -253,6 +259,16 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                 "orchestration.run-create" => need("objective", ": say what the Run is for")?,
                 "orchestration.run-use" | "orchestration.run-show" => need("id", "")?,
                 SEND => need("subject", "")?,
+                "orchestration.reply" => {
+                    need("id", "")?;
+                    need("body", "")?
+                }
+                "orchestration.task-create" => need("spec", ": say what the task is")?,
+                "orchestration.dispatch" => {
+                    need("task", "")?;
+                    need("to", ": name the agent terminal, like term-3")?
+                }
+                "orchestration.dispatch-show" => need("task", "")?,
                 _ => {}
             }
             if ["unread", "peek", "all"].iter().filter(|k| flags.contains_key(**k)).count() > 1 {
@@ -408,6 +424,56 @@ fn text_of(command: &str, r: &Value) -> String {
             out.join("\n")
         }
         "orchestration.run-show" => format!("Run {}: {}\nhome terminal {}; tied terminals {}\nmessages {} ({} not acknowledged)", s("id"), s("objective"), s("home"), r["terminals"], r["messages"], r["unacknowledged"]),
+        "orchestration.reply" => format!("sent {} to {} on thread {}", r["messageIds"][0].as_str().unwrap_or_default(), s("to"), s("threadId")),
+        "orchestration.inbox" => {
+            let msgs = r["messages"].as_array().cloned().unwrap_or_default();
+            let mut out = vec![if msgs.is_empty() { "no mail".to_string() } else { format!("{} newest message(s) for {}", msgs.len(), s("terminal")) }];
+            mail_lines(&msgs, &mut out);
+            out.join("\n")
+        }
+        "orchestration.task-create" => {
+            let deps: Vec<&str> = r["deps"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            if s("status") == "pending" { format!("{} is pending: it waits on {}", s("id"), deps.join(", ")) } else { format!("{} is {}", s("id"), s("status")) }
+        }
+        "orchestration.task-list" => {
+            let rows = r["tasks"].as_array().cloned().unwrap_or_default();
+            let mut out = Vec::new();
+            for t in &rows {
+                let g = |k: &str| t[k].as_str().unwrap_or_default().to_string();
+                let deps: Vec<&str> = t["deps"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+                let waits = if deps.is_empty() { String::new() } else { format!(" (waits on {})", deps.join(", ")) };
+                let worker = t["worker"]["dispatchId"].as_str().map(|d| format!(" [{d} in {}]", t["worker"]["terminal"].as_str().unwrap_or("?"))).unwrap_or_default();
+                out.push(format!("{}  {}  {}{waits}{worker}", g("id"), g("status"), g("name")));
+                if r["brief"] == true {
+                    out.push(format!("  {}", g("spec")));
+                }
+            }
+            if out.is_empty() {
+                out.push(match r["runId"].as_str() { Some(run) => format!("no tasks in {run}"), None => "no tasks outside a Run".into() });
+            }
+            out.join("\n")
+        }
+        "orchestration.dispatch" => {
+            let how = if s("mode") == "inject" { "the brief is typed in" } else { "context only, nothing typed" };
+            let mut line = if r["dryRun"] == true {
+                format!("dry run: would hand {} to {} ({}) as {}, {how}; {} is still {}", s("taskId"), s("to"), s("agent"), s("dispatchId"), s("taskId"), s("taskStatus"))
+            } else {
+                format!("{}: {} handed to {} ({}), {how}", s("dispatchId"), s("taskId"), s("to"), s("agent"))
+            };
+            if let Some(p) = r["preamble"].as_str() {
+                line.push_str("\n\n");
+                line.push_str(p);
+            }
+            line
+        }
+        "orchestration.dispatch-show" => {
+            let mut line = format!("{}: {} on {} ({}), {}, {}", s("id"), s("taskId"), s("handle"), s("agent"), if s("mode").is_empty() { "worker" } else { r["mode"].as_str().unwrap_or_default() }, s("status"));
+            if let Some(p) = r["preamble"].as_str() {
+                line.push_str("\n\n");
+                line.push_str(p);
+            }
+            line
+        }
         SEND => format!("sent {} to {}", r["messageIds"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "), s("to")),
         CHECK => {
             let msgs = r["messages"].as_array().cloned().unwrap_or_default();
@@ -418,17 +484,26 @@ fn text_of(command: &str, r: &Value) -> String {
                 (Some(d), false) => out.push(format!("delivery {d}: {} message(s); acknowledge with --ack {d}", msgs.len())),
                 (None, false) => out.push(format!("{} message(s), {}", msgs.len(), s("mode"))),
             }
-            for m in &msgs {
-                let p = m["priority"].as_str().unwrap_or("normal");
-                let mark = if p == "normal" { String::new() } else { format!("[{}] ", p.to_uppercase()) };
-                out.push(format!("{mark}{} from {} ({}): {}", m["id"].as_str().unwrap_or_default(), m["from"].as_str().unwrap_or_default(), m["type"].as_str().unwrap_or_default(), m["subject"].as_str().unwrap_or_default()));
-                if let Some(b) = m["body"].as_str().filter(|b| !b.is_empty()) {
-                    out.push(format!("  {b}"));
-                }
-            }
+            mail_lines(&msgs, &mut out);
             out.join("\n")
         }
         _ => format!("removed {}", s("path")),
+    }
+}
+
+/// One line per message, its body under it, and the command that answers it (ORCH-006).
+fn mail_lines(msgs: &[Value], out: &mut Vec<String>) {
+    for m in msgs {
+        let g = |k: &str| m[k].as_str().unwrap_or_default();
+        let p = m["priority"].as_str().unwrap_or("normal");
+        let mark = if p == "normal" { String::new() } else { format!("[{}] ", p.to_uppercase()) };
+        out.push(format!("{mark}{} from {} ({}): {}", g("id"), g("from"), g("type"), g("subject")));
+        if !g("body").is_empty() {
+            out.push(format!("  {}", g("body")));
+        }
+        if !g("reply").is_empty() {
+            out.push(format!("  reply: {}", g("reply")));
+        }
     }
 }
 
@@ -671,8 +746,6 @@ fn caller(ctx: &Ctx, req: &Request) -> Result<Option<String>, Fail> {
 
 /// Runs, sends and checks. Everything that ties, sends or reads needs a pane the runtime knows;
 /// a shell outside Kolux is turned away rather than tied to a guess (ORCH-001).
-// ponytail: tasks are not yet scoped to a Run (task-list per Run is ORCH-011, T-083); worker-start
-// stamps the caller Run on its task and dispatch so that pass can filter on it.
 fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     use crate::orchestration::{Mail, Mode};
     let a = &req.args;
@@ -721,10 +794,108 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             m.check(&p, &reader, &boxes, mode, types.as_deref(), text("ack").as_deref(), a["fence"].as_u64())?
         }
+        "orchestration.reply" => {
+            let p = need()?;
+            let id = text("id").ok_or_else(|| Fail::args("--id is required"))?;
+            let body = a["body"].as_str().unwrap_or_default().to_string();
+            let run = text("run");
+            m.once(retry, |m| m.reply(&p, &id, &body, run.as_deref(), now_ms()))?
+        }
+        "orchestration.inbox" => {
+            let reader = match text("terminal") {
+                Some(t) => t,
+                None => need()?,
+            };
+            let boxes = m.boxes_of(&reader, &load_list(&store, DISPATCHES_KEY));
+            m.inbox(&reader, &boxes, text("limit").and_then(|l| l.parse().ok()).unwrap_or(20).min(200), a["full"] == true)
+        }
+        "orchestration.task-create" | "orchestration.task-list" | "orchestration.dispatch" | "orchestration.dispatch-show" => tasks(ctx, &store, &mut m, req, pane.as_deref(), retry)?,
         other => return Err(Fail::args(format!("unknown command {other}"))),
     };
     m.save(&store)?;
     Ok(out)
+}
+
+/// ORCH-010, ORCH-011, ORCH-013: tasks in a Run, and handing one to an agent terminal that is
+/// already open. A task belongs to the Run named with --run, else to the caller's tied Run.
+fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Request, pane: Option<&str>, retry: Option<String>) -> Result<Value, Fail> {
+    use crate::orchestration as o;
+    let a = &req.args;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let named = text("run");
+    if let Some(r) = &named {
+        m.run_show(r)?;
+    }
+    let run = named.clone().or_else(|| pane.and_then(|p| m.bound(p)).map(str::to_string));
+    let mut tasks = load_list(store, TASKS_KEY);
+    o::promote(&mut tasks);
+    let mut dispatches = load_list(store, DISPATCHES_KEY);
+    let out = match req.command.as_str() {
+        "orchestration.task-create" => m.once(retry, |_| o::task_create(&mut tasks, a, run.clone(), now_ms()))?,
+        "orchestration.task-list" => o::task_list(&tasks, &dispatches, run.as_deref(), a, &|h| ctx.terminals.live(h))?,
+        "orchestration.dispatch" => {
+            let task = text("task").ok_or_else(|| Fail::args("--task is required"))?;
+            let to = text("to").ok_or_else(|| Fail::args("--to is required"))?;
+            let tid = to.strip_prefix("term-").and_then(|n| n.parse::<u32>().ok()).filter(|_| ctx.terminals.live(&to)).ok_or_else(|| Fail::new("not_found", format!("no open Kolux terminal is called {to}")))?;
+            let known = crate::agents::agent_list();
+            let agent_of = |h: &str| {
+                let p = ctx.terminals.program_of(h, SETTLE)?;
+                let stem = Path::new(&p).file_stem()?.to_string_lossy().to_lowercase();
+                known.iter().find(|x| x.id == stem || x.program.eq_ignore_ascii_case(&stem)).map(|x| x.id.clone())
+            };
+            let (i, agent) = o::dispatch_check(&tasks, &dispatches, &task, &to, pane, &agent_of)?;
+            if let (Some(n), Some(r)) = (&named, tasks[i]["runId"].as_str()) {
+                if n != r {
+                    return Err(Fail::new("run_mismatch", format!("{task} belongs to {r}, not to the Run named with --run ({n})")));
+                }
+            }
+            let id = next_id(&dispatches, "dispatch-");
+            let run = tasks[i]["runId"].as_str().map(str::to_string).or(run);
+            let brief = o::brief(&tasks[i], &id, run.as_deref());
+            let mode = if a["inject"] == true { "inject" } else { "context" };
+            let mut plan = json!({ "dispatchId": id, "taskId": task, "to": to, "agent": agent, "runId": run, "mode": mode });
+            if a["returnPreamble"] == true {
+                plan["preamble"] = json!(brief);
+            }
+            if a["dryRun"] == true {
+                plan["dryRun"] = json!(true);
+                plan["taskStatus"] = tasks[i]["status"].clone();
+                return Ok(plan);
+            }
+            m.once(retry, |_| {
+                if mode == "inject" {
+                    type_brief(ctx.terminals, tid, &brief)?;
+                }
+                dispatches.push(json!({ "id": id, "runtime": std::process::id(), "runId": run, "taskId": task, "status": "running", "terminal": tid, "agent": agent, "mode": mode, "brief": brief, "created": now_ms() }));
+                tasks[i]["status"] = json!("dispatched");
+                tasks[i]["dispatchId"] = json!(id);
+                Ok(plan.clone())
+            })?
+        }
+        "orchestration.dispatch-show" => {
+            let task = text("task").ok_or_else(|| Fail::args("--task is required"))?;
+            let mut v = dispatches.iter().rev().find(|d| d["taskId"] == task).cloned().ok_or_else(|| Fail::new("not_found", format!("{task} has not been dispatched")))?;
+            let brief = v.as_object_mut().and_then(|o| o.remove("brief"));
+            v["handle"] = json!(v["terminal"].as_u64().map(|t| crate::terminal::handle_of(t as u32)));
+            if a["preamble"] == true {
+                // A worker started with worker-start got the task text itself as its prompt.
+                v["preamble"] = brief.unwrap_or_else(|| tasks.iter().find(|t| t["id"] == task).map(|t| t["spec"].clone()).unwrap_or_default());
+            }
+            v
+        }
+        other => return Err(Fail::args(format!("unknown command {other}"))),
+    };
+    save_list(store, TASKS_KEY, &tasks)?;
+    save_list(store, DISPATCHES_KEY, &dispatches)?;
+    Ok(out)
+}
+
+/// ORCH-013's inject: the brief goes in as one bracketed paste, so its line breaks do not send it
+/// early, then Enter submits it.
+fn type_brief(terminals: &Terminals, id: u32, brief: &str) -> Result<(), Fail> {
+    terminals.write(id, &format!("\u{1b}[200~{brief}\u{1b}[201~")).map_err(|e| Fail::new("failed", e))?;
+    std::thread::sleep(Duration::from_millis(300));
+    terminals.write(id, "\r").map_err(|e| Fail::new("failed", e))
 }
 
 // ---------------------------------------------------------------- worker start (ORCH-016)
@@ -745,7 +916,7 @@ fn save_list(store: &Store, key: &str, list: &[Value]) -> Result<(), Fail> {
     store.set(key, &Value::Array(list.to_vec()).to_string()).map_err(|e| Fail::new("failed", e.to_string()))
 }
 
-fn next_id(list: &[Value], prefix: &str) -> String {
+pub(crate) fn next_id(list: &[Value], prefix: &str) -> String {
     let n = list.iter().filter_map(|t| t["id"].as_str()?.strip_prefix(prefix)?.parse::<u64>().ok()).max().unwrap_or(0);
     format!("{prefix}{}", n + 1)
 }
@@ -833,10 +1004,14 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 }
             }
             (None, Some(spec)) => {
+                if spec.len() > crate::orchestration::SPEC_MAX {
+                    return Err(Fail::new("too_large", format!("the task text is {} bytes; Kolux stores at most {}", spec.len(), crate::orchestration::SPEC_MAX)));
+                }
                 let title = text("taskTitle").unwrap_or_else(|| spec.lines().next().unwrap_or_default().chars().take(60).collect());
                 let deps: Vec<String> = text("deps").and_then(|d| serde_json::from_str(&d).ok()).unwrap_or_default();
                 let created = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-                tasks.push(json!({ "id": next_id(&tasks, "task-"), "title": title, "spec": spec, "status": "pending", "deps": deps, "parent": text("parent"), "created": created }));
+                let run_id = caller(ctx, req).ok().flatten().and_then(|p| crate::orchestration::Mail::load(&store).bound(&p).map(str::to_string));
+                tasks.push(json!({ "id": next_id(&tasks, "task-"), "runId": run_id, "title": title, "spec": spec, "status": "pending", "deps": deps, "parent": text("parent"), "created": created }));
                 tasks.len() - 1
             }
             (None, None) => return Err(Fail::args("give --task <id> or --spec <text>")),
@@ -909,7 +1084,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let mut dispatches = load_list(&store, DISPATCHES_KEY);
         let run_id = caller(ctx, req).ok().flatten().and_then(|p| crate::orchestration::Mail::load(&store).bound(&p).map(str::to_string));
-        dispatches.push(json!({ "id": dispatch_id, "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "created": since.elapsed().as_millis() as u64 }));
+        dispatches.push(json!({ "id": dispatch_id, "runtime": std::process::id(), "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "created": since.elapsed().as_millis() as u64 }));
         save_list(&store, DISPATCHES_KEY, &dispatches)?;
     }
     if ready {
@@ -1025,6 +1200,18 @@ mod tests {
         assert!(refused("orchestration check --timeout-ms 0").contains("above zero"));
         assert!(refused("orchestration run-list --bogus 1").contains("--bogus"));
         assert!(refused("orchestration run-show").contains("--id"));
+        let (_, p) = parse(&words("orchestration dispatch --task task-1 --to term-3 --dry-run --return-preamble"));
+        let p = p.unwrap().unwrap();
+        assert_eq!(p.command, "orchestration.dispatch");
+        assert_eq!((&p.args["dryRun"], &p.args["returnPreamble"]), (&json!(true), &json!(true)));
+        let (_, p) = parse(&words("orchestration task-create --spec b --deps [\"task-1\"] --display-name B"));
+        assert_eq!(p.unwrap().unwrap().args["displayName"], "B");
+        assert_eq!(parse(&words("orchestration inbox --limit 5 --full")).1.unwrap().unwrap().args["full"], true);
+        assert!(refused("orchestration reply --id msg-1").contains("--body"));
+        assert!(refused("orchestration dispatch --task task-1").contains("--to"));
+        assert!(refused("orchestration task-create").contains("--spec"));
+        assert!(refused("orchestration dispatch-show").contains("--task"));
+        assert!(refused("orchestration task-list --inject").contains("--inject"));
     }
 
     #[test]

@@ -40,10 +40,12 @@ fn id_of(handle: &str) -> Option<u32> {
     handle.strip_prefix("term-")?.parse().ok()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Mark {
     started: Instant,
     last_output: Option<Instant>,
+    /// The program the session runs (ORCH-013 tells agents from other programs by it).
+    program: String,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -107,7 +109,7 @@ impl Terminals {
         inner.sessions.insert(id, session);
         inner.keys.insert(id, key);
         if is_program {
-            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None });
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string() });
         }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
@@ -170,6 +172,18 @@ impl Terminals {
     pub fn verify(&self, handle: &str, key: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };
         self.inner.lock().map(|i| i.keys.get(&id).is_some_and(|k| !key.is_empty() && k == key)).unwrap_or(false)
+    }
+
+    /// ORCH-013: the program a terminal was started with, once it has written and then been quiet
+    /// for `settle` (fully started; part of a banner is not enough). Shells have none: what is
+    /// typed into a shell, or a pane title, proves nothing.
+    // ponytail: quiet after first output stands in for an idle detector (the STAT status cards).
+    pub fn program_of(&self, handle: &str, settle: std::time::Duration) -> Option<String> {
+        let id = id_of(handle)?;
+        let inner = self.inner.lock().ok()?;
+        let m = inner.marks.get(&id).filter(|_| inner.sessions.contains_key(&id))?;
+        m.last_output.filter(|t| t.elapsed() >= settle)?;
+        Some(m.program.clone())
     }
 
     /// Is `handle` an open terminal? (`--from` names one explicitly.)
