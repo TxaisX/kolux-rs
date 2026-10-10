@@ -43,9 +43,12 @@ type Props = {
   createRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
+  /** SKILL-036: the Artifacts row opens the library and shows as current while it is up. */
+  artifactsOn: boolean;
+  onArtifacts: () => void;
 };
 
-export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
+export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn, artifactsOn, onArtifacts }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -278,7 +281,7 @@ export default function ProjectsPanel({ openDirs, activeDir, onSelect, onRemoved
             </span>
             Tasks
           </button>
-          <button className="row" title="Artifacts (not built yet)">
+          <button className={`row${artifactsOn ? " on" : ""}`} aria-current={artifactsOn ? "page" : undefined} onClick={onArtifacts}>
             <span className="ic">
               <FileCode />
             </span>

@@ -9,7 +9,8 @@ import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, Pan
 import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 
-export type Screen = "agents" | "board" | "terminals";
+/** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
+export type Screen = "agents" | "board" | "terminals" | "artifacts";
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },

@@ -168,7 +168,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-094-b · EDIT-034 [compat] Explorer file operations, part 1: create a file or folder, inline rename, delete to the trash with one confirmation, undo and redo, copy path and relative path, Delete key, permanent delete on a WSL share
 - [x] T-094-b2 · Explorer file operations, part 2 (the rest of the card built in T-094-b): copy and paste without overwriting, drag to move (a folder dragged with its own children moves only the folder) with edge scrolling, drop in from the desktop (folders copied whole, clashing top-level items renamed, symlinks refused)
 - [x] T-094-c · EDIT-036 [compat] Quick Open a file by name with Mod+P
-- [ ] T-095 · SKILL-035 Pages Claude publishes are kept in Kolux automatically · SKILL-036 Artifacts library page and offline viewer · also passes: VIEW-012 Artifacts library
+- [x] T-095-a · SKILL-036 Artifacts library page and offline viewer (adding a page by hand stores it and its relative assets under the caps; a page on a network share is listed as unavailable unread) · also passes: VIEW-012 Artifacts library
+- [ ] T-095-b · SKILL-035 Pages Claude publishes are kept in Kolux automatically (picking publishes out of session output and transcripts, one entry per URL, offline copies of allow-listed CDN scripts, WSL and SSH paths listed as remote) · also from T-095-a: a captured page that loads scripts from a CDN runs from its stored copies, because the viewer lets an entry load only its own stored files
 - [ ] T-096 · SET-008 Shortcuts page lists every command with its keys · SET-009 Record, add, disable or reset a shortcut · SET-010 Clashing shortcuts are flagged, scope by scope
 - [ ] T-097 · CLI-011 [compat] kolux open starts the app or brings it to the front
 

@@ -1,4 +1,5 @@
 mod agents;
+mod artifacts;
 mod browser;
 pub mod cli;
 mod creatures;
@@ -57,6 +58,7 @@ pub fn run() {
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
             app.manage(Terminals::default());
+            app.manage(artifacts::Library::new(dir.join("artifacts")));
             app.manage(update::Updates::default());
             // Git is checked once here; every project and workspace action runs through it.
             app.manage(git::Git::detect()?);
@@ -64,6 +66,8 @@ pub fn run() {
             cli::serve(app.handle().clone(), &dir)?;
             Ok(())
         })
+        // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
+        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req))
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
             if let tauri::WindowEvent::Destroyed = event {
@@ -101,6 +105,10 @@ pub fn run() {
             files::file_read,
             files::file_write,
             files::md_list,
+            artifacts::artifacts_list,
+            artifacts::artifact_add,
+            artifacts::artifact_remove,
+            artifacts::open_external,
             files::file_list,
             files::md_new,
             files::diff_sides,

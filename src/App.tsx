@@ -25,6 +25,7 @@ import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
+import ArtifactsPage from "./artifacts/ArtifactsPage";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
@@ -468,6 +469,7 @@ function Window() {
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
   const select = (dir: string, branch: string | null) => {
     setActiveDir(dir);
+    if (screen === "artifacts") setScreen("terminals");
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else addShell(dir, branch);
   };
@@ -568,7 +570,7 @@ function Window() {
     <div className="app">
       <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && explorerOpen} onToggleRight={() => (terminals && explorerOpen ? setExplorerOpen(false) : toggleExplorer())} />
       <div className="body">
-        {terminals && sidebarOpen && (
+        {(terminals || screen === "artifacts") && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
             activeDir={activeDir}
@@ -583,6 +585,8 @@ function Window() {
             refresh={refresh}
             createRequest={createRequest}
             onStartIn={startIn}
+            artifactsOn={screen === "artifacts"}
+            onArtifacts={() => setScreen("artifacts")}
             onIndex={(list, dirs) => {
               setProjects(list);
               setOwner(dirs);
@@ -635,7 +639,17 @@ function Window() {
               )}
             </>
           )}
-          {!terminals && !board && (
+          {screen === "artifacts" && (
+            <>
+              <ArtifactsPage onToast={setToast} />
+              {toast && (
+                <div className="toast" role="status">
+                  {toast}
+                </div>
+              )}
+            </>
+          )}
+          {!terminals && !board && screen !== "artifacts" && (
             <div className="empty">
               <h2>{screens.find((s) => s.id === screen)?.label}</h2>
               <p>Nothing here yet. This screen is built in a later task.</p>
