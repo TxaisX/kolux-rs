@@ -1,0 +1,119 @@
+// Markdown in an editor tab (EDIT-012). The rich view is a Lexical editor showing the file as a
+// document; the file's text stays in the tab's CodeMirror buffer, so saving, the unsaved marker and
+// twin panes work exactly as in source view. A rich edit is turned back into markdown and only the
+// changed span goes into the buffer. Text the rich view cannot show faithfully stays in source
+// view with the reason, and so does a file over about 600 KB until the user picks Open anyway.
+import { $getRoot, createEditor, type LexicalEditor } from "lexical";
+import { HeadingNode, QuoteNode, registerRichText } from "@lexical/rich-text";
+import { createEmptyHistoryState, registerHistory } from "@lexical/history";
+import { ListItemNode, ListNode, registerCheckList, registerList } from "@lexical/list";
+import { LinkNode } from "@lexical/link";
+import { CodeHighlightNode, CodeNode } from "@lexical/code";
+import { $convertFromMarkdownString, $convertToMarkdownString, CHECK_LIST, registerMarkdownShortcuts, TRANSFORMERS } from "@lexical/markdown";
+import { mergeRegister } from "@lexical/utils";
+
+export const isMarkdown = (path: string) => /\.(md|markdown)$/i.test(path);
+
+/** Files bigger than this open in source view with a banner (EDIT-012). */
+export const RICH_LIMIT = 600 * 1024;
+
+const MD = [CHECK_LIST, ...TRANSFORMERS];
+const NODES = [HeadingNode, QuoteNode, ListNode, ListItemNode, CodeNode, CodeHighlightNode, LinkNode];
+const THEME = {
+  paragraph: "md-p",
+  quote: "md-quote",
+  heading: { h1: "md-h1", h2: "md-h2", h3: "md-h3", h4: "md-h4", h5: "md-h5", h6: "md-h6" },
+  list: { ul: "md-ul", ol: "md-ol", listitem: "md-li", listitemChecked: "md-li md-checked", listitemUnchecked: "md-li md-unchecked", nested: { listitem: "md-nested" } },
+  link: "md-link",
+  code: "md-code",
+  text: { bold: "md-bold", italic: "md-italic", strikethrough: "md-strike", code: "md-inline-code", underline: "md-underline" },
+};
+
+const fail = (e: Error) => {
+  throw e;
+};
+
+/** Things Lexical's markdown import would drop or garble, as a reason for the source banner. */
+const LIMITS: [RegExp, string][] = [
+  [/^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/, "front matter"],
+  [/^ {0,3}\|?.*\|.*\r?\n {0,3}\|? *:?-+:? *\|/m, "tables"],
+  [/<!--/, "HTML comments"],
+  [/<\/?[a-z][\w-]*(\s[^<>]*)?\/?>/i, "HTML"],
+  [/!\[[^\]]*\]\(/, "images"],
+  [/^ {0,3}\[[^\]^]+\]:\s/m, "reference links"],
+  [/\[\^[^\]]+\]/, "footnotes"],
+  [/^ {0,3}([-*_])( *\1){2,} *$/m, "horizontal rules"],
+  [/^ {0,3}\S.*\r?\n {0,3}(=+|-+) *$/m, "underlined headings"],
+];
+
+/** Why the rich view cannot show this markdown, or null when it can. Code is not looked into. */
+export function unsupported(md: string): string | null {
+  const prose = md.replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?^ {0,3}\1/gm, "").replace(/`[^`\n]*`/g, "");
+  for (const [re, what] of LIMITS) if (re.test(prose)) return `it has ${what}`;
+  const back = roundTrip(md);
+  if (back === null) return "it could not be read as markdown";
+  return words(back) === words(md) ? null : "some of its text would be lost";
+}
+
+const words = (s: string) => (s.match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
+
+/** The markdown the rich view would write back for this text (null when Lexical fails on it). */
+export function roundTrip(md: string): string | null {
+  try {
+    const ed = createEditor({ namespace: "kolux-md-check", nodes: NODES, onError: fail });
+    ed.update(() => $convertFromMarkdownString(md, MD), { discrete: true });
+    return ed.getEditorState().read(() => $convertToMarkdownString(MD));
+  } catch {
+    return null;
+  }
+}
+
+/** The one replacement that turns `a` into `b`: the span between their common start and end. */
+export function changeBetween(a: string, b: string): { from: number; to: number; insert: string } | null {
+  if (a === b) return null;
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let e = 0;
+  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
+  return { from: s, to: a.length - e, insert: b.slice(s, b.length - e) };
+}
+
+export type Rich = { editor: LexicalEditor; show: (md: string) => void; destroy: () => void };
+
+/** Starts the rich view in `el`; `onEdit` gets the whole markdown after each edit by the user. */
+export function mountRich(el: HTMLElement, md: string, onEdit: (md: string) => void): Rich {
+  const editor = createEditor({ namespace: "kolux-md", nodes: NODES, onError: fail, theme: THEME });
+  editor.setRootElement(el);
+  let last = "";
+  const off = mergeRegister(
+    registerRichText(editor),
+    registerHistory(editor, createEmptyHistoryState(), 300),
+    registerList(editor),
+    registerCheckList(editor),
+    registerMarkdownShortcuts(editor, MD),
+    editor.registerUpdateListener(({ editorState, dirtyElements, dirtyLeaves, tags }) => {
+      if (dirtyElements.size === 0 && dirtyLeaves.size === 0) return; // the caret moved, nothing more
+      const now = editorState.read(() => $convertToMarkdownString(MD));
+      if (now === last) return;
+      last = now;
+      if (!tags.has("kolux-load")) onEdit(now);
+    }),
+  );
+  const show = (text: string) =>
+    editor.update(
+      () => {
+        $convertFromMarkdownString(text, MD);
+        $getRoot().selectStart(); // the caret starts at the top, not after the last line
+      },
+      { discrete: true, tag: ["kolux-load", "history-merge"] },
+    );
+  show(md);
+  return {
+    editor,
+    show,
+    destroy: () => {
+      off();
+      editor.setRootElement(null);
+    },
+  };
+}

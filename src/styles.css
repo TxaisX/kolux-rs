@@ -257,3 +257,41 @@ input { font: inherit; }
 .pane-head .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-faint); font: 11px var(--mono-font); direction: rtl; text-align: left; }
 .unsaved { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--working-icon); }
 .notice.load-failed .btn { margin-left: auto; }
+
+/* EDIT-012: markdown tabs have a Rich | Source switch; rich and preview share one document look. */
+.view-switch { flex: none; display: flex; gap: 1px; padding: 1px; border: 1px solid var(--line-subtle); border-radius: 6px; }
+.view-switch button { height: 18px; padding: 0 7px; border-radius: 4px; font-size: 11px; color: var(--fg-muted); }
+.view-switch button:hover { color: var(--fg); }
+.view-switch button[aria-pressed="true"] { background: var(--seg-active); color: var(--fg); font-weight: 600; }
+.notice.md-banner { color: var(--fg-muted); border-color: var(--line); }
+.notice.md-banner .btn { margin-left: auto; }
+.pane.editor .md-rich, .pane.editor .md-preview { overflow: auto; padding: 14px 28px 40px; font: 14px/1.6 var(--ui-font); color: var(--fg); outline: none; overflow-wrap: break-word; }
+.md-rich h1, .md-preview h1 { font-size: 1.7em; margin: 0.6em 0 0.4em; line-height: 1.25; }
+.md-rich h2, .md-preview h2 { font-size: 1.35em; margin: 1em 0 0.4em; padding-bottom: 0.2em; border-bottom: 1px solid var(--line-subtle); }
+.md-rich h3, .md-preview h3 { font-size: 1.15em; margin: 1em 0 0.3em; }
+.md-rich h4, .md-rich h5, .md-rich h6, .md-preview h4, .md-preview h5, .md-preview h6 { font-size: 1em; margin: 1em 0 0.3em; }
+.md-rich p, .md-preview p { margin: 0 0 0.7em; }
+.md-rich blockquote, .md-preview blockquote { margin: 0 0 0.7em; padding-left: 12px; border-left: 3px solid var(--line); color: var(--fg-muted); }
+.md-rich ul, .md-rich ol, .md-preview ul, .md-preview ol { margin: 0 0 0.7em; padding-left: 24px; }
+.md-rich .md-nested { list-style: none; }
+.md-rich code, .md-preview code { font: 0.9em var(--mono-font); padding: 1px 4px; border-radius: 4px; background: var(--chip-bg); }
+.md-rich .md-code, .md-preview pre { display: block; margin: 0 0 0.7em; padding: 8px 12px; border-radius: 6px; background: var(--chip-bg); font: 12.5px/1.5 var(--mono-font); white-space: pre; overflow-x: auto; }
+.md-preview pre code { padding: 0; background: none; }
+.md-rich a, .md-preview a { color: var(--link); text-decoration: underline; }
+.md-rich .md-strike { text-decoration: line-through; }
+.md-rich .md-underline { text-decoration: underline; }
+.md-rich .md-checked, .md-rich .md-unchecked { position: relative; list-style: none; margin-left: -18px; padding-left: 22px; }
+.md-rich .md-checked::before, .md-rich .md-unchecked::before { content: ""; position: absolute; left: 0; top: 5px; width: 12px; height: 12px; border: 1px solid var(--fg-muted); border-radius: 3px; cursor: pointer; }
+.md-rich .md-checked::before { background: var(--fg-muted); }
+.md-rich .md-checked { color: var(--fg-muted); text-decoration: line-through; }
+.md-preview table { border-collapse: collapse; margin: 0 0 0.7em; }
+.md-preview th, .md-preview td { border: 1px solid var(--line); padding: 3px 8px; }
+.md-preview img { max-width: 100%; }
+.preview-tag { flex: none; height: 16px; padding: 0 6px; border-radius: 999px; background: var(--chip-bg); color: var(--fg-muted); font-size: 11px; line-height: 16px; }
+.note-picker { left: 50%; top: 56px; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 4px; }
+.picker-input { height: 30px; padding: 0 10px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--input-bg); color: var(--fg); font: inherit; }
+.picker-input:focus { outline: none; border-color: var(--line-focus); }
+.picker-list { max-height: min(420px, 60vh); overflow-y: auto; }
+.picker-list .menu-item.at { background: var(--row-selected); }
+.picker-list .menu-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }

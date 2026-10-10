@@ -155,6 +155,17 @@ impl Git {
     pub fn branch_taken(&self, repo: &Path, branch: &str) -> bool {
         run(&["for-each-ref", "--format=%(refname)", &format!("refs/heads/{branch}"), &format!("refs/remotes/*/{branch}")], Some(repo)).is_ok_and(|s| !s.is_empty())
     }
+
+    /// The worktree's markdown files, tracked and untracked, as full paths (EDIT-012). Git leaves
+    /// out ignored files and never walks into a symlinked folder; the list stops at `cap`, and the
+    /// flag says it did.
+    pub fn markdown_files(&self, worktree: &Path, cap: usize) -> Result<(Vec<String>, bool), String> {
+        let text = run(&["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate", "--", "*.md", "*.markdown"], Some(worktree))?;
+        let mut names: Vec<&str> = text.split('\0').filter(|n| !n.is_empty()).collect();
+        names.sort_unstable();
+        let capped = names.len() > cap;
+        Ok((names.into_iter().take(cap).map(|n| worktree.join(native(n)).to_string_lossy().into_owned()).collect(), capped))
+    }
 }
 
 /// Parses `git worktree list --porcelain`: blank-line separated blocks, the first is the main
@@ -243,6 +254,25 @@ mod tests {
         assert_eq!(git.worktrees(&repo).unwrap().len(), 1);
 
         fs::remove_dir_all(dest.parent().unwrap()).unwrap();
+        fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn markdown_files_skip_ignored_ones_and_stop_at_the_cap() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("md");
+        fs::create_dir_all(repo.join("docs")).unwrap();
+        fs::create_dir_all(repo.join("build")).unwrap();
+        fs::write(repo.join("docs").join("guide.md"), "x").unwrap();
+        fs::write(repo.join("build").join("out.md"), "x").unwrap();
+        fs::write(repo.join("notes.txt"), "x").unwrap();
+        fs::write(repo.join(".gitignore"), "build/\n").unwrap();
+        let (files, capped) = git.markdown_files(&repo, 10).unwrap();
+        let names: Vec<String> = files.iter().map(|f| PathBuf::from(f).strip_prefix(&repo).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(names, ["README.md", "docs/guide.md"]);
+        assert!(!capped);
+        let (one, capped) = git.markdown_files(&repo, 1).unwrap();
+        assert_eq!((one.len(), capped), (1, true));
         fs::remove_dir_all(&repo).unwrap();
     }
 

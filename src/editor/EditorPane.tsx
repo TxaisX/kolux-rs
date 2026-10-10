@@ -3,7 +3,8 @@
 // tab is unsaved while that text differs from the disk copy. Mod+S comes from App's shortcut
 // router, which calls the focused pane's entry in `editors`. A file that will not load is tried
 // three times, then the body says why and offers Retry; a failed save is a toast and the
-// marker stays.
+// marker stays. A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
+// Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
@@ -14,6 +15,7 @@ import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, loadText, relay, save, subscribe } from "./buffers";
+import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
@@ -45,6 +47,15 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
   report.current = { onDirty, onToast };
   const wantFocus = useRef(focused);
   wantFocus.current = focused;
+  const md = isMarkdown(path);
+  const richHost = useRef<HTMLDivElement>(null);
+  const rich = useRef<ReturnType<typeof mountRich> | null>(null);
+  const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
+  const [mode, setMode] = useState<"rich" | "source">(md ? "rich" : "source");
+  const [banner, setBanner] = useState<{ text: string; big?: boolean } | null>(null);
+  const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
+  const [richError, setRichError] = useState<string | null>(null);
+  const [richTries, setRichTries] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -66,6 +77,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
         });
         view.current = made;
         attach(path, made, text);
+        setReady((n) => n + 1);
         // A newly opened file takes the keyboard at once.
         if (wantFocus.current) made.focus();
         LanguageDescription.matchFilename(languages, baseName(path))
@@ -94,11 +106,63 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     };
   }, [id, path, tries]);
 
+  // A new file in this tab starts over: rich again, and Open anyway forgotten.
   useEffect(() => {
-    if (focused && !hidden) view.current?.focus();
+    setMode(isMarkdown(path) ? "rich" : "source");
+    setBigOk(false);
+    setBanner(null);
+  }, [path]);
+
+  // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
+  useEffect(() => {
+    const cm = view.current;
+    if (!md || mode !== "rich" || !ready || !cm || !richHost.current) return;
+    setRichError(null);
+    const text = cm.state.doc.toString();
+    const fallBack = (b: { text: string; big?: boolean }) => {
+      setBanner(b);
+      setMode("source");
+    };
+    if (text.length > RICH_LIMIT && !bigOk) return fallBack({ text: `This file is ${(text.length / 1048576).toFixed(1)} MB, so it opened in source view.`, big: true });
+    const why = unsupported(text);
+    if (why) return fallBack({ text: `Showing source: the rich view cannot show this file because ${why}.` });
+    let pushed = text;
+    try {
+      rich.current = mountRich(richHost.current, text, (out) => {
+        const now = cm.state.doc.toString();
+        // The rich view drops the file's last line end; keep it.
+        const next = now.endsWith("\n") && !out.endsWith("\n") ? out + "\n" : out;
+        const change = changeBetween(now, next);
+        pushed = next;
+        if (change) cm.dispatch({ changes: change, userEvent: "input" });
+      });
+    } catch (err) {
+      setRichError(String(err));
+      return;
+    }
+    setBanner(null);
+    const r = rich.current;
+    if (wantFocus.current) r.editor.focus();
+    // Text changed elsewhere (a twin pane, a reload) is shown afresh.
+    const off = subscribe(path, () => {
+      const now = cm.state.doc.toString();
+      if (now !== pushed) r.show((pushed = now));
+    });
+    return () => {
+      off();
+      r.destroy();
+      rich.current = null;
+    };
+  }, [md, mode, ready, bigOk, richTries, path]);
+
+  useEffect(() => {
+    if (!focused || hidden) return;
+    if (rich.current) rich.current.editor.focus();
+    else view.current?.focus();
   }, [focused, hidden]);
 
   const name = baseName(path);
+  const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
   return (
     <section className={`pane editor${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} data-kind="editor" data-key={id}>
       <header className="pane-head">
@@ -110,6 +174,23 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
         <span className="path" title={path}>
           {path}
         </span>
+        {md && (
+          <span className="view-switch" role="group" aria-label="View">
+            <button aria-pressed={mode === "rich"} onClick={() => setMode("rich")} title="Rich view">
+              Rich
+            </button>
+            <button
+              aria-pressed={mode === "source"}
+              onClick={() => {
+                setMode("source");
+                setBanner(null);
+              }}
+              title="Source view"
+            >
+              Source
+            </button>
+          </span>
+        )}
         <span className="right">
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
@@ -124,7 +205,32 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           </button>
         </div>
       )}
-      <div ref={host} className="pane-body" />
+      {banner && (
+        <div className="notice md-banner" role="status">
+          {banner.text}
+          {banner.big && (
+            <button
+              className="btn"
+              onClick={() => {
+                setBigOk(true);
+                setMode("rich");
+              }}
+            >
+              Open anyway
+            </button>
+          )}
+        </div>
+      )}
+      {shown === "error" && (
+        <div className="notice load-failed" role="alert">
+          The rich view did not start: {richError}
+          <button className="btn" onClick={() => setRichTries((n) => n + 1)}>
+            Retry
+          </button>
+        </div>
+      )}
+      <div ref={host} className="pane-body" hidden={shown !== "source"} />
+      {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich"} aria-label={`${name}, rich view`} />}
     </section>
   );
 }

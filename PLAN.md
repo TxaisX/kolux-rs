@@ -161,8 +161,8 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P0 · theme none · No theme (13 cards)
 
 - [x] T-093-a · EDIT-001 [compat] Edit a file in a tab and save it
-- [ ] T-093-b · EDIT-012 [compat] Markdown opens in a rich editor, with source and preview views
-- [ ] T-093-c · EDIT-027 [compat] Single-file diff tab: inline or side by side, step through changes
+- [x] T-093-b · EDIT-012 [compat] Markdown opens in a rich editor, with source and preview views
+- [ ] T-093-c · EDIT-027 [compat] Single-file diff tab: inline or side by side, step through changes · also from T-093-b: a markdown file's diff opens as source, never in the rich view (markdown card rule)
 - [ ] T-093-d · EDIT-029 All Changes: every changed file in one scrolling view
 - [ ] T-094 · EDIT-033 [compat] Explorer tree with mouse and keyboard · EDIT-034 [compat] Explorer file operations: create, rename, copy, delete, undo, drop in · EDIT-036 [compat] Quick Open a file by name with Mod+P · also from T-093-a: the explorer and Quick Open are the editor's main open routes, and the editor card's check 'take away read permission on a file and open it, failure with Retry, give it back, Retry loads' runs from the explorer (Windows' own Open dialog refuses an unreadable file before Kolux sees it); a pane rebuilt by a move to another pane keeps caret, selection and scroll, which needs the state kept per tab once tabs can move
 - [ ] T-095 · SKILL-035 Pages Claude publishes are kept in Kolux automatically · SKILL-036 Artifacts library page and offline viewer · also passes: VIEW-012 Artifacts library

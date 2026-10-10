@@ -99,6 +99,8 @@ pub fn run() {
             browser::browser_close,
             files::file_read,
             files::file_write,
+            files::md_list,
+            files::md_new,
             update::update_status,
             update::update_mark,
             update::update_check,

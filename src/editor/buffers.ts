@@ -105,3 +105,9 @@ export function subscribe(path: string, f: () => void): () => void {
     if (b.views.size === 0 && b.listeners.size === 0) buffers.delete(keyOf(path));
   };
 }
+
+/** The open text of a file, or null when no editor has it open (a preview then reads the disk). */
+export function textOf(path: string): string | null {
+  const v = buffers.get(keyOf(path))?.views.values().next().value;
+  return v ? v.state.sliceDoc() : null;
+}

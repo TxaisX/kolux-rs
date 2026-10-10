@@ -35,6 +35,40 @@ pub fn file_write(path: String, text: String) -> Result<(), String> {
     write_text(Path::new(&path), &text)
 }
 
+/// The worktree's markdown files for the Mod+Shift+O picker (EDIT-012), at most 2000 of them.
+#[derive(serde::Serialize)]
+pub struct Notes {
+    files: Vec<String>,
+    capped: bool,
+}
+
+#[tauri::command]
+pub fn md_list(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<Notes, String> {
+    let (files, capped) = git.markdown_files(Path::new(&root), 2000)?;
+    Ok(Notes { files, capped })
+}
+
+/// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
+/// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
+/// first save is EDIT-054 (T-237).
+#[tauri::command]
+pub fn md_new(root: String) -> Result<String, String> {
+    new_note(Path::new(&root))
+}
+
+pub fn new_note(root: &Path) -> Result<String, String> {
+    for n in 1..=100 {
+        let name = if n == 1 { "untitled.md".to_string() } else { format!("untitled-{n}.md") };
+        let path = root.join(name);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Ok(path.to_string_lossy().into_owned()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not create a note in {}: {e}", root.display())),
+        }
+    }
+    Err(format!("{} already has 100 untitled notes; rename or delete some first", root.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,6 +88,20 @@ mod tests {
         write_text(&f, "fn main() { x }\n").unwrap();
         assert_eq!(read_text(&f).unwrap(), "fn main() { x }\n");
         assert_eq!(fs::read_dir(&d).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn new_notes_count_up_and_never_overwrite() {
+        let d = temp_dir("notes");
+        fs::write(d.join("untitled-2.md"), "keep").unwrap();
+        let a = new_note(&d).unwrap();
+        let b = new_note(&d).unwrap();
+        assert!(a.ends_with("untitled.md") && b.ends_with("untitled-3.md"), "{a} {b}");
+        assert_eq!(read_text(&d.join("untitled-2.md")).unwrap(), "keep");
+        for n in 4..=100 {
+            fs::write(d.join(format!("untitled-{n}.md")), "").unwrap();
+        }
+        assert!(new_note(&d).unwrap_err().contains("100 untitled notes"));
     }
 
     #[test]

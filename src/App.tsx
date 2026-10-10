@@ -12,6 +12,8 @@
 // its shortcuts (bar, back, forward, reload) apply while a browser pane is focused (T-012-b).
 // An editor tab is one file in CodeMirror (T-093-a, src/editor/EditorPane.tsx): "File..." in the
 // New tab menu opens one, and Mod+S saves the focused editor while the terminals screen is up.
+// Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
+// worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -21,6 +23,9 @@ import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
+import PreviewPane from "./editor/PreviewPane";
+import NotePicker from "./editor/NotePicker";
+import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
@@ -41,12 +46,13 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor"; path?: string };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview"; path?: string };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   if (p.kind === "editor") return baseName(p.path ?? "");
+  if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** SESS-051: a seat's start line as the back end builds it. */
@@ -86,6 +92,7 @@ function Window() {
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
+  const [picking, setPicking] = useState(false); // EDIT-012: the Mod+Shift+O markdown picker is open
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const defaultId = defaultAgentId(settings);
@@ -141,7 +148,7 @@ function Window() {
       // the ones Kolux has no action for yet are left to CodeMirror.
       const hit =
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, kind === "editor" ? ["editor", "global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+        matchEvent(keymap, e, kind === "editor" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
@@ -181,6 +188,20 @@ function Window() {
           break;
         case "tab.newBrowser":
           void newTab("browser");
+          break;
+        case "editor.markdownPreview": {
+          const p = panes.find((x) => x.key === focused);
+          if (!p?.path || !isMarkdown(p.path)) return;
+          openPreview(p.path);
+          break;
+        }
+        case "tab.openMarkdown":
+          if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
+          else setPicking(true);
+          break;
+        case "tab.newMarkdown":
+          if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
+          else invoke<string>("md_new", { root: activeDir }).then(openFile, (err) => setToast(String(err)));
           break;
         case "tab.newAgent": {
           const a = agents.find((x) => x.id === defaultId && x.installed);
@@ -263,6 +284,20 @@ function Window() {
     if (same) return setFocused(same.key);
     const key = nextKey.current++;
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path }]);
+    setFocused(key);
+  };
+
+  // EDIT-012: Mod+Shift+V shows the file in a read-only preview tab beside it; a preview tab
+  // already in that cell is reused for the new file.
+  const openPreview = (path: string) => {
+    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const old = here && panes.find((p) => p.kind === "preview" && groupOf(p) === groupOf(here));
+    if (old) {
+      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...p, path } : p)));
+      return setFocused(old.key);
+    }
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "preview", path }]);
     setFocused(key);
   };
 
@@ -502,6 +537,7 @@ function Window() {
           {terminals && (
             <>
               <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />
+              {picking && activeDir && <NotePicker root={activeDir} onPick={openFile} onClose={() => setPicking(false)} />}
               {toast && (
                 <div className="toast" role="status">
                   {toast}
@@ -556,7 +592,7 @@ function Window() {
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
-                            {p.kind === "editor" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
+                            {p.kind === "editor" || p.kind === "preview" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
@@ -581,6 +617,8 @@ function Window() {
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
                   />
+                ) : p.kind === "preview" && p.path ? (
+                  <PreviewPane key={p.key} id={p.key} path={p.path} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
                   <ChooserPane
                     key={p.key}
