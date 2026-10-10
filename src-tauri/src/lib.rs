@@ -112,6 +112,8 @@ pub fn run() {
             fsops::fs_rename,
             fsops::fs_trash,
             fsops::fs_restore,
+            fsops::fs_copy,
+            fsops::fs_move,
             fsops::clip_write,
             update::update_status,
             update::update_mark,

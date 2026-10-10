@@ -1,6 +1,6 @@
 // The explorer's file operations (EDIT-034, part 1): create, rename, delete to the system trash and
 // bring back from it, and copy a path to the clipboard. The explorer keeps the undo history; each undo or redo is one of these calls.
-// Copy, move and drop-in are T-094-b2.
+// Part 2: copy (also used for files dropped in from the desktop) and move (drag in the tree).
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
@@ -145,6 +145,132 @@ pub async fn fs_restore(paths: Vec<String>) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || restore(&paths)).await.map_err(|e| e.to_string())?
 }
 
+#[derive(serde::Serialize, Debug, Default)]
+pub struct Placed {
+    pub from: String,
+    /// Where it landed; None when it failed.
+    pub to: Option<String>,
+    pub error: Option<String>,
+}
+
+/// "a.txt", then "a copy.txt", "a copy 2.txt" and on; a folder or a dot file keeps its whole name.
+fn nth_name(name: &str, n: usize) -> String {
+    if n == 0 {
+        return name.to_string();
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => name.split_at(i),
+        _ => (name, ""),
+    };
+    if n == 1 { format!("{stem} copy{ext}") } else { format!("{stem} copy {n}{ext}") }
+}
+
+fn is_link(md: &fs::Metadata) -> bool {
+    md.file_type().is_symlink() // on Windows a junction counts too
+}
+
+/// Copies a folder's contents into an empty `to`, skipping links inside it; returns how many it skipped.
+fn fill(from: &Path, to: &Path) -> std::io::Result<usize> {
+    let mut skipped = 0;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let md = fs::symlink_metadata(entry.path())?;
+        let dest = to.join(entry.file_name());
+        if is_link(&md) {
+            skipped += 1;
+        } else if md.is_dir() {
+            fs::create_dir(&dest)?;
+            skipped += fill(&entry.path(), &dest)?;
+        } else {
+            let mut src = fs::File::open(entry.path())?;
+            let mut out = fs::OpenOptions::new().write(true).create_new(true).open(&dest)?;
+            std::io::copy(&mut src, &mut out)?;
+        }
+    }
+    Ok(skipped)
+}
+
+/// Copies a file or a whole folder into `dir`. It never overwrites: a taken name gets " copy",
+/// " copy 2" and so on. A link is refused, and links inside a folder are left out.
+pub fn copy_into(from: &Path, dir: &Path) -> Result<(PathBuf, usize), String> {
+    let md = fs::symlink_metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    let name = from.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or_else(|| format!("{} has no name", from.display()))?;
+    if is_link(&md) {
+        return Err(format!("{name} is a link; links are not copied"));
+    }
+    if md.is_dir() && dir.starts_with(from) {
+        return Err(format!("{name} cannot be copied into itself"));
+    }
+    for n in 0..1000 {
+        let to = dir.join(nth_name(&name, n));
+        let made = if md.is_dir() { fs::create_dir(&to) } else { fs::OpenOptions::new().write(true).create_new(true).open(&to).map(drop) };
+        match made {
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("could not copy {name}: {e}")),
+            Ok(()) => {}
+        }
+        let filled = if md.is_dir() { fill(from, &to) } else { fs::File::open(from).and_then(|mut src| std::io::copy(&mut src, &mut fs::OpenOptions::new().write(true).truncate(true).open(&to)?)).map(|_| 0) };
+        return filled.map(|skipped| (to.clone(), skipped)).map_err(|e| {
+            let _ = if md.is_dir() { fs::remove_dir_all(&to) } else { fs::remove_file(&to) }; // only the half-made copy
+            format!("could not copy {name}: {e}")
+        });
+    }
+    Err(format!("could not find a free name for {name}"))
+}
+
+/// Moves an entry into another folder; refused when that folder already holds the name, or when a
+/// folder would go inside itself.
+pub fn move_into(from: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let name = from.file_name().ok_or_else(|| format!("{} has no name", from.display()))?;
+    let to = dir.join(name);
+    let _turn = RENAMES.lock().unwrap_or_else(|e| e.into_inner());
+    fs::symlink_metadata(from).map_err(|e| format!("{}: {e}", from.display()))?;
+    if from.parent() == Some(dir) {
+        return Ok(to);
+    }
+    if dir.starts_with(from) {
+        return Err(format!("{} cannot go inside itself", name.to_string_lossy()));
+    }
+    if fs::symlink_metadata(&to).is_ok() {
+        return Err(format!("{} already exists in {}", name.to_string_lossy(), dir.display()));
+    }
+    // ponytail: a move to another drive fails here; copy then delete when the tree spans drives
+    fs::rename(from, &to).map_err(|e| format!("could not move {}: {e}", name.to_string_lossy()))?;
+    Ok(to)
+}
+
+#[tauri::command]
+pub async fn fs_copy(paths: Vec<String>, dir: String) -> Vec<Placed> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|p| match copy_into(Path::new(&p), Path::new(&dir)) {
+                Ok((to, 0)) => Placed { from: p, to: Some(shown(&to)), error: None },
+                Ok((to, n)) => Placed { from: p, error: Some(format!("{}: {n} link(s) inside were left out", shown(&to))), to: Some(shown(&to)) },
+                Err(e) => Placed { from: p, to: None, error: Some(e) },
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Each move is (entry, folder to move it into).
+#[tauri::command]
+pub async fn fs_move(moves: Vec<(String, String)>) -> Vec<Placed> {
+    tauri::async_runtime::spawn_blocking(move || {
+        moves
+            .into_iter()
+            .map(|(p, dir)| match move_into(Path::new(&p), Path::new(&dir)) {
+                Ok(to) => Placed { from: p, to: Some(shown(&to)), error: None },
+                Err(e) => Placed { from: p, to: None, error: Some(e) },
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Puts text on the system clipboard from the app side, so a copy works whether or not the web view
 /// holds focus or a user gesture (the web Clipboard API needs both). The explorer falls back to the
 /// web Clipboard API where this is not built.
@@ -244,6 +370,53 @@ mod tests {
         let b = std::thread::spawn(move || rename(&dy, "z").is_ok());
         assert_eq!([a.join().unwrap(), b.join().unwrap()].iter().filter(|w| **w).count(), 1);
         assert_eq!(fs::read_dir(&d).unwrap().count(), 2);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn copies_never_overwrite_and_take_a_new_name() {
+        let d = temp_dir("copy");
+        fs::write(d.join("a.txt"), "a").unwrap();
+        fs::create_dir_all(d.join("f").join("deep")).unwrap();
+        fs::write(d.join("f").join("deep").join("x"), "x").unwrap();
+        fs::create_dir(d.join("in")).unwrap();
+        fs::write(d.join("in").join("a.txt"), "keep").unwrap();
+        assert_eq!(copy_into(&d.join("a.txt"), &d.join("in")).unwrap().0, d.join("in").join("a copy.txt"));
+        assert_eq!(copy_into(&d.join("a.txt"), &d.join("in")).unwrap().0, d.join("in").join("a copy 2.txt"));
+        assert_eq!(fs::read_to_string(d.join("in").join("a.txt")).unwrap(), "keep");
+        assert_eq!(fs::read_to_string(d.join("in").join("a copy.txt")).unwrap(), "a");
+        let (to, skipped) = copy_into(&d.join("f"), &d.join("in")).unwrap();
+        assert_eq!((to.clone(), skipped), (d.join("in").join("f"), 0));
+        assert_eq!(fs::read_to_string(to.join("deep").join("x")).unwrap(), "x");
+        assert_eq!(copy_into(&d.join("f"), &d.join("in")).unwrap().0, d.join("in").join("f copy"));
+        assert!(copy_into(&d.join("f"), &d.join("f").join("deep")).unwrap_err().contains("into itself"));
+        assert_eq!(nth_name(".env", 1), ".env copy");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn moves_refuse_a_taken_name_and_a_folder_into_itself() {
+        let d = temp_dir("move");
+        fs::create_dir_all(d.join("f").join("sub")).unwrap();
+        fs::create_dir(d.join("g")).unwrap();
+        fs::write(d.join("a.txt"), "a").unwrap();
+        fs::write(d.join("g").join("a.txt"), "keep").unwrap();
+        assert!(move_into(&d.join("a.txt"), &d.join("g")).unwrap_err().contains("already exists"));
+        assert_eq!(fs::read_to_string(d.join("g").join("a.txt")).unwrap(), "keep");
+        assert!(move_into(&d.join("f"), &d.join("f").join("sub")).unwrap_err().contains("inside itself"));
+        assert_eq!(move_into(&d.join("f"), &d.join("g")).unwrap(), d.join("g").join("f"));
+        assert!(d.join("g").join("f").join("sub").is_dir() && !d.join("f").exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_are_not_copied() {
+        let d = temp_dir("links");
+        fs::write(d.join("t"), "t").unwrap();
+        std::os::unix::fs::symlink(d.join("t"), d.join("l")).unwrap();
+        fs::create_dir(d.join("in")).unwrap();
+        assert!(copy_into(&d.join("l"), &d.join("in")).unwrap_err().contains("link"));
         let _ = fs::remove_dir_all(&d);
     }
 

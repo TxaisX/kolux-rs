@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { between, DRAFT, flatten, isWsl, redoOf, tops, undoOf, type Node } from "./Explorer";
+import { between, dirAt, DRAFT, flatten, isWsl, movesInto, redoOf, tops, undoOf, type Node } from "./Explorer";
 
 const dir = (path: string): Node => ({ name: path.split("/").pop()!, path, kind: "dir" });
 const file = (path: string): Node => ({ name: path.split("/").pop()!, path, kind: "file" });
@@ -49,5 +49,23 @@ describe("explorer file operations", () => {
     expect(isWsl("\\\\wsl.localhost\\Ubuntu\\x")).toBe(true);
     expect(isWsl("//wsl.localhost/Ubuntu/x")).toBe(true);
     expect(isWsl("C:\\wsl$\\x")).toBe(false);
+  });
+  it("undoes a copy by binning the copies and a move by moving each item back", () => {
+    const copy = { kind: "copy" as const, from: ["/r/a.ts"], dir: "/r/d", made: ["/r/d/a.ts"] };
+    expect(undoOf(copy)).toEqual(["fs_trash", { paths: ["/r/d/a.ts"] }]);
+    expect(redoOf(copy)).toEqual(["fs_copy", { paths: ["/r/a.ts"], dir: "/r/d" }]);
+    const move = { kind: "move" as const, moves: [["/r/a.ts", "/r/d/a.ts"], ["/r/x/b", "/r/d/b"]] as [string, string][] };
+    expect(undoOf(move)).toEqual(["fs_move", { moves: [["/r/d/a.ts", "/r"], ["/r/d/b", "/r/x"]] }]);
+    expect(redoOf(move)).toEqual(["fs_move", { moves: [["/r/a.ts", "/r/d"], ["/r/x/b", "/r/d"]] }]);
+  });
+  it("drops into the folder under the pointer, the folder holding a file, or the root", () => {
+    const kids = { "/r": [{ name: "d", path: "/r/d", kind: "dir" }, { name: "f.ts", path: "/r/f.ts", kind: "file" }] as Node[], "/r/d": [{ name: "g.ts", path: "/r/d/g.ts", kind: "file" }] as Node[] };
+    const rows = flatten("/r", kids, new Set(["/r/d"]));
+    const isDir = (n: Node) => n.kind === "dir";
+    expect([0, 1, 2, 9].map((i) => dirAt(rows, i, "/r", isDir))).toEqual(["/r/d", "/r/d", "/r", "/r"]);
+  });
+  it("moves a folder chosen with its own children once, and skips what is already there", () => {
+    expect(movesInto(["/r/d", "/r/d/g.ts", "/r/f.ts", "/r/e/h.ts"], "/r/e")).toEqual([["/r/d", "/r/e"], ["/r/f.ts", "/r/e"]]);
+    expect(movesInto(["/r/e"], "/r/e")).toEqual([]);
   });
 });

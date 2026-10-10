@@ -7,9 +7,12 @@
 // File operations (EDIT-034, part 1): New file and New folder in the header, F2 renames in place
 // (Enter or leaving the field commits, Escape cancels), Delete moves the selection to the trash after
 // one question, Mod+Z and Mod+Shift+Z (or Ctrl+Y) undo and redo those, and the path or the relative
-// path can be copied. Copy, move and drop-in come with T-094-b2.
+// path can be copied. Part 2: Mod+C then Mod+V copies the selection into the highlighted folder (a taken
+// name gets " copy"), dragging rows moves them into the folder under the pointer (the tree scrolls near its
+// edges), and files dropped in from the desktop are copied there; each of these undoes too.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Close, FileCode, FolderPlus, Plus } from "../chrome/icons";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
@@ -18,8 +21,14 @@ export type Node = { name: string; path: string; kind: "dir" | "file" | "link" }
 export type Row = { node: Node; depth: number; parent: string | null };
 export type Draft = { dir: string; folder: boolean };
 /** One explorer action, as the undo history keeps it. */
-export type Op = { kind: "create"; path: string } | { kind: "rename"; from: string; to: string } | { kind: "trash"; paths: string[] };
+export type Op =
+  | { kind: "create"; path: string }
+  | { kind: "rename"; from: string; to: string }
+  | { kind: "trash"; paths: string[] }
+  | { kind: "copy"; from: string[]; dir: string; made: string[] }
+  | { kind: "move"; moves: [string, string][] }; // [from, to]
 type Gone = { path: string; permanent: boolean; error: string | null };
+type Placed = { from: string; to: string | null; error: string | null };
 
 const ROW = 22; // px
 const SPARE = 10; // rows drawn beyond each edge
@@ -50,11 +59,44 @@ const inside = (p: string, dir: string) => p.startsWith(dir + "\\") || p.startsW
 /** A selection to delete: a folder chosen along with things inside it goes once, as the folder. */
 export const tops = (paths: string[]) => paths.filter((p) => p !== DRAFT && !paths.some((q) => q !== p && inside(p, q)));
 /** The call that undoes an action, and the one that does it again. */
-export const undoOf = (op: Op): [string, Record<string, unknown>] =>
-  op.kind === "create" ? ["fs_trash", { paths: [op.path] }] : op.kind === "rename" ? ["fs_rename", { path: op.to, name: baseName(op.from) }] : ["fs_restore", { paths: op.paths }];
-export const redoOf = (op: Op): [string, Record<string, unknown>] =>
-  op.kind === "create" ? ["fs_restore", { paths: [op.path] }] : op.kind === "rename" ? ["fs_rename", { path: op.from, name: baseName(op.to) }] : ["fs_trash", { paths: op.paths }];
-const touched = (op: Op) => (op.kind === "trash" ? op.paths : op.kind === "create" ? [op.path] : [op.from, op.to]);
+export function undoOf(op: Op): [string, Record<string, unknown>] {
+  switch (op.kind) {
+    case "create":
+      return ["fs_trash", { paths: [op.path] }];
+    case "rename":
+      return ["fs_rename", { path: op.to, name: baseName(op.from) }];
+    case "trash":
+      return ["fs_restore", { paths: op.paths }];
+    case "copy":
+      return ["fs_trash", { paths: op.made }];
+    case "move":
+      return ["fs_move", { moves: op.moves.map(([from, to]) => [to, parentOf(from)]) }];
+  }
+}
+export function redoOf(op: Op): [string, Record<string, unknown>] {
+  switch (op.kind) {
+    case "create":
+      return ["fs_restore", { paths: [op.path] }];
+    case "rename":
+      return ["fs_rename", { path: op.from, name: baseName(op.to) }];
+    case "trash":
+      return ["fs_trash", { paths: op.paths }];
+    case "copy":
+      return ["fs_copy", { paths: op.from, dir: op.dir }];
+    case "move":
+      return ["fs_move", { moves: op.moves.map(([from, to]) => [from, parentOf(to)]) }];
+  }
+}
+const touched = (op: Op) =>
+  op.kind === "trash" ? op.paths : op.kind === "create" ? [op.path] : op.kind === "rename" ? [op.from, op.to] : op.kind === "copy" ? op.made : op.moves.flat();
+/** The folder something lands in at row i: that folder, or the one holding that file; past the last row, the root. */
+export function dirAt(rows: Row[], i: number, root: string, isDir: (n: Node) => boolean) {
+  const r = rows[i];
+  return !r || r.node.path === DRAFT ? root : isDir(r.node) ? r.node.path : (r.parent ?? root);
+}
+/** A drag's moves: each top-level item not already in that folder and not the folder itself. */
+export const movesInto = (paths: string[], dir: string): [string, string][] => tops(paths).filter((p) => p !== dir && parentOf(p) !== dir).map((p) => [p, dir]);
+const EDGE = 24; // px from the tree's top or bottom where a drag scrolls it
 
 type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; onClose: () => void };
 
@@ -74,6 +116,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   const [renaming, setRenaming] = useState<string | null>(null);
   const [asking, setAsking] = useState<string[] | null>(null); // paths waiting for the delete answer
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null); // bad notes show as failures
+  const [clip, setClip] = useState<string[] | null>(null); // what Mod+C picked, for Mod+V
+  const [dropAt, setDropAt] = useState<string | null>(null); // the folder a drag or a desktop drop would land in
+  const swallow = useRef(false); // the click that ends a drag is not a click on the row
   const done = useRef<Op[]>([]);
   const undone = useRef<Op[]>([]);
 
@@ -154,8 +199,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   };
   const back = () => box.current?.focus();
   const startNew = (folder: boolean) => {
-    const r = rows[index];
-    const dir = !r || r.node.path === DRAFT ? root : isDir(r.node) ? r.node.path : (r.parent ?? root);
+    const dir = dirAt(rows, index, root, isDir);
     if (dir !== root) setOpen((o) => new Set(o).add(dir));
     setRenaming(null);
     setDraft({ dir, folder });
@@ -171,13 +215,21 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
       void load(d.dir).then(() => pick(path));
     }, fail);
   };
+  /** Open folders that moved or were renamed stay open at their new paths. */
+  const follow = (moves: [string, string][], also?: string) => {
+    const to = (p: string) => moves.reduce((q, [a, b]) => (q === a || inside(q, a) ? b + q.slice(a.length) : q), p);
+    const next = new Set([...open].map(to));
+    if (also && also !== root) next.add(also);
+    setOpen(next);
+    [...open].filter((p) => to(p) !== p).forEach((p) => void load(to(p)));
+  };
   const commitRename = (from: string, name: string) => {
     setRenaming(null);
     back();
     if (!name.trim() || name === baseName(from)) return;
     invoke<string>("fs_rename", { path: from, name }).then((to) => {
       record({ kind: "rename", from, to });
-      setOpen((o) => new Set([...o].map((p) => (p === from || inside(p, from) ? to + p.slice(from.length) : p))));
+      follow([[from, to]]);
       void load(parentOf(from)).then(() => pick(to));
     }, fail);
   };
@@ -197,16 +249,45 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
       setSel(new Set());
     }, fail);
   };
+  const errorsOf = (res: Placed[]) => res.flatMap((p) => (p.error ? [p.error] : []));
+  const doCopy = (paths: string[], dir: string) =>
+    invoke<Placed[]>("fs_copy", { paths, dir }).then((res) => {
+      const landed = res.filter((p) => p.to);
+      const made = landed.map((p) => p.to!);
+      if (made.length) record({ kind: "copy", from: landed.map((p) => p.from), dir, made });
+      const errors = errorsOf(res);
+      if (errors.length) setNote({ text: errors.join("; "), bad: true });
+      if (dir !== root) setOpen((o) => new Set(o).add(dir));
+      void load(dir).then(() => made.length && (setSel(new Set(made)), setAt(made[0])));
+    }, fail);
+  const doMove = (paths: string[], dir: string) => {
+    const moves = movesInto(paths, dir);
+    if (!moves.length) return;
+    invoke<Placed[]>("fs_move", { moves }).then((res) => {
+      const ok = res.flatMap((p): [string, string][] => (p.to ? [[p.from, p.to]] : []));
+      if (ok.length) record({ kind: "move", moves: ok });
+      const errors = errorsOf(res);
+      if (errors.length) setNote({ text: `Not moved: ${errors.join("; ")}`, bad: true });
+      follow(ok, dir);
+      reloadAround(ok.flat());
+      void load(dir);
+      setSel(new Set(ok.map(([, to]) => to)));
+      if (ok.length) setAt(ok[0][1]);
+    }, fail);
+  };
   const replay = (from: typeof done, to: typeof done, call: (op: Op) => [string, Record<string, unknown>]) => {
     const op = from.current.pop();
     if (!op) return;
     const [cmd, args] = call(op);
-    invoke<Gone[] | string | null>(cmd, args).then(
+    invoke<Gone[] | Placed[] | string | null>(cmd, args).then(
       (res) => {
         const err = Array.isArray(res) ? res.find((g) => g.error)?.error : null;
         if (err) return fail(err);
+        if (op.kind === "copy" && cmd === "fs_copy") op.made = (res as Placed[]).flatMap((p) => (p.to ? [p.to] : [])); // the copies may get new names
         to.current.push(op);
         setNote(null);
+        if (cmd === "fs_move") follow((res as Placed[]).flatMap((p): [string, string][] => (p.to ? [[p.from, p.to]] : [])));
+        if (cmd === "fs_rename") follow([[args.path as string, res as string]]);
         reloadAround(touched(op));
       },
       (err) => {
@@ -225,7 +306,19 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     if (e.target !== box.current) return; // a field inside the panel keeps its own keys
     const r = rows[index];
     const hit = matchEvent(keymap, e.nativeEvent, ["explorer"]);
-    switch (hit?.id ?? e.key) {
+    const mod = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+    const key = !hit && mod && (e.key === "c" || e.key === "v") ? `Mod+${e.key.toUpperCase()}` : e.key;
+    switch (hit?.id ?? key) {
+      case "Mod+C": {
+        const chosen = tops(sel.size ? [...sel] : at ? [at] : []);
+        if (!chosen.length) break;
+        setClip(chosen);
+        setNote({ text: `${chosen.length === 1 ? baseName(chosen[0]) : `${chosen.length} items`} ready to paste with Ctrl+V into a folder` });
+        break;
+      }
+      case "Mod+V":
+        if (clip) void doCopy(clip, dirAt(rows, index, root, isDir));
+        break;
       case "fileExplorer.undo":
         replay(done, undone, undoOf);
         break;
@@ -276,7 +369,76 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     e.preventDefault();
     e.stopPropagation();
   };
+  // Dragging rows moves them. Pointer events, not HTML drag and drop: on Windows the web view hands
+  // HTML drags to the desktop drop handler below.
+  const rowAt = (clientY: number) => {
+    const el = box.current!;
+    return Math.floor((clientY - el.getBoundingClientRect().top + el.scrollTop) / ROW);
+  };
+  const startDrag = (e: React.PointerEvent, path: string) => {
+    if (e.button !== 0 || path === DRAFT || path === renaming) return;
+    const paths = sel.has(path) ? [...sel] : [path];
+    const [x0, y0] = [e.clientX, e.clientY];
+    let on = false;
+    let edge = 0;
+    let last = y0;
+    const timer = window.setInterval(() => {
+      if (!on || !edge || !box.current) return;
+      box.current.scrollTop += edge * (ROW / 2);
+      setDropAt(dirAt(rows, rowAt(last), root, isDir));
+    }, 30);
+    const move = (ev: PointerEvent) => {
+      if (!on && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
+      on = true;
+      last = ev.clientY;
+      const b = box.current!.getBoundingClientRect();
+      edge = ev.clientY < b.top + EDGE ? -1 : ev.clientY > b.bottom - EDGE ? 1 : 0;
+      setDropAt(dirAt(rows, rowAt(ev.clientY), root, isDir));
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.clearInterval(timer);
+      setDropAt(null);
+      if (!on) return;
+      swallow.current = true;
+      window.setTimeout(() => (swallow.current = false));
+      const b = box.current!.getBoundingClientRect();
+      const inTree = ev.clientX >= b.left && ev.clientX <= b.right && ev.clientY >= b.top && ev.clientY <= b.bottom;
+      if (inTree) doMove(paths, dirAt(rows, rowAt(ev.clientY), root, isDir));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  // Files dragged in from the desktop are copied into the folder under the pointer.
+  const live = useRef({ rows, isDir, doCopy });
+  live.current = { rows, isDir, doCopy };
+  useEffect(() => {
+    if (hidden) return;
+    let off: (() => void) | undefined;
+    let gone = false;
+    getCurrentWebview()
+      .onDragDropEvent(({ payload: p }) => {
+        const el = box.current;
+        if (p.type === "leave" || !el) return setDropAt(null);
+        const ratio = window.devicePixelRatio || 1;
+        const [x, y] = [p.position.x / ratio, p.position.y / ratio];
+        const b = el.getBoundingClientRect();
+        const over = x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+        const dir = over ? dirAt(live.current.rows, rowAt(y), root, live.current.isDir) : null;
+        if (p.type !== "drop") return setDropAt(dir);
+        setDropAt(null);
+        if (dir) void live.current.doCopy(p.paths, dir);
+      })
+      .then((u) => (gone ? u() : (off = u)), () => {});
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [hidden, root]);
+
   const onRow = (e: React.MouseEvent, i: number) => {
+    if (swallow.current) return;
     const n = rows[i].node;
     if (n.path === DRAFT || n.path === renaming) return;
     box.current?.focus();
@@ -350,7 +512,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         </div>
       )}
       <div
-        className="explorer-rows"
+        className={`explorer-rows${dropAt === root ? " drop" : ""}`}
         ref={box}
         tabIndex={0}
         role="tree"
@@ -376,9 +538,10 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
                 aria-level={r.depth + 1}
                 aria-expanded={dir ? isOpen : undefined}
                 aria-selected={sel.has(r.node.path)}
-                className={`ex-row${sel.has(r.node.path) ? " sel" : ""}${i === index ? " at" : ""}`}
+                className={`ex-row${sel.has(r.node.path) ? " sel" : ""}${i === index ? " at" : ""}${dropAt === r.node.path ? " drop" : ""}`}
                 style={{ top: i * ROW, paddingLeft: 8 + r.depth * 12 }}
                 onMouseDown={(e) => editing || e.preventDefault()}
+                onPointerDown={(e) => startDrag(e, r.node.path)}
                 onClick={(e) => onRow(e, i)}
                 title={editing ? undefined : r.node.path}
               >
