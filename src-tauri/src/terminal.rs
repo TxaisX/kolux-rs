@@ -71,7 +71,7 @@ impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, env: Option<(&str, String)>) -> Result<u32, String> {
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Option<(&str, String)>) -> Result<u32, String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
@@ -97,6 +97,10 @@ impl Terminals {
         }
         if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
             command.env(crate::cli::APP_DIR_ENV, dir);
+        }
+        // SET-027: the user's variables for this agent; Kolux's account variable below wins.
+        for (k, v) in own_env {
+            command.env(k, v);
         }
         if let Some((k, v)) = env {
             // A pane on a managed Claude account must not be overridden by a 1-year key that
@@ -151,6 +155,29 @@ impl Terminals {
     pub fn resize(&self, id: u32, cols: u16, rows: u16) -> Result<(), String> {
         let inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.sessions.get(&id).ok_or("no such terminal")?.resize(cols.max(2), rows.max(1))
+    }
+
+    /// TERM-045: whether closing session `id` would stop a live program: one started as the pane's
+    /// program (an agent) is live while it runs; a shell is live while it has a program of its own
+    /// running. A session that has ended, or a check that fails, reads as idle (fails open).
+    pub fn busy(&self, id: u32) -> bool {
+        let pid = match self.inner.lock() {
+            Ok(inner) => match inner.sessions.get(&id) {
+                Some(_) if inner.marks.contains_key(&id) => return true,
+                Some(s) => s.pid(),
+                None => return false,
+            },
+            Err(_) => return false,
+        };
+        pid.and_then(crate::procs::has_children).unwrap_or(false)
+    }
+
+    /// APP-054: every session with its process id and the folder it was started in.
+    pub fn list(&self) -> Vec<(u32, Option<u32>, Option<String>)> {
+        match self.inner.lock() {
+            Ok(inner) => inner.sessions.iter().map(|(id, s)| (*id, s.pid(), inner.dirs.get(id).cloned())).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Ends one session. Its exit event follows from the waiter thread.
@@ -241,11 +268,12 @@ impl Terminals {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>) -> Result<u32, String> {
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
+    let env_own = env.unwrap_or_default();
     let env = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
@@ -256,7 +284,13 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
     };
-    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env)
+    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env_own, env)
+}
+
+/// TERM-045: for each id, whether closing it would stop a live program.
+#[tauri::command]
+pub fn terminal_busy(terminals: tauri::State<'_, Terminals>, ids: Vec<u32>) -> Vec<bool> {
+    ids.into_iter().map(|id| terminals.busy(id)).collect()
 }
 
 #[tauri::command]

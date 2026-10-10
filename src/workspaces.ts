@@ -38,7 +38,9 @@ export function withoutDir<P extends PaneLike>(panes: P[], root: string): P[] {
   return panes.filter((p) => !underDir(p.cwd, root));
 }
 
-/** Where to go when the shown workspace is removed: stay unless it was the one removed, then the home group. */
-export function activeAfterRemove(active: string | null, removed: string): string | null {
-  return active !== null && underDir(active, removed) ? null : active;
+/** Where to go when the shown workspace is removed: stay unless it was the one removed, then the
+ * most recently used sibling in the same project (PROJ-070), else the home group. */
+export function activeAfterRemove(active: string | null, removed: string, recent: string[] = [], siblings: string[] = []): string | null {
+  if (active === null || !underDir(active, removed)) return active;
+  return recent.find((d) => !underDir(d, removed) && siblings.some((s) => sameDir(s, d))) ?? null;
 }

@@ -17,6 +17,7 @@
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useRef, useState } from "react";
+import { blocker, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
@@ -62,6 +63,8 @@ type Props = {
   onIndex: (projects: Project[], owner: Record<string, string>) => void;
   /** Bumped by Mod+N (workspace.create): opens the name field for the project in front. */
   createRequest: number;
+  /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
+  deleteRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
   /** PROJ-047: child workspaces nest under their parent unless this is off. */
@@ -69,7 +72,7 @@ type Props = {
   onNest: (on: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, onStartIn, nest, onNest }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -93,8 +96,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   shown.current = activeDir;
   const [name, setName] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
-  // GIT-067: `dirty` is set once the back end refused because of uncommitted work; the form then asks again.
-  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; dirty?: boolean } | null>(null);
+  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
@@ -298,6 +300,14 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   useEffect(() => {
     if (createRequest > 0) setCreating(projectInFront());
   }, [createRequest]);
+  useEffect(() => {
+    if (deleteRequest === 0 || activeDir === null) return;
+    for (const p of projects) {
+      const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(activeDir, x.path));
+      if (w) return void ask(p.id, w.path, worktreeLabel(w));
+    }
+    say("warn", "The workspace shown is not one Kolux can delete (a main checkout, or no workspace).");
+  }, [deleteRequest]);
   const nameField = (p: Project | null) => (
     <div className="sb-form" data-create={p?.id ?? ""}>
       <input aria-label="workspace name" className="field" placeholder="name, e.g. Fix login" value={name} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
@@ -323,17 +333,39 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     </div>
   );
 
-  const remove = async () => {
-    if (!confirm) return;
+  // PROJ-070: look at the workspace first; the question shows what would be lost, and a clean
+  // one with the question switched off goes straight to deleting.
+  const ask = async (projectId: string, path: string, branch: string) => {
+    setBusy("checking");
+    let asked = null;
+    try {
+      const check = await invoke<RemoveCheck>("workspace_remove_check", { projectId, path });
+      const settings = await invoke<Record<string, unknown>>("get_settings");
+      asked = { projectId, path, branch, check, force: false };
+      if (!skipsQuestion(check, settings)) {
+        setConfirm(asked);
+        asked = null;
+      }
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy("");
+    }
+    if (asked) await remove(asked);
+  };
+  const remove = async (c = confirm) => {
+    if (!c) return;
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: confirm.projectId, path: confirm.path, force: confirm.dirty === true });
-      onRemoved(confirm.path);
-      say("ok", `removed ${confirm.branch} and its folder`);
+      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      onRemoved(c.path);
+      say("ok", `removed ${c.branch} and its folder`);
       setConfirm(null);
       await reload();
     } catch (err) {
-      if (!confirm.dirty && String(err).includes("has uncommitted changes")) setConfirm({ ...confirm, dirty: true });
+      // refused: say why in the question, showing the workspace as it is now with the force box cleared
+      const check = await invoke<RemoveCheck>("workspace_remove_check", { projectId: c.projectId, path: c.path }).catch(() => null);
+      if (check) setConfirm({ ...c, check, force: false, refusal: String(err) });
       else fail(err);
     } finally {
       setBusy("");
@@ -400,7 +432,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               disabled={busy !== ""}
               onClick={(e) => {
                 e.stopPropagation();
-                setConfirm({ projectId: p.id, path: w.path, branch: worktreeLabel(w) });
+                void ask(p.id, w.path, worktreeLabel(w));
               }}
             >
               <Close size={11} />
@@ -409,18 +441,32 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         </div>
         {asking && (
           <div className="sb-form warn">
-            {confirm.dirty ? (
-              <>
-                <b>{confirm.branch}</b> has uncommitted changes. Remove it anyway? That work is lost.
-              </>
-            ) : (
-              <>
-                Delete branch <b>{confirm.branch}</b> and its folder?
-              </>
+            <span>
+              Delete branch <b>{confirm.branch}</b> and its folder?{" "}
+              {blocker(confirm.check) ?? (confirm.check.changes.length > 0 ? `${confirm.check.changes.length} uncommitted or untracked change${confirm.check.changes.length === 1 ? "" : "s"} would be lost:` : "Nothing uncommitted is there.")}
+            </span>
+            {confirm.check.changes.length > 0 && (
+              <ul className="del-changes" aria-label="changes that would be lost">
+                {shownChanges(confirm.check).lines.map((l) => (
+                  <li key={l}>{l}</li>
+                ))}
+                {shownChanges(confirm.check).more > 0 && <li>and {shownChanges(confirm.check).more} more</li>}
+              </ul>
+            )}
+            {confirm.refusal && (
+              <span className="note error" role="alert">
+                {confirm.refusal}
+              </span>
+            )}
+            {confirm.check.changes.length > 0 && !blocker(confirm.check) && (
+              <label className="del-force">
+                <input type="checkbox" checked={confirm.force} onChange={(e) => setConfirm({ ...confirm, force: e.target.checked })} />
+                Delete my changes too
+              </label>
             )}
             <div className="btn-row">
-              <button className="btn danger" onClick={remove} disabled={busy !== ""}>
-                {busy === "removing" ? "Removing…" : confirm.dirty ? "Discard and remove" : "Remove"}
+              <button className="btn danger" onClick={() => remove()} disabled={busy !== "" || blocker(confirm.check) !== null}>
+                {busy === "removing" ? "Removing…" : "Remove"}
               </button>
               <button className="btn" onClick={() => setConfirm(null)}>
                 Keep

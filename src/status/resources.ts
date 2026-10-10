@@ -1,0 +1,32 @@
+// APP-054: the Resource Manager's rows. The Rust side measures every terminal session; here they
+// are grouped under the workspace (worktree) folder they run in, the rest under "No worktree".
+import { underDir } from "../workspaces";
+
+export type Usage = { bytes: number; cpu: number; processes: number };
+export type SessionUsage = Usage & { id: number; dir: string | null };
+export type Resources = { app: Usage; sessions: SessionUsage[]; free: number | null; total: number | null };
+export type Row = SessionUsage & { name: string; shown: boolean };
+export type Group = { label: string; dir: string | null; rows: Row[] };
+
+const base = (dir: string) => dir.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || dir;
+
+/** `names`: the tab name of every session shown in a pane, by terminal id. `workspaces`: the
+ * workspace folders Kolux knows; a session belongs to the deepest one it runs in. */
+export function groupSessions(sessions: SessionUsage[], names: Record<number, string>, workspaces: string[]): Group[] {
+  const groups = new Map<string, Group>();
+  const none: Group = { label: "No worktree", dir: null, rows: [] };
+  for (const s of [...sessions].sort((a, b) => a.id - b.id)) {
+    const row = { ...s, name: names[s.id] ?? `Session ${s.id} (not in a pane)`, shown: s.id in names };
+    const home = workspaces.filter((w) => underDir(s.dir, w)).sort((a, b) => b.length - a.length)[0];
+    if (home === undefined) {
+      none.rows.push(row);
+      continue;
+    }
+    const g = groups.get(home) ?? { label: base(home), dir: home, rows: [] };
+    g.rows.push(row);
+    groups.set(home, g);
+  }
+  return [...groups.values(), ...(none.rows.length > 0 ? [none] : [])];
+}
+
+export const formatCpu = (cpu: number) => `${cpu < 10 ? cpu.toFixed(1) : Math.round(cpu)}%`;

@@ -13,13 +13,18 @@
 // Source Control is a card on the right (Mod+Shift+G, Mod+L or the top bar's panel button): the
 // workspace in front's changes, staging and a commit box; its draft message is kept here per
 // worktree (T-018-a, src/scm/SourceControlPanel.tsx).
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
+import CloseAsk from "./terminal/CloseAsk";
+import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
+import { readLook, startScreen } from "./settings/general";
+import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -31,7 +36,7 @@ import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
-import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
+import { DEFAULT_AGENT_KEY, defaultAgentId, offeredAgents } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { nextNeedsYou } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
@@ -46,7 +51,7 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -70,13 +75,14 @@ function TabBadge({ kind }: { kind: Badge }) {
   );
 }
 /** SESS-051: a seat's start line as the back end builds it. */
-type StartLine = { args: string[]; typed: string | null };
+type StartLine = { args: string[]; typed: string | null; program: string | null; env: [string, string][] };
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
-export default function App() {
+/** `initial`: the settings read before the first frame (main.tsx), so the first screen is right at once. */
+export default function App({ initial = {} }: { initial?: Record<string, unknown> }) {
   return (
     <KeymapProvider>
-      <Window />
+      <Window initial={initial} />
     </KeymapProvider>
   );
 }
@@ -86,11 +92,12 @@ export function nextScreen(s: Screen): Screen {
   return screens[(screens.findIndex((x) => x.id === s) + 1) % screens.length].id;
 }
 
-function Window() {
+function Window({ initial }: { initial: Record<string, unknown> }) {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [screen, setScreen] = useState<Screen>("terminals");
+  const [screen, setScreen] = useState<Screen>(() => startScreen(initial)); // SET-037
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsAt, setSettingsAt] = useState<{ target: SettingsTarget | null; n: number }>({ target: null, n: 0 }); // SET-006: a link's page and section
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
@@ -130,14 +137,23 @@ function Window() {
   }, []);
   const markDir = (dir: string, un: boolean) => setUnreadDirs((u) => new Set(un ? [...u, dir] : [...u].filter((d) => !sameDir(d, dir))));
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
+  const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
+  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [settings, setSettings] = useState<Record<string, unknown>>({});
+  const [allAgents, setAgents] = useState<AgentInfo[]>([]);
+  const [settings, setSettings] = useState<Record<string, unknown>>(initial);
+  const classic = readLook(settings) === "classic";
+  // SET-027: everywhere but Settings, only agents that are switched on are offered.
+  const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
   const defaultId = defaultAgentId(settings);
   const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
   const [projects, setProjects] = useState<Project[]>([]);
   const [owner, setOwner] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
+  const [deleteRequest, setDeleteRequest] = useState(0); // PROJ-070: Mod+Shift+Backspace asks to delete the shown workspace
+  const recentDirs = useRef<string[]>([]); // PROJ-070: workspaces shown, newest first
+  const activeRef = useRef<string | null>(null);
+  activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -153,11 +169,24 @@ function Window() {
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
-    invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
-    const readSettings = () => void invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    const readAgents = () => void invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
+    readAgents();
+    // SET-027: Refresh on the Agents page looks again; the window takes the new list too.
+    const offAgents = listen("agents-changed", readAgents);
+    // SET-001: the saved look is put on the window every time the settings are read.
+    const readSettings = () =>
+      void invoke<Record<string, unknown>>("get_settings")
+        .then((s) => {
+          setSettings(s);
+          applyAppearance(readAppearance(s));
+        })
+        .catch(() => setSettings({}));
     readSettings();
     const off = listen("settings-saved", readSettings);
-    return () => void off.then((u) => u()).catch(() => {});
+    return () => {
+      void off.then((u) => u()).catch(() => {});
+      void offAgents.then((u) => u()).catch(() => {});
+    };
   }, []);
 
   const saveSetting = (key: string, value: unknown) => {
@@ -177,9 +206,23 @@ function Window() {
   }, []);
 
   // T-005: the shortcuts file is read at start; what it got wrong is said once, in the notice.
+  const keymapNotice = keymap.errors.join(" ");
   useEffect(() => {
-    if (keymap.errors.length) setNotice(keymap.errors.join(" "));
-  }, [keymap]);
+    if (keymapNotice) setNotice(keymapNotice);
+  }, [keymapNotice]);
+  // SET-037: under Classic there is only the Terminals screen.
+  useEffect(() => {
+    if (classic) setScreen("terminals");
+  }, [classic]);
+  // SET-006: a link anywhere in the app opens Settings at its page and section.
+  useEffect(() => {
+    const open = (e: Event) => {
+      setSettingsAt((a) => ({ target: (e as CustomEvent<SettingsTarget>).detail, n: a.n + 1 }));
+      setSettingsOpen(true);
+    };
+    window.addEventListener(OPEN_SETTINGS, open);
+    return () => window.removeEventListener(OPEN_SETTINGS, open);
+  }, []);
 
   // Global-scope shortcuts are pressed here, wherever focus is (the terminal policy comes with
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
@@ -205,6 +248,7 @@ function Window() {
           void invoke("browser_go", { id: focused, what: "reload" });
           break;
         case "app.settings":
+          if (!settingsOpen) setSettingsAt((a) => ({ target: null, n: a.n }));
           setSettingsOpen(true);
           break;
         case "sidebar.left.toggle":
@@ -216,13 +260,18 @@ function Window() {
           setScreen("terminals");
           setScmOpen((o) => !o);
           break;
+        case "workspace.delete":
+          setScreen("terminals");
+          setSidebarOpen(true);
+          setDeleteRequest((n) => n + 1);
+          break;
         case "workspace.create":
           setScreen("terminals");
           setSidebarOpen(true);
           setCreateRequest((n) => n + 1);
           break;
         case "view.cycleWorkspaceView":
-          setScreen((s) => nextScreen(s));
+          if (!classic) setScreen((s) => nextScreen(s));
           break;
         case "tab.newTerminal":
           void newTab(null);
@@ -231,8 +280,9 @@ function Window() {
           void newTab("browser");
           break;
         case "tab.newAgent": {
-          const a = agents.find((x) => x.id === defaultId && x.installed);
-          if (!a) setNotice(`The default agent (${defaultId}) is not installed.`);
+          // SET-027: with no default (switched off), the first agent available
+          const a = defaultId ? agents.find((x) => x.id === defaultId && x.installed) : agents.find((x) => x.installed);
+          if (!a) setNotice(defaultId ? `The default agent (${defaultId}) is not installed or is switched off.` : "No agent is installed and switched on.");
           else void newTab(a);
           break;
         }
@@ -301,7 +351,7 @@ function Window() {
     try {
       if (a) await pretrust(a.id, [activeDir]);
       const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: [], prompt: "" }) : null;
-      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: a.program, args: line.args, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
+      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
       setPanes((ps) => [...ps, pane]);
       setFocused(key);
     } catch (err) {
@@ -400,7 +450,7 @@ function Window() {
         const title = s.title?.trim() || (s.role && s.role[0].toUpperCase() + s.role.slice(1)) || undefined;
         const { cwd, branch } = places[i];
         return a && line
-          ? { key: k, cwd, branch, agent: markFor(a.id), program: a.program, args: line.args, title, batch, typed: line.typed ?? undefined }
+          ? { key: k, cwd, branch, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
           : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
@@ -423,7 +473,7 @@ function Window() {
       await pretrust(agent.id, [dir]);
       const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
       const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: agent.program, args: line.args, title, typed: line.typed ?? undefined }]);
+      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined }]);
       if (show) {
         setActiveDir(dir);
         setFocused(key);
@@ -437,6 +487,7 @@ function Window() {
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
   const select = (dir: string, branch: string | null) => {
     setPage(null);
+    recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
     setActiveDir(dir);
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else addShell(dir, branch);
@@ -444,9 +495,13 @@ function Window() {
 
   // PROJ-066: removing a workspace closes every pane in it, wherever it was; the view stays
   // unless it was the one removed, then it falls back to the home group.
+  // PROJ-070: the removed one gives way to the sibling used last that still has panes; the shown
+  // workspace is read when the delete finishes, so a user who went elsewhere meanwhile stays there.
   const removed = (path: string) => {
     const left = withoutDir(panes, path);
-    const next = activeAfterRemove(activeDir, path);
+    const pid = projectOf(path);
+    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !sameDir(d, path) && panesIn(left, d).length > 0).map(([d]) => d);
+    const next = activeAfterRemove(activeRef.current, path, recentDirs.current, siblings);
     setPanes(left);
     setActiveDir(next);
     setFocused((f) => focusIn(left, next, f));
@@ -540,7 +595,8 @@ function Window() {
     setToast(batchEmpty ? `Nothing started: ${error}` : `A session did not start: ${error}`);
   };
 
-  const closePane = (key: number) => {
+  const dropPane = (key: number) => {
+    delete ptys.current[key];
     setPanes((ps) => ps.filter((p) => p.key !== key));
     setRunning((r) => {
       const { [key]: _gone, ...rest } = r;
@@ -551,6 +607,18 @@ function Window() {
     const next = gone ? neighbourTab(rest.filter((p) => groupOf(p) === groupOf(gone)).map((p) => p.key).concat(key), key) : null;
     setFocused((f) => (f === key ? (next ?? focusIn(rest, activeDir, f)) : f));
   };
+
+  // TERM-045: every close (keyboard, a tab's x, the pane header) asks first when a program would
+  // stop; a tab's panes are checked together so a split tab asks once. Idle, switched off, or a
+  // failed check: the tab closes at once.
+  const closeTab = async (keys: number[]) => {
+    const first = panes.find((p) => p.key === keys[0]);
+    const ids = keys.map((k) => ptys.current[k]).filter((id): id is number => id !== undefined);
+    const busy = asksBeforeClose(settings) ? await busyCount(ids, (ids) => invoke<boolean[]>("terminal_busy", { ids })) : 0;
+    if (busy === 0 || !first) return keys.forEach(dropPane);
+    setAsking({ keys, ...closeQuestion(tabName(first, titles), busy, keys.length) });
+  };
+  const closePane = (key: number) => void closeTab([key]);
 
   const terminals = screen === "terminals";
   const board = screen === "board";
@@ -594,9 +662,20 @@ function Window() {
   });
   return (
     <div className="app">
-      <TopBar screen={screen} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
+      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
       <div className="body">
-        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
+        {asking && (
+          <CloseAsk
+            title={asking.title}
+            body={asking.body}
+            onCancel={() => setAsking(null)}
+            onConfirm={() => {
+              asking.keys.forEach(dropPane);
+              setAsking(null);
+            }}
+          />
+        )}
+        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
         {terminals && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
@@ -624,6 +703,7 @@ function Window() {
             onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}
             createRequest={createRequest}
+            deleteRequest={deleteRequest}
             onStartIn={startIn}
             onIndex={(list, dirs) => {
               setProjects(list);
@@ -665,6 +745,11 @@ function Window() {
               {notice && (
                 <div className="notice" role="alert">
                   {notice}
+                  {notice === keymapNotice && (
+                    <button className="btn link" onClick={() => openSettings("shortcuts", "shortcuts-file")}>
+                      Shortcuts settings
+                    </button>
+                  )}
                   <button className="ib" onClick={() => setNotice(null)} title="Dismiss">
                     ×
                   </button>
@@ -756,6 +841,7 @@ function Window() {
                     agent={p.agent}
                     program={p.program}
                     args={p.args}
+                    env={p.env}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {
@@ -765,6 +851,9 @@ function Window() {
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onBell={() => noticed(p, "rang the bell")}
                     unread={unreadPanes.has(p.key)}
+                    onPty={(id) => {
+                      ptys.current[p.key] = id;
+                    }}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title}
@@ -789,7 +878,12 @@ function Window() {
           <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} />
         )}
       </div>
-      <StatusBar terminals={live.length} agents={live.filter((p) => p.agent !== "shell").length} />
+      <StatusBar
+        terminals={live.length}
+        agents={live.filter((p) => p.agent !== "shell").length}
+        names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
+        workspaces={Object.keys(owner)}
+      />
     </div>
   );
 }

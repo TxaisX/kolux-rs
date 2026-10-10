@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-025 · STAT-001 / STAT-007 / STAT-008 … (status hooks)
-Done: 49 / 353 tasks  ·  P0 parity: 0/228 cards
+Done: 55 / 353 tasks  ·  P0 parity: 0/228 cards
 
 How to read this: `PLAN.md` holds the 353 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -566,6 +566,48 @@ wrote says "Settings changed" with Sign in again, which puts Kolux's settings ba
 refuses the command Kolux starts it with is reported as such ("update Codex"), never as a sign-in
 problem. The Claude card has a "Carry on by itself once a usage limit resets" switch: off unless
 turned on, kept across restarts; it only stores the choice until the resume itself (T-041) lands.
+
+[accounts] Settings has an Appearance page (T-053): Classic plus 16 coloured themes, with tint,
+saturation and depth sliders (greyed out on Classic) and a small preview, and a Terminal colours
+picker with "Match app theme". Every change shows on the whole window at once and is kept. The
+window now starts hidden and appears only once it already wears the saved theme, so the white
+flash before the interface loads is gone too.
+
+[accounts] Settings now has its ten pages (General, Appearance, Accounts & keys, Agents, Terminal &
+sessions, Git & worktrees, Safety, Notifications, Shortcuts, Usage) plus one small page per
+repository, and opens on the page used last (T-054). Appearance has a Mode switch: System (the
+default, follows Windows while the app runs), Light or Dark, and terminals turn light with the
+app unless that is switched off. General has the Classic or New look and the screen that opens
+first; under Classic the Agents / Board / Terminals switcher is gone and the window stays on
+Terminals. Pages with nothing built yet say so.
+
+[accounts] Closing a tab whose program is still running now asks first (T-057): "Close
+“Terminal 1”? A program is still running in it.", with Cancel and Close tab. An idle shell closes
+at once. The tab's x, the pane's close button and Ctrl+W all ask the same way, and Settings >
+Terminal & sessions has a switch to turn the question off.
+
+[accounts] Deleting a workspace now looks first (T-055): the question lists the uncommitted and
+untracked files that would be lost, and Remove refuses unless "Delete my changes too" is ticked.
+A locked workspace, or one holding another workspace's folder, cannot be deleted from Kolux at all,
+and if the workspace changed while the question was open the delete is refused and the question
+shows it as it is now. Ctrl+Shift+Backspace asks to delete the workspace shown. Settings > Git &
+worktrees can switch the question off for clean workspaces. After a delete the window moves to
+the workspace in the same project used last, and the list keeps its scroll position.
+
+[accounts] Settings > Agents is built (T-036). It lists the agents found on this PC, each with an
+on/off switch; switched-off agents leave the New tab and New session menus. The default agent
+can be set to Auto (the first one available); switching the default off leaves Auto, and a
+saved default that is not installed right now keeps its name with "(saved, not found right now)".
+Agent Permissions picks Yolo (agents skip their permission prompts where they have a switch for
+it: Claude Code in its automatic mode, Codex without approvals) or Manual. Under "How it starts"
+each agent shows the exact line it starts with and takes its own command, default arguments and
+environment variables; Refresh looks for agents again.
+
+[accounts] The Resource Manager is built (T-037). Clicking the memory figure in the status bar
+opens it: the computer's free memory, Kolux itself (the app and its WebView), and every terminal
+session with its memory and CPU, grouped under the workspace it runs in, with terminals outside
+any workspace under "No worktree" and a session no pane shows named as such. End asks in the row
+first and stops only that session. Figures refresh every two seconds while it is open.
 
 ## Needs Txais
 
@@ -1144,6 +1186,63 @@ recorded default until told otherwise; nothing here blocks a pass.
   window's copy of the settings now reloads after every save, so one writer no longer drops
   another's field.
 
+- 2026-10-09 · [accounts] T-053 · Settings fields: `appTheme` (lower-case name, anything else is
+  Classic), `themeTint`, `themeSaturation`, `themeDepth`, `terminalScheme` (`default` or `match`).
+  A hued theme recolours only the grey tokens (backgrounds and lines at 30 % saturation times the
+  slider, text at a third of that; depth moves backgrounds 1.2 % lightness per step) and leaves the
+  status colours as they are. The window starts hidden (`visible: false`); main.tsx applies the
+  saved look, renders, and shows the window two frames later, with a 5 s backstop in Rust. The
+  last run's look is also kept in the page's local storage (`kolux.look`) for when the settings
+  answer slowly; it is not relied on, since a killed app may not have written it. There are no
+  pop-out windows yet; any later window loads the same page and gets the same look.
+
+- 2026-10-09 · [accounts] T-054 · Settings fields: `appearanceMode` (`system` | `light` | `dark`,
+  anything else is System), `terminalLightScheme` (true unless false), `uiLook` (`classic` | `new`),
+  `firstScreen` (`agents` | `board` | `terminals`). A profile whose settings already hold anything
+  but have no `uiLook` is Classic; an empty one is New; main.tsx writes the answer down on the
+  first start so it does not change later. NOTE for the merge: every existing dev profile
+  (main checkout included) therefore opens Classic, without the screen switcher, until New is
+  picked in Settings > General. Light mode turns the grey tokens over (backgrounds 1 - 0.7 x
+  lightness, text 1 - lightness) and darkens status colours by a quarter; warn / danger literals
+  became tokens for light mode only (dark keeps the measured values). The window sets
+  `data-mode` and `color-scheme` on the root. Settings links: `openSettings(page, section)` in
+  `src/settings/pages.ts`; sections carry `data-section`. The shortcut-policy setting itself
+  does not exist yet; the link is proved on Shortcuts > Commands and keys, and the keymap
+  notice's "Shortcuts settings" button opens the Shortcuts file section. The terminal picker's
+  "Kolux dark" is now called "Kolux", since it turns light in light mode.
+
+- 2026-10-09 · [accounts] T-057 · Settings field `confirmCloseRunning` (true unless false). A pane
+  started with a program (an agent) counts as live while it runs; a shell counts as live while a
+  process has it as its parent (Windows process snapshot, `pgrep -P` elsewhere, `src-tauri/src/procs.rs`).
+  A failed check closes without asking. The confirm focuses Close tab, so Ctrl+W then Enter closes;
+  Escape or a click outside keeps the tab. Panes in this build split into separate cells, never into
+  one tab, so the one-question-per-split-tab rule is in place (`closeTab` takes every pane key of a
+  tab) but has nothing to act on yet; the rest is named on T-102. Settings pages now share
+  `src/settings/useSettings.ts`.
+
+- 2026-10-09 · [accounts] T-055 · Settings field `confirmWorkspaceDelete` (false skips the question
+  for a clean workspace only). `workspace_remove` now takes `force` and `stamp` and re-checks before
+  deleting; the stamp is HEAD plus the porcelain lines, so any new, changed or committed file
+  refuses a delete asked about earlier. The CLI's remove (cli.rs) still deletes as before, forced.
+  Nested means another worktree of the same repository inside the folder; other projects'
+  folders inside it are not looked for (ponytail note in projects.rs). No delete animation exists,
+  so reduced motion has nothing to turn off. The move-to-sibling only picks a sibling that still
+  has panes, so the window never lands on an empty workspace.
+
+- 2026-10-09 · [accounts] T-036 · Settings fields: `disabledAgents` (ids switched off),
+  `agentOptions` ({id: {command, args, env}}, args split on spaces with double quotes keeping a
+  part together, env one NAME=value per line), `agentPermissions` ("manual", anything else is
+  Yolo), `defaultAgent` "" now means no default (Auto). An agent's own default arguments replace
+  the built-in ones and the permission mode leaves them alone. Kolux's account variable wins over
+  a user variable of the same name. No new no-prompt switch was added for other agents (that
+  stays with T-056). Reading these fields from an old Kolux profile waits for the compat import task.
+
+- 2026-10-09 · [accounts] T-037 · CPU is a share of the whole machine (every core), 0 to 100, so
+  one busy core on this PC reads about 5 %. The status bar figure is still the main process's
+  working set alone, while the Kolux row adds the WebView processes (about 500 MB against 38 MB
+  here). Console host processes belong to the app's tree on Windows, so they count under Kolux,
+  not under a session. A session's tree is found by parent ids (ponytail note in resources.rs).
+
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.
 - 2026-10-09 · T-023 · done: `src/terminal/status.ts` (header word, tone, icon, age, needs-you cycle) + `status.test.ts`; `TerminalPane.tsx` finish time, minute tick, glow until focused, `onNeedsYou`; `App.tsx` Ctrl+J handler across workspaces; `styles.css` glow and age. Live: agent workspace via CLI, split shell focused, `/exit` sent to the agent → "Done · just now" with a glow, "1m ago" after a minute, glow gone on focus; Ctrl+J with nothing waiting left focus where it was. Evidence: `evidence/T-023-glow.png`, `evidence/T-023-focused.png`.
@@ -1156,7 +1255,13 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
 - 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png
 - 2026-10-09 · T-016 · done: `terminal.rs` marks program sessions (start time, last output) and `program_in(dir, since)`; `projects::create_fresh` shared by the UI command and the CLI; `cli.rs` `orchestration worker-start` parse (`WORKER_FLAGS`, `check_worker_start` with every refusal from CLI-035/ORCH-016/018/019), `worker_start` dispatch (task made/found under `orchestration.tasks`, worktree made or picked, `created` + `start` notify, readiness wait, receipt, `orchestration.dispatches`), `text_of` worker line, help text; front end `CliWorkspace` `start` kind → `startIn` with extra args and a pane title; 2 Rust tests (49 total; dispatch test runs the full flow with a 1 ms timeout); live in the throwaway "repo": `worker-start --spec "add a test" --agent claude --json` → `status: ready` in 1.8 s, `dispatch-1`/`task-1`, worktree hazel-otter, terminal 2; sidebar row hazel-otter + background tab "add a test" (Claude, Running) while the view stayed on main; opening the row shows one tab with Claude's trust prompt; `claude.exe --permission-mode auto "add a test"` under the app; `--worktree current --base-branch main` refused with exit 1 before anything was made; `worktree rm --worktree path:… --force` took the row, tab, process and folder away; build / clippy / 49 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-016-ready.png, evidence/T-016-one-tab.png
-
+- 2026-10-09 · [accounts] T-037 · done: new `resources.rs` (`owners` counts each process tree under one session only and the rest under the app, `total` adds memory and CPU up with the app's working set standing in when its row is missing, `percent` clamps to the machine's cores, Win32 Toolhelp + process memory/times + GlobalMemoryStatusEx, `ps` and /proc/meminfo elsewhere; new `resources` command), `Terminals::list`, windows-sys features ProcessStatus / SystemInformation / Threading, `src/status/resources.ts` (grouping) and `ResourceManager.tsx`, the status bar memory figure opens it; 2 Rust tests (86 total), 1 front-end test (121 total); live: five sessions (three in a throwaway repository, one home terminal, one left from before a reload and shown in no pane) listed in their groups with memory figures, a session running a child read about twice the memory, ending it after the in-row question stopped it and its child while the other four kept running, ending the hidden one left the remaining three, a busy loop read 5.4 %; build / clippy / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-037.txt, evidence/T-037-*.png
+- 2026-10-09 · [accounts] T-036 · done: `agents.rs` (`StartLine` gains `program` and `env`; `start_line` applies the saved permission mode and the agent's command, arguments and environment; `split_args`, `parse_env`; `agent_start_line` reads the settings), `terminal.rs` (`terminal_spawn` takes `env`), App and TerminalPane pass them through, `src/launch/agents.ts` (`disabledAgents`, `offeredAgents`, `switchAgent`; no default means the first agent), new `src/settings/AgentsPage.tsx`; 1 Rust test (84 total), 1 front-end test (120 total); live: the page listed Claude Code and Codex, Claude given powershell.exe with `-NoLogo -NoExit -Command "echo $env:KOLUX_T036"` and KOLUX_T036=hello opened from New tab and printed hello, Manual dropped both agents' prompt-skipping flags, Claude switched off left Auto selected, no chip and a New tab menu without Claude, a saved default of aider showed "Aider (saved, not found right now)" through Refresh; build / clippy / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-036.txt, evidence/T-036-*.png
+- 2026-10-09 · [accounts] T-055 · done: `git.rs` (worktree `locked` read from `git worktree list --porcelain`, `changes` keeps the porcelain lines' leading space), `projects.rs` (`RemoveCheck`, `remove_check`, `removal_refused`: stamp, nested, locked never forced, changes need force; new `workspace_remove_check`, `workspace_remove` checks again before deleting), `src/projects/deleting.ts` (question rules), ProjectsPanel question lists up to five changes with a force box and shows a refusal in place, `workspace.delete` shortcut wired, `src/settings/GitPage.tsx`, `activeAfterRemove` picks the sibling used last; 1 Rust test (83 total), 4 front-end tests (119 total); live: lima with a changed and an untracked file listed both, Remove without the box refused and kept the folder, a file added while asking refused with the stamp message and listed three, forced delete removed it and moved to kilo with the list still at scroll 200, a locked workspace showed its reason with Remove disabled and a direct forced call was refused, the question switched off in Settings deleted clean golf from Ctrl+Shift+Backspace at once while dirty hotel still asked; build / clippy / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-055.txt, evidence/T-055-*.png
+- 2026-10-09 · [accounts] T-057 · done: `src-tauri/src/procs.rs` (has a process started a child), `terminal_busy` command and `Terminals::busy` (program panes live while running, shells while they have a child, ended or failed reads idle), each session keeps its process id, `src/terminal/closing.ts` + `CloseAsk.tsx` (the question naming the tab), every close in App goes through `closeTab`, the pane's own Close defers to the window, Settings > Terminal & sessions gets the switch; 1 Rust test (82 total), 3 front-end tests (115 total); live: a background tab running ping closed from its x asks "Close “Terminal 1”?" with Close tab focused, Escape keeps it, Close tab removes it and ping is gone, an idle shell closes with Ctrl+W without a question, Ctrl+W and the pane header's close button on a busy tab ask too, with the switch off a busy tab closes at once; build / clippy / 82 Rust tests / 115 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process · evidence/T-057.txt, evidence/T-057-*.png
+- 2026-10-09 · [accounts] T-056 · NOT BUILT, left unticked, needs Txais: the permission check that guards this build session refused the edit that gives more agents their no-prompt start (Gemini CLI `--yolo`, Aider `--yes-always`, Goose `GOOSE_MODE` auto) as an unsafe-agent change, so nothing was changed. Claude Code (`--permission-mode auto`) and Codex (`--dangerously-bypass-approvals-and-sandbox`) already start that way from the agent catalogue. The rest of the card (the user's default arguments replacing the built-in ones, Kilo Code's refused argument dropped) waits with it. Txais decides: allow it for the build agent, or build it in a session of his own · no evidence
+- 2026-10-09 · [accounts] T-054 · done: `src/theme.ts` (mode and light-terminal fields, `isDark`, light `buildTheme`, light terminal scheme, `followSystemMode`, two-frame transition hold on a light/dark switch), `src/settings/pages.ts` (ten pages, repo pages, `openSettings`, last page), `src/settings/general.ts` + `GeneralPage.tsx` (look and first screen), `ShortcutsPage.tsx` (file, errors, every command and its keys), SettingsPage rebuilt on the page list with lazily loaded pages and scroll-to-section, Appearance gets Interface > Mode and the light-scheme switch, App starts on the saved first screen and hides the switcher under Classic, the screen-cycle shortcut does nothing under Classic; 7 new front-end tests (112 total); live: existing profile opens Classic with System = light (Windows is in light mode) and the General page greys Agents and Board, New brings the switcher back, Board saved as first screen shows first after a restart, a fresh profile is written as New, Dark applies at once and System follows an emulated Windows switch to dark and back (#050405 / #fcfcfc), transitions held for two frames, light scheme on gives a #f6f6f6 terminal and off #0d0d0d, a link opens Shortcuts scrolled to its section, a repository adds an 11th entry with its own page; build / clippy / 81 Rust tests / 112 front-end tests / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-054.txt, evidence/T-054-*.png
+- 2026-10-09 · [accounts] T-053 · done: `src/theme.ts` (17 themes in wheel order, `readAppearance` / `writeAppearance` with unknown names as Classic and sliders clamped or defaulted, `buildTheme`, `previewOf`, `terminalFor` with a matched 16-colour palette, `applyAppearance` + `cachedAppearance`), `src/settings/AppearancePage.tsx` (swatches, preview, sliders, terminal picker, live apply and a 250 ms save), Settings gets an Appearance page, open terminals recolour in place, App applies the look on every settings read, the window starts hidden and is shown after the first themed frame (index.html, main.tsx, tauri.conf.json, `core:window:allow-show`, Rust backstop); 7 front-end tests (105 total); live: fresh profile Classic with sliders off, Teal on the whole window inside one frame, Moss saturation 0 grey and back, saturation 500 read as 160 and a word as 100, Match with Sky then Ember recolours a running PowerShell pane (#090e11 then #110b09) and Kolux dark puts it back (#0d0d0d), Rose saved while the app was closed is the first visible frame, an unknown name starts as Classic; build / clippy / 81 Rust tests / 105 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-053.txt, evidence/T-053-*.png
 - 2026-10-09 · [accounts] T-043-d · HAND TO FABLE: Kolux-side renewal means Kolux sending the managed account's refresh credential to Anthropic's token service itself; that service's address, client id and answer are in no public Claude Code doc, so it cannot be built clean-room, and OD-01 (direct provider calls off) argues against building it at all, which is a call for Txais; the macOS keychain rules cannot be run or checked on this Windows PC; the switch alone (`claudeSignInUpkeepByClaudeCode` false) would only turn off Claude Code's upkeep with nothing in its place, so it was not shipped either; nothing changed, left unticked · no evidence
 - 2026-10-09 · [accounts] T-042-b · HAND TO FABLE: Codex's own usage service is not in OpenAI's public Codex docs (only the background process's `account/rateLimits/read`, which T-042-a already uses), so its address and answer cannot be learnt clean-room, and the last route reads Codex's status screen in a hidden terminal (PTY screen parsing); nothing changed, left unticked · no evidence
 - 2026-10-09 · [accounts] T-041 · HAND TO FABLE: blocked on T-025 and T-039 (carrying on after a limit needs the stop reason from the agent status hooks; Claude plan figures and the weekly pill need the status-line channel); the 200k window part could go alone (Claude Code's auto-compact variable, Codex's context-window and auto-compact overrides per run) but was not split off, to keep the task whole; the stored resume switch from T-045 waits for it; nothing changed, left unticked · no evidence

@@ -12,7 +12,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
-import { monoFont, terminalTheme } from "../theme";
+import { currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
@@ -34,6 +34,8 @@ type Props = {
   /** The program to run instead of the shell (an agent's command), with its arguments. */
   program?: string | null;
   args?: string[];
+  /** SET-027: the user's environment variables for this agent. */
+  env?: [string, string][];
   onRunning?: (running: boolean) => void;
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
@@ -41,6 +43,8 @@ type Props = {
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
   unread?: boolean;
+  /** TERM-045: the session id once it runs, so the window can ask whether closing would stop a program. */
+  onPty?: (id: number) => void;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
@@ -50,7 +54,7 @@ type Props = {
   /** Names a pane outside any workspace: "Terminal N". */
   number?: number;
   onFocus?: () => void;
-  /** Called after Close ended the program, so the window can drop the pane. */
+  /** Close was asked for; the window decides (TERM-045) and drops the pane, which ends its program. */
   onClose?: () => void;
   /** The plus menu behind the header's "+" button. */
   agents?: AgentInfo[];
@@ -65,7 +69,7 @@ type Props = {
   card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -81,11 +85,14 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   report.current = onRunning;
   const bell = useRef(onBell);
   bell.current = onBell;
+  const pty = useRef(onPty);
+  pty.current = onPty;
   const failed = useRef(onFailed);
   failed.current = onFailed;
 
   useEffect(() => {
     report.current?.(status.kind === "running");
+    if (status.kind === "running") pty.current?.(status.id);
   }, [status.kind]);
   // TERM-023: an agent that finished while this pane was not focused glows until it is; the age
   // next to Done refreshes each minute. The glow is static (no animation).
@@ -111,7 +118,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       cursorBlink: true,
       fontFamily: monoFont,
       fontSize: 13,
-      theme: terminalTheme(),
+      theme: currentTerminal(),
       allowProposedApi: true,
     });
     const fit = new FitAddon();
@@ -178,7 +185,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args });
+        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
@@ -201,9 +208,15 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     };
     const observer = new ResizeObserver(resize);
     observer.observe(el);
+    // SET-003: open terminals follow a theme change without being reopened.
+    const recolour = () => {
+      term.options.theme = currentTerminal();
+    };
+    window.addEventListener(TERMINAL_EVENT, recolour);
 
     return () => {
       alive = false;
+      window.removeEventListener(TERMINAL_EVENT, recolour);
       clearTimeout(quiet);
       observer.disconnect();
       unlisteners.forEach((u) => u());
@@ -214,13 +227,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     };
   }, []);
 
-  // Close ends the program (TERM-014; the "ask first" step comes with its own task) and tells
-  // the window, which drops the pane unless it is the last one.
-  const close = () => {
-    const id = idRef.current;
-    if (id !== null) invoke("terminal_kill", { id }).catch(() => {});
-    onClose?.();
-  };
+  // Close asks the window (TERM-045 may confirm first); dropping the pane ends its program
+  // through the cleanup above (TERM-014).
+  const close = () => onClose?.();
 
   // TERM-020/021: a plain shell reads as a terminal with a neutral status; an agent reads
   // Working (working tone) while its program is up, Done (done tone, with its age) after it

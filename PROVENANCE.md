@@ -353,3 +353,15 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-09 · T-044 · Claude Code's public setup page (code.claude.com/docs/en/setup) and OpenAI's public Codex CLI page (developers.openai.com/codex/cli) as the install pages opened by "Open install page"; `claude auth status` used as in T-043-b; the stand-in claude.exe and codex.exe for the live check were written for this task; no Claude Code or Codex source read
 
 > 2026-10-09 · T-045 · `claude auth status --json` used as in T-043-b; `cli_auth_credentials_store` from OpenAI's public Codex auth docs as in T-043-c; the usage-error wording is that of the common Rust command-line parser as seen from outside (`--help` output), not Codex source; the stand-in claude.exe and codex.exe for the live check were written for this task; no Claude Code or Codex source read
+
+> 2026-10-09 · T-053 · theme names and slider spans from the spec cards; the hue numbers, saturation and depth steps and the matched terminal palette were chosen for this task (no old-app colours exist beyond DESIGN.md's Classic); xterm.js `ITheme` and live `options.theme` from its public API docs; Tauri's `visible` window setting and `show()` from Tauri's public docs; no old Kolux source read
+
+> 2026-10-09 · T-054 · page names, mode names and look rules from the spec cards; the light palette mapping and the field names were chosen for this task (DESIGN.md has no light theme); `prefers-color-scheme` with `matchMedia` change events, React `lazy` / `Suspense`, `scrollIntoView` and the DevTools `Emulation.setEmulatedMedia` call used for the live check from public web and React docs; no old Kolux source read
+
+> 2026-10-09 · T-057 · rules from the spec card; the busy rule (program panes live while running, shells while they have a child) and the wording were chosen for this task; Win32 `CreateToolhelp32Snapshot` / `Process32FirstW` from Microsoft's public docs and the windows-sys crate docs, `pgrep -P` from its manual page, portable-pty `Child::process_id` from its crate docs; no old Kolux source read
+
+> 2026-10-09 · T-055 · rules from the PROJ-070 card; `git worktree list --porcelain` (its `locked` line), `git worktree lock --reason` / `unlock` and `git status --porcelain` from the public Git documentation; the stamp and the field name were chosen for this task; no old Kolux source read
+
+> 2026-10-09 · T-036 · rules from the SET-027 card; Tauri events (`emit` / `listen` from @tauri-apps/api/event) from the public Tauri documentation; the field names were chosen for this task; no old Kolux source read
+
+> 2026-10-09 · T-037 · rules from the APP-054 card; Win32 CreateToolhelp32Snapshot, OpenProcess, K32GetProcessMemoryInfo, GetProcessTimes and GlobalMemoryStatusEx from the public Microsoft documentation through windows-sys; `ps -o` fields and /proc/meminfo from their public man pages; no old Kolux source read

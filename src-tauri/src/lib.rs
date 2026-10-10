@@ -12,6 +12,8 @@ mod include;
 mod keybindings;
 mod names;
 mod orchestration;
+mod procs;
+mod resources;
 mod projects;
 mod scm;
 mod pty;
@@ -71,7 +73,16 @@ pub fn run() {
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
+            // SET-004: the window starts hidden and the page shows it once its first frame has the saved
+            // look; this is the backstop for a page that never gets that far.
+            if let Some(w) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let _ = w.show();
+                });
+            }
             app.manage(Terminals::default());
+            app.manage(resources::Sampler::default());
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());
             app.manage(codex_accounts::SignIns::default());
@@ -101,6 +112,7 @@ pub fn run() {
             get_settings,
             save_settings,
             sysmem::process_memory,
+            resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,
             terminal::terminal_resize,
@@ -114,6 +126,7 @@ pub fn run() {
             projects::workspace_create_fresh,
             projects::handoff_note_prepare,
             projects::workspace_remove,
+            projects::workspace_remove_check,
             projects::project_set,
             agents::agent_list,
             agents::agent_start_line,
@@ -121,6 +134,7 @@ pub fn run() {
             scm::scm_status,
             scm::scm_stage,
             scm::scm_commit, scm::scm_remote,
+            terminal::terminal_busy,
             keybindings::keybindings_read,
             projects::workspaces_place_get,
             projects::workspaces_place_set,

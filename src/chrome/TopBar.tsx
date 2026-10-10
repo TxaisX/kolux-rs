@@ -17,9 +17,10 @@ export const screens: Array<{ id: Screen; label: string }> = [
   { id: "terminals", label: "Terminals" },
 ];
 
-type Props = { screen: Screen; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
+/** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
+type Props = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
 
-export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
+export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -55,13 +56,15 @@ export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onTo
         </button>
       </div>
 
-      <nav className="switcher" aria-label="Screen">
-        {screens.map((s) => (
-          <button key={s.id} aria-pressed={screen === s.id} onClick={() => onScreen(s.id)}>
-            {s.label}
-          </button>
-        ))}
-      </nav>
+      {!classic && (
+        <nav className="switcher" aria-label="Screen">
+          {screens.map((s) => (
+            <button key={s.id} aria-pressed={screen === s.id} onClick={() => onScreen(s.id)}>
+              {s.label}
+            </button>
+          ))}
+        </nav>
+      )}
 
       <div className="topbar-right">
         <button className="ib panel" title={rightOpen ? "Hide Source Control" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
