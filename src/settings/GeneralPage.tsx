@@ -1,7 +1,6 @@
 // Settings > General: the Classic or New look and the screen that opens first (SET-037).
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { screens } from "../chrome/TopBar";
+import { useSettings } from "./useSettings";
 import { FIRST_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
 
 /** A row of buttons that behaves as one radio group. */
@@ -38,23 +37,7 @@ export function GeneralView({ settings, onSave }: { settings: Record<string, unk
 }
 
 export default function GeneralPage() {
-  const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    invoke<Record<string, unknown>>("get_settings")
-      .then(setSettings)
-      .catch((e) => setError(String(e)));
-  }, []);
-  const save = (patch: Record<string, unknown>) => {
-    setError(null);
-    invoke<Record<string, unknown>>("get_settings")
-      .then((s) => {
-        const next = { ...s, ...patch };
-        setSettings(next);
-        return invoke("save_settings", { value: next });
-      })
-      .catch((e) => setError(String(e)));
-  };
+  const { settings, error, save } = useSettings();
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}

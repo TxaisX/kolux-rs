@@ -78,6 +78,7 @@ pub struct PtySession {
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    pid: Option<u32>,
 }
 
 impl PtySession {
@@ -96,6 +97,7 @@ impl PtySession {
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
         let killer = child.clone_killer();
+        let pid = child.process_id();
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
@@ -119,7 +121,7 @@ impl PtySession {
             })
             .map_err(|e| e.to_string())?;
 
-        Ok(Self { master: Some(pair.master), writer: Some(writer), killer })
+        Ok(Self { master: Some(pair.master), writer: Some(writer), killer, pid })
     }
 
     /// Sends keystrokes (already encoded as the terminal would) to the program.
@@ -131,6 +133,11 @@ impl PtySession {
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
         let m = self.master.as_ref().ok_or("session already closed")?;
         m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())
+    }
+
+    /// The started program's process id, when the platform reports one.
+    pub fn pid(&self) -> Option<u32> {
+        self.pid
     }
 
     /// Ends the program: closes its input, forces it to stop, releases the PTY so the reader

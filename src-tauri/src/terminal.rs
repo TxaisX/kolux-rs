@@ -22,6 +22,8 @@ struct Inner {
     /// The folder each session was started in, so a workspace can close its shells before its
     /// folder is deleted.
     dirs: HashMap<u32, String>,
+    /// Sessions started with a program (an agent) rather than a shell (TERM-045).
+    programs: std::collections::HashSet<u32>,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -48,6 +50,7 @@ impl Terminals {
         let out_app = app.clone();
         let exit_app = app;
         let registry = self.inner.clone();
+        let runs_program = program.as_deref().is_some_and(|p| !p.trim().is_empty());
         let mut command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => program_command(p, &args, cwd.as_deref()),
             None => shell_command(cwd.as_deref()),
@@ -73,11 +76,15 @@ impl Terminals {
                 if let Ok(mut inner) = registry.lock() {
                     inner.sessions.remove(&id);
                     inner.dirs.remove(&id);
+                    inner.programs.remove(&id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
         )?;
         inner.sessions.insert(id, session);
+        if runs_program {
+            inner.programs.insert(id);
+        }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
         }
@@ -94,10 +101,26 @@ impl Terminals {
         inner.sessions.get(&id).ok_or("no such terminal")?.resize(cols.max(2), rows.max(1))
     }
 
+    /// TERM-045: whether closing session `id` would stop a live program: one started as the pane's
+    /// program (an agent) is live while it runs; a shell is live while it has a program of its own
+    /// running. A session that has ended, or a check that fails, reads as idle (fails open).
+    pub fn busy(&self, id: u32) -> bool {
+        let pid = match self.inner.lock() {
+            Ok(inner) => match inner.sessions.get(&id) {
+                Some(_) if inner.programs.contains(&id) => return true,
+                Some(s) => s.pid(),
+                None => return false,
+            },
+            Err(_) => return false,
+        };
+        pid.and_then(crate::procs::has_children).unwrap_or(false)
+    }
+
     /// Ends one session. Its exit event follows from the waiter thread.
     pub fn kill(&self, id: u32) -> Result<(), String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.dirs.remove(&id);
+        inner.programs.remove(&id);
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
@@ -129,6 +152,7 @@ impl Terminals {
     pub fn kill_all(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.dirs.clear();
+            inner.programs.clear();
             for (_, mut s) in inner.sessions.drain() {
                 s.kill();
             }
@@ -154,6 +178,12 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
     };
     terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env)
+}
+
+/// TERM-045: for each id, whether closing it would stop a live program.
+#[tauri::command]
+pub fn terminal_busy(terminals: tauri::State<'_, Terminals>, ids: Vec<u32>) -> Vec<bool> {
+    ids.into_iter().map(|id| terminals.busy(id)).collect()
 }
 
 #[tauri::command]

@@ -321,3 +321,10 @@ input { font: inherit; }
 .keys-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .keys-table td { padding: 4px 0; border-top: 1px solid var(--line-subtle); color: var(--fg-row); }
 .keys-table td:last-child { text-align: right; }
+
+/* TERM-045: the question before a tab with a live program closes */
+.ask-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); }
+.ask { width: min(380px, calc(100vw - 32px)); padding: 16px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.ask-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
+.ask-body { margin: 0 0 14px; font-size: 12px; color: var(--fg-muted); }
+.ask .btn-row { justify-content: flex-end; }

@@ -29,7 +29,7 @@ base64 = "0.22"
 tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Diagnostics_ToolHelp"] }
 
 [profile.release]
 codegen-units = 1

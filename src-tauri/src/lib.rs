@@ -9,6 +9,7 @@ mod creatures;
 mod git;
 mod keybindings;
 mod names;
+mod procs;
 mod projects;
 mod pty;
 mod secrets;
@@ -115,6 +116,7 @@ pub fn run() {
             projects::project_set,
             agents::agent_list,
             agents::agent_start_line,
+            terminal::terminal_busy,
             keybindings::keybindings_read,
             projects::workspaces_place_get,
             projects::workspaces_place_set,

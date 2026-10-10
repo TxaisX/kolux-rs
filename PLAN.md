@@ -113,7 +113,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [ ] T-055 · PROJ-070 [compat] Delete a workspace safely
 - [ ] T-056 · SESS-027 [compat] Agents start in their own no-prompt approval mode by default
-- [ ] T-057 · TERM-045 Confirm before closing a terminal with a live program
+- [x] T-057 · TERM-045 Confirm before closing a terminal with a live program
 - [ ] T-058 · SAFE-009 [compat] Claude stops and asks before running a protected shell command · SAFE-010 Built-in rules protect git history: force-push to main and discarding uncommitted work · SAFE-011 Built-in rule: pause before dropping or emptying database objects · SAFE-012 Built-in rules protect live services: Stripe, infrastructure and production deploys
 - [ ] T-059 · SAFE-013 Built-in rule: pause before a recursive delete that reaches outside the workspace · SAFE-014 Protected commands are still caught when wrapped, chained, nested or encoded · SAFE-015 [compat] The Protected actions section on the Safety page · SAFE-019 Secrets inside paused commands are masked before they are kept or shown
 - [ ] T-060 · SAFE-021 Paths on other machines are refused before any file access · SAFE-022 Clicking a link to a program reveals it in its folder instead of running it
@@ -179,7 +179,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-099 · SESS-002 Refresh agents finds a fresh install without a restart · SESS-003 [compat] Turn individual agents off so launch menus skip them · SESS-006 The create menu offers shells, an agent chooser, a browser and markdown · SESS-008 [compat] Shortcuts add chooser panes or close sessions · SESS-010 [compat] Choose a default agent
 - [ ] T-100 · SESS-011 [compat] Shortcuts open a new agent tab, a terminal or the workspace composer · SESS-016 Effort, fast mode and role label per seat · SESS-021 Use last lineup brings back this project's previous launch when asked · SESS-028 [compat] Per-agent command, default arguments and environment · SESS-029 Each agent's model list, discovered live for some
 - [ ] T-101 · TERM-002 [compat] Add and remove session shortcuts · TERM-005 Default pane count for a new workspace · TERM-007 Starting a session into a full grid makes room · TERM-009 [compat] Equalize pane sizes · TERM-012 [compat] Move focus between panes
-- [ ] T-102 · TERM-015 Drag a pane to rearrange the split · TERM-044 [compat] Close tabs in bulk · TERM-049 Tab right-click menu · TERM-054 Reorder tabs by dragging
+- [ ] T-102 · TERM-015 Drag a pane to rearrange the split · TERM-044 [compat] Close tabs in bulk · TERM-049 Tab right-click menu · TERM-054 Reorder tabs by dragging · also: the rest of T-057's card: a tab that holds several split panes, and closing tabs in bulk, go through `closeTab` in App.tsx with all their pane keys, so one question covers them all
 - [ ] T-103 · VIEW-036 [compat] Add or remove sessions by shortcut · VIEW-108 [compat] Terminals keep their scroll position across view switches
 - [ ] T-104 · ACCT-046 Windows terminals choose the best shell on the machine · ACCT-047 Startup commands run once, after the shell is ready · ACCT-048 Terminals begin with a clean environment · ACCT-049 Terminals refuse start folders that are unsafe or out of reach · ACCT-065 macOS and Linux terminals fall back to a shell that works
 - [ ] T-105 · CLI-023 [compat] kolux terminal list and show · CLI-026 [compat] kolux terminal create, split, rename and switch (also focus)

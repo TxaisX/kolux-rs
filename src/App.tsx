@@ -16,6 +16,8 @@ import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
+import CloseAsk from "./terminal/CloseAsk";
+import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import { readLook, startScreen } from "./settings/general";
@@ -84,6 +86,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
+  const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
+  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
@@ -453,7 +457,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setToast(batchEmpty ? `Nothing started: ${error}` : `A session did not start: ${error}`);
   };
 
-  const closePane = (key: number) => {
+  const dropPane = (key: number) => {
+    delete ptys.current[key];
     setPanes((ps) => ps.filter((p) => p.key !== key));
     setRunning((r) => {
       const { [key]: _gone, ...rest } = r;
@@ -465,6 +470,18 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setFocused((f) => (f === key ? (next ?? focusIn(rest, activeDir, f)) : f));
   };
 
+  // TERM-045: every close (keyboard, a tab's x, the pane header) asks first when a program would
+  // stop; a tab's panes are checked together so a split tab asks once. Idle, switched off, or a
+  // failed check: the tab closes at once.
+  const closeTab = async (keys: number[]) => {
+    const first = panes.find((p) => p.key === keys[0]);
+    const ids = keys.map((k) => ptys.current[k]).filter((id): id is number => id !== undefined);
+    const busy = asksBeforeClose(settings) ? await busyCount(ids, (ids) => invoke<boolean[]>("terminal_busy", { ids })) : 0;
+    if (busy === 0 || !first) return keys.forEach(dropPane);
+    setAsking({ keys, ...closeQuestion(tabName(first, titles), busy, keys.length) });
+  };
+  const closePane = (key: number) => void closeTab([key]);
+
   const terminals = screen === "terminals";
   const board = screen === "board";
   const live = panes.filter((p) => running[p.key]);
@@ -475,6 +492,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     <div className="app">
       <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
       <div className="body">
+        {asking && (
+          <CloseAsk
+            title={asking.title}
+            body={asking.body}
+            onCancel={() => setAsking(null)}
+            onConfirm={() => {
+              asking.keys.forEach(dropPane);
+              setAsking(null);
+            }}
+          />
+        )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
         {terminals && sidebarOpen && (
           <ProjectsPanel
@@ -603,6 +631,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     args={p.args}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
+                    onPty={(id) => {
+                      ptys.current[p.key] = id;
+                    }}
                     onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
