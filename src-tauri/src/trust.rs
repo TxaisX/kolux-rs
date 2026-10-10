@@ -27,7 +27,7 @@ pub fn claude_key(path: &Path) -> Result<String, String> {
 }
 
 /// The folder's real path on disk (letter case included), without the `\\?\` prefix.
-fn real_path(path: &Path) -> Result<String, String> {
+pub(crate) fn real_path(path: &Path) -> Result<String, String> {
     let real = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
     let s = real.to_string_lossy();
     Ok(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
@@ -49,7 +49,7 @@ fn checked_keys(paths: &[PathBuf], key: fn(&Path) -> Result<String, String>) -> 
 }
 
 /// Whole file at once, then a rename: a crash mid-write can never leave an agent half a file.
-fn write_whole(file: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_whole(file: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }

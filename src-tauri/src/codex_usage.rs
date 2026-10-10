@@ -217,7 +217,7 @@ impl Drop for Claim {
 const READ_TIMEOUT: Duration = Duration::from_secs(20);
 const CLOSE_GRACE: Duration = Duration::from_secs(3);
 
-fn app_server(program: &Path, home: &Path) -> std::io::Result<Child> {
+pub(crate) fn app_server(program: &Path, home: &Path) -> std::io::Result<Child> {
     let mut cmd = if program.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")) {
         let mut c = Command::new("cmd.exe");
         c.arg("/d").arg("/c").arg(program);
@@ -236,7 +236,7 @@ fn app_server(program: &Path, home: &Path) -> std::io::Result<Child> {
 
 /// Ends the server: input closed first, a grace period, then the whole process tree by force.
 /// Gives back how it ended when it ended by itself.
-fn finish(mut child: Child) -> Option<std::process::ExitStatus> {
+pub(crate) fn finish(mut child: Child) -> Option<std::process::ExitStatus> {
     drop(child.stdin.take());
     let start = Instant::now();
     while start.elapsed() < CLOSE_GRACE {

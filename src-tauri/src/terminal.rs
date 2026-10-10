@@ -194,6 +194,10 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
             .into_iter()
             .collect()
     };
+    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it.
+    if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
+        crate::hooks::install_codex_home(std::path::Path::new(home));
+    }
     terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env, pane_key)
 }
 
