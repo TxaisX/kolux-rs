@@ -3,6 +3,7 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
+import { headerOf } from "./status";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
@@ -34,6 +35,12 @@ type Props = {
   program?: string | null;
   args?: string[];
   onRunning?: (running: boolean) => void;
+  /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
+  onNeedsYou?: (needs: boolean) => void;
+  /** TERM-118: the program rang the terminal bell. */
+  onBell?: () => void;
+  /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
+  unread?: boolean;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
@@ -58,9 +65,12 @@ type Props = {
   card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
+  const [finishedAt, setFinishedAt] = useState<number | null>(null);
+  const [glow, setGlow] = useState(false); // TERM-023: finished while not focused
+  const [now, setNow] = useState(() => Date.now());
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   const idRef = useRef<number | null>(null);
@@ -69,12 +79,30 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   keys.current = keymap;
   const report = useRef(onRunning);
   report.current = onRunning;
+  const bell = useRef(onBell);
+  bell.current = onBell;
   const failed = useRef(onFailed);
   failed.current = onFailed;
 
   useEffect(() => {
     report.current?.(status.kind === "running");
   }, [status.kind]);
+  // TERM-023: an agent that finished while this pane was not focused glows until it is; the age
+  // next to Done refreshes each minute. The glow is static (no animation).
+  useEffect(() => {
+    if (status.kind !== "ended") return;
+    setFinishedAt(Date.now());
+    if (!focused && agent !== "shell" && !status.code) setGlow(true); // finished well, not stopped
+  }, [status.kind]);
+  useEffect(() => {
+    if (focused) setGlow(false);
+  }, [focused]);
+  useEffect(() => {
+    if (finishedAt === null) return;
+    setNow(Date.now());
+    const t = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(t);
+  }, [finishedAt]);
 
   useEffect(() => {
     const el = host.current;
@@ -102,6 +130,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       if (id !== null && !ended) invoke("terminal_write", { id, data }).catch(() => {});
     };
     term.onData(write);
+    term.onBell(() => bell.current?.());
     // SESS-051: a typed-route prompt goes in once the program has drawn its screen and gone
     // quiet. ponytail: "ready" is the first 1.5 s of silence after some output; SESS-032 owns the
     // real readiness rule and replaces this timer.
@@ -194,11 +223,14 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   };
 
   // TERM-020/021: a plain shell reads as a terminal with a neutral status; an agent reads
-  // "Running" while its program is up (what it needs comes from hooks, a later task); only a
-  // failure is tinted.
-  const word = status.kind === "starting" ? "Starting" : status.kind === "running" ? (agent === "shell" ? "Ready" : "Running") : status.kind === "ended" ? `Ended${status.code ? ` (${status.code})` : ""}` : "Failed";
-  const tone = status.kind === "failed" ? "attention" : "";
-  const icon = status.kind === "starting" ? "working" : status.kind === "running" ? "done" : "idle";
+  // Working (working tone) while its program is up, Done (done tone, with its age) after it
+  // ends well. What it needs (permission, waiting, blocked) comes from the status hooks (T-025).
+  const { word, tone, icon, age, needsYou } = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now);
+  const needs = useRef(onNeedsYou);
+  needs.current = onNeedsYou;
+  useEffect(() => {
+    needs.current?.(needsYou);
+  }, [needsYou]);
   const drawing = renderer === "webgl" ? "GPU renderer" : renderer === "dom" ? "plain renderer" : "";
   // The seat's job title names the pane; else the workspace folder (an agent launch's creature
   // name); else "Terminal N" (SESS-024).
@@ -208,7 +240,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const model = agent === "shell" ? null : modelOf(args);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
+    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
       <header className="pane-head">
         <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
           {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}
@@ -230,6 +262,11 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`}>{word}</span>
+        {age && (
+          <span className="age" title="when the agent finished">
+            {age}
+          </span>
+        )}
         <span className="right">
           <span className="gauge" title="Context used (agents only)">
             <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">

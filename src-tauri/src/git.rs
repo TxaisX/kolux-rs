@@ -1,6 +1,10 @@
 //! The git runner: every git operation goes through the `git` program on the user's path, run
 //! with `std::process::Command`. Checked once at startup (`git --version`), never shelled through
 //! a terminal. Worktrees are the unit of work: one branch in one folder of its own (PROJ-020).
+//! GIT-067: removal deletes the branch only when no other worktree has it checked out and says
+//! at which commit a kept branch was left, so it can be deleted later only while unmoved; moves
+//! go through `git worktree move` so Git's records stay right; a base ref that is not a plain
+//! ref spelling (leading dash, blanks, `..`) is never handed to git.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,7 +28,7 @@ pub struct Worktree {
     pub parent: Option<String>,
 }
 
-fn command(args: &[&str], cwd: Option<&Path>) -> Command {
+pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args);
     if let Some(dir) = cwd {
@@ -40,7 +44,7 @@ fn command(args: &[&str], cwd: Option<&Path>) -> Command {
 }
 
 /// Runs git and returns its stdout, trimmed; a non-zero exit becomes an error carrying stderr.
-fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
+pub(crate) fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -51,7 +55,7 @@ fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 }
 
 /// Git's own path spelling (forward slashes, no `\\?\` prefix) turned back into a native path.
-fn native(path: &str) -> String {
+pub(crate) fn native(path: &str) -> String {
     if cfg!(windows) {
         path.replace('/', "\\")
     } else {
@@ -91,7 +95,9 @@ impl Git {
 
     /// Removes the worktree folder and then deletes its branch. The folder goes first; a branch
     /// that will not delete (never the case for `-D`) leaves a clear error rather than a half state.
-    pub fn worktree_remove(&self, repo: &Path, dest: &Path, branch: Option<&str>) -> Result<(), String> {
+    /// A branch another worktree still has checked out is kept: the result then carries the
+    /// commit it points at, for `delete_branch_if_at` later.
+    pub fn worktree_remove(&self, repo: &Path, dest: &Path, branch: Option<&str>) -> Result<Option<String>, String> {
         let dest_s = dest.to_string_lossy();
         // Windows may still hold the folder for a moment after a program in it was ended.
         let mut attempt = 0;
@@ -109,14 +115,43 @@ impl Git {
             return Err(format!("the folder {} is still there: something keeps it open", dest.display()));
         }
         if let Some(b) = branch {
+            if self.checked_out_somewhere(repo, b)? {
+                return run(&["rev-parse", "--verify", &format!("refs/heads/{b}")], Some(repo)).map(Some);
+            }
             run(&["branch", "-D", b], Some(repo))?;
         }
-        Ok(())
+        Ok(None)
     }
 
-    /// Does the checkout hold changes Git does not have yet (modified or untracked files)?
+    /// `git worktree move`: the folder changes place and Git's own records follow.
+    pub fn worktree_move(&self, repo: &Path, from: &Path, to: &Path) -> Result<(), String> {
+        run(&["worktree", "move", &from.to_string_lossy(), &to.to_string_lossy()], Some(repo)).map(|_| ())
+    }
+
+    fn checked_out_somewhere(&self, repo: &Path, branch: &str) -> Result<bool, String> {
+        Ok(self.worktrees(repo)?.iter().any(|w| w.branch.as_deref() == Some(branch)))
+    }
+
+    /// Deletes a branch kept at removal, but only while it still points at `commit` and no
+    /// worktree has it checked out. Ok(false) means it was left alone.
+    pub fn delete_branch_if_at(&self, repo: &Path, branch: &str, commit: &str) -> Result<bool, String> {
+        let at = run(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")], Some(repo))?;
+        if at != commit || self.checked_out_somewhere(repo, branch)? {
+            return Ok(false);
+        }
+        run(&["branch", "-D", branch], Some(repo)).map(|_| true)
+    }
+
+    /// Does the checkout hold changes Git does not have yet (modified or untracked files, and
+    /// work inside a submodule)?
     pub fn dirty(&self, worktree: &Path) -> Result<bool, String> {
-        run(&["status", "--porcelain"], Some(worktree)).map(|s| !s.is_empty())
+        run(&["status", "--porcelain", "--ignore-submodules=none"], Some(worktree)).map(|s| !s.is_empty())
+    }
+
+    /// Could `rev` be a ref spelling at all? Anything git might read as an option or a range is
+    /// refused before any command runs.
+    pub fn ref_ok(rev: &str) -> bool {
+        !rev.is_empty() && !rev.starts_with('-') && !rev.contains("..") && !rev.chars().any(|c| c.is_whitespace() || c.is_control())
     }
 
     /// How many commits `base` has that the worktree's HEAD does not (ORCH-014's base drift).
@@ -126,7 +161,7 @@ impl Git {
 
     /// Does `rev` name a commit here: a branch, tag, remote branch or id?
     pub fn rev_exists(&self, repo: &Path, rev: &str) -> bool {
-        run(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")], Some(repo)).is_ok()
+        Self::ref_ok(rev) && run(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")], Some(repo)).is_ok()
     }
 
     /// The branch new work starts from when nothing says otherwise (PROJ-028): origin's HEAD,
@@ -143,6 +178,9 @@ impl Git {
     /// has counts as gone; a full commit id is used as it is; being offline is not an error, the
     /// local copy serves.
     pub fn base_available(&self, repo: &Path, rev: &str) -> bool {
+        if !Self::ref_ok(rev) {
+            return false;
+        }
         if rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit()) {
             return self.rev_exists(repo, rev);
         }
@@ -244,12 +282,58 @@ mod tests {
         assert_eq!(added.branch.as_deref(), Some("fix-login"));
         assert_eq!(PathBuf::from(&added.path).canonicalize().unwrap(), dest.canonicalize().unwrap());
 
-        git.worktree_remove(&repo, &dest, Some("fix-login")).unwrap();
+        assert_eq!(git.worktree_remove(&repo, &dest, Some("fix-login")).unwrap(), None);
         assert!(!dest.exists(), "folder is gone");
         assert!(!git.branch_taken(&repo, "fix-login"), "branch is gone");
         assert_eq!(git.worktrees(&repo).unwrap().len(), 1);
 
         fs::remove_dir_all(dest.parent().unwrap()).unwrap();
+        fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn removal_keeps_a_branch_in_use_elsewhere_moves_keep_records_and_bad_refs_never_run() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("keep");
+        let side = std::env::temp_dir().join(format!("kolux-rs-git-keep-ws-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&side);
+        let (a, b, c) = (side.join("a"), side.join("b"), side.join("c"));
+        git.worktree_add(&repo, &a, "shared", "HEAD").unwrap();
+        // a second worktree on the same branch (git allows it only when forced)
+        run(&["worktree", "add", "--force", &b.to_string_lossy(), "shared"], Some(&repo)).unwrap();
+        let head = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
+
+        // GIT-067: moving goes through git, so the list follows the folder
+        git.worktree_move(&repo, &a, &c).unwrap();
+        assert!(!a.exists() && c.join("README.md").is_file());
+        assert!(git.worktrees(&repo).unwrap().iter().any(|w| PathBuf::from(&w.path).canonicalize().unwrap() == c.canonicalize().unwrap()), "git lists the moved folder");
+
+        // the branch is in use by b, so removing c keeps it, and says where it stood
+        assert_eq!(git.worktree_remove(&repo, &c, Some("shared")).unwrap().as_deref(), Some(head.as_str()));
+        assert!(git.branch_taken(&repo, "shared"), "kept: b still has it checked out");
+        assert!(!git.delete_branch_if_at(&repo, "shared", &head).unwrap(), "never while a worktree has it");
+        assert!(git.branch_taken(&repo, "shared"));
+        // nobody uses it any more: the kept branch goes, but only while unmoved
+        assert_eq!(git.worktree_remove(&repo, &b, None).unwrap(), None);
+        fs::write(repo.join("README.md"), "more\n").unwrap();
+        run(&["commit", "-q", "-am", "second"], Some(&repo)).unwrap();
+        run(&["branch", "-f", "shared", "HEAD"], Some(&repo)).unwrap();
+        assert!(!git.delete_branch_if_at(&repo, "shared", &head).unwrap(), "moved since removal: left alone");
+        assert!(git.branch_taken(&repo, "shared"));
+        let now = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
+        assert!(git.delete_branch_if_at(&repo, "shared", &now).unwrap());
+        assert!(!git.branch_taken(&repo, "shared"));
+
+        // submodule-less dirty check still sees untracked files; malformed refs never reach git
+        assert!(!git.dirty(&repo).unwrap());
+        fs::write(repo.join("new.txt"), "x").unwrap();
+        assert!(git.dirty(&repo).unwrap());
+        for bad in ["--upload-pack=evil", "-x", "main master", "a..b", "", "ma\tin"] {
+            assert!(!Git::ref_ok(bad) && !git.base_available(&repo, bad) && !git.rev_exists(&repo, bad), "{bad:?}");
+        }
+        assert!(git.base_available(&repo, "HEAD~1") && git.base_available(&repo, "main"));
+
+        fs::remove_dir_all(&side).unwrap();
         fs::remove_dir_all(&repo).unwrap();
     }
 

@@ -194,6 +194,9 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             other if MAIL.iter().any(|(w, _, _)| *w == other) => MAIL.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
             _ => return Err(Fail::args(format!("unknown command `{joined}`; run kolux-dev --help"))),
         };
+        if command == "worktree.create" && flags.contains_key("parent-workspace") {
+            return Err(Fail::args("--parent-workspace was retired; use --parent-worktree <selector>"));
+        }
         if let Some(k) = flags.keys().find(|k| !allowed.contains(&k.as_str())) {
             return Err(Fail::args(format!("unknown flag --{k} for {joined}")));
         }
@@ -207,10 +210,13 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             if text("prompt").is_some() && text("agent").is_none() {
                 return Err(Fail::args("a prompt needs --agent to name who gets it"));
             }
-            for k in ["agent", "prompt", "setup"] {
+            for k in ["agent", "prompt", "setup", "parent-worktree"] {
                 if empty(k) {
                     return Err(Fail::args(format!("--{k} cannot be empty")));
                 }
+            }
+            if text("issue").is_some_and(|v| v.trim().parse::<u64>().map_or(true, |n| n == 0)) {
+                return Err(Fail::args("--issue takes a GitHub issue number"));
             }
             let setup = text("setup").unwrap_or("inherit");
             if !["run", "skip", "inherit"].contains(&setup) {
@@ -691,6 +697,15 @@ fn pick_project(ctx: &Ctx, repo: Option<&str>, cwd: &str) -> Result<Project, Fai
     Err(Fail { code: "not_found", message: format!("no project contains {cwd}"), data: json!({ "hint": "run it inside a project, or pass --repo name:<project>" }) })
 }
 
+/// The worktree of `project` the call was made from (the main checkout counts), the innermost
+/// when folders nest; None when `cwd` is outside them all.
+fn calling_worktree(ctx: &Ctx, project: &Project, cwd: &str) -> Result<Option<String>, Fail> {
+    let store = ctx.store.lock().map_err(|e| e.to_string())?;
+    let mut inside: Vec<String> = projects::list_workspaces(ctx.git, &store, project)?.into_iter().map(|w| w.path).filter(|p| under(p, cwd)).collect();
+    inside.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    Ok(inside.into_iter().next())
+}
+
 /// The worktree `--worktree` means: `current` is the one the call was made in; `name:` matches
 /// the typed name, the branch or the folder name; `branch:` and `path:` match exactly.
 fn pick_worktree(ctx: &Ctx, sel: &str, cwd: &str) -> Result<(Project, Worktree), Fail> {
@@ -732,15 +747,41 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 return Err(Fail::args("a prompt needs --agent to name who gets it"));
             }
             let project = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
+            // Lineage: the worktree the call was made from, unless a flag says otherwise.
+            let parent = if a["noParent"].as_bool().unwrap_or(false) {
+                None
+            } else if let Some(sel) = text("parentWorktree") {
+                let (owner, w) = pick_worktree(ctx, &sel, &req.cwd)?;
+                if owner.id != project.id {
+                    return Err(Fail::args(format!("--parent-worktree {sel} is in project {}, not {}", owner.name, project.name)));
+                }
+                Some(w.path)
+            } else {
+                calling_worktree(ctx, &project, &req.cwd)?
+            };
+            let issue = text("issue").and_then(|v| v.parse::<u64>().ok());
             let made = projects::create_named(ctx.git, ctx.store, &project.id, &name, text("baseBranch").as_deref())?;
+            // The calling terminal, when the runtime vouches for it; a shell outside Kolux records none.
+            let terminal = caller(ctx, req).ok().flatten();
+            let pane_key = terminal.as_ref().and(req.pane.as_ref()).map(|p| p.key.clone());
+            let origin = json!({ "madeBy": "cli", "parent": parent, "cwd": req.cwd, "issue": issue, "comment": text("comment"), "terminal": terminal, "paneKey": pane_key });
+            {
+                let store = ctx.store.lock().map_err(|e| e.to_string())?;
+                projects::set_origin(&store, &made.worktree.path, Some(&origin))?;
+                // PROJ-047: the sidebar nests it under its parent.
+                if let Some(p) = &parent {
+                    projects::set_parent(&store, &made.worktree.path, Some(p))?;
+                }
+            }
             let activate = a["activate"].as_bool().unwrap_or(false);
             let mut result = serde_json::to_value(&made).map_err(|e| Fail::new("failed", e.to_string()))?;
             let obj = result.as_object_mut().expect("a workspace is an object");
             obj.insert("projectId".into(), json!(project.id));
             obj.insert("agent".into(), json!(agent));
             obj.insert("activated".into(), json!(activate));
-            // ponytail: setup scripts, issues, comments and lineage are later cards; the values
-            // are accepted and echoed, nothing runs on them yet.
+            obj.extend(origin.as_object().expect("an origin is an object").clone());
+            // ponytail: setup scripts (PROJ-033) and issue lookups (PROJ-037) are T-107; the
+            // values are recorded and echoed, nothing runs on them yet.
             obj.insert("setup".into(), json!(text("setup").unwrap_or_else(|| "inherit".into())));
             (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": made, "agent": agent, "prompt": text("prompt").unwrap_or_default(), "activate": activate }));
             Ok(result)
@@ -756,7 +797,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 return Err(Fail { code: "dirty", message: format!("{shown} has uncommitted changes"), data: json!({ "hint": "add --force to remove it anyway, changes and all" }) });
             }
             ctx.terminals.kill_under(Path::new(&w.path));
-            projects::remove_workspace(ctx.git, &project, &w.path)?;
+            projects::remove_workspace(ctx.git, &project, &w.path, true)?;
             {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
                 projects::forget_workspace(&store, &w.path)?;
@@ -1308,6 +1349,12 @@ mod tests {
         assert!(refused("worktree create --name x --bogus 1").contains("--bogus"));
         assert!(refused("worktree create --name x --setup later").contains("run, skip or inherit"));
         assert!(refused("worktree create --name x --no-parent --parent-worktree name:a").contains("disagree"));
+        assert!(refused("worktree create --name x --parent-workspace name:a").contains("retired"));
+        assert!(refused("worktree create --name x --parent-worktree").contains("needs a value"));
+        assert!(refused("worktree create --name x --parent-worktree=").contains("empty"));
+        assert!(refused("worktree create --name x --issue abc").contains("issue number"));
+        assert!(refused("worktree create --name x --issue 0").contains("issue number"));
+        assert_eq!(parse(&words("worktree create --name x --issue 12 --no-parent")).1.unwrap().unwrap().args["noParent"], true);
         assert!(refused("worktree rm").contains("--worktree"));
         assert!(refused("worktree frobnicate").contains("unknown command"));
         assert!(parse(&words("--help")).1.unwrap().is_none());
@@ -1478,6 +1525,31 @@ mod tests {
         assert_eq!(made["name"], "cli one");
         assert_eq!(made["branch"], "cli-one");
         assert_eq!(events.lock().unwrap()[0]["kind"], "created");
+        // CLI-018 lineage: called from the main checkout, the parent is the main checkout.
+        assert_eq!(made["madeBy"], "cli");
+        assert_eq!(made["parent"], json!(repo.display().to_string()));
+        let child = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "child", "repo": "name:repo", "parentWorktree": "name:cli one", "issue": "12", "comment": "from a test" }))).unwrap();
+        assert_eq!(child["parent"], json!(path.display().to_string()));
+        assert_eq!(child["issue"], 12);
+        assert_eq!(child["comment"], "from a test");
+        let child_path = child["path"].as_str().unwrap().to_string();
+        let stored = projects::origin(&store.lock().unwrap(), &child_path).unwrap();
+        assert_eq!(stored["parent"], json!(path.display().to_string()));
+        assert_eq!(stored["cwd"], json!(dir.display().to_string()));
+        assert_eq!(stored["terminal"], Value::Null, "a call from outside Kolux records no terminal");
+        assert!(store.lock().unwrap().get("workspaceParents").unwrap().unwrap().contains("child"), "the sidebar nests it (PROJ-047)");
+        let inside = dispatch(&ctx, &req("worktree.create", &path, json!({ "name": "grandchild" }))).unwrap();
+        assert_eq!(inside["parent"], json!(path.display().to_string()), "called from inside cli one");
+        let alone = dispatch(&ctx, &req("worktree.create", &path, json!({ "name": "alone", "noParent": true }))).unwrap();
+        assert_eq!(alone["parent"], Value::Null);
+        let from_elsewhere = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "top", "repo": "name:repo" }))).unwrap();
+        assert_eq!(from_elsewhere["parent"], Value::Null, "called from outside every worktree");
+        let missing = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "x", "parentWorktree": "name:nope" }))).unwrap_err();
+        assert_eq!(missing.code, "not_found");
+        for n in ["child", "grandchild", "alone", "top"] {
+            dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": format!("name:{n}"), "force": true }))).unwrap();
+        }
+        assert!(projects::origin(&store.lock().unwrap(), &child_path).is_none(), "the origin goes with the worktree");
 
         let outside = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "nowhere" }))).unwrap_err();
         assert_eq!(outside.code, "not_found");
@@ -1490,7 +1562,7 @@ mod tests {
         assert!(path.exists());
         dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "name:cli one", "force": true }))).unwrap();
         assert!(!path.exists());
-        assert_eq!(events.lock().unwrap()[1]["kind"], "removed");
+        assert_eq!(events.lock().unwrap().last().unwrap()["kind"], "removed");
 
         let two = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "two" }))).unwrap();
         let two_path = PathBuf::from(two["path"].as_str().unwrap());

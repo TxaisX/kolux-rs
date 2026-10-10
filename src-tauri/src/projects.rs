@@ -2,14 +2,17 @@
 //! project is a Git repository the user chose; a workspace is one of its worktrees. Projects are
 //! saved in the state store; the workspaces folder and layout are user settings, and a project
 //! may carry its own folder and base ref. The command line (PROJ-077) creates and removes
-//! workspaces through the same functions.
+//! workspaces through the same functions. GIT-067: creations in one repository run one at a time,
+//! a new worktree brings the include file's copies and kolux.yaml's shared folders along
+//! (`include.rs`), and removal refuses uncommitted work unless forced.
 
 use crate::creatures::creature_name;
 use crate::git::{Git, Worktree};
 use crate::names::safe_name;
 use crate::state::Store;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tauri::State;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -35,6 +38,15 @@ pub struct Created {
     pub worktree: Worktree,
     pub base: String,
     pub note: Option<String>,
+    /// GIT-067: include-file and shared-folder entries that could not be brought along.
+    pub warnings: Vec<String>,
+}
+
+/// GIT-067: creations in one repository take turns; a failed one hands the turn on at once.
+fn repo_turn(repo: &Path) -> Arc<Mutex<()>> {
+    static TURNS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    let key = repo.to_string_lossy().to_lowercase();
+    TURNS.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner).entry(key).or_default().clone()
 }
 
 /// Where a project's workspaces go and how they are laid out (PROJ-025).
@@ -51,6 +63,9 @@ const PROJECTS_KEY: &str = "projects";
 const NAMES_KEY: &str = "workspaceNames";
 /// Child workspace path (as `name_key` writes it) to its parent's path (PROJ-047).
 const PARENTS_KEY: &str = "workspaceParents";
+/// How each workspace came to be (CLI-018): who made it, its parent worktree, the calling folder,
+/// an issue number and a comment, keyed like the names. Lineage views (PROJ-047) read it.
+const ORIGINS_KEY: &str = "workspaceOrigins";
 const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 /// "nested" (the default) or "flat" (PROJ-025).
 const LAYOUT_SETTING: &str = "workspacesLayout";
@@ -100,10 +115,31 @@ pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(),
 }
 
 /// Drops what Kolux remembers about a removed workspace, so a later one in the same folder starts
-/// clean: its typed name and its parent.
+/// clean: its typed name, its parent and its origin.
 pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
     set_name(store, path, None)?;
-    set_parent(store, path, None)
+    set_parent(store, path, None)?;
+    set_origin(store, path, None)
+}
+
+fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
+    store.get(ORIGINS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// Records (or with `None`, forgets) how the workspace at `path` came to be.
+pub fn set_origin(store: &Store, path: &str, origin: Option<&serde_json::Value>) -> Result<(), String> {
+    let mut all = load_origins(store);
+    match origin {
+        Some(o) => all.insert(name_key(path), o.clone()),
+        None => all.remove(&name_key(path)),
+    };
+    store.set(ORIGINS_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
+}
+
+/// ponytail: read by tests only until the sidebar draws lineage (PROJ-047, T-077).
+#[cfg(test)]
+pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
+    load_origins(store).remove(&name_key(path))
 }
 
 /// The workspaces of a project as the sidebar lists them (PROJ-007): Git's list with the typed
@@ -156,8 +192,21 @@ pub fn default_workspaces_dir() -> PathBuf {
     home.join("kolux-rs").join("workspaces")
 }
 
+pub const WORKSPACES_DIR_ENV: &str = "KOLUX_WORKSPACES_DIR";
+
+fn non_blank(s: Option<&str>) -> Option<&str> {
+    s.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The global workspaces folder (SET-032, PROJ-026): the saved setting, else the environment
+/// variable (which only moves the default, so a folder the user saved still wins), else the
+/// default. Both values are trimmed and a blank one counts as not set.
+pub fn resolve_workspaces_dir(env: Option<&str>, setting: Option<&str>) -> PathBuf {
+    non_blank(setting).or(non_blank(env)).map(PathBuf::from).unwrap_or_else(default_workspaces_dir)
+}
+
 pub fn workspaces_dir(store: &Store) -> PathBuf {
-    store.settings()[WORKSPACES_DIR_SETTING].as_str().filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(default_workspaces_dir)
+    resolve_workspaces_dir(std::env::var(WORKSPACES_DIR_ENV).ok().as_deref(), store.settings()[WORKSPACES_DIR_SETTING].as_str())
 }
 
 /// The folder and layout for `project`'s workspaces (PROJ-025): the project's own folder when it
@@ -225,6 +274,8 @@ pub fn resolve_base(git: &Git, repo: &Path, project: &Project, chosen: Option<&s
 pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>) -> Result<Created, String> {
     let base = safe_name(typed_name).ok_or_else(|| format!("\"{}\" leaves nothing usable for a branch name; use some letters or digits", typed_name.trim()))?;
     let repo = Path::new(&project.path);
+    let turn = repo_turn(repo);
+    let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
     let (from, note) = resolve_base(git, repo, project, start)?;
     // PROJ-021: a name taken by a branch (local or on a remote) or a folder gets a number.
     let (safe, dest) = (1..)
@@ -239,12 +290,13 @@ pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name:
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     git.worktree_add(repo, &dest, &safe, &from)?;
+    let warnings = crate::include::bring_along(repo, &dest);
     let worktree = git
         .worktrees(repo)?
         .into_iter()
         .find(|w| same_folder(Path::new(&w.path), &dest))
         .ok_or_else(|| "the worktree was created but Git does not list it".to_string())?;
-    Ok(Created { worktree, base: from, note })
+    Ok(Created { worktree, base: from, note, warnings })
 }
 
 /// Every workspace folder name and branch in use across all registered projects (SESS-023 and
@@ -297,13 +349,19 @@ pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects:
     create_workspace(git, place, project, &name, base).map(|c| c.worktree)
 }
 
-pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str) -> Result<(), String> {
+/// GIT-067: uncommitted work (submodule work included) stops the removal unless `force`; the
+/// branch goes with the folder unless another worktree still has it checked out.
+pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str, force: bool) -> Result<(), String> {
     let repo = Path::new(&project.path);
     let target = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(worktree_path))).ok_or_else(|| format!("{worktree_path} is not a worktree of {}", project.name))?;
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref())
+    if !force && git.dirty(Path::new(&target.path))? {
+        return Err(format!("{} has uncommitted changes", target.branch.as_deref().unwrap_or(worktree_path)));
+    }
+    crate::include::unlink_shared(repo, Path::new(&target.path));
+    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref()).map(|_| ())
 }
 
 fn find_project(store: &Store, id: &str) -> Result<Project, String> {
@@ -417,30 +475,38 @@ pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: St
 }
 
 #[tauri::command]
-pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String) -> Result<(), String> {
+pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool) -> Result<(), String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
     };
+    if !force && git.dirty(Path::new(&path))? {
+        return Err(format!("{} has uncommitted changes", Path::new(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path)));
+    }
     // A shell still sitting in the folder would keep Windows from deleting it.
     terminals.kill_under(Path::new(&path));
-    remove_workspace(&git, &project, &path)?;
+    remove_workspace(&git, &project, &path, force)?;
     let store = store.lock().map_err(|e| e.to_string())?;
     forget_workspace(&store, &path)
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaceInfo {
     /// The folder in use (the default when nothing is set).
     pub dir: String,
     pub flat: bool,
     pub used: Vec<String>,
+    /// True while KOLUX_WORKSPACES_DIR supplies the folder (nothing saved), so the field can say so.
+    pub from_env: bool,
 }
 
 fn place_info(store: &Store) -> PlaceInfo {
-    PlaceInfo { dir: workspaces_dir(store).display().to_string(), flat: store.settings()[LAYOUT_SETTING].as_str() == Some("flat"), used: used_dirs(store) }
+    let settings = store.settings();
+    let saved = non_blank(settings[WORKSPACES_DIR_SETTING].as_str()).is_some();
+    let from_env = !saved && non_blank(std::env::var(WORKSPACES_DIR_ENV).ok().as_deref()).is_some();
+    PlaceInfo { dir: workspaces_dir(store).display().to_string(), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), used: used_dirs(store), from_env }
 }
 
 #[tauri::command]
@@ -453,17 +519,26 @@ pub fn workspaces_place_get(store: StoreState<'_>) -> Result<PlaceInfo, String> 
 #[tauri::command]
 pub fn workspaces_place_set(store: StoreState<'_>, dir: String, flat: bool) -> Result<PlaceInfo, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
+    set_place(&store, &dir, flat)
+}
+
+/// An absolute folder is made right away (so a folder that cannot be made is a failed save the
+/// user can retry, SET-032); a relative one counts from each project root, so it is only saved.
+fn set_place(store: &Store, dir: &str, flat: bool) -> Result<PlaceInfo, String> {
     let mut settings = store.settings();
     let trimmed = dir.trim();
     if trimmed.is_empty() {
         settings.as_object_mut().map(|o| o.remove(WORKSPACES_DIR_SETTING));
     } else {
+        if Path::new(trimmed).is_absolute() {
+            std::fs::create_dir_all(trimmed).map_err(|e| format!("{trimmed} cannot be made: {e}"))?;
+        }
         settings[WORKSPACES_DIR_SETTING] = serde_json::Value::String(trimmed.to_string());
     }
     settings[LAYOUT_SETTING] = serde_json::Value::String(if flat { "flat" } else { "nested" }.to_string());
     store.save_settings(&settings).map_err(|e| e.to_string())?;
-    remember_dir(&store, trimmed)?;
-    Ok(place_info(&store))
+    remember_dir(store, trimmed)?;
+    Ok(place_info(store))
 }
 
 /// SESS-025: the handoff note of one agent launched side by side: `<repo>/.kolux/handoffs/<name>.md`
@@ -603,13 +678,13 @@ mod tests {
         assert_eq!(listed.iter().find(|w| w.path == third.path).unwrap().parent.as_deref(), Some(wt.path.as_str()));
         assert_eq!(listed.iter().find(|w| w.path == again.path).unwrap().parent, None);
         for w in [&again, &third] {
-            remove_workspace(&git, &project, &w.path).unwrap();
+            remove_workspace(&git, &project, &w.path, false).unwrap();
             forget_workspace(&store, &w.path).unwrap();
         }
         assert!(store.get("workspaceParents").unwrap().unwrap() == "{}");
 
-        assert!(remove_workspace(&git, &project, &project.path).unwrap_err().contains("main checkout"));
-        remove_workspace(&git, &project, &wt.path).unwrap();
+        assert!(remove_workspace(&git, &project, &project.path, false).unwrap_err().contains("main checkout"));
+        remove_workspace(&git, &project, &wt.path, false).unwrap();
         assert!(!expected.exists());
         assert!(!git.branch_taken(&repo, "fix-login-fire"));
         drop(store);
@@ -641,7 +716,7 @@ mod tests {
         let in_use = names_in_use(&git, &projects);
         assert!(in_use.contains(&name_of(&first)) && in_use.contains(&name_of(&second)));
         // SESS-023: a retired name never comes back, even from the same seed.
-        remove_workspace(&git, &project, &first.path).unwrap();
+        remove_workspace(&git, &project, &first.path, false).unwrap();
         assert!(!names_in_use(&git, &projects).contains(&name_of(&first)));
         for seed in [0u64, 7, 4242] {
             assert_ne!(fresh_name(&git, &store, &projects, seed), name_of(&first), "seed {seed}");
@@ -652,6 +727,52 @@ mod tests {
 
         drop(store);
         for d in [profile, repo, root] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn new_workspaces_bring_listed_files_along_and_removal_refuses_dirty_work_unless_forced() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile8");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("repo8");
+        fs::write(repo.join(".gitignore"), ".env\nnode_modules/\n").unwrap();
+        fs::write(repo.join("tracked.txt"), "committed\n").unwrap();
+        fs::write(repo.join(".worktreeinclude"), "# bring these\n.env\n*.log\nmissing.txt\ntracked.txt\n").unwrap();
+        fs::write(repo.join("kolux.yaml"), "worktree:\n  sharedDirectories:\n    - node_modules/\n    - src\n    - ../out\n").unwrap();
+        fs::create_dir_all(repo.join("src")).unwrap();
+        fs::write(repo.join("src").join("a.txt"), "a").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-q", "-m", "setup"]);
+        fs::write(repo.join(".env"), "SECRET=1\n").unwrap();
+        fs::write(repo.join("tracked.txt"), "edited in main\n").unwrap();
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = Place { root: temp("ws8"), flat: true };
+
+        let made = create_workspace(&git, &place, &project, "feat", None).unwrap();
+        let dest = PathBuf::from(&made.worktree.path);
+        assert_eq!(fs::read_to_string(dest.join(".env")).unwrap(), "SECRET=1\n", "the ignored file came along");
+        assert_eq!(fs::read_to_string(dest.join("tracked.txt")).unwrap().trim_end(), "committed", "a tracked file is never copied over (the checkout may add CR)");
+        assert_eq!(made.warnings.len(), 3, "{:?}", made.warnings);
+        assert!(made.warnings[0].contains("`*.log`") && made.warnings[1].contains("`missing.txt`") && made.warnings[2].contains("`src` is not git-ignored"), "{:?}", made.warnings);
+        // the shared folder is one folder seen from both places
+        fs::write(repo.join("node_modules").join("dep.js"), "1").unwrap();
+        assert_eq!(fs::read_to_string(dest.join("node_modules").join("dep.js")).unwrap(), "1");
+        assert!(!dest.join("out").exists());
+        let status = Command::new("git").args(["status", "--porcelain"]).current_dir(&dest).output().unwrap().stdout;
+        assert!(!git.dirty(&dest).unwrap(), "linked and copied files are ignored, so the worktree starts clean: {}", String::from_utf8_lossy(&status));
+
+        fs::write(dest.join("work.txt"), "unsaved").unwrap();
+        let err = remove_workspace(&git, &project, &made.worktree.path, false).unwrap_err();
+        assert!(err.contains("feat has uncommitted changes"), "{err}");
+        assert!(dest.join("work.txt").is_file(), "nothing was lost");
+        remove_workspace(&git, &project, &made.worktree.path, true).unwrap();
+        assert!(!dest.exists() && !git.branch_taken(&repo, "feat"));
+        assert!(repo.join("node_modules").join("dep.js").is_file(), "removing the link left the shared folder alone");
+
+        drop(store);
+        for d in [profile, repo, place.root] {
             fs::remove_dir_all(d).unwrap();
         }
     }
@@ -707,7 +828,7 @@ mod tests {
         assert_eq!(workspace_path(&place, &project, "x"), repo.join("ws").join("x"));
         let made = create_workspace(&git, &place, &project, "x", None).unwrap();
         assert!(same_folder(Path::new(&made.worktree.path), &repo.join("ws").join("x")), "{}", made.worktree.path);
-        remove_workspace(&git, &project, &made.worktree.path).unwrap();
+        remove_workspace(&git, &project, &made.worktree.path, false).unwrap();
         // folders used before are remembered, newest first, once each
         remember_dir(&store, "D:\\one").unwrap();
         remember_dir(&store, "D:\\two").unwrap();
@@ -757,7 +878,7 @@ mod tests {
         assert_eq!(rev(Path::new(&fallen.worktree.path), "HEAD"), first);
         assert!(fallen.note.is_some());
         for m in [&made, &fallen] {
-            remove_workspace(&git, &project, &m.worktree.path).unwrap();
+            remove_workspace(&git, &project, &m.worktree.path, false).unwrap();
         }
         drop(store);
         for d in [profile, repo, root] {
@@ -774,6 +895,34 @@ mod tests {
         assert_eq!(workspaces_dir(&store), PathBuf::from("D:\\ws"));
         store.save_settings(&serde_json::json!({ "workspacesDir": "  " })).unwrap();
         assert_eq!(workspaces_dir(&store), default_workspaces_dir());
+        drop(store);
+        fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn env_var_moves_the_default_but_a_setting_still_wins() {
+        // PROJ-026 / SET-032: KOLUX_WORKSPACES_DIR is trimmed, ignored when blank, and only
+        // replaces the default, never a folder the user saved.
+        assert_eq!(resolve_workspaces_dir(Some("  D:\\wt  "), None), PathBuf::from("D:\\wt"));
+        assert_eq!(resolve_workspaces_dir(Some("   "), None), default_workspaces_dir());
+        assert_eq!(resolve_workspaces_dir(None, None), default_workspaces_dir());
+        assert_eq!(resolve_workspaces_dir(Some("D:\\wt"), Some("E:\\mine")), PathBuf::from("E:\\mine"));
+        assert_eq!(resolve_workspaces_dir(Some("D:\\wt"), Some(" ")), PathBuf::from("D:\\wt"));
+    }
+
+    #[test]
+    fn saving_a_folder_that_cannot_be_made_fails_and_keeps_the_old_one() {
+        let profile = temp("profile4");
+        let store = Store::open(&profile).unwrap();
+        let bad = profile.join("file-not-folder");
+        fs::write(&bad, "x").unwrap();
+        let err = set_place(&store, &bad.join("ws").display().to_string(), false).unwrap_err();
+        assert!(err.contains("cannot be made"), "{err}");
+        assert_eq!(store.settings()[WORKSPACES_DIR_SETTING], serde_json::Value::Null, "the failed folder is not saved");
+        assert!(used_dirs(&store).is_empty(), "nor remembered");
+        let good = profile.join("ws").join("deep");
+        let info = set_place(&store, &good.display().to_string(), true).unwrap();
+        assert!(good.is_dir() && info.flat && info.dir == good.display().to_string() && info.used == vec![good.display().to_string()]);
         drop(store);
         fs::remove_dir_all(profile).unwrap();
     }

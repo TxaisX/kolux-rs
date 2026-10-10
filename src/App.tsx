@@ -10,11 +10,16 @@
 // focused pane, started in the workspace folder (T-010). A browser tab is a pane whose page is
 // a child web view laid over its body by the back end (T-012-a, src/browser/BrowserPane.tsx);
 // its shortcuts (bar, back, forward, reload) apply while a browser pane is focused (T-012-b).
-import { useEffect, useRef, useState } from "react";
+// Source Control is a card on the right (Mod+Shift+G, Mod+L or the top bar's panel button): the
+// workspace in front's changes, staging and a commit box; its draft message is kept here per
+// worktree (T-018-a, src/scm/SourceControlPanel.tsx).
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
+import SettingsPage from "./settings/SettingsPage";
+import SignInNotice from "./settings/SignInNotice";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -24,8 +29,13 @@ import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
+import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
+import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
+import { nextNeedsYou } from "./terminal/status";
+import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
+import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -42,6 +52,22 @@ type Pane = { key: number; cwd: string | null; branch: string | null; agent: Age
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
+}
+/** TERM-055: the one badge a tab carries beside its agent icon. */
+const badges: Record<NonNullable<Badge>, [(p: { size?: number }) => ReactElement, string]> = {
+  working: [Spinner, "working"],
+  permission: [Help, "needs permission"],
+  unread: [Bell, "unread"],
+  done: [CheckCircle, "done"],
+};
+function TabBadge({ kind }: { kind: Badge }) {
+  if (!kind) return null;
+  const [Icon, label] = badges[kind];
+  return (
+    <span className={`badge ${kind}`} role="img" aria-label={label}>
+      <Icon size={11} />
+    </span>
+  );
 }
 /** SESS-051: a seat's start line as the back end builds it. */
 type StartLine = { args: string[]; typed: string | null };
@@ -64,12 +90,16 @@ function Window() {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("terminals");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
   // the grid stays mounted (hidden) behind it.
   // SET-028: Model routing opens the same way until Settings > Agents exists.
   const [page, setPage] = useState<Page | null>(null);
+  const [scmOpen, setScmOpen] = useState(false);
+  // GIT-004: a half-written commit message per worktree, kept through closing the panel.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -82,6 +112,24 @@ function Window() {
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
+  const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
+  const runRef = useRef(running); // TERM-118: the last reported running flags, to see a finish
+  runRef.current = running;
+  const [unreadPanes, setUnreadPanes] = useState<Set<number>>(new Set()); // TERM-118: finished or rang out of view
+  const [unreadDirs, setUnreadDirs] = useState<Set<string>>(new Set()); // PROJ-063 / TERM-118: workspace rows marked unread
+  const [winFocused, setWinFocused] = useState(() => document.hasFocus());
+  useEffect(() => {
+    const on = () => setWinFocused(true);
+    const off = () => setWinFocused(false);
+    window.addEventListener("focus", on);
+    window.addEventListener("blur", off);
+    return () => {
+      window.removeEventListener("focus", on);
+      window.removeEventListener("blur", off);
+    };
+  }, []);
+  const markDir = (dir: string, un: boolean) => setUnreadDirs((u) => new Set(un ? [...u, dir] : [...u].filter((d) => !sameDir(d, dir))));
+  const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
@@ -106,15 +154,19 @@ function Window() {
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
     invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
-    invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    const readSettings = () => void invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    readSettings();
+    const off = listen("settings-saved", readSettings);
+    return () => void off.then((u) => u()).catch(() => {});
   }, []);
 
-  // SESS-004: the default agent is a settings key; the plus menu lists it first.
-  const setDefault = (id: string) => {
-    const next = { ...settings, [DEFAULT_AGENT_KEY]: id };
+  const saveSetting = (key: string, value: unknown) => {
+    const next = { ...settings, [key]: value };
     setSettings(next);
     invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
   };
+  // SESS-004: the default agent is a settings key; the plus menu lists it first.
+  const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
   useEffect(() => {
     document.title = windowTitle(info);
   }, [info]);
@@ -152,8 +204,17 @@ function Window() {
         case "browser.reload":
           void invoke("browser_go", { id: focused, what: "reload" });
           break;
+        case "app.settings":
+          setSettingsOpen(true);
+          break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
+          break;
+        case "sidebar.sourceControl.toggle":
+        case "sidebar.right.toggle":
+          // ponytail: the right sidebar holds only Source Control until VIEW-056/057 (T-146).
+          setScreen("terminals");
+          setScmOpen((o) => !o);
           break;
         case "workspace.create":
           setScreen("terminals");
@@ -180,6 +241,16 @@ function Window() {
           if (!inFront) return;
           closePane(focused);
           break;
+        case "terminals.focusNextNeedsYou": {
+          // TERM-030: cycle through the panes waiting on the user in grid order, across workspaces;
+          // with none waiting, focus stays where it is.
+          const k = nextNeedsYou(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)), focused);
+          if (k === null) return;
+          const p = panes.find((x) => x.key === k);
+          if (p && !sameDir(p.cwd, activeDir)) setActiveDir(p.cwd);
+          setFocused(k);
+          break;
+        }
         case "terminal.splitRight":
         case "terminal.splitDown":
           if (!inFront) return;
@@ -422,6 +493,16 @@ function Window() {
       console.warn(`trust: ${String(err)}`);
     }
   };
+  // GIT-004: a refused commit can be handed to the default agent with the hook's own words.
+  const fixWithAI = (output: string) => {
+    const a = agents.find((x) => x.id === defaultId && x.installed);
+    if (!a || activeDir === null) {
+      setNotice(`The default agent (${defaultId}) is not installed.`);
+      return;
+    }
+    const prompt = `A git action in this workspace failed. Find the cause, fix it, and finish the action.\n\nGit said:\n${output}`;
+    void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
+  };
   const projectOf = (cwd: string | null): string | null => (cwd ? (Object.entries(owner).find(([dir]) => sameDir(dir, cwd))?.[1] ?? null) : null);
   const projectFor = (projectId: string | null): string | null => projectId ?? projectOf(panes.find((p) => p.key === focused)?.cwd ?? null) ?? projects[0]?.id ?? null;
 
@@ -475,15 +556,55 @@ function Window() {
   const board = screen === "board";
   const live = panes.filter((p) => running[p.key]);
   const openDirs = panes.map((p) => p.cwd).filter((d): d is string => d !== null);
+  // PROJ-063 / PROJ-050: a workspace row shows the strongest state among its panes, and remembers
+  // when that last moved so the smart sort can put the newest change first.
+  const byDir: Record<string, AgentState[]> = {};
+  for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(paneState(p.agent, running[p.key]));
+  const rowStates: Record<string, RowInfo> = {};
+  for (const [dir, states] of Object.entries(byDir)) {
+    const state = strongest(states);
+    const prev = rowRef.current[dir];
+    rowStates[dir] = prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null };
+  }
+  rowRef.current = rowStates;
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
+  const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
+  // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
+  // shows every pane); a finish or bell anywhere else marks tab, pane and workspace row unread
+  // and says so in the window. A desktop notification and the settings that gate it are T-026.
+  const inView = (key: number) => {
+    const cell = cells.find((c) => c.panes.some((p) => p.key === key));
+    if (!cell) return false;
+    return board || (terminals && sameDir(cell.panes[0].cwd, activeDir) && activeOf(cell) === key);
+  };
+  const noticed = (p: Pane, what: string) => {
+    if (!marksUnread(p.key, new Set(panes.map((x) => x.key)), unreadPanes, inView(p.key), winFocused)) return;
+    setUnreadPanes((u) => new Set([...u, p.key]));
+    if (p.cwd !== null) markDir(p.cwd, true);
+    setToast(`${tabName(p, titles)} ${what}`);
+  };
+  useEffect(() => {
+    // Viewing a marked pane in a focused window clears its mark.
+    if (!winFocused || unreadPanes.size === 0) return;
+    const seen = [...unreadPanes].filter(inView);
+    if (seen.length === 0) return;
+    setUnreadPanes((u) => new Set([...u].filter((k) => !seen.includes(k))));
+    for (const p of panes) if (seen.includes(p.key) && p.cwd !== null) markDir(p.cwd, false);
+  });
   return (
     <div className="app">
-      <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} />
+      <TopBar screen={screen} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
       <div className="body">
+        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
         {terminals && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
+            states={rowStates}
+            unread={unreadDirs}
+            onUnread={markDir}
+            settings={settings}
+            onSetting={saveSetting}
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}
@@ -511,6 +632,7 @@ function Window() {
           />
         )}
         <div className="content">
+          <SignInNotice />
           {terminals && page === "automations" && (
             <AutomationsPage
               projects={projects}
@@ -582,7 +704,7 @@ function Window() {
                 </div>
               )}
               {cells.map((c) => {
-                const active = c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key;
+                const active = activeOf(c);
                 return (
                   <div key={c.group} className="cell" hidden={!board && !sameDir(c.panes[0].cwd, activeDir)}>
                     {c.panes.length > 1 && (
@@ -590,6 +712,7 @@ function Window() {
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
                             <VendorMark agent={p.agent} size={12} />
+                            {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key))} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
@@ -600,7 +723,7 @@ function Window() {
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || settingsOpen || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
                   <ChooserPane
                     key={p.key}
@@ -635,7 +758,13 @@ function Window() {
                     args={p.args}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
-                    onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                    onRunning={(on) => {
+                      if (runRef.current[p.key] && !on && p.agent !== "shell") noticed(p, "finished");
+                      setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }));
+                    }}
+                    onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                    onBell={() => noticed(p, "rang the bell")}
+                    unread={unreadPanes.has(p.key)}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title}
@@ -656,6 +785,9 @@ function Window() {
             })}
           </div>
         </div>
+        {terminals && scmOpen && (
+          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} />
+        )}
       </div>
       <StatusBar terminals={live.length} agents={live.filter((p) => p.agent !== "shell").length} />
     </div>

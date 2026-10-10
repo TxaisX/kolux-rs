@@ -102,6 +102,7 @@ Acceptance:
   - [ ] Switch the opt-out on → no traffic reaches the token service, and the account never shows
         Needs re-auth afterwards.
 Compat: The opt-out choice (off unless the user turned it on) carries over.
+Amended 2026-10-09 (DT-A2): ships with the opt-out on, per OD-01; the switch and Kolux-side renewal are T-043-d.
 Source: D-07-006
 
 ### ACCT-007 · Codex connects with a ChatGPT sign-in or a device code

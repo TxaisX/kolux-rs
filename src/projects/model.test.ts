@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { folderName, nestRows, orderWorktrees, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { folderName, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -50,4 +50,16 @@ test("folding a parent hides everything under it; nesting off is one flat level"
 test("a loop of parents is listed flat rather than lost", () => {
   const a: Worktree = { ...p, parent: child.path };
   expect(shape(nestRows([a, child], true, new Set())).sort()).toEqual(["child", "p"]);
+});
+
+test("nesting keeps the order it is handed when the list is sorted elsewhere (PROJ-050)", () => {
+  expect(shape(nestRows([zeta, child, p], true, new Set(), (ws) => ws))).toEqual(["zeta", "p+", "-child"]);
+});
+
+test("the workspaces-folder field saves on Enter, reverts on Escape and ignores keys mid-composition (SET-032)", () => {
+  expect(placeFieldAction("Enter", false)).toBe("save");
+  expect(placeFieldAction("Escape", false)).toBe("revert");
+  expect(placeFieldAction("Enter", true)).toBeNull();
+  expect(placeFieldAction("Escape", true)).toBeNull();
+  expect(placeFieldAction("a", false)).toBeNull();
 });

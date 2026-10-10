@@ -12,7 +12,7 @@ import { resolve } from "../keys/keymap";
 import { Mark } from "./icons";
 
 test("the top bar carries the screen switcher, search hint, usage pill and window controls", () => {
-  const html = renderToString(createElement(TopBar, { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {} }));
+  const html = renderToString(createElement(TopBar, { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {}, rightOpen: false, onToggleRight: () => {} }));
   expect(html).toContain('class="topbar"');
   expect(html).toContain("data-tauri-drag-region");
   for (const label of ["Agents", "Board", "Terminals"]) expect(html).toContain(`>${label}</button>`);
@@ -24,7 +24,7 @@ test("the top bar carries the screen switcher, search hint, usage pill and windo
 });
 
 test("the search box chips follow the keybindings file", () => {
-  const topbar = createElement(TopBar, { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {} });
+  const topbar = createElement(TopBar, { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {}, rightOpen: false, onToggleRight: () => {} });
   const plain = renderToString(topbar);
   expect(plain).toMatch(/kbd">Ctrl<.*kbd">Shift<.*kbd">J</);
   const custom: KeymapState = { ...resolve({ version: 1, platforms: { win32: { "worktree.palette": "Mod+Alt+P" } } }, "win32"), path: null, reload: () => {} };

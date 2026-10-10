@@ -48,6 +48,9 @@ input { font: inherit; }
 .kbd-part { display: inline-flex; align-items: center; gap: 6px; }
 .kbd-none { font-size: 11px; color: var(--fg-faint); }
 .topbar-right .bell { margin-right: 8px; }
+/* the Codex half of the pill (USAGE-022); warn yellow from DESIGN.md section 3 */
+.usage-part { display: inline-flex; align-items: center; gap: 6px; }
+.usage-part.warn { color: #fdc030; }
 .usage { display: inline-flex; align-items: center; gap: 6px; height: 23px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg-muted); font-size: 12px; margin-right: 14px; white-space: nowrap; }
 
 .wc { display: flex; height: 100%; }
@@ -85,12 +88,23 @@ input { font: inherit; }
 .branch { display: flex; align-items: center; height: 32px; padding: 0 12px 0 8px; gap: 8px; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
 .branch .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .branch .count { font-size: 11px; color: var(--fg); }
+.branch .dot { margin-right: 2px; }
 .branch .chev { color: #797979; display: inline-flex; }
 .branch:hover { background: #1f1f1f; }
 .branch.sel { background: var(--row-selected); color: var(--fg); font-weight: 600; }
-.sess { display: flex; align-items: center; height: 32px; padding: 0 4px 0 26px; gap: 10px; border-radius: 6px; font-size: 13px; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
-.sess .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-idle); flex: none; }
-.sess .dot.live { background: var(--dot-live); }
+.sess { position: relative; display: flex; align-items: center; height: 32px; padding: 0 4px 0 26px; gap: 10px; border-radius: 6px; font-size: 13px; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
+/* PROJ-063: the dot is the strongest live agent state; what needs you is amber, working green, done teal. */
+.sb-list .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dot-idle); flex: none; }
+.sb-list .dot.live, .sb-list .dot.working { background: var(--dot-live); }
+.sb-list .dot.done { background: var(--done-icon); }
+.sb-list .dot.permission, .sb-list .dot.blocked, .sb-list .dot.waiting, .sb-list .dot.interrupted { background: var(--working-icon); }
+.sess.sel::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 1px; background: var(--dot-live); }
+.sess.unread .name { font-weight: 600; color: var(--fg); }
+.sess.unread .name::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--working-icon); vertical-align: middle; }
+.sb-group { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; margin-top: 6px; padding: 0 8px; text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-label); }
+.sb-group .count { font-weight: 400; color: var(--fg-muted); }
+.sb-group .chev { display: inline-flex; margin-left: auto; transition: transform 0.15s; }
+.sb-group[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 .sess .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sess .ib { opacity: 0; width: 22px; height: 22px; }
 .sess:hover { background: #1f1f1f; }
@@ -148,6 +162,31 @@ input { font: inherit; }
 .sb-foot .upd { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; margin-left: 6px; margin-right: auto; border-radius: 6px; font-size: 13px; color: var(--fg-muted); white-space: nowrap; }
 .sb-foot .upd:hover { background: var(--row-selected); color: var(--fg); }
 
+/* ---- Source Control card on the right (spec 11; GIT-002 / GIT-004) ---- */
+.sidebar-wrap.right { padding: 8px 8px 8px 0; }
+.sidebar.scm { width: 320px; }
+.scm-head { margin-top: 8px; }
+.scm-head .count { margin-left: 8px; font-size: 11px; color: var(--fg); }
+.scm-commit { display: flex; flex-direction: column; gap: 6px; margin: 8px 8px 0; }
+.scm-commit .field.multi { min-height: 56px; }
+.scm-main { display: flex; gap: 6px; }
+.scm-main .btn.primary { flex: 1; min-width: 0; }
+.scm-main .btn.primary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-item .reason { margin-left: auto; font-size: 11px; color: var(--fg-faint); }
+.scm-sec { display: flex; align-items: center; height: 28px; padding: 0 4px 0 12px; font-size: 12px; font-weight: 500; color: var(--fg-label); }
+.scm-sec .count { margin-left: 6px; color: var(--fg-muted); }
+.scm-sec .ib { margin-left: auto; }
+.scm-row { display: flex; align-items: center; height: 28px; padding: 0 4px 0 12px; gap: 8px; border-radius: 6px; font-size: 12.5px; color: var(--fg-row); white-space: nowrap; }
+.scm-row:hover { background: #1f1f1f; }
+.scm-row .letter { width: 14px; text-align: center; font: 11px var(--mono-font); color: var(--fg-muted); flex: none; }
+.scm-row .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.scm-row .ib { opacity: 0; width: 22px; height: 22px; }
+.scm-row:hover .ib, .scm-row .ib:focus-visible { opacity: 1; }
+.scm-out { margin: 6px 8px 0; padding: 6px 8px; border: 1px solid #7a3b1e; border-radius: 8px; font-size: 12px; color: #f0a07a; display: flex; flex-direction: column; gap: 6px; }
+.scm-out summary { cursor: pointer; font-weight: 500; }
+.scm-out pre { margin: 6px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; font: 11px var(--mono-font); color: var(--fg-muted); user-select: text; }
+.scm-out .btn { align-self: flex-start; }
+
 /* ---- 6. layout strip: 40 px ---- */
 .strip { flex: none; height: 40px; display: flex; align-items: center; padding-left: 12px; gap: 16px; background: var(--strip-bg); font-size: 12px; color: var(--fg-muted); }
 .layouts { display: flex; height: 28px; border: 1px solid var(--line-focus); border-radius: 6px; overflow: hidden; }
@@ -175,11 +214,19 @@ input { font: inherit; }
 .tabs { flex: none; display: flex; gap: 4px; height: 26px; overflow-x: auto; font-size: 12px; }
 .tab { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border: 1px solid var(--line-subtle); border-radius: 8px; color: var(--fg-muted); white-space: nowrap; cursor: default; }
 .tab[aria-selected="true"] { background: var(--pane-bg); border-color: var(--line-focus); color: var(--fg); }
+/* TERM-055: one badge beside the agent icon; the spinner reuses the header's spin. */
+.tab .badge { display: inline-flex; flex: none; }
+.tab .badge.working { color: var(--working-icon); animation: spin 1s linear infinite; }
+.tab .badge.done { color: var(--done-icon); }
+.tab .badge.unread,
+.tab .badge.permission { color: var(--working-icon); }
 .tab .tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .tab .tab-x { width: 18px; height: 18px; border-radius: 4px; color: var(--fg-muted); line-height: 1; }
 .tab .tab-x:hover { background: var(--row-selected); color: var(--fg); }
 .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
 .pane.focused { border-color: var(--line-focus); }
+/* TERM-023: a soft, static green glow on a pane whose agent finished while it was not focused. */
+.pane.glow { border-color: var(--done); box-shadow: inset 0 0 0 1px var(--line-inner), 0 0 18px rgba(1, 200, 143, 0.3); }
 .pane[hidden] { display: none; }
 .pane-head { flex: none; height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 9px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; white-space: nowrap; }
 .pane-head .st { display: inline-flex; flex: none; }
@@ -194,6 +241,7 @@ input { font: inherit; }
 .pane-head .status.working { color: var(--working); }
 .pane-head .status.done { color: var(--done); }
 .pane-head .status.attention { color: var(--working-icon); }
+.pane-head .age { color: var(--fg-muted); }
 .pane-head .right { margin-left: auto; display: flex; align-items: center; gap: 2px; }
 /* BROW-001: the address bar fills the browser tab's header; its page is a native web view laid over the body. */
 .pane-head .address { flex: 1; min-width: 0; height: 20px; padding: 0 8px; border: 1px solid var(--line-subtle); border-radius: 6px; background: var(--kbd-bg); color: var(--fg); font: inherit; font-size: 12px; }
@@ -295,3 +343,49 @@ input { font: inherit; }
 .routing-table td:first-child { min-width: 120px; }
 .routing-table select.field { width: 200px; }
 .routing-missing { margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 500; color: var(--fg-muted); background: var(--input-bg); border: 1px solid var(--line-subtle); }
+
+/* Settings (T-043-a): laid over the window body; the panes underneath stay mounted */
+.body { position: relative; }
+.settings { position: absolute; inset: 0; z-index: 40; display: flex; gap: 8px; padding: 8px; background: var(--app-bg); }
+.settings-nav { flex: none; width: 288px; display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; }
+.settings-title { padding: 0 9px 10px; font-size: 13px; font-weight: 600; color: var(--fg-label); }
+.settings-link { height: 32px; padding: 0 9px; border-radius: 6px; text-align: left; font-size: 13px; color: var(--fg-row); }
+.settings-link[aria-current="page"] { background: var(--row-selected); color: var(--fg); font-weight: 600; }
+.settings-main { flex: 1; min-width: 0; overflow: auto; padding: 20px 28px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 12px; }
+.settings-head { display: flex; align-items: center; justify-content: space-between; }
+.settings-head h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--fg); }
+.settings-sub { margin: 6px 0 18px; font-size: 12px; color: var(--fg-muted); }
+.conn-card { max-width: 560px; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; }
+.conn-head { display: flex; align-items: center; gap: 8px; }
+.conn-name { font-size: 14px; font-weight: 600; color: var(--fg); }
+.conn-chip { margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 11px; color: var(--fg-muted); background: var(--chip-bg); }
+.conn-chip.connected, .conn-chip.warning { color: var(--done); }
+.conn-chip.expired, .conn-chip.attention { color: #fdc030; }
+.conn-chip.connecting { color: var(--working); }
+.conn-headline { font-size: 13px; color: var(--fg-row); }
+.conn-detail { margin: 0; font-size: 12px; color: var(--fg-muted); }
+.conn-detail.warn { color: #fdc030; }
+
+/* Claude accounts (T-043-b) */
+.settings-main .conn-card + .conn-card { margin-top: 12px; }
+.conn-add { margin-left: auto; }
+.btn.link { background: none; border-color: transparent; color: var(--fg-muted); text-decoration: underline; }
+.acct-pending { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--working); }
+.acct-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.acct-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.acct-email { font-size: 13px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.acct-org { font-size: 11px; color: var(--fg-muted); }
+.acct-row .conn-chip { margin-left: 0; }
+.device-code { display: flex; flex-direction: column; gap: 6px; }
+.device-link { color: var(--fg); user-select: all; word-break: break-all; }
+.device-value { align-self: flex-start; padding: 4px 12px; border-radius: 6px; background: var(--chip-bg); color: var(--fg); font-size: 18px; letter-spacing: 0.12em; user-select: all; }
+/* ACCT-012 lapsed sign-in notice; ACCT-013 needs-attention reason with its one fix */
+.signin-notice { color: var(--fg); border-color: #7a5a1e; }
+.signin-notice span { color: #f0c27a; }
+.signin-notice .btn { margin-left: auto; }
+.attn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.attn .conn-detail { flex: 1 1 240px; margin: 0; }
+.own-sign-in { margin-top: 2px; }
+.conn-switch { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--chip-bg); cursor: pointer; }
+.conn-switch input { margin-top: 2px; accent-color: var(--done); }
+.conn-switch small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: 12px; }

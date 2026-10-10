@@ -70,7 +70,8 @@ struct ExitPayload {
 impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>) -> Result<u32, String> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, env: Option<(&str, String)>) -> Result<u32, String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
@@ -96,6 +97,14 @@ impl Terminals {
         }
         if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
             command.env(crate::cli::APP_DIR_ENV, dir);
+        }
+        if let Some((k, v)) = env {
+            // A pane on a managed Claude account must not be overridden by a 1-year key that
+            // Kolux itself was started with (Claude Code prefers the variable).
+            if k == crate::claude_accounts::CONFIG_ENV {
+                command.env_remove(crate::claude_key::ENV);
+            }
+            command.env(k, v);
         }
         let session = PtySession::spawn(
             command,
@@ -232,10 +241,22 @@ impl Terminals {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>) -> Result<u32, String> {
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
-    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default())
+    // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
+    // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
+    let env = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let settings = store.settings();
+        let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
+        let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
+        crate::claude_key::pane_env(program.as_deref(), &settings, token)
+            .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
+            // ACCT-007: a Codex pane runs in the active Codex account's private home.
+            .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
+    };
+    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env)
 }
 
 #[tauri::command]

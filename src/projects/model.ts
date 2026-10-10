@@ -4,10 +4,16 @@
 export type Project = { id: string; name: string; path: string; workspacesDir?: string | null; base?: string | null };
 /** What a typed name becomes in a project: its branch and the folder it would get (PROJ-021, PROJ-025). */
 export type Preview = { branch: string; folder: string };
-/** A workspace just made: the worktree, the ref it started from, a note when the saved base was gone (PROJ-028). */
-export type Created = Worktree & { base: string; note: string | null };
-/** The global workspaces settings (PROJ-025): folder in use, layout, folders used before. */
-export type PlaceInfo = { dir: string; flat: boolean; used: string[] };
+/** A workspace just made: the worktree, the ref it started from, a note when the saved base was gone (PROJ-028), and what could not be brought along (GIT-067). */
+export type Created = Worktree & { base: string; note: string | null; warnings: string[] };
+/** The global workspaces settings (PROJ-025): folder in use, layout, folders used before, and whether KOLUX_WORKSPACES_DIR supplies the folder (SET-032). */
+export type PlaceInfo = { dir: string; flat: boolean; used: string[]; fromEnv: boolean };
+
+/** What a key does in the workspaces-folder field (SET-032): Enter saves, Escape puts the saved folder back, and nothing happens while an input method is still composing. */
+export function placeFieldAction(key: string, composing: boolean): "save" | "revert" | null {
+  if (composing) return null;
+  return key === "Enter" ? "save" : key === "Escape" ? "revert" : null;
+}
 /** `parent` is the workspace it was made from (PROJ-047); gone or main means it sits at the top level. */
 export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null };
 
@@ -40,11 +46,11 @@ export const NESTING_KEY = "workspaceNesting";
 
 /**
  * PROJ-047: the non-main workspaces as rows, each child under its parent to any depth, siblings
- * in `orderWorktrees` order. A child whose parent is not listed (removed, or the main checkout)
+ * in `sort` order (`orderWorktrees` unless the caller sorted already). A child whose parent is not listed (removed, or the main checkout)
  * sits at the top level; a folded row hides everything under it; nesting off is one flat level.
  */
-export function nestRows(others: Worktree[], nest: boolean, folded: ReadonlySet<string>): Row[] {
-  const sorted = orderWorktrees(others);
+export function nestRows(others: Worktree[], nest: boolean, folded: ReadonlySet<string>, sort: (ws: Worktree[]) => Worktree[] = orderWorktrees): Row[] {
+  const sorted = sort(others);
   if (!nest) return sorted.map((w) => ({ w, depth: 0, kids: false }));
   const listed = new Set(sorted.map((w) => w.path));
   const under = new Map<string, Worktree[]>();

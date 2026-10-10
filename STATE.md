@@ -1,11 +1,11 @@
 # STATE
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
-Budget: 6 passes per day   (today: 17, date: 2026-10-09)
-Next task: T-018 · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
-Done: 23 / 341 tasks  ·  P0 parity: 0/228 cards
+Budget: 6 passes per day   (today: 25, date: 2026-10-09)
+Next task: T-025 · STAT-001 / STAT-007 / STAT-008 … (status hooks)
+Done: 38 / 351 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 341 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 351 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
@@ -371,10 +371,211 @@ when PowerShell strips their quotes, `task-create` from outside any Kolux termin
 and every task records the terminal that made it, and a terminal whose handle has gone stale is
 recognised again from its pane key. The reply hint on delivered mail names this build's own command.
 
+**Source Control (T-018-a, GIT-002 / GIT-004).** Mod+Shift+G, Mod+L or the top bar's right panel
+button opens a 320 px card right of the content with the workspace in front's changes under
+Conflicts, Staged, Changes and Untracked, each with its count and a stage-all / unstage-all
+control, plus or minus on every row (renames show `from → to`; names such as `docs/c d.md` and
+`a[1].txt` stay whole), and a commit box. Commit, and Ctrl+Enter anywhere in the card, is live
+only with staged work, a non-blank message and no conflict; it commits the message exactly as
+typed, shows `Committed <short id>` and refreshes. A failed commit shows `Commit failed`, or
+`Commit blocked by a hook` when a pre-commit / prepare-commit-msg / commit-msg /
+pre-merge-commit hook exists, with git's and the hook's own output behind a disclosure and a
+`Fix with AI` button that starts the default agent in that workspace with the output as its
+prompt. The draft message is kept per worktree for the window's life, through closing the card
+and switching workspaces. Back end `scm.rs`: `scm_status` (porcelain v2, `--untracked-files=all`,
+NUL-separated), `scm_stage` (one `git add` / `git restore --staged` fed NUL-separated paths on
+stdin with `--literal-pathspecs`, paths checked to stay inside the worktree, 2 000 files in one
+call), `scm_commit` (`-F -`). The list refreshes after each action and every 4 s while the card
+is open; the watcher is GIT-001's (T-033), the multi-row bulk bar is T-018-c and folder rows are
+T-033's tree view.
+
+**Main button and remote menu (T-018-b, GIT-006 / GIT-007).** The large button under the commit
+box always names the next step: Stage all while edits wait with nothing staged; Commit once
+something is staged (held with "Write a message first" or "Resolve the conflicts first"); Publish
+branch for a branch with no upstream (held with "HEAD is detached"); Force push with lease when
+the upstream holds only patches the branch already has, as after a rebase; Sync ↓behind ↑ahead,
+Pull n or Push n by the counts; Create pull request on a clean, pushed branch (the composer is
+GIT-021, T-228, and the button says so). The Remote menu lists push, pull, sync, fetch,
+fast-forward, force push with lease, publish branch and rebase from base, labels carrying counts
+("Push 2 commits", "Sync ↓1 ↑2", "Rebase from origin/main"), every disabled item showing its
+reason (no branch checked out, branch unpublished, nothing to push / pull, already current, local
+commits are in the way, already published, this is the base branch). Actions run against the
+branch's own remote only (publish pushes to origin and sets it as upstream; force always carries a
+lease; rebase fetches first); a failure shows git's words with Fix with AI. Status never touches
+the network: ahead / behind come from the refs git has, so an unpublished branch is never checked
+against the remote; only an explicit menu action does. Back end: `scm_remote` in `scm.rs`,
+`Status.rewritten` (`git cherry HEAD @{upstream}` all `-`) and `Status.base`.
+
+**Worktree create, move and remove on the Git side (T-019, GIT-067).** A new workspace brings
+along what the repository says: git-ignored files named in `.worktreeinclude` at the repo root
+(one literal path per line, `#` comments; wildcard and negation lines are skipped with a warning)
+are copied from the main checkout, and git-ignored folders under `worktree.sharedDirectories` in
+`kolux.yaml` are linked (a junction on Windows, so no privilege is needed and git sees a folder),
+so every workspace shares one `node_modules`. Entries are tidied before anything on disk changes:
+absolute paths, paths with `..`, paths into `.git`, duplicates and trailing slashes; a folder that
+is not ignored, a file missing from the main checkout or a link that could not be made comes back
+as a warning in the sidebar's "created …" note, never as a failed create. A tracked file is never
+copied over. Creations in one repository take turns (a failed one hands the turn on). Removing a
+workspace with uncommitted work (submodule work included) is refused; the sidebar form then asks
+again with "Discard and remove", and nothing is lost until that click. The shared-folder links are
+taken out first, so removal never touches the folders behind them. The branch is deleted only
+when no other worktree has it checked out; otherwise the commit it stood at is recorded so
+`Git::delete_branch_if_at` can delete it later only while unmoved (the form's keep-branch choice
+is T-218). `Git::worktree_move` goes through `git worktree move`. A base ref that could read as a
+git option or range (leading dash, blanks, `..`) is refused before any git command runs. Back end:
+`include.rs` (new), `git.rs`, `projects.rs`; `workspace_remove` takes `force`.
+
+**The workspaces folder (T-020, SET-032, PROJ-026).** The sidebar's Workspaces-folder field saves
+on Enter, puts the saved folder back on Escape, and does nothing while an input method is still
+composing; leaving the field sends the typed folder again whenever it differs from the saved one,
+so a save that failed is retried by moving on. An absolute folder is made at save time, and one
+that cannot be made (a path under a file, say) is a failed save that keeps the typed text in the
+field. Browse… picks the folder with the native dialog and saves it at once. Folders used before
+are offered from the field's list. `KOLUX_WORKSPACES_DIR` (trimmed, blank counts as unset)
+replaces the default folder without opening Settings; a saved folder still wins over it, and the
+field's label says "(from KOLUX_WORKSPACES_DIR)" while the variable is what supplies the folder.
+Back end: `projects::resolve_workspaces_dir`, `PlaceInfo.fromEnv`, `set_place`.
+
+**Worktree create from the command line, with lineage (T-021, CLI-018).** On top of T-014-b,
+`kolux-dev worktree create` records how the workspace came to be: made by the CLI, the folder the
+call was made in, the parent worktree (the one the call was made from, the main checkout
+included; `--parent-worktree <selector>` names another in the same project, `--no-parent` records
+none, and a call from outside every worktree has none), `--issue <number>` and `--comment
+<text>`. The record lives in the store under `workspaceOrigins` (`projects::set_origin` /
+`origin`), is echoed in the result and goes when the worktree is removed from either the CLI or
+the sidebar. Refused before the app is asked: `--parent-workspace` (retired; the message names
+`--parent-worktree`), a parent flag with no or an empty value, `--issue` that is not a positive
+whole number, and the earlier refusals (prompt without agent, empty agent/prompt/setup,
+disagreeing parent flags, `--run-hooks` with `--setup skip`). A parent selector that matches
+nothing fails before anything is created. The sidebar does not draw lineage yet (PROJ-047,
+T-077).
+
+T-022 (PROJ-045, PROJ-050, PROJ-063): each sidebar row shows the strongest live state among the
+panes open in its folder as a coloured dot (amber for what needs you, green working, teal done,
+grey idle; a permission request outranks everything), and the main checkout's row gets the same
+dot. A state change in a workspace that is not in front marks its row unread (bold name and an
+amber mark); showing it clears the mark, and the bell button on any row, the shown one included,
+flips the mark by hand. The shown row carries a thin accent bar. The Sliders button in the
+Projects header opens Group by (Project, None, Status, Pull request) and Sort (Smart, Name); both
+are settings keys (`workspaceGroupBy`, `workspaceSort`) remembered across launches, and an old
+"recent" sort is moved to Smart once. Smart puts what needs you first, then done, then working,
+then idle, newest change first inside each class; an interrupted agent is never among the done.
+Status and Pull request grouping draw folding headers with counts; None is one flat list with
+the project name at the right of each row. A branch switched inside a workspace folder shows on
+its row within five seconds (a poll while the window is visible; watching is PROJ-041, T-107).
+Today the only live states are working, done and idle, read from whether an agent's program is
+up; the hook-fed states and the pull-request feed are named on T-025 and T-229.
+
+T-023 (TERM-020, TERM-021, TERM-023, TERM-030; STAT-051, VIEW-047): the pane header's status
+word is tinted by `status.ts`: an agent reads Starting then Working (cyan), Done (green) once
+its program ends well, "Ended (code)" neutral when it stopped otherwise, Failed (amber) when it
+could not start; a plain shell reads Starting, Ready and Ended in the neutral tone; the status
+dot keeps its spoken label. A Done agent shows its age next to the word ("just now", then "1m
+ago", refreshed each minute), and a pane whose agent finished while another pane was focused
+carries a static green glow until it is focused. Ctrl+J (Cmd+Shift+J on macOS;
+`terminals.focusNextNeedsYou`) cycles through the panes waiting on the user in grid order
+across workspaces and leaves focus alone when none waits; today no pane waits, since what an
+agent needs arrives with the status hooks (T-025), so the two-waiting cycle is proved in tests.
+
+T-024 (TERM-055, TERM-118): a cell with two or more tabs shows one badge beside each tab's agent
+icon: a spinner while the agent works, a question mark while it waits on the user (fed by the
+status hooks, T-025), a bell for a finish or a terminal bell not yet looked at, a green check for
+a finish that was; an idle shell tab shows only its icon. An agent that finishes, or any program
+that rings the bell, while its pane is not in view (a hidden tab, a hidden split pane, another
+workspace in front, or the window in the background) marks the tab, the pane (green glow) and
+the workspace row unread and shows a passing note in the window ("Claude finished", "Terminal 3
+rang the bell"); looking at the pane in a focused window clears all three. A finish in the pane
+being looked at adds no mark. A late event for a pane that is gone or already marked is dropped.
+The desktop notification and its settings are T-026.
+
+[accounts] Secrets are sealed on disk (T-038): the Claude 1-year key and the xAI key live in
+settings.json only as Windows-sealed values (DPAPI, this user only), the window never receives
+them and cannot overwrite them, and a vault folder in the profile holds one sealed file per
+managed sign-in. About two seconds after the first window, a one-off pass seals anything still in
+the clear from an older profile (it never delays the launch, leaves a value as it was if sealing
+fails, and moves an unopenable sealed file aside instead of deleting it) and limits the profile
+folder to the current user; it writes to `logs\kolux.log` in the profile. No screen sets a key
+yet; the Connect cards come with T-043.
+
+[accounts] The Codex half of the top-bar usage pill is real (T-042-a): shortly after the window
+opens, and every 10 minutes, Kolux checks for a Codex sign-in (the account's own Codex home, then
+`CODEX_HOME`, then `~\.codex`), starts nothing when there is none, and otherwise asks Codex's
+background app server, in a hidden process that only reads and is closed afterwards, for the
+plan figures. The pill reads "Codex 100% left" (weekly figure); hovering lists the 5-hour and
+weekly figures each with its own reset time, the limit-reset credits and the plan. A sign-in
+Codex no longer accepts turns it into a yellow "Codex · sign in again" with no figures. The
+Claude half still reads "unknown" until T-041.
+
+[accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
+the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
+were. The Claude card connects on a key that lasts a year: Connect runs Claude Code's own
+long-lived-key setup out of sight (no console window, never through the command prompt), shows
+"Finish in the browser" with Cancel while Claude's page is open, picks the key out of the
+setup's output, keeps it sealed with the date it was made, and turns the card to "Connected ·
+1-year key, Renew in <month year>". From 30 days before the year is up the card warns with the
+days left and offers Renew; past it, it reads "ran out". A second Connect while one is running is
+turned down, the setup gives up after 10 minutes, and a launcher Kolux cannot start directly puts
+the card in needs attention. Every new Claude pane is handed the key through
+CLAUDE_CODE_OAUTH_TOKEN while key mode is on (its /status reads "Auth token:
+CLAUDE_CODE_OAUTH_TOKEN"). Disconnect forgets the key. Managed Claude accounts and the Codex
+sign-ins come with T-043-b / T-043-c.
+
+[accounts] Settings > AI connections lists managed Claude accounts (T-043-b): Add Account, or "Use
+my Claude account instead" on the Claude card, runs Claude Code's own browser sign-in out of sight
+into a private Claude folder for that account and shows "Finish signing in in the browser." with
+Cancel. When the sign-in is done the account is listed with its email and organisation (read from
+Claude Code's own status), and its sign-in is kept sealed in the vault as well. Cancel, or a
+sign-in that quits early, keeps nothing partial; "Sign in again" that fails puts the earlier
+sign-in back and says why in yellow. Make active picks the account new Claude panes run on (they
+get that folder as CLAUDE_CONFIG_DIR); while the 1-year key is connected the key still wins, and
+the section says so. Kolux does not renew these sign-ins itself: Claude Code keeps them fresh in
+its own panes (the ACCT-006 default under OD-01). The renewal opt-out switch and Kolux-side
+renewal are T-043-d.
+
+[accounts] The Codex card on Settings > AI connections connects Codex (T-043-c): Connect runs
+Codex's own browser sign-in out of sight, and "Sign in with a code" shows a link and a one-time
+code to enter on this or any other device (the view waits until it has both). Each account Kolux
+adds lives in a private Codex home of its own (\codex-accounts\<id> in the profile), so the
+user's own \.codex folder is never touched (checked file by file). The newest account becomes the
+active one; others can be made active, and new Codex panes and the top-bar Codex figures run on
+the active account. With no managed account the card reports Codex's own login as it is: a ChatGPT
+sign-in, an API key, an API key with a custom provider, or not connected. Cancel or a failed
+sign-in adds nothing and removes the half-made home, but never a home that already holds a
+working sign-in; the reason shows with links and codes removed.
+
+[accounts] A lapsed sign-in now shows in the main window, not only in Settings (T-044): a bar
+across the top says "Claude account sam@example.com is no longer signed in." (or the Codex
+account) with Sign in again, which runs the same hidden sign-in as Settings and clears the bar
+when it works. Kolux asks Claude Code once at start whether the active account is still signed
+in, but only while Kolux, not Claude Code, looks after sign-ins; under the default (Claude Code
+looks after them) the Claude half never shows. A Codex account is flagged when its usage read
+says to sign in again. Every needs-attention card in Settings now names one reason and offers
+the one fix that fits: Try again (browser blocked, sign-in refused), Check again (plan not
+covered, Claude not found), Open install page (Windows blocked it, no installer here), Renew
+(key running out or expired), Try installing again (install failed), and no button for a usage
+limit, which says when it can be used again. Nothing yet produces the install-failed and
+SmartScreen reasons; the install flows will.
+
+[accounts] Settings > AI connections now says whether each sign-in is ready (T-045). With no
+1-year key and no managed Claude account, the Claude card reports Claude Code's own sign-in on
+this PC ("New Claude panes use Claude Code's own sign-in on this PC (email)"), and warns in
+yellow when Claude Code is signed out, so a sign-out from Claude's own command line shows the
+next time Settings opens. Managed Claude accounts that lapsed and Codex accounts with a sign-in
+error say "Needs sign-in"; a Codex account whose settings file was changed away from what Kolux
+wrote says "Settings changed" with Sign in again, which puts Kolux's settings back. A Codex that
+refuses the command Kolux starts it with is reported as such ("update Codex"), never as a sign-in
+problem. The Claude card has a "Carry on by itself once a usage limit resets" switch: off unless
+turned on, kept across restarts; it only stores the choice until the resume itself (T-041) lands.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
+
+- [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
+  Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
+  Txais said the same evening that this was intended, not accidental; the key stays and no builder
+  should ask for it to be revoked. Live checks still use stand-in programs and fake keys.
 
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
@@ -467,6 +668,94 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-08 · No bundled font files: Inter, JetBrains Mono and Cascadia Code are SIL OFL 1.1, which
   LOOP.md's licence list does not name, so the app uses system stacks (LOOK-1 above). Measured
   text therefore differs by a pixel or two from the reference where the installed font differs.
+- 2026-10-09 · T-024: the notification is an in-window note until T-026 brings the desktop one
+  and the settings that gate it. A plain shell's exit does not mark anything (only an agent's
+  finish and any terminal bell do). The workspace row's unread mark now lives in the window
+  (`App.tsx`) with the pane marks, so viewing the marked pane clears the row too; the sidebar's
+  own state-change rule and the hand toggle (T-022) feed the same set. "In view" means the tab
+  on top of a cell in the workspace in front (every pane on the Board); a visible split pane that
+  is not focused counts as viewed, so it only glows (T-023) and is not marked.
+- 2026-10-09 · T-023: a stopped agent ("Ended (code)", non-zero exit) is not Done and does not
+  glow; only a clean exit reads Done with its age. The pane's finish time is its own clock read
+  at the exit event (the sidebar's `changed` is read at the same event in the window; the two
+  differ by milliseconds), so no shared store is kept until the Board needs one. A failed start
+  counts as "needs you" in `status.ts`, but the window already drops a failed pane with a
+  toast, so the next-that-needs-you cycle has nothing to visit until the hooks feed it.
+- 2026-10-09 · T-022: with no status hooks yet (STAT-001, T-025) a row's state is read from
+  the pane's program: a shell is idle, an agent is working until its program ends, then done;
+  permission, blocked, waiting, interrupted and queued are typed and ranked now so the hooks only
+  have to fill them in. The pull-request state is typed (`pr` on each row, null today) and the
+  grouping is proved in tests only until GIT-025 (T-229) feeds it. The "Recent" sort is not kept
+  as a choice: an old `workspaceSort: "recent"` is saved back as "smart" on first load, as the
+  card asks. Unread marks live in the window only (not saved); a restart clears them.
+- 2026-10-09 · T-021: the parent is recorded as the worktree's path (the store key the names use),
+  not an id, since worktrees have no id of their own yet; the main checkout counts as a parent
+  when the call is made from it (the card says "the worktree the command was called from" and
+  the sidebar already groups the rest under main), and a call from outside every worktree (a
+  plain shell with `--repo`) records no parent rather than failing. `--parent-worktree` must be
+  in the same project; another project's worktree is refused. The calling terminal is recorded
+  as its folder for now: the terminal handle and pane key the CLI will read from its environment
+  are CLI-007's (T-088, in the orchestration lane; its line now names the hand-off), and the
+  folder-workspace parent is PROJ-086's (T-218). `--issue` is validated as a number only; the
+  lookup is PROJ-037's (T-107). `--setup` values are still only echoed (PROJ-033, T-107).
+- 2026-10-09 · T-020: the saved folder wins over `KOLUX_WORKSPACES_DIR`, which only moves the
+  default (PROJ-026's acceptance says "no folder setting"); so with a folder saved the variable
+  does nothing, and the field says where its value comes from only while the variable supplies it.
+  A save makes the folder right away (`create_dir_all`) so that a bad folder is a failure the user
+  can retry rather than a later failed create; a relative folder is only saved, since it counts
+  from each project root. The blur retry is "differs from the saved folder", which is the same as
+  "equals the last failed attempt" because a successful save puts the saved value in the field.
+  Save and Browse… keep the field's focus on mousedown, so a click never saves twice. Hidden
+  worktrees by origin (made by Claude Code, GSD, elsewhere, extra roots) are not built here: they
+  are PROJ-042/PROJ-044's rules and go with T-108, whose line now names them.
+- 2026-10-09 · T-019: shared folders are junctions on Windows, not symlinks: a symlink needs a
+  privilege most accounts lack and git treats it as a file, so a `node_modules/` ignore line
+  would not match it and the new worktree would start dirty (seen in the test); a junction
+  needs nothing and git sees a folder. `git worktree remove --force` leaves a junction (and so
+  the folder) in place, so the links are removed first, which also keeps the shared folders
+  safe. A folder-only ignore pattern is checked with a trailing slash so it matches before the
+  folder exists in the main checkout. "Ignored" is `git check-ignore`, so a tracked file named
+  in the include file is skipped rather than copied over. The kolux.yaml shared list is read by
+  a small line scanner (block list or inline list under `worktree:`), not a YAML parser; the
+  rest of the file is PROJ-034 (T-149). The pre-rename twin of kolux.yaml (COMPAT.md 5.6, HID-037)
+  is not read: its name is not in the clean-room sources and HID-037 is retired, default skip;
+  Txais names the file if he wants it read. The include-file copy budget and interrupted-copy
+  warning are PROJ-032's (T-106). The dirty check is the removal's own refusal, so the sidebar
+  form asks twice only when there is something to lose; the CLI keeps its `--force` flow and
+  passes force on. The one-at-a-time rule is a per-repository mutex keyed by the main checkout's
+  path; a poisoned lock is taken over, so a panic in one create never blocks the next.
+- 2026-10-09 · T-018-b: "differs from its remote only by commits with identical patches" is read
+  as `git cherry HEAD @{upstream}` marking every upstream-only commit `-`, checked only when the
+  branch is behind, so the common path costs no extra git call. The base branch is
+  `Git::default_branch` (origin's HEAD, else main / master, else the current branch); a repo
+  whose origin was added by hand has no `origin/HEAD`, so its base reads as the local `main`
+  until `git remote set-head origin -a`. Push, pull and sync use git's plain forms so the user's
+  own pull policy applies; a diverged pull with no policy shows git's refusal (GIT-008, T-313).
+  No push target is ever taken from the UI, so "a target that differs from the configured remote
+  is rejected" holds by construction, as does "git only reaches remotes the user set up". The
+  ten-minute "no repeating remote checks" acceptance holds by construction (status is local) and
+  is proven in the Rust test with origin pointing nowhere: three status calls in well under a
+  second, only an explicit fetch reports the trouble. The sync label shows the ↓ ↑ pair even when
+  one side is 0. Create pull request, the wait while the PR check loads and the "PR already
+  merged" reason go to T-228 (named in PLAN.md). Fix with AI's prompt now covers any failed
+  action, not only a commit (GIT-009's push hand-off proper stays on T-227).
+- 2026-10-09 · T-018-a: the stage card's batching rule is met by one git process fed
+  NUL-separated paths on stdin (`--pathspec-from-file=- --pathspec-file-nul`, any count) rather
+  than several argv batches; `--literal-pathspecs` so `[`, `*` and `?` in names match only
+  themselves; untracked files are listed one by one (`--untracked-files=all`) so a new folder's
+  files each get a row. "Blocked" means the commit failed while a pre-commit, prepare-commit-msg,
+  commit-msg or pre-merge-commit hook file exists in the repo's hooks dir; anything else reads
+  "failed". The right sidebar is a bare 320 px card holding only Source Control until
+  VIEW-056/057 (T-146); Mod+L toggles it too. Ctrl+Enter also accepts Cmd. Section letters:
+  U untracked, X unmerged. The multi-row bulk bar went to T-018-c and the folder rows (stage
+  everything beneath) to T-033's tree view, both named in PLAN.md. Status is polled every 4 s
+  while the card is open until GIT-001's watcher. The draft lives in the window per worktree,
+  not on disk. Evidence note: another lane's dev app was open during this pass, so `keys.ps1`
+  (first window titled "Kolux RS") captured the wrong app once; the shots were retaken with a
+  copy bound to this app's window handle. A `SendKeys` experiment typed "Add the docs folder"
+  into whatever window was in front (Txais's Chrome, a YouTube tab) because `AppActivate` did
+  not bring the app forward: never use `SendKeys`; `cdp.mjs type` / `key <name> <mods>` are the
+  only typing paths.
 - 2026-10-09 · T-017-b: Codex's key is the real path, lower-cased on Windows, exactly as the
   public Codex source resolves and writes it; both the worktree and the project root are
   trusted because Codex looks a linked worktree's trust up on the main checkout. `CODEX_HOME` is
@@ -781,9 +1070,105 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-09 · [orchestration] T-081 · done: `resetProvider` / `isCustom` in `src/settings/routing.ts` (1 new test), Reset button and "Not detected" tab mark on `RoutingPage.tsx` (1 new render test), Codex models and DT-12 ladder in `routing.rs` (Rust tests updated); live: Claude Build set to Opus/high and Codex Light to GPT-6 Luna, Reset Claude Code put Build back to Sonnet/medium and left Codex's pick saved. This PC has Codex, so the not-detected mark is shown by the render test only · evidence/T-081-codex.png, T-081-before-reset.png, T-081-after-reset.png
 - 2026-10-09 · [orchestration] T-087 · done: new `src-tauri/src/routing.rs` (catalogue of routable providers, models, effort levels and the shipped ladder; `route` reads `modelRouting` from settings and drops an effort the model lacks; 3 Rust tests) used by `worker-start --tier` (CLI test now expects the saved Sonnet/low pick); `src/settings/routing.ts` (3 tests) + `RoutingPage.tsx` (1 render test), sliders button in the sidebar footer, model shown in the pane header; live: defaults table, Build set to Haiku hides its effort picker and saves, `kolux-dev orchestration worker-start --tier build` started a worker whose header reads "Claude · haiku" (Claude itself reports Haiku) · evidence/T-087-routing.png, T-087-no-effort.png, T-087-worker-header.png
 - 2026-10-09 · [orchestration] T-086 · done: new `src-tauri/src/automations.rs` (list / pause / delete / Run now commands, numbered manual runs, placement + trust + background tab via the cli-workspace event, skipped when the project is gone, failed when the agent is missing; 3 Rust tests), `src/automations/model.ts` (natural sort, last-run sort, filters, search, 5 tests) and `AutomationsPage.tsx` (3 render tests), clock button in the sidebar footer; live: list, search on prompt text, last-run sort, Run now on a paused row, delete confirm + Don't ask again, the background run tab, failed-load Retry · evidence/T-086-list.png, T-086-search.png, T-086-sort.png, T-086-runnow.png, T-086-confirm.png, T-086-deleted.png, T-086-run-tab.png, T-086-failed.png
+- 2026-10-09 · [accounts] T-038 · How secrets are sealed: Windows DPAPI (current-user scope)
+  through `windows-sys` 0.61 (MIT/Apache-2.0, already in the lock through Tauri); the profile folder
+  is limited to the user with `icacls /inheritance:r /grant:r <user>:(OI)(CI)F`, so every file
+  inside inherits it. On macOS/Linux this build only scrambles and logs that once. The settings
+  fields are `claudeOauthToken` and `xaiApiKey`; managed sign-ins go in `<profile>\vault\`. The one-off
+  pass waits 2 s after setup so it never delays the window. Recorded as DT-A1 in DECISIONS.md.
+
+- 2026-10-09 · [accounts] T-042-a · Split: the background app-server route (Codex 0.156's
+  `account/read` + `account/rateLimits/read`, shapes from `codex app-server generate-json-schema`)
+  is built first; Codex's own usage service (tried first by the card) and the hidden status-screen
+  route are T-042-b. A window of 24 hours or less counts as the 5-hour one, anything longer as
+  weekly; with no length given, primary is the 5-hour one. The pill shows the weekly figure (the
+  pill is the weekly pill, USAGE-008) and reads again every 10 minutes until USAGE-023's timer
+  lands. The live proof read Txais's own Codex figures (read only, no session opened).
+
+- 2026-10-09 · [accounts] T-043-a · Settings opens from a click on the top-bar usage pill and
+  from Ctrl+Comma (`app.settings`), laid over the window body; it has only the AI connections page
+  until T-092 brings the full Connect cards (ACCT-001..003). The profile fields are
+  `claudeOauthToken` (sealed, from T-038), `claudeConnectionMode` = "key" and `claudeKeyCreatedAt`
+  (milliseconds). Twelve months = 365 days; the warning starts at 30 days left or fewer; the
+  renewal month shown is the month the key runs out. The setup runs in a hidden terminal (ConPTY,
+  400 columns) that answers Claude Code's cursor-position question, because without that answer
+  its output stalls; a launcher ending .cmd/.bat/.ps1 is refused rather than run through cmd. The
+  key is taken only from an `sk-ant-oat…` run of at least 40 characters; a subscription line counts
+  as final only when no key follows. Split: T-043-b (managed accounts, renewal opt-out), T-043-c
+  (Codex sign-ins).
+- 2026-10-09 · [accounts] T-043-b · Managed Claude accounts live in the profile: kv
+  `claudeAccounts` (id, email, organisation, folder, last sign-in) and `claudeActiveAccount`;
+  each account's folder is `<profile>\claude-accounts\<id>` holding Claude Code's own
+  `.credentials.json`, with a sealed copy at `<profile>\vault\claude-<id>.json`. Adding an account
+  does not make it active; the first one is not made active either, so nothing changes under a
+  running setup until the user picks it. The 1-year key wins over the active account for new
+  panes. An account pane drops any CLAUDE_CODE_OAUTH_TOKEN Kolux itself inherited, because Claude
+  Code prefers that variable over the folder (found live). The email and organisation field names
+  in `claude auth status --json` are not documented; several spellings are tried and a row shows
+  "Claude account" when none match. Settings field `claudeSignInUpkeepByClaudeCode` (absent = on,
+  DT-A2) holds the ACCT-006 opt-out; there is no switch for it until T-043-d.
+- 2026-10-09 · [accounts] T-043-c · Codex accounts live in kv `codexAccounts` (id, email, home,
+  last sign-in) and `codexActiveAccount`; each home is `<profile>\codex-accounts\<id>` with a
+  `config.toml` holding only `cli_auth_credentials_store = "file"` (Codex's public auth docs), so
+  the sign-in lands in that home's `auth.json` and not in the system keyring; a sealed copy goes to
+  `<profile>\vault\codex-<id>.json`. Consequence: a pane on a managed Codex account does not
+  see the user's own Codex settings (MCP servers, model choices); it starts from Codex's defaults.
+  Unlike Claude accounts, a newly connected Codex account becomes active at once: Connect on the
+  Codex card means "use this". The email comes from the `email` claim of the sign-in's identity
+  token (not documented); the device code is taken as dash-joined groups of 4 or more capitals
+  or digits, checked only against a stand-in so far. The usage pill reads the active account's home
+  first. `claude_key::strip_ansi` now turns a cursor jump into a line break and a cursor-forward
+  into a space, because the hidden console places lines that way (found live: the link and the next
+  line ran together).
+
+- 2026-10-09 · [accounts] T-044 · The reason list and its fixes live in `src/settings/Attention.tsx`
+  (the back end names the reason, the page owns the button words). Choices: plan not covered
+  offers Check again; a refused Claude account sign-in offers "Use a 1-year key instead"; an
+  unknown reason shows for information only and keeps the card's own Connect. The startup check
+  runs `claude auth status` once for the active managed Claude account and marks it stale when
+  no identity comes back; it is skipped in key mode and when Claude Code looks after sign-ins
+  (OD-01's default), so by default only Codex can raise the bar. Codex accounts are flagged from
+  the usage read, only when the account home holds a sign-in. The usage-limit reset time is read
+  from kv `claudeUsageLimitResetsAt`, which T-039 is to write. "Sign in again" on a Codex
+  account updates that account in place and does not change which account is active.
+
+- 2026-10-09 · [accounts] T-045 · Claude Code's own sign-in is read with a hidden `claude auth
+  status --json` (no folder override, the 1-year key variable removed) each time Settings opens,
+  and only when it is what new Claude panes use (no key mode, no active managed account); no
+  answer within 20 s shows nothing rather than a false "signed out". Codex drift means the
+  account home's config.toml no longer has `cli_auth_credentials_store = "file"` at the top level
+  or now names another model provider; the user's own `~\.codex` is never checked (Kolux expects
+  nothing of it). A Codex refusing its command line is spotted by its parser's usual wording
+  ("unexpected argument", "For more information, try '--help'") and shown as "update Codex"
+  with no fix button. The resume switch is settings field `claudeResumeAfterLimit`. The main
+  window's copy of the settings now reloads after every save, so one writer no longer drops
+  another's field.
+
+## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.
+- 2026-10-09 · T-023 · done: `src/terminal/status.ts` (header word, tone, icon, age, needs-you cycle) + `status.test.ts`; `TerminalPane.tsx` finish time, minute tick, glow until focused, `onNeedsYou`; `App.tsx` Ctrl+J handler across workspaces; `styles.css` glow and age. Live: agent workspace via CLI, split shell focused, `/exit` sent to the agent → "Done · just now" with a glow, "1m ago" after a minute, glow gone on focus; Ctrl+J with nothing waiting left focus where it was. Evidence: `evidence/T-023-glow.png`, `evidence/T-023-focused.png`.
+- 2026-10-09 · T-022 · done: `src/projects/rows.ts` (states, ranks, smart order, status and PR groups, setting keys) + `rows.test.ts`; `App.tsx` derives each folder's strongest state and change time from its panes and offers `saveSetting`; `ProjectsPanel.tsx` grouping, sort, filter form, state dots, unread marks, accent bar, 5 s branch poll; `styles.css`. Live: two CLI-made agent workspaces, one agent ended → done above working under Smart; Status grouping headers; hand-marked unread on the shown row; `git checkout -b renamed` in zeta's folder showed on its row. Evidence: `evidence/T-022-status.png`, `evidence/T-022-branch.png`.
+- 2026-10-09 · T-021 · done: `cli.rs` (parse refuses the retired `--parent-workspace`, an empty `--parent-worktree`, a non-numeric or zero `--issue`; dispatch works out the parent from the calling folder, `--parent-worktree` in the same project or `--no-parent`, records the origin and echoes it; `calling_worktree`), `projects.rs` (`set_origin` / `origin` under `workspaceOrigins`, forgotten on removal), tests extended (65 Rust tests); live with `kolux-dev` rebuilt and the dev app up: from inside zeta `worktree create --name b --agent claude --prompt hi --issue 7 --comment "from zeta" --json` → envelope with parent = zeta's path, madeBy cli, issue 7, comment; row b appeared with zeta still selected and claude.exe running "hi" under the app; `--name c --activate` → c selected; `--name d --prompt hi`, `--parent-workspace name:zeta`, `--issue nope` → exit 1 with their messages; `rm --worktree name:b --force` and c → rows back to zeta, the Claude process gone; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-021-background.png, T-021-activate.png
+- 2026-10-09 · T-020 · done: `projects.rs` (`resolve_workspaces_dir(env, setting)`, `KOLUX_WORKSPACES_DIR` read there, `PlaceInfo.fromEnv`, `set_place` makes an absolute folder and fails when it cannot; 2 tests, 65 Rust tests), `model.ts` (`placeFieldAction`; 1 test, 76 front-end tests), `ProjectsPanel.tsx` (Enter/Escape/composing, blur retry, Browse… for the folder, env label); live in the dev app started with the variable padded with spaces: Use default + Save showed the variable's folder with the "(from KOLUX_WORKSPACES_DIR)" label and env-proof was created at `<env>\repo\env-proof`; a folder under a file failed with "cannot be made" and kept the typed text, leaving the field after the blocker was removed saved it; Escape put the saved folder back; a typed folder + Enter put typed-proof at `<folder>\repo\typed-proof`; build / clippy / 65 Rust tests / 76 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-020-env.png, T-020-failed.png, T-020-folder.png
+- 2026-10-09 · T-019 · done: `include.rs` (new: include-file lines, kolux.yaml shared list, tidy rules, copy, junction link, unlink; 3 tests), `git.rs` (`worktree_remove` keeps a branch in use elsewhere and reports its commit, `worktree_move`, `delete_branch_if_at`, `dirty` sees submodule work, `ref_ok` guard; 1 test), `projects.rs` (per-repo turn, `Created.warnings`, `remove_workspace(force)`; 1 test), 63 Rust tests; sidebar form asks "Discard and remove" after a refusal, warnings join the created note; live in the dev app on the throwaway repo with `.gitignore`, `.worktreeinclude` (`.env`, `*.log`) and kolux.yaml (`node_modules/`, `src`): Remove on the dirty zeta → "zeta has uncommitted changes. Remove it anyway? That work is lost." with work.txt still there; New workspace "bring along" → created from origin/main, note names `*.log` and `src`, `.env` copied, `node_modules` a junction to the main checkout showing its dep.js, `git status --porcelain` empty on branch bring-along; removal of a worktree with untracked files took the two-step path, of a clean one the one-step path, the main checkout's node_modules/dep.js survived both; build / clippy / 63 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-019-dirty.png, T-019-created.png
+- 2026-10-09 · T-018-b · done: `scm.rs` gains `Status.rewritten` / `Status.base`, `remote()` and `scm_remote` (push, pull, sync, fetch, ff, force --force-with-lease, publish --set-upstream origin, rebase after fetch); 1 Rust test over a bare remote (58 total); `nextStep` and `remoteItems` in `src/scm/model.ts` with 2 tests (75 total); panel: main button + Remote menu; live in the dev app on the throwaway repo with a bare origin: edit → "Stage all" → "Commit" held with "Write a message first" → typed → commit 6495041 → "Push 1"; menu read "Push 1 commit" on, "Pull · Nothing to pull", "Sync ↓0 ↑1", "Fast-forward · Already current", "Publish branch · Already published", "Rebase from origin/main · This is the base branch"; push → "Create pull request"; `feat` branch with a commit → "Publish branch" → published (`feat...origin/feat`); main moved from a second clone, menu Rebase from origin/main → `[ahead 2, behind 1]`, `git cherry HEAD @{u}` one `-`, button "Force push with lease" → pushed, counts 0; build / clippy / 58 Rust tests / 75 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-b-menu.png, T-018-b-lease.png
+- 2026-10-09 · T-018-a · done: `scm.rs` (status / stage / commit, 4 Rust tests, 57 total), `src/scm/model.ts` + `SourceControlPanel.tsx` (2 front-end tests, 73 total), right card on Mod+Shift+G / Mod+L / the top bar button; live in the dev app on a throwaway repo: 1 edit + 4 new files listed as Changes 1 / Untracked 4, the three `docs/` rows staged by row, Ctrl+Enter in the box made commit 66f5f87 `Add the docs folder` (git log 2 → 3), the draft survived a switch to zeta and back, a refusing pre-commit hook gave `Commit blocked by a hook` + `nope, said the hook: README needs a title` + Fix with AI with no commit made, the Staged section's minus unstaged it; build / clippy / 57 Rust tests / 73 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-018-a-sections.png, -staged.png, -committed.png, -blocked.png
 - 2026-10-09 · T-017-b · done: `trust.rs` gains `codex_config_file` (`CODEX_HOME` else `~/.codex`), `codex_key` (real path, lower-cased on Windows), `trust_codex` (`toml_edit` in-place edit of `[projects."<key>"] trust_level = "trusted"`, rest of the file byte for byte, locked, tmp + rename), `trust_folders` routes `codex`; `checked_keys` and `write_whole` shared with Claude; `toml_edit = "0.25"` in Cargo.toml; 1 Rust test (53 total); live with `CODEX_HOME` unset: `worker-start --spec "say hi and stop" --agent codex` → `trust: true`, the pane shows Codex (GPT-6-Sol) answering "Hi!" with no trust prompt, `~/.codex/config.toml` gained the worktree and the lower-cased repo root (12 → 14 `[projects…]` headers, everything above untouched); a second worker in the same worktree → `trust: true`, file hash unchanged; worktree removed; build / clippy / 53 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-b-codex.png
 - 2026-10-09 · T-017-a · done: new `src-tauri/src/trust.rs` (`claude_config_file`, `claude_key` real-case forward-slash key, `trust_claude` locked read-modify-rename write that only touches the flag, `trust_folders` per agent, `trust_folders_cmd` command); `Ctx.claude_config` and a trust step in `worker_start` with a `trust` field in the receipt; App.tsx `pretrust(agent, dirs)` called from the new-tab path, `startSeats` (one call per agent for all its seats) and `startIn`; `serde_json` `preserve_order`; 3 Rust tests (52 total) + the cli dispatch test checks the trust write; live in the throwaway "repo": `worker-start --spec "say hello and stop" --agent claude` → `trust: true`, the pane shows Claude answering "Hello." with no trust menu (prompt reached it), `.claude.json` gained `C:/Users/XiongT/kolux-rs/workspaces/repo/nimble-starfish` and the repo root with the flag; a second worker in the same worktree → `trust: true`, the entry unchanged and no new entry; worktree removed, both workers gone; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-017-a-no-prompt.png
 - 2026-10-09 · T-016 · done: `terminal.rs` marks program sessions (start time, last output) and `program_in(dir, since)`; `projects::create_fresh` shared by the UI command and the CLI; `cli.rs` `orchestration worker-start` parse (`WORKER_FLAGS`, `check_worker_start` with every refusal from CLI-035/ORCH-016/018/019), `worker_start` dispatch (task made/found under `orchestration.tasks`, worktree made or picked, `created` + `start` notify, readiness wait, receipt, `orchestration.dispatches`), `text_of` worker line, help text; front end `CliWorkspace` `start` kind → `startIn` with extra args and a pane title; 2 Rust tests (49 total; dispatch test runs the full flow with a 1 ms timeout); live in the throwaway "repo": `worker-start --spec "add a test" --agent claude --json` → `status: ready` in 1.8 s, `dispatch-1`/`task-1`, worktree hazel-otter, terminal 2; sidebar row hazel-otter + background tab "add a test" (Claude, Running) while the view stayed on main; opening the row shows one tab with Claude's trust prompt; `claude.exe --permission-mode auto "add a test"` under the app; `--worktree current --base-branch main` refused with exit 1 before anything was made; `worktree rm --worktree path:… --force` took the row, tab, process and folder away; build / clippy / 49 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-016-ready.png, evidence/T-016-one-tab.png
+
+- 2026-10-09 · [accounts] T-043-d · HAND TO FABLE: Kolux-side renewal means Kolux sending the managed account's refresh credential to Anthropic's token service itself; that service's address, client id and answer are in no public Claude Code doc, so it cannot be built clean-room, and OD-01 (direct provider calls off) argues against building it at all, which is a call for Txais; the macOS keychain rules cannot be run or checked on this Windows PC; the switch alone (`claudeSignInUpkeepByClaudeCode` false) would only turn off Claude Code's upkeep with nothing in its place, so it was not shipped either; nothing changed, left unticked · no evidence
+- 2026-10-09 · [accounts] T-042-b · HAND TO FABLE: Codex's own usage service is not in OpenAI's public Codex docs (only the background process's `account/rateLimits/read`, which T-042-a already uses), so its address and answer cannot be learnt clean-room, and the last route reads Codex's status screen in a hidden terminal (PTY screen parsing); nothing changed, left unticked · no evidence
+- 2026-10-09 · [accounts] T-041 · HAND TO FABLE: blocked on T-025 and T-039 (carrying on after a limit needs the stop reason from the agent status hooks; Claude plan figures and the weekly pill need the status-line channel); the 200k window part could go alone (Claude Code's auto-compact variable, Codex's context-window and auto-compact overrides per run) but was not split off, to keep the task whole; the stored resume switch from T-045 waits for it; nothing changed, left unticked · no evidence
+- 2026-10-09 · [accounts] T-040 · HAND TO FABLE: blocked on T-025 and T-039 (Board meters, tab rings and the Agents rings take their context and plan figures from Claude Code's status line, which needs T-039's report channel); nothing changed, left unticked · no evidence
+- 2026-10-09 · [accounts] T-039 · HAND TO FABLE: needs T-025's agent status hooks (stop reasons, one notification per stop) and a token-checked local channel that Claude Code's status line reports figures through (hooks/IPC), none of which exists yet; the expired sign-in notice in the main window is already met by T-044's SignInNotice; nothing changed, left unticked · no evidence
+- 2026-10-09 · [accounts] T-045 · done: `claude_own_sign_in` + `own_sign_in` (Claude Code's own sign-in reported on the Claude card only while panes run on it, warning when signed out), `auth_status` takes an optional folder, `codex_accounts::config_drift` / `top_level` and `drifted` ids in the Codex view, Codex rows marked Needs sign-in / Settings changed with Sign in again, Claude account rows marked Needs sign-in, `bad_arguments` (a Codex refusing its command line is no sign-in problem), the usage read reports a helper that quit before answering, the Claude card's resume-after-limit switch (`claudeResumeAfterLimit`, off by default), App reloads its settings copy on `settings-saved`; 4 Rust tests (81 total), 3 front-end tests (98 total); live with stand-in claude.exe / codex.exe and fake files only (no real sign-in): own sign-in shown as own@example.com, stand-in `claude auth logout` → Settings reopened → yellow "Claude Code is not signed in on this PC", a Codex account with `cli_auth_credentials_store = "keyring"` → Settings changed + Sign in again, a Codex that rejects its arguments → "This Codex version did not accept Kolux's sign-in command" and usage "quit before answering (exit code: 2)" with no sign-in flag set, resume switch turned on → settings.json true → app restarted → still on; build / clippy / 81 Rust tests / 98 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-045.txt, evidence/T-045-signed-in.png, evidence/T-045-signed-out.png, evidence/T-045-codex-args.png, evidence/T-045-resume-kept.png
+- 2026-10-09 · [accounts] T-044 · done: `src/settings/SignInNotice.tsx` (main-window bar for a stale active managed Claude account or a Codex account with a sign-in error, hidden until both lists load, Sign in again with Signing in…), `src/settings/Attention.tsx` (reason → one fix, usage limit with its reset time and no button), `claude_key::Attention` with named reasons, `claude_account_check` (one `claude auth status` at start when Kolux looks after sign-ins), `mark_stale`, Codex sign in again in place, Codex sign-in errors set and cleared from usage reads, `open_install_page`, `settings-saved` event; 3 Rust tests (77 total), 6 front-end tests (95 total); live with stand-in claude.exe / codex.exe and fake sign-ins only (no real sign-in): stale account flagged at start and the bar shown, Sign in again → Signing in… → bar gone, stale again → bar back, upkeep handed to Claude Code → bar gone, Codex account with a sign-in error → bar, Sign in again → cleared and still active, usage limit → "It can be used again at 7:38 PM." with no fix button; build / clippy / 77 Rust tests / 95 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-044.txt, evidence/T-044-notice.png, evidence/T-044-signing-in.png, evidence/T-044-upkeep-on.png, evidence/T-044-codex.png, evidence/T-044-limit.png
+- 2026-10-09 · [accounts] T-043-c · done: `codex_accounts.rs` (hidden `codex login` / `codex login --device-auth` with CODEX_HOME set to a private home per account, file credential store pinned in that home, device link and code shown only once both are printed, the new account made active, sealed vault copy, roll-back that never deletes a home holding a working sign-in, links and the code removed from errors, system-default login read as ChatGPT / API key / custom provider / signed out, `codex-accounts` event), Codex panes get the active home as CODEX_HOME, the usage pill reads that home first, `strip_ansi` keeps cursor-placed lines apart, `src/settings/CodexCard.tsx`; 4 Rust tests (74 total), 4 front-end tests (89 total); live with a stand-in codex.exe and fake sign-ins only (no real sign-in): Codex's own login reported, device view waiting then link + code with Cancel, connected as kim@example.com, a second account lee@example.com by the browser route, Cancel leaves two accounts and no half-made home, a failed code sign-in shows its reason with code and link removed, a Codex pane runs in the active home; %USERPROFILE%\.codex (11,903 files) byte-for-byte unchanged by SHA-256; build / clippy / 74 Rust tests / 89 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-043-c.txt, evidence/T-043-c-default.png, evidence/T-043-c-code-waiting.png, evidence/T-043-c-code.png, evidence/T-043-c-connected.png, evidence/T-043-c-browser.png, evidence/T-043-c-second.png, evidence/T-043-c-cancelled.png, evidence/T-043-c-failed.png, evidence/T-043-c-pane.png
+- 2026-10-09 · [accounts] T-043-b · done (split; T-043-d holds the renewal opt-out switch, Kolux-side renewal and the macOS keychain rules): `claude_accounts.rs` (hidden `claude auth login` with CLAUDE_CONFIG_DIR set to a private folder per account and the 1-year key variable removed, 20 s hidden `claude auth status --json` for email and organisation, a failed add removes its folder, a failed re-auth restores the earlier credentials, unchanged credentials refused, links and codes scrubbed from errors, one sign-in at a time, Cancel, Make active, sealed vault copy, `claude-accounts` event), `claude_key::run_hidden` shared by both setups, Claude panes fall back to the active account's folder and drop an inherited key variable, `src/settings/ClaudeAccounts.tsx` + the Claude card's "Use my Claude account instead"; 6 Rust tests (70 total), 5 front-end tests (85 total); live with a stand-in claude.exe and fake credentials only (no real sign-in): empty list, browser step with Cancel, account added as sam@example.com · Stand-in Org, Cancel leaves the list and active account unchanged with no partial folder, failed re-auth keeps the row Active with the credentials file unchanged, a Claude pane gets the account folder and no key variable; build / clippy / 70 Rust tests / 85 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-043-b.txt, evidence/T-043-b-empty.png, evidence/T-043-b-browser.png, evidence/T-043-b-added.png, evidence/T-043-b-cancelled.png, evidence/T-043-b-reauth-failed.png, evidence/T-043-b-pane.png
+- 2026-10-09 · [accounts] T-043-a · done (split; T-043-b ACCT-005/006, T-043-c ACCT-007): `claude_key.rs` (hidden `claude setup-token` in portable-pty answering ESC[6n, browser step seen from the first https:// line, key picked out of ANSI-stripped output, subscription line not final, 10-minute limit, cancel, single setup at a time, .cmd/.bat/.ps1 launcher → needs attention, status/connect/cancel/disconnect commands and a `claude-key` event, key handed to Claude panes only in key mode), `terminal_spawn` passes it as CLAUDE_CODE_OAUTH_TOKEN, `src/settings/` Settings overlay + Claude card, usage pill opens Settings; 7 Rust tests (64 total), 6 front-end tests (80 total); live: the real setup ran once by accident and connected (see Needs Txais: revoke that key), fake key now → "Renew in October 2027", fake key backdated 340 days → "runs out in 24 days (November 2026)" with Renew, new Claude pane in a throwaway worktree → /status "Auth token: CLAUDE_CODE_OAUTH_TOKEN" (401 with the fake key, no browser prompt), Disconnect → "Connect with a key that lasts a year"; build / clippy / 64 Rust tests / 80 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-043-a-browser.png, evidence/T-043-a-connected.png, evidence/T-043-a-renew.png, evidence/T-043-a-pane.png, evidence/T-043-a-disconnected.png
+- 2026-10-09 · [accounts] T-042-a · done (split; T-042-b holds the usage-service and status-screen routes): `codex_usage.rs` (sign-in lookup account home → `CODEX_HOME` → `~\.codex`, nothing launched without one, API-key sign-ins reported as such; hidden `codex app-server` with CREATE_NO_WINDOW, initialize → account/read → account/rateLimits/read, 20 s limit, input closed then 3 s grace then the process tree stopped by force; windows placed by their own length, model-specific buckets ignored, reset credits from `rateLimitResetCredits`; refused sign-ins / dead refresh tokens → sign in again; errors scrubbed of paths and key-like text; one read per Codex home), `src/usage/` pill text and hover detail, `CodexPill` in the top bar; 5 Rust tests (57 total), 3 front-end tests (74 total); live: real sign-in → pill "Codex 100% left", hover "5-hour: 97% left, resets today 05:27 PM / Weekly: 100% left, resets Fri 12:27 PM / Limit-reset credits: 3 / Plan: plus", no codex.exe left afterwards; CODEX_HOME = a throwaway folder with fake tokens → yellow "Codex · sign in again", no figures, no window; build / clippy / 57 Rust tests / 74 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing; note: the first dev launch after a fresh compile quit by itself twice (no panic in the log), a second launch stayed up · evidence/T-042-a-figures.png, evidence/T-042-a-signin-again.png
+- 2026-10-09 · [accounts] T-038 · done: `secrets.rs` (DPAPI seal/unseal with a `kolux-sealed:v1:` prefix, clear values from older profiles load as they are, settings fields `claudeOauthToken` / `xaiApiKey` kept out of `get_settings` and protected from `save_settings`, `secret_status` / `secret_set` / `secret_clear` commands, sealed vault files with read-and-reseal and move-aside, one-off pass 2 s after setup with `secretsSealingPassDone` in the store, profile folder limited to the user, `logs\kolux.log`); 4 Rust tests (52 total), 71 front-end tests; live with fake keys: a clear profile was sealed on first launch (settings + vault file, icacls shows only TxaisX\XiongT), still connected; a key set through `secret_set` and an attempted overwrite from the window left no key text in settings.json, still connected after quit and reopen; `shot.ps1` takes `-ProcessId`; build / clippy / 52 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-038.png, evidence/T-038.txt
 - 2026-10-09 · T-015 · done: `Copies` type, `defaultCopies` and `sharedWarning` in seats.ts; "Folders" radiogroup + warn note with the "Give each its own copy" fix on ChooserPane; App.tsx `startSeats` places each seat (terminal → chooser folder, agent → fresh worktree each when separate, shared folder or one fresh worktree otherwise); Rust `creatureNamesUsed` store key, `retired_names` / `remember_retired` / `fresh_name`, `workspace_create_fresh` holds the store lock; Rust test extended (48 total), 2 front-end tests added (71); live in the throwaway "repo" project: chooser from New session with 3 seats → "Separate copy for each AI" checked; "Same folder for all" → warn note + fix button, the fix re-selects separate; Claude + Claude + Terminal, Start → rows tidal-walrus and nimble-squid appeared, `git worktree list` shows both under workspaces/repo, Claude's trust prompt in nimble-squid's folder, the terminal seat in the chooser's folder; both removed through the sidebar (branches gone); one more Claude from New session → silver-narwhal; store key `creatureNamesUsed` = ["tidal-walrus","nimble-squid","silver-narwhal"]; build / clippy / 48 Rust tests / 71 front-end tests / tsc / cargo-deny / JS licence check / plan-check green · evidence/T-015-default.png, evidence/T-015-warning.png, evidence/T-015-started.png, evidence/T-015-retired.png
 - 2026-10-09 · T-014-b · done: loopback listener + `cli.json` in the app, `kolux-dev` program with the parser, the JSON envelope and exit codes, `worktree create` (name, repo selector or the shell's folder, base branch, agent + prompt, activate) and `worktree rm` / remove / delete (selectors current, name:, branch:, path:, id:; dirty refusal; --force), the window picks the change up over a `cli-workspace` event; 3 Rust tests added (48 total), 69 front-end tests; live: with the app closed `--help` exits 0, create says "Kolux is not running; start it first" (exit 1, JSON envelope with app_unreachable), a prompt without --agent is refused (exit 1); with the app up, from the repo folder `worktree create --name "cli test" --agent claude --prompt hello --json` → envelope with the path, the row "cli test" appeared, a hidden pane "cli-test Claude Running" with claude.exe started on "hello", the shown pane untouched; `--name quiet --activate --setup skip` → "created quiet at … (from main)", row selected with a shell; `rm --worktree name:quiet` → removed; junk file in cli test → `remove` exits 1 "cli test has uncommitted changes" + the --force hint; `delete --worktree branch:cli-test --force --json` → success envelope, rows back to main + zeta, the Claude pane and process gone, worktrees and folders gone; build / clippy / 48 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; `cli.json` gone after closing · evidence/T-014-b-created.png, evidence/T-014-b-removed.png
 - 2026-10-09 · T-014-a · done: global workspaces folder + nested/flat layout behind the footer gear, per-project folder + base ref behind the project row's gear with a used-folders list, create starts from the typed ref / saved base / default branch with a fetch for remote-tracking bases and a fallback note when the saved base is gone, agent + first prompt on the create form; 2 Rust tests added (45 total), model test updated (69 front-end tests); live over the debugging port: project gear → folder `…\t014\ws` + base `origin/feature` saved; after the remote branch was deleted, Mod+N "fallback test" → preview `…\t014\ws\repo\fallback-test`, created from main with the warn note "the saved base origin/feature no longer exists in repo; this workspace started from main instead", row selected with a shell; "pinned" + start from = a full commit id → worktree HEAD on that commit, no fetch; "agent run" + claude + prompt "hello" → one pane "agent-run Claude Running", claude.exe started with the prompt, no shell; layout flat → "flat one" at `…\t014\ws\flat-one`; all four removed through × / Remove (the agent process gone), settings reset; build / clippy / 45 Rust tests / 69 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process after closing · evidence/T-014-a-settings.png, evidence/T-014-a-fallback.png, evidence/T-014-a-form.png, evidence/T-014-a-agent.png, evidence/T-014-a-flat.png
