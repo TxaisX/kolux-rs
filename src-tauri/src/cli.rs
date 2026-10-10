@@ -837,13 +837,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             let task = text("task").ok_or_else(|| Fail::args("--task is required"))?;
             let to = text("to").ok_or_else(|| Fail::args("--to is required"))?;
             let tid = to.strip_prefix("term-").and_then(|n| n.parse::<u32>().ok()).filter(|_| ctx.terminals.live(&to)).ok_or_else(|| Fail::new("not_found", format!("no open Kolux terminal is called {to}")))?;
-            let known = crate::agents::agent_list();
-            let agent_of = |h: &str| {
-                let p = ctx.terminals.program_of(h, SETTLE)?;
-                let stem = Path::new(&p).file_stem()?.to_string_lossy().to_lowercase();
-                known.iter().find(|x| x.id == stem || x.program.eq_ignore_ascii_case(&stem)).map(|x| x.id.clone())
-            };
-            let (i, agent) = o::dispatch_check(&tasks, &dispatches, &task, &to, pane, &agent_of)?;
+            let (i, agent) = o::dispatch_check(&tasks, &dispatches, &task, &to, pane, &|h| pane_agent(ctx, h))?;
             if let (Some(n), Some(r)) = (&named, tasks[i]["runId"].as_str()) {
                 if n != r {
                     return Err(Fail::new("run_mismatch", format!("{task} belongs to {r}, not to the Run named with --run ({n})")));
@@ -851,7 +845,11 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             }
             let id = next_id(&dispatches, "dispatch-");
             let run = tasks[i]["runId"].as_str().map(str::to_string).or(run);
-            let brief = o::brief(&tasks[i], &id, run.as_deref());
+            let behind = ctx.terminals.dir_of(&to).and_then(|d| {
+                let p = projects::load_projects(store).into_iter().find(|p| projects::list_workspaces(ctx.git, store, p).is_ok_and(|ws| ws.iter().any(|w| same_dir(&w.path, &d))))?;
+                drift(ctx.git, &p, &d)
+            });
+            let brief = o::brief(&tasks[i], &o::Brief { dispatch: &id, run: run.as_deref(), coordinator: pane, behind });
             let mode = if a["inject"] == true { "inject" } else { "context" };
             let mut plan = json!({ "dispatchId": id, "taskId": task, "to": to, "agent": agent, "runId": run, "mode": mode });
             if a["returnPreamble"] == true {
@@ -878,8 +876,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
             let brief = v.as_object_mut().and_then(|o| o.remove("brief"));
             v["handle"] = json!(v["terminal"].as_u64().map(|t| crate::terminal::handle_of(t as u32)));
             if a["preamble"] == true {
-                // A worker started with worker-start got the task text itself as its prompt.
-                v["preamble"] = brief.unwrap_or_else(|| tasks.iter().find(|t| t["id"] == task).map(|t| t["spec"].clone()).unwrap_or_default());
+                v["preamble"] = brief.unwrap_or_default();
             }
             v
         }
@@ -888,6 +885,24 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
     save_list(store, TASKS_KEY, &tasks)?;
     save_list(store, DISPATCHES_KEY, &dispatches)?;
     Ok(out)
+}
+
+/// ORCH-013: the agent Kolux started in pane `h`, once it is up; a shell, or a program Kolux does
+/// not know, is none.
+fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
+    let p = ctx.terminals.program_of(h, SETTLE)?;
+    let stem = Path::new(&p).file_stem()?.to_string_lossy().to_lowercase();
+    crate::agents::agent_list().into_iter().find(|x| x.id == stem || x.program.eq_ignore_ascii_case(&stem)).map(|x| x.id)
+}
+
+fn same_dir(a: &str, b: &str) -> bool {
+    Path::new(a).canonicalize().ok().is_some_and(|x| Path::new(b).canonicalize().ok() == Some(x))
+}
+
+/// ORCH-014: how many commits the worktree at `dir` is behind its project's base, when it is.
+fn drift(git: &Git, project: &Project, dir: &str) -> Option<(u32, String)> {
+    let base = project.base.clone().filter(|b| !b.trim().is_empty()).or_else(|| git.default_branch(Path::new(&project.path)))?;
+    git.behind(Path::new(dir), &base).filter(|n| *n > 0).map(|n| (n, base))
 }
 
 /// ORCH-013's inject: the brief goes in as one bracketed paste, so its line breaks do not send it
@@ -968,15 +983,18 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     if text("terminal").is_some() {
         return Err(Fail::new("unsupported", "terminal handles are not known to the command line yet; use --agent or --tier"));
     }
-    let agent_id = match text("agent") {
-        Some(id) => id,
-        None => {
-            let store = ctx.store.lock().map_err(|e| e.to_string())?;
-            store.settings()["defaultAgent"].as_str().filter(|s| !s.is_empty()).unwrap_or("claude").to_string()
-        }
+    let default = {
+        let store = ctx.store.lock().map_err(|e| e.to_string())?;
+        store.settings()["defaultAgent"].as_str().filter(|s| !s.is_empty()).unwrap_or("claude").to_string()
+    };
+    let coordinator = caller(ctx, req).ok().flatten();
+    let tier = text("tier");
+    // ORCH-018: a tier runs on the coordinator's own agent, when Kolux started one in its pane.
+    let agent_id = match &tier {
+        Some(_) => crate::orchestration::tier_agent(text("agent").as_deref(), coordinator.as_deref().and_then(|h| pane_agent(ctx, h)).as_deref(), &default)?,
+        None => text("agent").unwrap_or(default),
     };
     let agent = installed_agent(&agent_id)?;
-    let tier = text("tier");
     // ORCH-018 / SET-028: a tier means the model and effort picked for it in model routing.
     let (model, effort) = match &tier {
         Some(t) => {
@@ -1022,7 +1040,6 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         (tasks[idx].clone(), dispatch_id)
     };
     let task_id = task["id"].as_str().unwrap_or_default().to_string();
-    let brief = task["spec"].as_str().unwrap_or_default().to_string();
 
     // The placement: the caller's worktree, one picked by selector, or a new one (agent-first).
     let placement = text("worktree").unwrap_or_else(|| NEW_TOP.into());
@@ -1057,6 +1074,14 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         (p, w, false)
     };
 
+    // ORCH-014: the worker's brief: how to report, beat and ask, any base drift, then the task.
+    let run_id = {
+        let store = ctx.store.lock().map_err(|e| e.to_string())?;
+        coordinator.as_deref().and_then(|p| crate::orchestration::Mail::load(&store).bound(p).map(str::to_string))
+    };
+    let behind = drift(ctx.git, &project, &worktree.path);
+    let brief = crate::orchestration::brief(&task, &crate::orchestration::Brief { dispatch: &dispatch_id, run: run_id.as_deref(), coordinator: coordinator.as_deref(), behind });
+
     // SAFE-023: the worktree (and its main repository) are trusted before the agent starts; best
     // effort, a failure never stops the worker.
     let trusted = match crate::trust::trust_folders(&ctx.claude_config, &agent_id, &[PathBuf::from(&worktree.path), PathBuf::from(&project.path)]) {
@@ -1083,8 +1108,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     {
         let store = ctx.store.lock().map_err(|e| e.to_string())?;
         let mut dispatches = load_list(&store, DISPATCHES_KEY);
-        let run_id = caller(ctx, req).ok().flatten().and_then(|p| crate::orchestration::Mail::load(&store).bound(&p).map(str::to_string));
-        dispatches.push(json!({ "id": dispatch_id, "runtime": std::process::id(), "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "created": since.elapsed().as_millis() as u64 }));
+        dispatches.push(json!({ "id": dispatch_id, "runtime": std::process::id(), "runId": run_id, "taskId": task_id, "status": status, "worktree": worktree.path, "agent": agent_id, "model": model, "effort": effort, "tier": tier, "terminal": terminal, "brief": brief, "created": since.elapsed().as_millis() as u64 }));
         save_list(&store, DISPATCHES_KEY, &dispatches)?;
     }
     if ready {
@@ -1339,7 +1363,9 @@ mod tests {
             let n = ev.len();
             assert_eq!(ev[n - 2]["kind"], "created");
             assert_eq!(ev[n - 1]["kind"], "start");
-            assert_eq!(ev[n - 1]["prompt"], "add a test");
+            // ORCH-014: the worker gets its brief, the task text last.
+            let prompt = ev[n - 1]["prompt"].as_str().unwrap();
+            assert!(prompt.contains("--type worker_done") && prompt.contains("--dispatch-id dispatch-1") && prompt.ends_with(&format!("{}\nadd a test", crate::orchestration::DIVIDER)), "{prompt}");
             assert_eq!(ev[n - 1]["extra"], json!(["--model", "sonnet", "--effort", "low"]));
             assert_eq!(ev[n - 1]["path"], out.data["worktree"]["path"]);
             drop(ev);

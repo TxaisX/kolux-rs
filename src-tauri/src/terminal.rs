@@ -186,6 +186,12 @@ impl Terminals {
         Some(m.program.clone())
     }
 
+    /// The folder terminal `handle` was started in (ORCH-014 checks it for base drift).
+    pub fn dir_of(&self, handle: &str) -> Option<String> {
+        let id = id_of(handle)?;
+        self.inner.lock().ok()?.dirs.get(&id).cloned()
+    }
+
     /// Is `handle` an open terminal? (`--from` names one explicitly.)
     pub fn live(&self, handle: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };

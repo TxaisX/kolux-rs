@@ -119,6 +119,11 @@ impl Git {
         run(&["status", "--porcelain"], Some(worktree)).map(|s| !s.is_empty())
     }
 
+    /// How many commits `base` has that the worktree's HEAD does not (ORCH-014's base drift).
+    pub fn behind(&self, worktree: &Path, base: &str) -> Option<u32> {
+        run(&["rev-list", "--count", &format!("HEAD..{base}")], Some(worktree)).ok()?.parse().ok()
+    }
+
     /// Does `rev` name a commit here: a branch, tag, remote branch or id?
     pub fn rev_exists(&self, repo: &Path, rev: &str) -> bool {
         run(&["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")], Some(repo)).is_ok()

@@ -501,10 +501,63 @@ pub fn dispatch_check(tasks: &[Value], dispatches: &[Value], task: &str, to: &st
     Ok((i, agent))
 }
 
-/// The text a dispatched agent is given. ORCH-014 (T-084) adds how to report, ask and keep in touch.
-pub fn brief(task: &Value, dispatch: &str, run: Option<&str>) -> String {
-    let run = run.map(|r| format!(", Run {r}")).unwrap_or_default();
-    format!("Kolux task {} ({dispatch}{run}):\n\n{}", task["id"].as_str().unwrap_or_default(), task["spec"].as_str().unwrap_or_default())
+/// The command name a brief tells workers to run (ORCH-014).
+// ponytail: WSL workers, who need the exact path instead, do not exist yet (SESS-048 is not in
+// the plan); the name is the plain one until they do.
+pub const CLI: &str = if cfg!(debug_assertions) { "kolux-dev" } else { "kolux" };
+/// Everything after this line in a brief is the task text.
+pub const DIVIDER: &str = "---------------- task ----------------";
+
+/// What a worker's brief is tied to (ORCH-014).
+pub struct Brief<'a> {
+    pub dispatch: &'a str,
+    pub run: Option<&'a str>,
+    /// Where reports go when there is no Run: the coordinator's pane.
+    pub coordinator: Option<&'a str>,
+    /// Commits the worktree is behind its base, and the base's name.
+    pub behind: Option<(u32, String)>,
+}
+
+/// ORCH-014: the text a worker gets: how to report done, beat, ask and look for mail, each a
+/// one-line command that runs in any shell, then the task text last. The commands need no
+/// `--from`: run in the worker's pane, its KOLUX_TERMINAL_HANDLE ties them to that pane.
+// ponytail: questions go out as mail plus `check --wait` until the ask command lands (ORCH-029,
+// T-190); the dispatch pass joins these commands with ORCH-067 (T-155); the sub-worker section,
+// shown only while nesting budget remains, comes with that budget (ORCH-032, T-155). Every worker
+// Kolux can reach today is an agent (dispatch turns shells away, worker-start cannot reuse a
+// shell yet), so the bare-shell "exit after reporting" line comes with terminal reuse (T-089).
+pub fn brief(task: &Value, b: &Brief) -> String {
+    let id = task["id"].as_str().unwrap_or_default();
+    let to = b.run.map(|r| format!(" --to run:{r}")).or_else(|| b.coordinator.map(|c| format!(" --to {c}"))).unwrap_or_default();
+    let tie = format!("{to} --task-id {id} --dispatch-id {}", b.dispatch);
+    let send = |kind: &str, subject: &str, body: &str| format!("  {CLI} orchestration send --type {kind} --subject \"{id} {subject}\" --body \"{body}\"{tie}\n");
+    let run = b.run.map(|r| format!(", Run {r}")).unwrap_or_default();
+    let mut s = format!("Kolux task {id} ({}{run}). You are a Kolux worker; a coordinator handed you this task.\n\n", b.dispatch);
+    s += "When you finish, report it with one of these, then stop and wait at your prompt:\n";
+    s += &send("worker_done --outcome succeeded", "done", "what you did");
+    s += &send("worker_done --outcome failed", "failed", "what went wrong");
+    s += "About every five minutes while you work, send a heartbeat:\n";
+    s += &send("heartbeat", "working", "what you are doing now");
+    s += "To ask the coordinator something, use Kolux, not your own question tool, then wait for the answer:\n";
+    s += &send("question", "question", "your question");
+    s += &format!("  {CLI} orchestration check --wait\n");
+    s += &format!("Look for new mail between steps, at least every few minutes:\n  {CLI} orchestration check\n");
+    if let Some((n, base)) = b.behind.as_ref().filter(|(n, _)| *n > 0) {
+        let commits = if *n == 1 { "commit" } else { "commits" };
+        s += &format!("\nBase drift: this worktree is {n} {commits} behind {base}. Bring {base} in before you build on it, or say in your report why you did not.\n");
+    }
+    format!("{s}\n{DIVIDER}\n{}", task["spec"].as_str().unwrap_or_default())
+}
+
+/// ORCH-018: the agent a tier runs on: the coordinator's own when Kolux knows it, else the one
+/// named, else the default. Naming another agent than the coordinator's is turned away.
+pub fn tier_agent(named: Option<&str>, coordinator: Option<&str>, default: &str) -> Result<String, Fail> {
+    match (named, coordinator) {
+        (Some(n), Some(c)) if n != c => Err(args(format!("a tier runs on the coordinator's own agent ({c}); drop --agent {n}, or name a model instead of a tier"))),
+        (Some(n), _) => Ok(n.to_string()),
+        (None, Some(c)) => Ok(c.to_string()),
+        (None, None) => Ok(default.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -713,7 +766,45 @@ mod tests {
         assert_eq!(code("task-1", "term-6"), "busy");
         assert_eq!(code("task-7", "term-5"), "not_found");
         assert_eq!(dispatch_check(&tasks, &d, "task-1", "term-5", Some("term-1"), &agent).unwrap(), (0, "claude".to_string()));
-        let b = brief(&tasks[0], "dispatch-2", Some("run-1"));
+        let b = brief(&tasks[0], &Brief { dispatch: "dispatch-2", run: Some("run-1"), coordinator: Some("term-1"), behind: None });
         assert!(b.contains("task-1") && b.contains("dispatch-2") && b.ends_with('a'), "{b}");
+    }
+
+    #[test]
+    fn a_brief_says_how_to_report_ask_and_keep_in_touch() {
+        let task = json!({ "id": "task-4", "spec": "Fix the login bug.\nThen run the tests." });
+        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: Some("run-2"), coordinator: Some("term-1"), behind: None });
+        let line = |needle: &str| b.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle} in {b}")).to_string();
+        // The done, heartbeat and question commands are one line each and carry this dispatch.
+        for kind in ["--type worker_done --outcome succeeded", "--type heartbeat", "--type question"] {
+            let l = line(kind);
+            assert!(l.trim_start().starts_with(CLI) && l.contains("--dispatch-id dispatch-7") && l.contains("--to run:run-2") && l.contains("--task-id task-4"), "{l}");
+            assert_eq!(l.matches('"').count() % 2, 0, "unbalanced quotes: {l}");
+        }
+        assert!(b.contains("five minutes") && b.contains("orchestration check") && b.contains("not your own question tool"), "{b}");
+        assert!(b.contains("wait at your prompt"), "{b}");
+        assert!(!b.contains("behind"), "no drift section when the worktree is up to date: {b}");
+        // The task text comes last, after the divider.
+        let (head, tail) = b.rsplit_once(DIVIDER).expect("divider");
+        assert_eq!(tail.trim_start_matches('\n'), "Fix the login bug.\nThen run the tests.");
+        assert!(head.contains("worker_done"));
+        // Without a Run, reports go to the coordinator's pane; drift names the base and the count.
+        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: None, coordinator: Some("term-1"), behind: Some((2, "main".into())) });
+        assert!(line_of(&b, "worker_done").contains("--to term-1"), "{b}");
+        assert!(b.contains("2 commits behind main"), "{b}");
+        assert!(b.find("behind").unwrap() < b.find(DIVIDER).unwrap());
+    }
+
+    fn line_of(b: &str, needle: &str) -> String {
+        b.lines().find(|l| l.contains(needle)).unwrap_or_default().to_string()
+    }
+
+    #[test]
+    fn a_tier_runs_on_the_coordinators_own_agent() {
+        assert_eq!(tier_agent(None, Some("codex"), "claude").unwrap(), "codex");
+        assert_eq!(tier_agent(None, None, "claude").unwrap(), "claude");
+        assert_eq!(tier_agent(Some("codex"), Some("codex"), "claude").unwrap(), "codex");
+        assert_eq!(tier_agent(Some("codex"), None, "claude").unwrap(), "codex");
+        assert_eq!(tier_agent(Some("codex"), Some("claude"), "claude").unwrap_err().code, "invalid_arguments");
     }
 }
