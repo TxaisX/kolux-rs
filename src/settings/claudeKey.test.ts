@@ -45,12 +45,31 @@ test("a running setup says to finish in the browser once the page is open, with 
   expect(c.actions).toEqual(["cancel"]);
 });
 
-test("a failed setup shows its reason and lets the user connect again", () => {
-  const c = keyCard({ ...off, attention: "The installed Claude launcher (claude.cmd) is a script wrapper Kolux cannot start directly." });
+test("a failed setup shows its reason with the one fix that fits (ACCT-013)", () => {
+  const wrapper = { ...off, attention: { reason: "install-unavailable" as const, message: "The installed Claude launcher (claude.cmd) is a script wrapper Kolux cannot start directly.", resetsAt: null } };
+  const c = keyCard(wrapper);
   expect(c.state).toBe("attention");
-  expect(c.detail).toContain("claude.cmd");
-  expect(c.actions).toEqual(["connect"]);
+  expect(c.actions).toEqual([]);
+  const html = renderToString(createElement(ClaudeCardView, { status: wrapper, busy: false, onAction: () => {} }));
+  expect(html).toContain("claude.cmd");
+  expect(html).toContain("Open install page");
+  expect(html).not.toContain(">Connect<");
+  // an unknown reason is information only: the card keeps its own Connect and offers no fix
+  const odd = { ...off, attention: { reason: "unknown" as const, message: "The key could not be stored: disk full", resetsAt: null } };
+  expect(keyCard(odd).actions).toEqual(["connect"]);
+  const oddHtml = renderToString(createElement(ClaudeCardView, { status: odd, busy: false, onAction: () => {} }));
+  for (const f of ["Try again", "Renew", "Check again", "Open install page"]) expect(oddHtml).not.toContain(f);
   expect(keyCard(off).actions).toEqual(["connect"]);
+});
+
+test("a usage limit shows when Claude can be used again, with no fix button", () => {
+  const resetsAt = new Date(2026, 9, 9, 15, 40).getTime();
+  const limited = { ...made(300, 65, false), attention: { reason: "usage-limit" as const, message: "Claude's usage limit was reached.", resetsAt } };
+  expect(keyCard(limited).state).toBe("connected");
+  const html = renderToString(createElement(ClaudeCardView, { status: limited, busy: false, onAction: () => {} }));
+  expect(html).toContain("It can be used again at");
+  expect(html).toContain('data-reason="usage-limit"');
+  expect(html.match(/<button/g)?.length).toBe(1); // Disconnect only
 });
 
 test("the card renders the buttons its state offers", () => {

@@ -5,10 +5,11 @@
 // Connect-card states and the accounts list are T-092 and T-138.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 
-export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number };
+export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean };
 export type CodexView = {
   accounts: CodexAccount[];
   active: string | null;
@@ -17,9 +18,9 @@ export type CodexView = {
   inBrowser: boolean;
   deviceLink: string | null;
   deviceCode: string | null;
-  attention: string | null;
+  attention: Attention | null;
 };
-export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string };
+export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string } | { kind: "again"; id: string } | { kind: "install" };
 
 const systemLabel: Record<CodexView["systemDefault"], string> = {
   chatgpt: "a ChatGPT sign-in",
@@ -77,11 +78,7 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
         </div>
       )}
       {!busy && view.accounts.length === 0 && view.systemDefault !== "signed-out" && <p className="conn-detail">Connect adds a ChatGPT account in a Codex home of Kolux's own; your Codex folder stays as it is.</p>}
-      {view.attention && (
-        <p className="conn-detail warn" role="alert">
-          {view.attention}
-        </p>
-      )}
+      <AttentionNote attention={view.attention} route="codex" onFix={(f) => onAction(f === "Open install page" ? { kind: "install" } : { kind: "connect" })} />
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}
@@ -94,9 +91,12 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
           </button>
         ) : (
           <>
-            <button className="btn primary" onClick={() => onAction({ kind: "connect" })}>
-              {view.accounts.length > 0 ? "Add account" : "Connect"}
-            </button>
+            {/* a fix shown above takes Connect's place (ACCT-013: one button that fixes it) */}
+            {!fixFor(view.attention, "codex") && (
+              <button className="btn primary" onClick={() => onAction({ kind: "connect" })}>
+                {view.accounts.length > 0 ? "Add account" : "Connect"}
+              </button>
+            )}
             <button className="btn link" onClick={() => onAction({ kind: "code" })}>
               Sign in with a code
             </button>
@@ -130,7 +130,9 @@ export default function CodexCard() {
         ? invoke("codex_account_cancel")
         : a.kind === "activate"
           ? invoke("codex_account_activate", { id: a.id })
-          : invoke("codex_account_sign_in", { device: a.kind === "code" });
+          : a.kind === "install"
+            ? openInstallPage("codex")
+            : invoke("codex_account_sign_in", { device: a.kind === "code", again: a.kind === "again" ? a.id : null });
     call.catch((e) => setError(String(e))).finally(read);
   };
   return <CodexCardView view={view} error={error} onAction={act} />;

@@ -16,7 +16,7 @@
 //! ponytail: macOS keychain entries per account (ACCT-005's keychain rules) are T-043-d too;
 //! this build keeps the Windows/Linux credentials file.
 
-use crate::claude_key::{run_hidden, Ended};
+use crate::claude_key::{run_hidden, Attention, Ended};
 use crate::{secrets, state::Store};
 use portable_pty::CommandBuilder;
 use serde_json::Value;
@@ -49,6 +49,9 @@ pub struct Account {
     pub config_dir: String,
     /// Milliseconds since 1970 of the last good sign-in.
     pub last_sign_in: i64,
+    /// ACCT-012: Claude Code no longer reports this account signed in; Sign in again clears it.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 pub fn load(store: &Store) -> Vec<Account> {
@@ -120,17 +123,17 @@ pub fn scrub(message: &str) -> String {
 }
 
 /// Why a login did not give Kolux an account, in plain words.
-pub fn failure(ended: &Ended, output: &str) -> String {
+pub fn failure(ended: &Ended, output: &str) -> Attention {
     match ended {
-        Ended::Cancelled => "Sign-in cancelled.".into(),
-        Ended::TimedOut => "The browser sign-in was not finished within 10 minutes.".into(),
-        Ended::NotStarted(e) => format!("Claude Code's sign-in could not start: {}", scrub(e)),
+        Ended::Cancelled => Attention::new("cancelled", "Sign-in cancelled."),
+        Ended::TimedOut => Attention::new("browser-blocked", "The browser sign-in was not finished within 10 minutes."),
+        Ended::NotStarted(e) => format!("Claude Code's sign-in could not start: {}", scrub(e)).into(),
         Ended::Exited(_) | Ended::Stopped => {
             let last = output.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("");
             if last.is_empty() {
-                "Claude Code's sign-in ended without signing in.".into()
+                Attention::new("sign-in-refused", "Claude Code's sign-in ended without signing in.")
             } else {
-                format!("Claude Code's sign-in ended without signing in: {}", scrub(last))
+                Attention::new("sign-in-refused", format!("Claude Code's sign-in ended without signing in: {}", scrub(last)))
             }
         }
     }
@@ -188,7 +191,7 @@ pub fn login_command(program: &Path, dir: &Path) -> CommandBuilder {
 /// credentials sealed into the vault; on failure nothing partial is kept and an existing
 /// account's earlier credentials are put back.
 #[allow(clippy::too_many_arguments)]
-pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended), status: impl FnOnce(&Path) -> Option<String>) -> Result<Account, String> {
+pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, now: i64, login: impl FnOnce(&Path) -> (String, Ended), status: impl FnOnce(&Path) -> Option<String>) -> Result<Account, Attention> {
     let dir = profile.join(FOLDER).join(id);
     let creds = dir.join(CREDENTIALS);
     let vault = profile.join(secrets::VAULT).join(format!("claude-{id}.json"));
@@ -215,13 +218,13 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
     };
     let Some((email, organization)) = status(&dir).as_deref().and_then(identity) else {
         undo(&before);
-        return Err("Claude Code did not report a signed-in account after the browser step.".into());
+        return Err(Attention::new("sign-in-refused", "Claude Code did not report a signed-in account after the browser step."));
     };
     if let Err(e) = secrets::write_file(&vault, &fresh) {
         undo(&before);
-        return Err(format!("The sign-in could not be stored: {e}"));
+        return Err(format!("The sign-in could not be stored: {e}").into());
     }
-    let account = Account { id: id.into(), email, organization, config_dir: dir.to_string_lossy().into_owned(), last_sign_in: now };
+    let account = Account { id: id.into(), email, organization, config_dir: dir.to_string_lossy().into_owned(), last_sign_in: now, stale: false };
     let store = store.lock().map_err(|e| e.to_string())?;
     let mut list = load(&store);
     match list.iter_mut().find(|a| a.id == id) {
@@ -238,7 +241,7 @@ pub struct SignIns {
     running: Mutex<Option<String>>,
     in_browser: AtomicBool,
     cancel: Mutex<Option<Arc<AtomicBool>>>,
-    attention: Mutex<Option<String>>,
+    attention: Mutex<Option<Attention>>,
 }
 
 #[derive(serde::Serialize)]
@@ -249,7 +252,7 @@ pub struct AccountsView {
     /// The account id a sign-in is running for (a new one has no row yet).
     pub signing_in: Option<String>,
     pub in_browser: bool,
-    pub attention: Option<String>,
+    pub attention: Option<Attention>,
     /// The 1-year key is the Claude connection, so it wins for new panes.
     pub key_mode: bool,
     pub upkeep_left_to_claude: bool,
@@ -282,15 +285,15 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
         }
         *running = Some(id.clone());
     }
-    let set = |a: Option<String>| {
+    let set = |a: Option<Attention>| {
         if let Ok(mut g) = sign_ins.attention.lock() {
             *g = a;
         }
     };
     let program = crate::agents::find_program("claude");
     let refused = match &program {
-        None => Some("Claude Code is not installed, so there is nothing to sign in with.".to_string()),
-        Some(p) if crate::claude_key::is_wrapper(p) => Some("The installed Claude launcher is a script wrapper Kolux cannot start directly. Install Claude Code's native build and try again.".into()),
+        None => Some(Attention::new("not-found", "Claude Code is not installed, so there is nothing to sign in with.")),
+        Some(p) if crate::claude_key::is_wrapper(p) => Some(Attention::new("install-unavailable", "The installed Claude launcher is a script wrapper Kolux cannot start directly. Install Claude Code's native build and try again.")),
         _ => None,
     };
     if let Some(r) = refused {
@@ -335,7 +338,7 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
         );
         let sign_ins = app.state::<SignIns>();
         if let Ok(mut g) = sign_ins.attention.lock() {
-            *g = result.err().filter(|e| e != "Sign-in cancelled.");
+            *g = result.err().filter(|e| e.reason != "cancelled");
         }
         sign_ins.in_browser.store(false, Ordering::SeqCst);
         if let Ok(mut g) = sign_ins.running.lock() {
@@ -361,6 +364,46 @@ pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Sto
     }
     store.set(ACTIVE_KEY, &id).map_err(|e| e.to_string())?;
     let _ = app.emit(EVENT, ());
+    Ok(())
+}
+
+/// Marks an account stale or fresh (ACCT-012); true when that changed anything.
+pub fn mark_stale(store: &Store, id: &str, stale: bool) -> Result<bool, String> {
+    let mut list = load(store);
+    let Some(a) = list.iter_mut().find(|a| a.id == id && a.stale != stale) else {
+        return Ok(false);
+    };
+    a.stale = stale;
+    save(store, &list)?;
+    Ok(true)
+}
+
+/// ACCT-012: asks Claude Code whether the active managed account is still signed in. Only when
+/// Kolux, not Claude Code, looks after sign-ins (ACCT-006) and the 1-year key is not the
+/// connection; an answer that never came leaves the account as it was.
+#[tauri::command]
+pub async fn claude_account_check(app: AppHandle) -> Result<(), String> {
+    let target = {
+        let store = app.state::<Mutex<Store>>();
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let settings = store.settings();
+        let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(Value::as_str) == Some(crate::claude_key::KEY_MODE);
+        if upkeep_left_to_claude(&settings) || key_mode {
+            None
+        } else {
+            active(&store).zip(active_dir(&store))
+        }
+    };
+    let (Some((id, dir)), Some(program)) = (target, crate::agents::find_program("claude")) else {
+        return Ok(());
+    };
+    let answer = tauri::async_runtime::spawn_blocking(move || auth_status(&program, Path::new(&dir))).await.map_err(|e| e.to_string())?;
+    let Some(answer) = answer else { return Ok(()) };
+    let store = app.state::<Mutex<Store>>();
+    let changed = mark_stale(&*store.lock().map_err(|e| e.to_string())?, &id, identity(&answer).is_none())?;
+    if changed {
+        let _ = app.emit(EVENT, ());
+    }
     Ok(())
 }
 
@@ -406,12 +449,31 @@ mod tests {
     }
 
     #[test]
+    fn a_stale_account_is_marked_once_and_a_new_sign_in_clears_it() {
+        let (dir, store) = profile("stale");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        {
+            let s = store.lock().unwrap();
+            assert!(mark_stale(&s, "a1", true).unwrap());
+            assert!(!mark_stale(&s, "a1", true).unwrap(), "no change, no write");
+            assert!(!mark_stale(&s, "gone", true).unwrap());
+            assert!(load(&s)[0].stale);
+        }
+        // an older record without the field reads as fresh
+        assert!(!serde_json::from_str::<Account>(r#"{"id":"x","email":null,"organization":null,"configDir":"d","lastSignIn":1}"#).unwrap().stale);
+        sign_in(&store, &dir, "a1", true, 8, writes(r#"{"claudeAiOauth":{"accessToken":"fake-2"}}"#, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        assert!(!load(&store.lock().unwrap())[0].stale, "Sign in again clears it");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_cancelled_or_empty_sign_in_keeps_nothing() {
         let (dir, store) = profile("cancel");
         let err = sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Cancelled), |_| Some(SIGNED_IN.into())).unwrap_err();
         assert_eq!(err, "Sign-in cancelled.");
         let err = sign_in(&store, &dir, "a2", false, 7, |_| ("Login failed: see https://claude.ai/x?code=abcdefghijklmnopqrstu".into(), Ended::Exited(Some(1))), |_| Some(SIGNED_IN.into())).unwrap_err();
-        assert!(!err.contains("https://") && !err.contains("abcdefghijklmnopqrstu"), "no link or code in the error: {err}");
+        assert!(!err.message.contains("https://") && !err.message.contains("abcdefghijklmnopqrstu"), "no link or code in the error: {err}");
+        assert_eq!(err.reason, "sign-in-refused", "a refused sign-in offers Try again");
         assert!(load(&store.lock().unwrap()).is_empty());
         assert!(!dir.join(FOLDER).join("a1").exists() && !dir.join(FOLDER).join("a2").exists(), "no partial folder left");
         let _ = fs::remove_dir_all(&dir);

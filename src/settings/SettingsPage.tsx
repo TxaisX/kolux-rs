@@ -9,9 +9,11 @@ import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, type KeyAction, type KeyStatus } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
+import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void }) {
   const card = keyCard(status);
+  const fix = (f: Fix) => (f === "Open install page" ? void openInstallPage("claude").catch(() => {}) : onAction("connect"));
   const chip = card.state === "connected" || card.state === "warning" ? "Connected" : card.state === "expired" ? "Ran out" : card.state === "connecting" ? "Connecting" : card.state === "attention" ? "Needs attention" : card.state === "reading" ? "" : "Not connected";
   return (
     <section className="conn-card" data-state={card.state} aria-label="Claude">
@@ -22,7 +24,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount }: 
       </header>
       <div className="conn-headline">{card.headline}</div>
       {card.detail && <p className={card.state === "warning" || card.state === "expired" || card.state === "attention" ? "conn-detail warn" : "conn-detail"}>{card.detail}</p>}
-      {card.attention && <p className="conn-detail warn">{card.attention}</p>}
+      <AttentionNote attention={card.attention} route="claude-key" busy={busy} offer={card.state === "attention"} onFix={fix} />
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}

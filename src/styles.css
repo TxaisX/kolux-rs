@@ -267,3 +267,9 @@ input { font: inherit; }
 .device-code { display: flex; flex-direction: column; gap: 6px; }
 .device-link { color: var(--fg); user-select: all; word-break: break-all; }
 .device-value { align-self: flex-start; padding: 4px 12px; border-radius: 6px; background: var(--chip-bg); color: var(--fg); font-size: 18px; letter-spacing: 0.12em; user-select: all; }
+/* ACCT-012 lapsed sign-in notice; ACCT-013 needs-attention reason with its one fix */
+.signin-notice { color: var(--fg); border-color: #7a5a1e; }
+.signin-notice span { color: #f0c27a; }
+.signin-notice .btn { margin-left: auto; }
+.attn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.attn .conn-detail { flex: 1 1 240px; margin: 0; }

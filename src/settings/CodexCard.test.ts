@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 import { CodexCardView, codexHeadline, type CodexView } from "./CodexCard";
 
 const off: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null };
-const kim = { id: "c1", email: "kim@example.com", home: "h1", lastSignIn: 1 };
+const kim = { id: "c1", email: "kim@example.com", home: "h1", lastSignIn: 1, signInError: false };
 const html = (view: CodexView) => renderToString(createElement(CodexCardView, { view, onAction: () => {} }));
 
 test("signed out, the card offers Connect and Sign in with a code", () => {

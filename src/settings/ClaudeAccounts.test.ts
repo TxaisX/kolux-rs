@@ -6,8 +6,8 @@ import { ClaudeCardView } from "./SettingsPage";
 import type { KeyStatus } from "./claudeKey";
 
 const empty: AccountsView = { accounts: [], active: null, signingIn: null, inBrowser: false, attention: null, keyMode: false, upkeepLeftToClaude: true };
-const sam = { id: "a1", email: "sam@example.com", organization: "Example Org", configDir: "C:\p\claude-accounts\a1", lastSignIn: 1 };
-const kim = { id: "a2", email: "kim@example.com", organization: null, configDir: "C:\p\claude-accounts\a2", lastSignIn: 2 };
+const sam = { id: "a1", email: "sam@example.com", organization: "Example Org", configDir: "C:\p\claude-accounts\a1", lastSignIn: 1, stale: false };
+const kim = { id: "a2", email: "kim@example.com", organization: null, configDir: "C:\p\claude-accounts\a2", lastSignIn: 2, stale: false };
 const html = (view: AccountsView) => renderToString(createElement(ClaudeAccountsView, { view, onAction: () => {} }));
 
 test("with no accounts the section offers Add Account", () => {

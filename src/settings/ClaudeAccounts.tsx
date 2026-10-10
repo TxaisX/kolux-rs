@@ -6,19 +6,20 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { AttentionNote, openInstallPage, type Attention } from "./Attention";
 
-export type Account = { id: string; email: string | null; organization: string | null; configDir: string; lastSignIn: number };
+export type Account = { id: string; email: string | null; organization: string | null; configDir: string; lastSignIn: number; stale: boolean };
 export type AccountsView = {
   accounts: Account[];
   active: string | null;
   signingIn: string | null;
   inBrowser: boolean;
-  attention: string | null;
+  attention: Attention | null;
   keyMode: boolean;
   upkeepLeftToClaude: boolean;
 };
 
-export type AccountAction = { kind: "add" } | { kind: "again"; id: string } | { kind: "activate"; id: string } | { kind: "cancel" };
+export type AccountAction = { kind: "add" } | { kind: "again"; id: string } | { kind: "activate"; id: string } | { kind: "cancel" } | { kind: "key" } | { kind: "install" };
 
 export function ClaudeAccountsView({ view, error, onAction }: { view: AccountsView | null; error?: string | null; onAction: (a: AccountAction) => void }) {
   if (!view) return null;
@@ -65,11 +66,12 @@ export function ClaudeAccountsView({ view, error, onAction }: { view: AccountsVi
         );
       })}
       {view.keyMode && view.active && <p className="conn-detail">The 1-year key is connected, so new Claude panes use the key. Disconnect it to run them on the active account.</p>}
-      {view.attention && (
-        <p className="conn-detail warn" role="alert">
-          {view.attention}
-        </p>
-      )}
+      <AttentionNote
+        attention={view.attention}
+        route="claude-account"
+        busy={busy}
+        onFix={(f) => onAction(f === "Use a 1-year key instead" ? { kind: "key" } : f === "Open install page" ? { kind: "install" } : { kind: "add" })}
+      />
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}
@@ -110,7 +112,11 @@ export default function ClaudeAccounts() {
           ? invoke("claude_account_sign_in", { id: a.id })
           : a.kind === "activate"
             ? invoke("claude_account_activate", { id: a.id })
-            : invoke("claude_account_cancel");
+            : a.kind === "key"
+              ? invoke("claude_key_connect")
+              : a.kind === "install"
+                ? openInstallPage("claude")
+                : invoke("claude_account_cancel");
     call.catch((e) => setError(String(e))).finally(read);
   };
   return <ClaudeAccountsView view={view} error={error} onAction={act} />;

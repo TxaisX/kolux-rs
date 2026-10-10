@@ -1,6 +1,7 @@
 // What the Claude card on Settings > AI connections says about the 1-year key (ACCT-004). The
 // back end (src-tauri/src/claude_key.rs) runs the hidden setup and keeps the key sealed; the
 // window only ever sees these figures, never the key itself.
+import { fixFor, type Attention } from "./Attention";
 
 export type KeyStatus = {
   connected: boolean;
@@ -11,7 +12,7 @@ export type KeyStatus = {
   expired: boolean;
   settingUp: boolean;
   inBrowser: boolean;
-  attention: string | null;
+  attention: Attention | null;
 };
 
 export type KeyAction = "connect" | "renew" | "cancel" | "disconnect";
@@ -20,8 +21,8 @@ export type KeyCard = {
   state: "reading" | "disconnected" | "connecting" | "connected" | "warning" | "expired" | "attention";
   headline: string;
   detail: string;
-  /** A failed renewal or setup, shown under the card's own text. */
-  attention: string | null;
+  /** A failed renewal or setup, or a usage limit, shown under the card's own text (ACCT-013). */
+  attention: Attention | null;
   actions: KeyAction[];
 };
 
@@ -58,12 +59,13 @@ export function keyCard(s: KeyStatus | null): KeyCard {
       actions: ["disconnect"],
     };
   }
-  if (s.attention) return { state: "attention", headline: "Needs attention", detail: s.attention, attention: null, actions: ["connect"] };
+  // A fix replaces Connect; a reason with no fix keeps it, since connecting is still the way in.
+  if (s.attention && s.attention.reason !== "usage-limit") return { state: "attention", headline: "Needs attention", detail: "", attention: s.attention, actions: fixFor(s.attention, "claude-key") ? [] : ["connect"] };
   return {
     state: "disconnected",
     headline: "Connect with a key that lasts a year",
     detail: "Connect opens Claude's sign-in page in your browser once and keeps a key that lasts a year.",
-    attention: null,
+    attention: s.attention,
     actions: ["connect"],
   };
 }

@@ -29,6 +29,53 @@ pub const WARN_DAYS: i64 = 30;
 /// Kolux gives up on the setup after ten minutes.
 pub const SETUP_LIMIT: Duration = Duration::from_secs(600);
 const TOKEN_PREFIX: &str = "sk-ant-oat";
+/// Store key: when a Claude usage limit that was reached lifts (ms since 1970). Written when a
+/// pane stops on a usage limit (STAT-022, T-039); the card shows it until then (ACCT-013).
+pub const LIMIT_KEY: &str = "claudeUsageLimitResetsAt";
+
+/// ACCT-013: why a card needs attention, in plain words, with the reason the window maps to its
+/// one fix. Reasons: browser-blocked, sign-in-refused, plan, not-found, smartscreen, usage-limit,
+/// key-expiring, key-expired, install-failed, install-unavailable, unknown (and cancelled, which
+/// is never shown).
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Attention {
+    pub reason: &'static str,
+    pub message: String,
+    /// A usage limit: when the agent can be used again.
+    pub resets_at: Option<i64>,
+}
+
+impl Attention {
+    pub fn new(reason: &'static str, message: impl Into<String>) -> Self {
+        Attention { reason, message: message.into(), resets_at: None }
+    }
+}
+
+/// Anything else that went wrong is shown for information only.
+impl From<String> for Attention {
+    fn from(message: String) -> Self {
+        Attention::new("unknown", message)
+    }
+}
+
+impl PartialEq<&str> for Attention {
+    fn eq(&self, other: &&str) -> bool {
+        self.message == *other
+    }
+}
+
+impl std::fmt::Display for Attention {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// The usage-limit notice while the limit lasts.
+pub fn usage_limit(resets_at: Option<i64>, now: i64) -> Option<Attention> {
+    let at = resets_at.filter(|t| *t > now)?;
+    Some(Attention { resets_at: Some(at), ..Attention::new("usage-limit", "Claude's usage limit was reached.") })
+}
 
 pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
@@ -148,7 +195,7 @@ pub struct KeyStatus {
     /// The running setup has shown its browser step.
     pub in_browser: bool,
     /// Why the card needs attention, in plain words; never a link or a code.
-    pub attention: Option<String>,
+    pub attention: Option<Attention>,
 }
 
 /// The card's figures from the settings fields at `now`.
@@ -295,12 +342,12 @@ pub fn run_setup(cmd: CommandBuilder, limit: Duration, cancel: Arc<AtomicBool>, 
 }
 
 /// What the card says for each way a setup can end without a key.
-pub fn attention_for(outcome: &Outcome) -> Option<String> {
+pub fn attention_for(outcome: &Outcome) -> Option<Attention> {
     match outcome {
         Outcome::Key(_) | Outcome::Cancelled => None,
-        Outcome::SubscriptionRequired => Some("The 1-year key needs a paid Claude subscription on the account you approved.".into()),
-        Outcome::TimedOut => Some("The browser step was not finished within 10 minutes. Connect again to retry.".into()),
-        Outcome::Failed(m) => Some(m.clone()),
+        Outcome::SubscriptionRequired => Some(Attention::new("plan", "The 1-year key needs a paid Claude subscription on the account you approved.")),
+        Outcome::TimedOut => Some(Attention::new("browser-blocked", "The browser step was not finished within 10 minutes.")),
+        Outcome::Failed(m) => Some(Attention::new("sign-in-refused", m.clone())),
     }
 }
 
@@ -310,14 +357,14 @@ pub struct KeySetup {
     running: AtomicBool,
     in_browser: AtomicBool,
     cancel: Mutex<Option<Arc<AtomicBool>>>,
-    attention: Mutex<Option<String>>,
+    attention: Mutex<Option<Attention>>,
 }
 
 impl KeySetup {
-    fn attention(&self) -> Option<String> {
+    fn attention(&self) -> Option<Attention> {
         self.attention.lock().ok().and_then(|a| a.clone())
     }
-    fn set_attention(&self, a: Option<String>) {
+    fn set_attention(&self, a: Option<Attention>) {
         if let Ok(mut g) = self.attention.lock() {
             *g = a;
         }
@@ -329,7 +376,8 @@ fn status(store: &Store, setup: &KeySetup) -> KeyStatus {
     let mut s = status_at(&store.settings(), has, now_ms());
     s.setting_up = setup.running.load(Ordering::SeqCst);
     s.in_browser = s.setting_up && setup.in_browser.load(Ordering::SeqCst);
-    s.attention = setup.attention();
+    let limit = store.get(LIMIT_KEY).ok().flatten().and_then(|t| t.parse().ok());
+    s.attention = setup.attention().or_else(|| usage_limit(limit, now_ms()));
     s
 }
 
@@ -349,7 +397,7 @@ pub fn claude_key_connect(app: AppHandle, setup: tauri::State<'_, KeySetup>) -> 
         Some(p) => p,
         None => {
             setup.running.store(false, Ordering::SeqCst);
-            setup.set_attention(Some("Claude Code is not installed, so there is nothing to run the key setup with.".into()));
+            setup.set_attention(Some(Attention::new("not-found", "Claude Code is not installed, so there is nothing to run the key setup with.")));
             let _ = app.emit(EVENT, ());
             return Ok(());
         }
@@ -358,7 +406,7 @@ pub fn claude_key_connect(app: AppHandle, setup: tauri::State<'_, KeySetup>) -> 
         // Never retried through the command prompt (ACCT-004).
         setup.running.store(false, Ordering::SeqCst);
         let name = program.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        setup.set_attention(Some(format!("The installed Claude launcher ({name}) is a script wrapper Kolux cannot start directly. Install Claude Code's native build and connect again.")));
+        setup.set_attention(Some(Attention::new("install-unavailable", format!("The installed Claude launcher ({name}) is a script wrapper Kolux cannot start directly. Install Claude Code's native build and connect again."))));
         let _ = app.emit(EVENT, ());
         return Ok(());
     }
@@ -385,7 +433,7 @@ pub fn claude_key_connect(app: AppHandle, setup: tauri::State<'_, KeySetup>) -> 
             let store = app.state::<Mutex<Store>>();
             let kept = store.lock().map_err(|e| e.to_string()).and_then(|s| keep(&s, token, now_ms()));
             if let Err(e) = kept {
-                attention = Some(format!("The key could not be stored: {e}"));
+                attention = Some(format!("The key could not be stored: {e}").into());
             }
         }
         setup.set_attention(attention);
@@ -417,6 +465,19 @@ pub fn claude_key_disconnect(app: AppHandle, store: tauri::State<'_, Mutex<Store
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_usage_limit_shows_its_reset_time_only_while_it_lasts_and_setups_name_their_reason() {
+        let a = usage_limit(Some(5_000), 1_000).unwrap();
+        assert_eq!((a.reason, a.resets_at), ("usage-limit", Some(5_000)));
+        assert_eq!(usage_limit(Some(1_000), 1_000), None, "a limit that has lifted is gone");
+        assert_eq!(usage_limit(None, 1_000), None);
+        assert_eq!(attention_for(&Outcome::SubscriptionRequired).unwrap().reason, "plan");
+        assert_eq!(attention_for(&Outcome::TimedOut).unwrap().reason, "browser-blocked");
+        assert_eq!(attention_for(&Outcome::Failed("x".into())).unwrap().reason, "sign-in-refused");
+        assert_eq!(attention_for(&Outcome::Cancelled), None);
+        assert_eq!(Attention::from("odd".to_string()).reason, "unknown");
+    }
 
     const KEY: &str = "sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcdefghijkl";
 

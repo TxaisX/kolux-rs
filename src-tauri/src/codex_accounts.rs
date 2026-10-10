@@ -11,7 +11,7 @@
 //! run on it. Without a managed account, Codex's own system-default login is reported as it is.
 //! The accounts list with fast switching is T-138 (ACCT-019, ACCT-020).
 
-use crate::claude_key::{run_hidden, Ended};
+use crate::claude_key::{run_hidden, Attention, Ended};
 use crate::codex_usage::{sign_in_kind, SignIn};
 use crate::{secrets, state::Store};
 use base64::Engine;
@@ -42,16 +42,35 @@ pub struct Account {
     /// The account's private Codex home: where it runs.
     pub home: String,
     pub last_sign_in: i64,
+    /// ACCT-012: Codex answered with a sign-in error for this account; Sign in again clears it.
+    #[serde(default)]
+    pub sign_in_error: bool,
 }
 
 pub fn load(store: &Store) -> Vec<Account> {
     store.get(LIST_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
 
+/// The active account, if it is still listed and its home is on disk.
+pub fn active_account(store: &Store) -> Option<Account> {
+    let id = store.get(ACTIVE_KEY).ok().flatten()?;
+    load(store).into_iter().find(|a| a.id == id).filter(|a| PathBuf::from(&a.home).is_dir())
+}
+
+/// Flags or clears an account's sign-in error (ACCT-012); true when that changed anything.
+pub fn mark_sign_in_error(store: &Store, id: &str, error: bool) -> Result<bool, String> {
+    let mut list = load(store);
+    let Some(a) = list.iter_mut().find(|a| a.id == id && a.sign_in_error != error) else {
+        return Ok(false);
+    };
+    a.sign_in_error = error;
+    store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// The active account's home, if it is still listed and on disk.
 pub fn active_home(store: &Store) -> Option<String> {
-    let id = store.get(ACTIVE_KEY).ok().flatten()?;
-    load(store).into_iter().find(|a| a.id == id).map(|a| a.home).filter(|h| PathBuf::from(h).is_dir())
+    active_account(store).map(|a| a.home)
 }
 
 /// The variable a new pane gets: only a Codex pane, only with an active account.
@@ -113,7 +132,7 @@ pub fn email(auth: &str) -> Option<String> {
 }
 
 /// Why a login gave Kolux no account, with links and the code kept out.
-pub fn failure(ended: &Ended, output: &str, code: Option<&str>) -> String {
+pub fn failure(ended: &Ended, output: &str, code: Option<&str>) -> Attention {
     let clean = |s: &str| {
         let s = crate::claude_accounts::scrub(s);
         match code {
@@ -122,12 +141,12 @@ pub fn failure(ended: &Ended, output: &str, code: Option<&str>) -> String {
         }
     };
     match ended {
-        Ended::Cancelled => "Sign-in cancelled.".into(),
-        Ended::TimedOut => "The Codex sign-in was not finished within 15 minutes.".into(),
-        Ended::NotStarted(e) => format!("Codex's sign-in could not start: {}", clean(e)),
+        Ended::Cancelled => Attention::new("cancelled", "Sign-in cancelled."),
+        Ended::TimedOut => Attention::new("browser-blocked", "The Codex sign-in was not finished within 15 minutes."),
+        Ended::NotStarted(e) => format!("Codex's sign-in could not start: {}", clean(e)).into(),
         Ended::Exited(_) | Ended::Stopped => match output.lines().map(str::trim).rfind(|l| !l.is_empty()) {
-            Some(last) => format!("Codex's sign-in ended without signing in: {}", clean(last)),
-            None => "Codex's sign-in ended without signing in.".into(),
+            Some(last) => Attention::new("sign-in-refused", format!("Codex's sign-in ended without signing in: {}", clean(last))),
+            None => Attention::new("sign-in-refused", "Codex's sign-in ended without signing in."),
         },
     }
 }
@@ -143,10 +162,11 @@ pub fn login_command(program: &Path, home: &Path, device: bool) -> CommandBuilde
     cmd
 }
 
-/// One new sign-in into a fresh private home. On success the account is listed, made active
-/// and its sign-in sealed into the vault. On failure the home is removed, unless it already
-/// holds a working sign-in.
-pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, String> {
+/// One sign-in, into a fresh private home or again into a listed account's own (ACCT-012). On
+/// success a new account is listed and made active, a listed one updated in place, and the
+/// sign-in sealed into the vault; only a sign-in the login changed counts. On failure the home is
+/// removed, unless it already holds a working sign-in.
+pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: impl FnOnce(&Path) -> (String, Ended, Option<String>)) -> Result<Account, Attention> {
     let home = profile.join(FOLDER).join(id);
     let auth = home.join("auth.json");
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
@@ -156,22 +176,28 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
             let _ = fs::remove_dir_all(&home);
         }
     };
+    let before = fs::read_to_string(&auth).ok();
     let (output, ended, code) = login(&home);
-    let signed_in = matches!(ended, Ended::Exited(_)) && sign_in_kind(&auth) == Some(SignIn::ChatGpt);
+    let signed_in = matches!(ended, Ended::Exited(_)) && sign_in_kind(&auth) == Some(SignIn::ChatGpt) && fs::read_to_string(&auth).ok() != before;
     if !signed_in {
         roll_back();
         return Err(failure(&ended, &output, code.as_deref()));
     }
     let text = fs::read_to_string(&auth).map_err(|e| e.to_string())?;
     if let Err(e) = secrets::write_file(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")), &text) {
-        return Err(format!("The sign-in could not be stored: {e}"));
+        return Err(format!("The sign-in could not be stored: {e}").into());
     }
-    let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now };
+    let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now, sign_in_error: false };
     let store = store.lock().map_err(|e| e.to_string())?;
     let mut list = load(&store);
-    list.push(account.clone());
+    match list.iter_mut().find(|a| a.id == id) {
+        Some(a) => *a = account.clone(),
+        None => {
+            list.push(account.clone());
+            store.set(ACTIVE_KEY, id).map_err(|e| e.to_string())?;
+        }
+    }
     store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    store.set(ACTIVE_KEY, id).map_err(|e| e.to_string())?;
     Ok(account)
 }
 
@@ -182,7 +208,7 @@ pub struct SignIns {
     in_browser: AtomicBool,
     device: Mutex<Option<(String, String)>>,
     cancel: Mutex<Option<Arc<AtomicBool>>>,
-    attention: Mutex<Option<String>>,
+    attention: Mutex<Option<Attention>>,
 }
 
 #[derive(serde::Serialize)]
@@ -196,7 +222,7 @@ pub struct CodexView {
     pub in_browser: bool,
     pub device_link: Option<String>,
     pub device_code: Option<String>,
-    pub attention: Option<String>,
+    pub attention: Option<Attention>,
 }
 
 #[tauri::command]
@@ -219,9 +245,10 @@ pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::St
     })
 }
 
-/// Connect (browser) or Sign in with a code (`device` = true): adds a Codex account.
+/// Connect (browser) or Sign in with a code (`device` = true): adds a Codex account, or signs
+/// the listed account `again` in once more (ACCT-012).
 #[tauri::command]
-pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>, device: bool) -> Result<(), String> {
+pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>, device: bool, again: Option<String>) -> Result<(), String> {
     {
         let mut running = sign_ins.running.lock().map_err(|e| e.to_string())?;
         if running.is_some() {
@@ -229,7 +256,7 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
         }
         *running = Some(if device { "device" } else { "browser" }.into());
     }
-    let finish = |app: &AppHandle, attention: Option<String>| {
+    let finish = |app: &AppHandle, attention: Option<Attention>| {
         let s = app.state::<SignIns>();
         if let Ok(mut g) = s.attention.lock() {
             *g = attention;
@@ -246,11 +273,11 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
     let program = match crate::agents::find_program("codex") {
         Some(p) if !crate::claude_key::is_wrapper(&p) => p,
         Some(_) => {
-            finish(&app, Some("The installed Codex launcher is a script wrapper Kolux cannot start directly. Install Codex's native build and try again.".into()));
+            finish(&app, Some(Attention::new("install-unavailable", "The installed Codex launcher is a script wrapper Kolux cannot start directly. Install Codex's native build and try again.")));
             return Ok(());
         }
         None => {
-            finish(&app, Some("Codex is not installed, so there is nothing to sign in with.".into()));
+            finish(&app, Some(Attention::new("not-found", "Codex is not installed, so there is nothing to sign in with.")));
             return Ok(());
         }
     };
@@ -265,7 +292,7 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
     let _ = app.emit(EVENT, ());
     std::thread::spawn(move || {
         let store = app.state::<Mutex<Store>>();
-        let id = format!("{:x}", crate::claude_key::now_ms());
+        let id = again.unwrap_or_else(|| format!("{:x}", crate::claude_key::now_ms()));
         let result = sign_in(&store, &profile, &id, crate::claude_key::now_ms(), |home| {
             let seen: Arc<Mutex<Option<(String, String)>>> = Arc::default();
             let peek = seen.clone();
@@ -301,7 +328,7 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
             let code = seen.lock().ok().and_then(|s| s.as_ref().map(|d| d.1.clone()));
             (out, ended, code)
         });
-        finish(&app, result.err().filter(|e| e != "Sign-in cancelled."));
+        finish(&app, result.err().filter(|e| e.reason != "cancelled"));
     });
     Ok(())
 }
@@ -390,11 +417,39 @@ mod tests {
     }
 
     #[test]
+    fn signing_in_again_updates_the_account_in_place_and_clears_its_error() {
+        let profile = temp("again");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", 2, ok("lee@example.com")).unwrap();
+        {
+            let s = store.lock().unwrap();
+            assert!(mark_sign_in_error(&s, "c1", true).unwrap());
+            assert!(!mark_sign_in_error(&s, "c1", true).unwrap(), "no change, no write");
+            assert_eq!(active_account(&s).unwrap().id, "c2");
+        }
+        // a login that leaves the old sign-in untouched does not count, and keeps the home
+        let e = sign_in(&store, &profile, "c1", 3, |_| (String::new(), Ended::Exited(Some(0)), None)).unwrap_err();
+        assert_eq!(e.reason, "sign-in-refused");
+        assert!(profile.join(FOLDER).join("c1").join("auth.json").exists());
+        sign_in(&store, &profile, "c1", 4, ok("kim2@example.com")).unwrap();
+        let s = store.lock().unwrap();
+        let list = load(&s);
+        assert_eq!(list.len(), 2, "updated in place, not added");
+        assert!(!list[0].sign_in_error && list[0].email.as_deref() == Some("kim2@example.com") && list[0].last_sign_in == 4);
+        assert_eq!(active_account(&s).unwrap().id, "c2", "signing in again does not change the active account");
+    }
+
+    #[test]
     fn a_failed_sign_in_keeps_nothing_but_never_deletes_a_working_home() {
         let profile = temp("fail");
         let store = Mutex::new(Store::open(&profile).unwrap());
         let e = sign_in(&store, &profile, "c2", 1, |_| ("Enter this one-time code: WXYZ-9876\nError: device code expired".into(), Ended::Exited(Some(1)), Some("WXYZ-9876".into()))).unwrap_err();
-        assert!(!e.contains("WXYZ-9876") && !e.contains("https://"), "{e}");
+        assert!(!e.message.contains("WXYZ-9876") && !e.message.contains("https://"), "{e}");
         assert!(!profile.join(FOLDER).join("c2").exists());
         let e = sign_in(&store, &profile, "c3", 1, |home| {
             fs::write(home.join("auth.json"), token("kim@example.com")).unwrap();

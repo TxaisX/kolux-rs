@@ -44,11 +44,14 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
 }
 
 #[tauri::command]
-fn save_settings(store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value) -> Result<(), String> {
+fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
     let value = secrets::keep_stored_secrets(&store.settings(), value);
-    store.save_settings(&value).map_err(|e| e.to_string())
+    store.save_settings(&value).map_err(|e| e.to_string())?;
+    // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
+    let _ = tauri::Emitter::emit(&app, "settings-saved", ());
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -124,6 +127,8 @@ pub fn run() {
             claude_accounts::claude_account_sign_in,
             claude_accounts::claude_account_cancel,
             claude_accounts::claude_account_activate,
+            claude_accounts::claude_account_check,
+            agents::open_install_page,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,

@@ -322,10 +322,27 @@ pub fn read(account_home: Option<&Path>) -> CodexUsage {
 }
 
 #[tauri::command]
-pub async fn codex_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Result<CodexUsage, String> {
+pub async fn codex_usage(app: tauri::AppHandle) -> Result<CodexUsage, String> {
+    use tauri::{Emitter, Manager};
     // ACCT-007: the active managed Codex account's home is read first.
-    let home = store.lock().ok().and_then(|s| crate::codex_accounts::active_home(&s)).map(PathBuf::from);
-    tauri::async_runtime::spawn_blocking(move || read(home.as_deref())).await.map_err(|e| e.to_string())
+    let account = app.state::<Mutex<crate::state::Store>>().lock().ok().and_then(|s| crate::codex_accounts::active_account(&s));
+    let home = account.as_ref().map(|a| PathBuf::from(&a.home));
+    let usage = tauri::async_runtime::spawn_blocking(move || read(home.as_deref())).await.map_err(|e| e.to_string())?;
+    // ACCT-012: a sign-in error from a managed account's own sign-in flags that account; the
+    // system default's never does (when the account home holds no sign-in, it was not read).
+    if let Some(a) = account.filter(|a| sign_in_kind(&Path::new(&a.home).join("auth.json")).is_some()) {
+        let error = match usage.state.as_str() {
+            "sign-in-again" => Some(true),
+            "ok" => Some(false),
+            _ => None,
+        };
+        let store = app.state::<Mutex<crate::state::Store>>();
+        let changed = error.and_then(|e| store.lock().ok().and_then(|s| crate::codex_accounts::mark_sign_in_error(&s, &a.id, e).ok())).unwrap_or(false);
+        if changed {
+            let _ = app.emit(crate::codex_accounts::EVENT, ());
+        }
+    }
+    Ok(usage)
 }
 
 #[cfg(test)]
