@@ -78,6 +78,10 @@ input { font: inherit; }
 .ex-twist { width: 12px; flex: none; display: inline-flex; justify-content: center; color: var(--fg-icon-dim); }
 .ex-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ex-link { flex: none; font-size: 10.5px; color: var(--fg-faint); }
+.ex-input { flex: 1; min-width: 0; height: 20px; padding: 0 4px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line-focus); border-radius: 4px; font: inherit; outline: none; }
+.explorer .notice { flex-wrap: wrap; }
+.notice.ex-ask, .notice.ex-note { color: var(--fg-muted); border-color: var(--line); }
+.explorer .notice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .sb-nav { padding: 8px 4px 0; }
 .row { display: flex; align-items: center; height: 32px; padding: 0 8px 0 13px; gap: 13px; border-radius: 6px; color: var(--fg-nav); white-space: nowrap; width: 100%; text-align: left; }
 .row .ic { width: 16px; display: inline-flex; justify-content: center; color: var(--fg-icon-dim); flex: none; }

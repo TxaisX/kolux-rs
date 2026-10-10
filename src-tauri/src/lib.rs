@@ -3,6 +3,7 @@ mod browser;
 pub mod cli;
 mod creatures;
 mod files;
+mod fsops;
 mod git;
 mod keybindings;
 mod names;
@@ -107,6 +108,11 @@ pub fn run() {
             files::diff_image,
             files::dir_list,
             files::path_kind,
+            fsops::fs_create,
+            fsops::fs_rename,
+            fsops::fs_trash,
+            fsops::fs_restore,
+            fsops::clip_write,
             update::update_status,
             update::update_mark,
             update::update_check,
