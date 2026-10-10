@@ -31,6 +31,12 @@ struct Inner {
     keys: HashMap<u32, String>,
 }
 
+/// `dir` at the front of a search path (CLI-007).
+fn cli_first(dir: &std::path::Path, path: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    let rest: Vec<std::path::PathBuf> = path.map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(rest)).unwrap_or_else(|_| dir.as_os_str().to_os_string())
+}
+
 /// The handle a terminal is known by on the command line (`KOLUX_TERMINAL_HANDLE`).
 pub fn handle_of(id: u32) -> String {
     format!("term-{id}")
@@ -80,6 +86,17 @@ impl Terminals {
         let key = crate::cli::secret();
         command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
         command.env("KOLUX_PANE_KEY", &key);
+        // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
+        // registered system-wide, and it is told which app folder to call. ponytail: the folder
+        // is the app's own; the release launcher (CLI-006, T-185) and the Linux `kolux` launcher
+        // folder land with the packaged build.
+        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
+            let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+            command.env("PATH", path);
+        }
+        if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
+            command.env(crate::cli::APP_DIR_ENV, dir);
+        }
         let session = PtySession::spawn(
             command,
             cols.max(2),
@@ -226,6 +243,21 @@ pub fn terminal_write(terminals: tauri::State<'_, Terminals>, id: u32, data: Str
 #[tauri::command]
 pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     terminals.resize(id, cols, rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bundled_cli_folder_comes_first_on_the_search_path() {
+        let dir = std::path::Path::new("D:\\app");
+        let rest = std::env::join_paths(["C:\\old\\kolux", "C:\\Windows"]).unwrap();
+        let path = cli_first(dir, Some(rest));
+        let parts: Vec<_> = std::env::split_paths(&path).collect();
+        assert_eq!(parts, ["D:\\app", "C:\\old\\kolux", "C:\\Windows"].map(std::path::PathBuf::from));
+        assert_eq!(std::env::split_paths(&cli_first(dir, None)).count(), 1);
+    }
 }
 
 #[tauri::command]

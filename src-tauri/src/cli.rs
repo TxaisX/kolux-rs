@@ -20,6 +20,8 @@ pub const FILE: &str = "cli.json";
 /// The event the front end gets when the CLI made or removed a workspace.
 pub const EVENT: &str = "cli-workspace";
 const DATA_DIR: &str = "com.txaisxiong.kolux-rs";
+/// The environment value that tells the CLI which running app opened its terminal (CLI-007).
+pub const APP_DIR_ENV: &str = "KOLUX_APP_DIR";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Request {
@@ -258,7 +260,19 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             match command {
                 "orchestration.run-create" => need("objective", ": say what the Run is for")?,
                 "orchestration.run-use" | "orchestration.run-show" => need("id", "")?,
-                SEND => need("subject", "")?,
+                SEND => {
+                    need("subject", "")?;
+                    // CLI-031: refused here, before the sender is worked out.
+                    let kind = text("type").map(str::trim).unwrap_or("status");
+                    if ["worker_done", "heartbeat"].contains(&kind) && text("to").is_some_and(|t| t.trim().starts_with('@')) {
+                        return Err(Fail::args("done reports and heartbeats go to exactly one dispatch, never to a group; send them to run:<id> or dispatch:<id>"));
+                    }
+                    if text("payload").is_some() {
+                        if let Some(k) = ["task-id", "dispatch-id", "files-modified", "report-path", "phase"].into_iter().find(|k| flags.contains_key(*k)) {
+                            return Err(Fail::args(format!("give the payload as flags (--{k}) or as --payload JSON, not both")));
+                        }
+                    }
+                }
                 "orchestration.reply" => {
                     need("id", "")?;
                     need("body", "")?
@@ -352,9 +366,18 @@ fn check_worker_start(flags: &Map<String, Value>) -> Result<(), Fail> {
     Ok(())
 }
 
+/// CLI-007: a terminal Kolux started names its own app folder in `KOLUX_APP_DIR`, so the CLI
+/// reaches the copy of Kolux that opened it (a development or side-by-side build included);
+/// anywhere else it is the installed app's folder.
 fn data_dir() -> PathBuf {
-    let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    base.join(DATA_DIR)
+    data_dir_of(std::env::var_os(APP_DIR_ENV), std::env::var_os("APPDATA"))
+}
+
+fn data_dir_of(own: Option<std::ffi::OsString>, appdata: Option<std::ffi::OsString>) -> PathBuf {
+    match own.filter(|d| !d.is_empty()) {
+        Some(d) => d.into(),
+        None => appdata.map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(DATA_DIR),
+    }
 }
 
 fn unreachable_fail(why: String) -> Fail {
@@ -1204,6 +1227,15 @@ mod tests {
     }
 
     #[test]
+    fn a_kolux_terminal_reaches_the_app_that_opened_it() {
+        let own = data_dir_of(Some("D:\\lane\\app".into()), Some("C:\\roaming".into()));
+        assert_eq!(own, PathBuf::from("D:\\lane\\app"));
+        let installed = data_dir_of(None, Some("C:\\roaming".into()));
+        assert_eq!(installed, PathBuf::from("C:\\roaming").join(DATA_DIR));
+        assert_eq!(data_dir_of(Some("".into()), Some("C:\\roaming".into())), installed);
+    }
+
+    #[test]
     fn mail_commands_are_checked_before_the_app_is_asked() {
         let (json, p) = parse(&words("orchestration send --subject hi --to run:run-1 --type worker_done --outcome succeeded --files-modified a,b --retry-request r1 --json"));
         let p = p.unwrap().unwrap();
@@ -1221,6 +1253,10 @@ mod tests {
         assert!(refused("orchestration run-create").contains("--objective"));
         assert!(refused("orchestration send --to run:run-1").contains("--subject"));
         assert!(refused("orchestration check --peek --all").contains("one of"));
+        // CLI-031: refused here, before the sender is worked out.
+        assert!(refused("orchestration send --subject hi --type heartbeat --to @all").contains("never to a group"));
+        assert!(refused("orchestration send --subject hi --type worker_done --outcome failed --to @worktree:w1").contains("never to a group"));
+        assert!(refused("orchestration send --subject hi --to run:run-1 --task-id t1 --payload {}").contains("not both"));
         assert!(refused("orchestration check --timeout-ms 0").contains("above zero"));
         assert!(refused("orchestration run-list --bogus 1").contains("--bogus"));
         assert!(refused("orchestration run-show").contains("--id"));

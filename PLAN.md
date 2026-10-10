@@ -149,7 +149,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-085-b · AUTO-004 [compat] Event triggers: pull request opened, checks failed, agent finished · AUTO-011 Runs launch in the background and never take focus (split from T-085: also RRULE lines with INTERVAL, COUNT, UNTIL, BYSETPOS, DTSTART or numbered weekdays; needs T-025 hooks for agent finished and T-176 PR status polling)
 - [x] T-086 · AUTO-016 Automations list with sorting, filters and search · AUTO-019 Run now, pause, edit or delete an automation
 - [x] T-087 · SET-028 Model and effort per tier for orchestration workers
-- [ ] T-088 · CLI-007 [compat] kolux works in every Kolux terminal with no setup · CLI-030 [compat] Orchestration runs: start one, bind to one, look one up · CLI-031 [compat] Orchestration messages: send and reply · CLI-032 [compat] Orchestration inbox: check and inbox
+- [x] T-088 · CLI-007 [compat] kolux works in every Kolux terminal with no setup · CLI-030 [compat] Orchestration runs: start one, bind to one, look one up · CLI-031 [compat] Orchestration messages: send and reply · CLI-032 [compat] Orchestration inbox: check and inbox
 - [ ] T-089 · CLI-033 [compat] Orchestration ask: a question that waits for its answer, and can be resumed · CLI-034 [compat] Orchestration tasks and dispatch · CLI-035 [compat] Orchestration worker-start launches a worker, with model routing · CLI-036 [compat] Orchestration workers: list, show, read, stop, abandon, release and retain
 
 ### P0 · theme 8 · Release, update and CI pipeline (7 cards)
