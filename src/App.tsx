@@ -13,7 +13,7 @@
 // Source Control is a card on the right (Mod+Shift+G, Mod+L or the top bar's panel button): the
 // workspace in front's changes, staging and a commit box; its draft message is kept here per
 // worktree (T-018-a, src/scm/SourceControlPanel.tsx).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
@@ -30,6 +30,8 @@ import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { nextNeedsYou } from "./terminal/status";
+import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
+import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -46,6 +48,22 @@ type Pane = { key: number; cwd: string | null; branch: string | null; agent: Age
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
+}
+/** TERM-055: the one badge a tab carries beside its agent icon. */
+const badges: Record<NonNullable<Badge>, [(p: { size?: number }) => ReactElement, string]> = {
+  working: [Spinner, "working"],
+  permission: [Help, "needs permission"],
+  unread: [Bell, "unread"],
+  done: [CheckCircle, "done"],
+};
+function TabBadge({ kind }: { kind: Badge }) {
+  if (!kind) return null;
+  const [Icon, label] = badges[kind];
+  return (
+    <span className={`badge ${kind}`} role="img" aria-label={label}>
+      <Icon size={11} />
+    </span>
+  );
 }
 /** SESS-051: a seat's start line as the back end builds it. */
 type StartLine = { args: string[]; typed: string | null };
@@ -86,6 +104,22 @@ function Window() {
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
+  const runRef = useRef(running); // TERM-118: the last reported running flags, to see a finish
+  runRef.current = running;
+  const [unreadPanes, setUnreadPanes] = useState<Set<number>>(new Set()); // TERM-118: finished or rang out of view
+  const [unreadDirs, setUnreadDirs] = useState<Set<string>>(new Set()); // PROJ-063 / TERM-118: workspace rows marked unread
+  const [winFocused, setWinFocused] = useState(() => document.hasFocus());
+  useEffect(() => {
+    const on = () => setWinFocused(true);
+    const off = () => setWinFocused(false);
+    window.addEventListener("focus", on);
+    window.addEventListener("blur", off);
+    return () => {
+      window.removeEventListener("focus", on);
+      window.removeEventListener("blur", off);
+    };
+  }, []);
+  const markDir = (dir: string, un: boolean) => setUnreadDirs((u) => new Set(un ? [...u, dir] : [...u].filter((d) => !sameDir(d, dir))));
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -504,6 +538,29 @@ function Window() {
   rowRef.current = rowStates;
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
+  const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
+  // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
+  // shows every pane); a finish or bell anywhere else marks tab, pane and workspace row unread
+  // and says so in the window. A desktop notification and the settings that gate it are T-026.
+  const inView = (key: number) => {
+    const cell = cells.find((c) => c.panes.some((p) => p.key === key));
+    if (!cell) return false;
+    return board || (terminals && sameDir(cell.panes[0].cwd, activeDir) && activeOf(cell) === key);
+  };
+  const noticed = (p: Pane, what: string) => {
+    if (!marksUnread(p.key, new Set(panes.map((x) => x.key)), unreadPanes, inView(p.key), winFocused)) return;
+    setUnreadPanes((u) => new Set([...u, p.key]));
+    if (p.cwd !== null) markDir(p.cwd, true);
+    setToast(`${tabName(p, titles)} ${what}`);
+  };
+  useEffect(() => {
+    // Viewing a marked pane in a focused window clears its mark.
+    if (!winFocused || unreadPanes.size === 0) return;
+    const seen = [...unreadPanes].filter(inView);
+    if (seen.length === 0) return;
+    setUnreadPanes((u) => new Set([...u].filter((k) => !seen.includes(k))));
+    for (const p of panes) if (seen.includes(p.key) && p.cwd !== null) markDir(p.cwd, false);
+  });
   return (
     <div className="app">
       <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
@@ -512,6 +569,8 @@ function Window() {
           <ProjectsPanel
             openDirs={openDirs}
             states={rowStates}
+            unread={unreadDirs}
+            onUnread={markDir}
             settings={settings}
             onSetting={saveSetting}
             activeDir={activeDir}
@@ -583,7 +642,7 @@ function Window() {
                 </div>
               )}
               {cells.map((c) => {
-                const active = c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key;
+                const active = activeOf(c);
                 return (
                   <div key={c.group} className="cell" hidden={!board && !sameDir(c.panes[0].cwd, activeDir)}>
                     {c.panes.length > 1 && (
@@ -591,6 +650,7 @@ function Window() {
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
                             <VendorMark agent={p.agent} size={12} />
+                            {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key))} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
@@ -632,8 +692,13 @@ function Window() {
                     args={p.args}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
-                    onRunning={(on) => setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                    onRunning={(on) => {
+                      if (runRef.current[p.key] && !on && p.agent !== "shell") noticed(p, "finished");
+                      setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }));
+                    }}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
+                    onBell={() => noticed(p, "rang the bell")}
+                    unread={unreadPanes.has(p.key)}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title}

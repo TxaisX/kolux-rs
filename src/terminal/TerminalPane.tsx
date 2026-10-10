@@ -35,6 +35,10 @@ type Props = {
   onRunning?: (running: boolean) => void;
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
+  /** TERM-118: the program rang the terminal bell. */
+  onBell?: () => void;
+  /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
+  unread?: boolean;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
@@ -59,7 +63,7 @@ type Props = {
   card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -73,6 +77,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   keys.current = keymap;
   const report = useRef(onRunning);
   report.current = onRunning;
+  const bell = useRef(onBell);
+  bell.current = onBell;
   const failed = useRef(onFailed);
   failed.current = onFailed;
 
@@ -122,6 +128,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       if (id !== null && !ended) invoke("terminal_write", { id, data }).catch(() => {});
     };
     term.onData(write);
+    term.onBell(() => bell.current?.());
     // SESS-051: a typed-route prompt goes in once the program has drawn its screen and gone
     // quiet. ponytail: "ready" is the first 1.5 s of silence after some output; SESS-032 owns the
     // real readiness rule and replaces this timer.
@@ -229,7 +236,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}${glow ? " glow" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
+    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
       <header className="pane-head">
         <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
           {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}

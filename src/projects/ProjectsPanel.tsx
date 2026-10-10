@@ -26,6 +26,9 @@ type Props = {
   openDirs: string[];
   /** PROJ-063: each open folder's strongest agent state and when it last changed. */
   states: Record<string, RowInfo>;
+  /** PROJ-063 / TERM-118: workspace paths marked unread, kept by the window; `onUnread` flips one. */
+  unread: Set<string>;
+  onUnread: (dir: string, unread: boolean) => void;
   /** PROJ-045 / PROJ-050: the remembered group-by and sort choices, saved through `onSetting`. */
   settings: Record<string, unknown>;
   onSetting: (key: string, value: unknown) => void;
@@ -52,7 +55,7 @@ type Props = {
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, states, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, refresh, onIndex, createRequest, onStartIn }: Props) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
@@ -83,7 +86,6 @@ export default function ProjectsPanel({ openDirs, states, settings, onSetting, a
   const indexed = useRef(""); // the last project list and owner map handed to the window
   const [filterOpen, setFilterOpen] = useState(false);
   const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
-  const [unread, setUnread] = useState<Set<string>>(new Set()); // workspace paths marked unread
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
   const sortBy = sortFromSetting(settings[SORT_SETTING]);
@@ -101,8 +103,8 @@ export default function ProjectsPanel({ openDirs, states, settings, onSetting, a
       if (dir in was && was[dir] !== i.state && !(activeDir !== null && same(dir, activeDir))) fresh.push(dir);
     }
     seen.current = now;
-    if (fresh.length > 0) setUnread((u) => new Set([...u, ...fresh]));
-  }, [states, activeDir]);
+    for (const dir of fresh) onUnread(dir, true);
+  }, [states, activeDir, onUnread]);
 
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   const fail = (err: unknown) => say("error", String(err));
@@ -329,7 +331,7 @@ export default function ProjectsPanel({ openDirs, states, settings, onSetting, a
   const isSelected = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
   const infoOf = (w: Worktree): RowInfo => Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
   const isUnread = (w: Worktree) => [...unread].some((d) => same(d, w.path));
-  const setRead = (w: Worktree, read: boolean) => setUnread((u) => new Set(read ? [...u].filter((d) => !same(d, w.path)) : [...u, w.path]));
+  const setRead = (w: Worktree, read: boolean) => onUnread(w.path, !read);
   const show = (w: Worktree) => {
     setRead(w, true);
     onSelect(w.path, w.branch);

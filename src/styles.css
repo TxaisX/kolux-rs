@@ -207,6 +207,12 @@ input { font: inherit; }
 .tabs { flex: none; display: flex; gap: 4px; height: 26px; overflow-x: auto; font-size: 12px; }
 .tab { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border: 1px solid var(--line-subtle); border-radius: 8px; color: var(--fg-muted); white-space: nowrap; cursor: default; }
 .tab[aria-selected="true"] { background: var(--pane-bg); border-color: var(--line-focus); color: var(--fg); }
+/* TERM-055: one badge beside the agent icon; the spinner reuses the header's spin. */
+.tab .badge { display: inline-flex; flex: none; }
+.tab .badge.working { color: var(--working-icon); animation: spin 1s linear infinite; }
+.tab .badge.done { color: var(--done-icon); }
+.tab .badge.unread,
+.tab .badge.permission { color: var(--working-icon); }
 .tab .tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .tab .tab-x { width: 18px; height: 18px; border-radius: 4px; color: var(--fg-muted); line-height: 1; }
 .tab .tab-x:hover { background: var(--row-selected); color: var(--fg); }
