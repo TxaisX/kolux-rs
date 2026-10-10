@@ -130,7 +130,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-072 · AUTO-012 [compat] Every run ends with a truthful status
 - [ ] T-073 · EDIT-003 Banner when a file you have open is changed on disk by an agent
 - [ ] T-074 · BROW-008 Pages that fail to load get a recovery overlay · BROW-009 Crashed pages recover by themselves
-- [ ] T-075 · APP-048 [compat] Everything the user set up is saved as they go and survives quits and updates · APP-050 Quitting writes one final save without freezing · APP-052 Terminals survive app restarts and a replaced terminal service · also from T-093-a: keep each worktree's open editor tabs so they come back after a restart
+- [ ] T-075 · APP-048 [compat] Everything the user set up is saved as they go and survives quits and updates · APP-050 Quitting writes one final save without freezing · APP-052 Terminals survive app restarts and a replaced terminal service · also from T-093-a: keep each worktree's open editor tabs so they come back after a restart · also from T-097: when only the background terminal service is running with no window, kolux open waits for it to show the desktop window, and fails with a clear reason when it cannot safely become the desktop app
 - [ ] T-076 · CLI-012 [compat] kolux status tells whether the app is up
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
@@ -171,7 +171,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-095-a · SKILL-036 Artifacts library page and offline viewer (adding a page by hand stores it and its relative assets under the caps; a page on a network share is listed as unavailable unread) · also passes: VIEW-012 Artifacts library
 - [x] T-095-b · SKILL-035 Pages Claude publishes are kept in Kolux automatically (picking publishes out of session output and transcripts, one entry per URL, offline copies of allow-listed CDN scripts, WSL and SSH paths listed as remote) · also from T-095-a: a captured page that loads scripts from a CDN runs from its stored copies, because the viewer lets an entry load only its own stored files
 - [ ] T-096 · SET-008 Shortcuts page lists every command with its keys · SET-009 Record, add, disable or reset a shortcut · SET-010 Clashing shortcuts are flagged, scope by scope
-- [ ] T-097 · CLI-011 [compat] kolux open starts the app or brings it to the front
+- [x] T-097 · CLI-011 [compat] kolux open starts the app or brings it to the front
 
 ## 2. P1: shipped and used
 

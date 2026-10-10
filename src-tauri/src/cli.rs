@@ -13,7 +13,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Where the app says how to reach it, inside its data folder.
 pub const FILE: &str = "cli.json";
@@ -72,11 +72,14 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent"];
 const CREATE_FLAGS: &[&str] = &["name", "repo", "agent", "prompt", "setup", "base-branch", "issue", "comment", "parent-worktree", "no-parent", "run-hooks", "activate"];
 const RM_FLAGS: &[&str] = &["worktree", "force", "run-hooks"];
+const OPEN_FLAGS: &[&str] = &[];
+/// How long `open` waits for an app it started to answer.
+const OPEN_LIMIT: Duration = Duration::from_secs(60);
 
 /// Parses the words after the program name. The `--json` flag is reported even when the rest is
 /// refused, so the refusal can be printed in the asked-for shape. `Ok(None)` means help was
@@ -131,6 +134,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         let (command, allowed) = match joined.as_str() {
             "worktree create" => ("worktree.create", CREATE_FLAGS),
             "worktree rm" | "worktree remove" | "worktree delete" => ("worktree.rm", RM_FLAGS),
+            "open" => ("app.open", OPEN_FLAGS),
             _ => return Err(Fail::args(format!("unknown command `{joined}`; run kolux-dev --help"))),
         };
         if let Some(k) = flags.keys().find(|k| !allowed.contains(&k.as_str())) {
@@ -175,7 +179,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             if flags.contains_key("run-hooks") {
                 args.insert("activate".into(), Value::Bool(true));
             }
-        } else {
+        } else if command == "worktree.rm" {
             if text("worktree").map(str::trim).unwrap_or_default().is_empty() {
                 return Err(Fail::args("--worktree is required"));
             }
@@ -189,6 +193,10 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
 }
 
 fn data_dir() -> PathBuf {
+    // COMPAT 7: KOLUX_USER_DATA_PATH points the command at another build's data folder.
+    if let Some(d) = std::env::var_os("KOLUX_USER_DATA_PATH").filter(|d| !d.is_empty()) {
+        return d.into();
+    }
     let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     base.join(DATA_DIR)
 }
@@ -222,6 +230,51 @@ pub fn call(port: u16, req: &Request) -> Result<Value, Fail> {
     Ok(v)
 }
 
+/// CLI-011: asks a running app to come forward; when none answers, starts it once and asks again
+/// until it answers or `limit` has passed since the start.
+pub fn open(send: &dyn Fn() -> Result<Value, Fail>, launch: &dyn Fn() -> Result<(), Fail>, limit: Duration) -> Result<Value, Fail> {
+    match send() {
+        Err(f) if f.code == "app_unreachable" => {}
+        answered => return answered,
+    }
+    launch()?;
+    let until = Instant::now() + limit;
+    loop {
+        match send() {
+            Ok(mut env) => {
+                if let Some(r) = env["result"].as_object_mut() {
+                    r.insert("started".into(), json!(true));
+                }
+                return Ok(env);
+            }
+            Err(f) if f.code != "app_unreachable" => return Err(f),
+            Err(f) if Instant::now() >= until => {
+                return Err(Fail { code: "app_unreachable", message: format!("Kolux was started but did not answer within {} s", limit.as_secs()), data: f.data });
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+/// Starts the app detached from this terminal: KOLUX_APP_EXECUTABLE, else the app program
+/// beside this one (both are built and installed side by side).
+/// ponytail: on Linux and macOS the app is only spawned, not put in its own session.
+fn launch_app() -> Result<(), Fail> {
+    let exe = match std::env::var_os("KOLUX_APP_EXECUTABLE").filter(|e| !e.is_empty()) {
+        Some(e) => PathBuf::from(e),
+        None => std::env::current_exe().map_err(|e| Fail::new("launch_failed", e.to_string()))?.with_file_name(if cfg!(windows) { "kolux-rs.exe" } else { "kolux-rs" }),
+    };
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: closing this terminal or Ctrl+C here leaves the app running.
+        cmd.creation_flags(0x0000_0008 | 0x0000_0200);
+    }
+    cmd.spawn().map(drop).map_err(|e| Fail::new("launch_failed", format!("could not start Kolux from {}: {e}", exe.display())))
+}
+
 fn request_id() -> String {
     let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     format!("{:x}-{:x}", std::process::id(), t)
@@ -239,6 +292,8 @@ fn text_of(command: &str, r: &Value) -> String {
             }
             line
         }
+        "app.open" if r["started"] == Value::Bool(true) => "Kolux started and is ready".into(),
+        "app.open" => "Kolux is ready; its window is in front".into(),
         _ => format!("removed {}", s("path")),
     }
 }
@@ -293,10 +348,13 @@ pub fn main(words: Vec<String>) -> i32 {
         Err(f) => return finish(Err(f)),
     };
     let run = || -> Result<(String, Value), Fail> {
-        let (port, token) = read_endpoint(&data_dir())?;
         let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();
-        let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(parsed.args.clone()) };
-        Ok((parsed.command.clone(), call(port, &req)?))
+        let send = || {
+            let (port, token) = read_endpoint(&data_dir())?;
+            call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(parsed.args.clone()) })
+        };
+        let env = if parsed.command == "app.open" { open(&send, &launch_app, OPEN_LIMIT)? } else { send()? };
+        Ok((parsed.command.clone(), env))
     };
     finish(run())
 }
@@ -310,6 +368,8 @@ pub struct Ctx<'a> {
     pub store: &'a Mutex<Store>,
     pub terminals: &'a Terminals,
     pub notify: &'a (dyn Fn(Value) + Sync),
+    /// Shows the window, restored and in front.
+    pub front: &'a (dyn Fn() -> Result<(), String> + Sync),
 }
 
 fn lower(p: &Path) -> String {
@@ -437,6 +497,10 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             (ctx.notify)(json!({ "kind": "removed", "path": w.path }));
             Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id }))
         }
+        "app.open" => {
+            (ctx.front)()?;
+            Ok(json!({ "ready": true, "started": false, "pid": std::process::id() }))
+        }
         other => Err(Fail::args(format!("unknown command {other}"))),
     }
 }
@@ -486,7 +550,12 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
             let notify = |v: Value| {
                 let _ = app.emit(EVENT, v);
             };
-            dispatch(&Ctx { git: &git, store: &store, terminals: &terminals, notify: &notify }, req)
+            let front = || -> Result<(), String> {
+                let w = app.get_webview_window("main").ok_or("the Kolux window is gone")?;
+                let _ = w.unminimize();
+                w.show().and_then(|_| w.set_focus()).map_err(|e| e.to_string())
+            };
+            dispatch(&Ctx { git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front }, req)
         });
     });
     Ok(())
@@ -522,8 +591,39 @@ mod tests {
         assert!(refused("worktree create --name x --no-parent --parent-worktree name:a").contains("disagree"));
         assert!(refused("worktree rm").contains("--worktree"));
         assert!(refused("worktree frobnicate").contains("unknown command"));
+        assert_eq!(parse(&words("open --json")).1.unwrap().unwrap().command, "app.open");
+        assert!(refused("open --name x").contains("unknown flag --name"));
         assert!(parse(&words("--help")).1.unwrap().is_none());
         assert!(parse(&words("help worktree")).1.unwrap().is_none());
+    }
+
+    #[test]
+    fn open_starts_the_app_only_when_none_answers_and_gives_up_after_the_limit() {
+        use std::cell::Cell;
+        let down = || Fail::new("app_unreachable", "down");
+        let up = || Ok(json!({ "success": true, "result": { "ready": true, "started": false } }));
+        let launches = Cell::new(0);
+        let launch = || {
+            launches.set(launches.get() + 1);
+            Ok(())
+        };
+        // Already running: brought forward, nothing started.
+        let v = open(&up, &launch, Duration::from_secs(5)).unwrap();
+        assert_eq!((v["result"]["started"].clone(), launches.get()), (json!(false), 0));
+        // Closed: started once, then answers on the third try.
+        let tries = Cell::new(0);
+        let late = || {
+            tries.set(tries.get() + 1);
+            if tries.get() < 3 { Err(down()) } else { up() }
+        };
+        let v = open(&late, &launch, Duration::from_secs(5)).unwrap();
+        assert_eq!((v["result"]["started"].clone(), launches.get(), tries.get()), (json!(true), 1, 3));
+        // Never answers: an error naming the limit, after one start.
+        let e = open(&|| Err(down()), &launch, Duration::ZERO).unwrap_err();
+        assert!(e.message.contains("did not answer within 0 s") && launches.get() == 2, "{}", e.message);
+        // Another failure is reported as it is, without starting anything.
+        let e = open(&|| Err(Fail::new("unauthorized", "stale")), &launch, Duration::ZERO).unwrap_err();
+        assert_eq!((e.code, launches.get()), ("unauthorized", 2));
     }
 
     #[test]
@@ -568,7 +668,7 @@ mod tests {
         let events = Mutex::new(Vec::<Value>::new());
         let notify = |v: Value| events.lock().unwrap().push(v);
         let terminals = Terminals::default();
-        let ctx = Ctx { git: &git_, store: &store, terminals: &terminals, notify: &notify };
+        let ctx = Ctx { git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
         let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args };
 
         let made = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "cli one", "setup": "skip" }))).unwrap();

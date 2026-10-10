@@ -285,6 +285,10 @@ T-095-b fills the Artifacts page by itself (SKILL-035). Every page a Claude Code
 the Artifact tool lands there within a couple of seconds, labelled with its project and session, and opens
 offline, scripts from the usual CDNs included. Publishing the same page again updates its one entry.
 
+T-097 adds `kolux-dev open` (CLI-011, APP-056): it starts Kolux, or brings its window to the front if it is
+already open or minimised, and returns once the app takes commands, so scripts can run `open` and then
+any other command. If the app never answers it gives up after 60 s with an error.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -322,6 +326,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-09 · [release] T-094-c · Quick Open ranks name-prefix, name, letters-in-name, folder, letters-in-path; 50 results, list capped at 200,000; the markdown and changed-file pickers rank and show paths the same way (DT-R20).
 - 2026-10-09 · [release] T-095-a · Artifacts are stored per page path under the app data folder with capped assets from the page's own folder; the viewer is a sandboxed frame on a kolux-artifact scheme limited to the entry's files; outside links go to the system browser (DT-R21).
 - 2026-10-09 · [release] T-095-b · Claude publishes are read from session transcripts only, from each file's end at start, with publishes over 60 s older than start ignored as replay; one entry per URL, newest wins; CDN scripts from Claude's own allow-list are stored offline; paths this machine cannot read are remote (DT-R22).
+- 2026-10-09 · [release] T-097 · kolux open asks a running app to come forward first and starts the app beside the command only when none answers, then waits up to 60 s; KOLUX_USER_DATA_PATH and KOLUX_APP_EXECUTABLE override where it looks and what it starts (DT-R23).
 - 2026-10-07 · Task size: tasks group neighbouring cards of one tier, theme and area, at most 4 P0
   cards, 5 P1, 6 P2 or 5 H cards per task. That gives 338 tasks; at 6 passes a day the plan runs
   about 57 days if every task takes one pass. A task that proves too big is split in place.
@@ -618,6 +623,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   note was extended: `type.ps1` needs the window activated first.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [release] T-097 · done: with the app minimised behind another window, kolux-dev open restored it and put it in front (four times out of four) and exited 0; with the app closed and a stale cli.json left behind, open started it detached and exited 0 once it answered (4.4 s), and a second open started no second copy; a missing app program failed at once and a silent one after 60 s, both exit 1 · evidence/T-097-*.png, T-097-live.txt
 - 2026-10-09 · [release] T-096 · BLOCKED, not started: the Shortcuts page is one of the ten Settings pages (SET-006 in T-054, not built), and a Settings screen already exists only on lane/accounts (T-043-a); a second Settings screen here would collide with it at merge. The pieces it builds on are on main already: the keybindings file reader (T-005, SET-011) and the keymap resolver with scopes in src/keys. Build T-096 after T-054 lands, and note its live test writes Txais's real ~/.kolux/keybindings.json (shared with the old app), so back it up and restore it byte for byte · no evidence
 - 2026-10-09 · [release] T-095-b · done: with a made-up Claude config folder, a publish written before start was ignored and a new one turned up within a poll as "Launch Plan · repo · session 7c371ba6" with its image and an offline copy of its jsdelivr script (the failed cdnjs one kept its address, a file outside the folder was not copied); a Bash look-alike, prose and a failed publish were ignored; publishing again kept one entry and refreshed the open viewer to v3; a replayed old publish in a resumed file was ignored; a subagent's publish was kept; a network-share page was listed Unavailable and a WSL path Remote · evidence/T-095-b-*.png, T-095-b-live.txt
 - 2026-10-09 · [release] T-095-a · done: two pages added through the real Windows file dialog listed newest first and opened in the viewer offline with their stored image; a file outside the page's folder was not copied and the frame could not fetch it or another entry's files; a link to example.com opened in Chrome while a link outside the entry did nothing; "sales quarterly" hid the other row and "sales quarterly chart" showed the no-match message; an 11 MB page gave an error toast and left the list alone; a network-share page was listed Unavailable without being read; removing the open entry closed the preview and deleted its stored folder · evidence/T-095-a-*.png, T-095-a-live.txt
