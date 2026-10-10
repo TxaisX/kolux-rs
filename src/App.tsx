@@ -10,7 +10,7 @@
 // focused pane, started in the workspace folder (T-010). A browser tab is a pane whose page is
 // a child web view laid over its body by the back end (T-012-a, src/browser/BrowserPane.tsx);
 // its shortcuts (bar, back, forward, reload) apply while a browser pane is focused (T-012-b).
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
@@ -30,7 +30,7 @@ import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel from "./projects/ProjectsPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
-import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
+import { DEFAULT_AGENT_KEY, defaultAgentId, offeredAgents } from "./launch/agents";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -41,7 +41,7 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -49,7 +49,7 @@ function tabName(p: Pane, titles: Record<number, string>): string {
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** SESS-051: a seat's start line as the back end builds it. */
-type StartLine = { args: string[]; typed: string | null };
+type StartLine = { args: string[]; typed: string | null; program: string | null; env: [string, string][] };
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
 /** `initial`: the settings read before the first frame (main.tsx), so the first screen is right at once. */
@@ -89,9 +89,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
   const classic = readLook(settings) === "classic";
+  // SET-027: everywhere but Settings, only agents that are switched on are offered.
+  const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
   const defaultId = defaultAgentId(settings);
   const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -116,7 +118,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
-    invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
+    const readAgents = () => void invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
+    readAgents();
+    // SET-027: Refresh on the Agents page looks again; the window takes the new list too.
+    const offAgents = listen("agents-changed", readAgents);
     // SET-001: the saved look is put on the window every time the settings are read.
     const readSettings = () =>
       void invoke<Record<string, unknown>>("get_settings")
@@ -127,7 +132,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         .catch(() => setSettings({}));
     readSettings();
     const off = listen("settings-saved", readSettings);
-    return () => void off.then((u) => u()).catch(() => {});
+    return () => {
+      void off.then((u) => u()).catch(() => {});
+      void offAgents.then((u) => u()).catch(() => {});
+    };
   }, []);
 
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
@@ -214,8 +222,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           void newTab("browser");
           break;
         case "tab.newAgent": {
-          const a = agents.find((x) => x.id === defaultId && x.installed);
-          if (!a) setNotice(`The default agent (${defaultId}) is not installed.`);
+          // SET-027: with no default (switched off), the first agent available
+          const a = defaultId ? agents.find((x) => x.id === defaultId && x.installed) : agents.find((x) => x.installed);
+          if (!a) setNotice(defaultId ? `The default agent (${defaultId}) is not installed or is switched off.` : "No agent is installed and switched on.");
           else void newTab(a);
           break;
         }
@@ -273,7 +282,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     }
     try {
       const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: [], prompt: "" }) : null;
-      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: a.program, args: line.args, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
+      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
       setPanes((ps) => [...ps, pane]);
       setFocused(key);
     } catch (err) {
@@ -356,7 +365,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         const title = s.title?.trim() || undefined;
         const { cwd, branch } = places[i];
         return a && line
-          ? { key: k, cwd, branch, agent: markFor(a.id), program: a.program, args: line.args, title, batch, typed: line.typed ?? undefined }
+          ? { key: k, cwd, branch, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
           : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
@@ -378,7 +387,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     try {
       const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra: [], prompt });
       const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: agent.program, args: line.args, typed: line.typed ?? undefined }]);
+      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, typed: line.typed ?? undefined }]);
       if (show) {
         setActiveDir(dir);
         setFocused(key);
@@ -644,6 +653,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     agent={p.agent}
                     program={p.program}
                     args={p.args}
+                    env={p.env}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onPty={(id) => {

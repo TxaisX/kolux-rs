@@ -361,3 +361,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-09 · T-057 · rules from the spec card; the busy rule (program panes live while running, shells while they have a child) and the wording were chosen for this task; Win32 `CreateToolhelp32Snapshot` / `Process32FirstW` from Microsoft's public docs and the windows-sys crate docs, `pgrep -P` from its manual page, portable-pty `Child::process_id` from its crate docs; no old Kolux source read
 
 > 2026-10-09 · T-055 · rules from the PROJ-070 card; `git worktree list --porcelain` (its `locked` line), `git worktree lock --reason` / `unlock` and `git status --porcelain` from the public Git documentation; the stamp and the field name were chosen for this task; no old Kolux source read
+
+> 2026-10-09 · T-036 · rules from the SET-027 card; Tauri events (`emit` / `listen` from @tauri-apps/api/event) from the public Tauri documentation; the field names were chosen for this task; no old Kolux source read

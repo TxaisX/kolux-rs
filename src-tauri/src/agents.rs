@@ -226,6 +226,10 @@ pub fn agent_list() -> Vec<AgentInfo> {
 pub struct StartLine {
     pub args: Vec<String>,
     pub typed: Option<String>,
+    /// SET-027: the user's command in place of the agent's program, when one is set.
+    pub program: Option<String>,
+    /// SET-027: the user's default environment variables for this agent.
+    pub env: Vec<(String, String)>,
 }
 
 /// How an agent takes its opening prompt (SESS-051).
@@ -263,10 +267,32 @@ const HERMES_LIMIT: usize = 24_000;
 /// arguments and the seat's model choice), then the opening prompt by the agent's own route.
 /// A blank prompt counts as none. Hermes's query and interface-mode arguments in `extra` give
 /// way to Kolux's, and a Hermes line over the limit is refused.
+#[cfg(test)]
 pub fn start_args(id: &str, extra: &[String], prompt: &str) -> Result<StartLine, String> {
+    line_for(id, None, true, extra, prompt)
+}
+
+/// SET-027: the built-in arguments that skip an agent's permission prompts; Manual leaves them out.
+/// ponytail: only the agents whose CLI already starts this way here; the others' switches wait
+/// with the no-prompt task in PLAN.md.
+fn prompt_skips(id: &str) -> &'static [&'static str] {
+    match id {
+        "claude" => &["--permission-mode", "auto"],
+        "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+        _ => &[],
+    }
+}
+
+/// `start_args` with the user's own default arguments (`own`, which replace the built-in ones and
+/// are left alone by the permission mode) and the mode: `yolo` false drops the prompt-skipping ones.
+fn line_for(id: &str, own: Option<&[String]>, yolo: bool, extra: &[String], prompt: &str) -> Result<StartLine, String> {
     let (_, _, _, fixed) = CATALOGUE.iter().find(|e| e.0 == id).ok_or_else(|| format!("Unknown agent {id}"))?;
     let prompt = prompt.trim();
-    let mut args: Vec<String> = fixed.iter().map(|a| a.to_string()).collect();
+    let skips = if yolo { &[][..] } else { prompt_skips(id) };
+    let mut args: Vec<String> = match own {
+        Some(own) => own.to_vec(),
+        None => fixed.iter().filter(|a| !skips.contains(a)).map(|a| a.to_string()).collect(),
+    };
     let mut typed = None;
     match route(id) {
         Route::Hermes => {
@@ -303,7 +329,56 @@ pub fn start_args(id: &str, extra: &[String], prompt: &str) -> Result<StartLine,
             }
         }
     }
-    Ok(StartLine { args, typed })
+    Ok(StartLine { args, typed, program: None, env: Vec::new() })
+}
+
+/// Settings fields of the Agents page (SET-027).
+pub const OPTIONS_FIELD: &str = "agentOptions";
+pub const PERMISSIONS_FIELD: &str = "agentPermissions";
+
+/// Splits typed arguments on spaces, keeping a "double-quoted part" together.
+pub fn split_args(typed: &str) -> Vec<String> {
+    let (mut out, mut cur, mut quoted, mut any) = (Vec::new(), String::new(), false, false);
+    for c in typed.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                any = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if any {
+                    out.push(std::mem::take(&mut cur));
+                    any = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                any = true;
+            }
+        }
+    }
+    if any {
+        out.push(cur);
+    }
+    out
+}
+
+/// `NAME=value` lines; blank lines and lines with no name are skipped.
+pub fn parse_env(typed: &str) -> Vec<(String, String)> {
+    typed.lines().filter_map(|l| l.trim().split_once('=')).filter(|(k, _)| !k.trim().is_empty()).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect()
+}
+
+/// The start line with the saved Agents page options applied: the permission mode (anything but
+/// `manual` is Yolo), and this agent's command, default arguments and environment.
+pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prompt: &str) -> Result<StartLine, String> {
+    let yolo = settings.get(PERMISSIONS_FIELD).and_then(|v| v.as_str()) != Some("manual");
+    let mine = settings.get(OPTIONS_FIELD).and_then(|o| o.get(id));
+    let field = |k: &str| mine.and_then(|m| m.get(k)).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty());
+    let own = field("args").map(split_args);
+    let mut line = line_for(id, own.as_deref(), yolo, extra, prompt)?;
+    line.program = field("command").map(str::to_string);
+    line.env = field("env").map(parse_env).unwrap_or_default();
+    Ok(line)
 }
 
 /// The agent credited with a running program, from its command line (SESS-051): letter case,
@@ -361,8 +436,9 @@ fn credited_name(stem: &str, packages: bool) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub fn agent_start_line(id: String, extra: Vec<String>, prompt: String) -> Result<StartLine, String> {
-    start_args(&id, &extra, &prompt)
+pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, id: String, extra: Vec<String>, prompt: String) -> Result<StartLine, String> {
+    let settings = store.lock().map_err(|e| e.to_string())?.settings();
+    start_line(&settings, &id, &extra, &prompt)
 }
 
 /// ACCT-013 "Open install page": the agent's own install page in the default browser. Only these
@@ -410,6 +486,30 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn set027_options_and_permission_mode_shape_the_start_line() {
+        let none = serde_json::json!({});
+        let yolo = start_line(&none, "claude", &[], "go").unwrap();
+        assert_eq!(yolo.args, s(&["--permission-mode", "auto", "go"]));
+        assert_eq!((yolo.program, yolo.env.len()), (None, 0));
+        // Manual drops the prompt-skipping arguments and keeps the rest
+        let manual = serde_json::json!({ "agentPermissions": "manual" });
+        assert_eq!(start_line(&manual, "claude", &[], "go").unwrap().args, s(&["go"]));
+        assert_eq!(start_line(&manual, "codex", &[], "").unwrap().args, Vec::<String>::new());
+        assert_eq!(start_line(&manual, "kiro", &[], "").unwrap().args, s(&["chat", "--tui"]));
+        // the user's own arguments replace the built-in ones, whatever the mode
+        let own = serde_json::json!({ "agentPermissions": "manual", "agentOptions": { "claude": { "args": "--model opus --append-system-prompt \"be brief\"", "command": " C:/tools/claude.exe ", "env": "A=1\n\n=x\nB = two words\nnot a pair" } } });
+        let line = start_line(&own, "claude", &s(&["--x"]), "go").unwrap();
+        assert_eq!(line.args, s(&["--model", "opus", "--append-system-prompt", "be brief", "--x", "go"]));
+        assert_eq!(line.program.as_deref(), Some("C:/tools/claude.exe"));
+        assert_eq!(line.env, vec![("A".to_string(), "1".to_string()), ("B".to_string(), "two words".to_string())]);
+        // a blank override counts as none
+        let blank = serde_json::json!({ "agentOptions": { "codex": { "args": "  ", "command": "" } } });
+        let codex = start_line(&blank, "codex", &[], "").unwrap();
+        assert_eq!((codex.args, codex.program), (s(&["--dangerously-bypass-approvals-and-sandbox"]), None));
+        assert_eq!(split_args(r#"a "" b"#), s(&["a", "", "b"]));
     }
 
     #[test]

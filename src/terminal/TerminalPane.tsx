@@ -31,6 +31,8 @@ type Props = {
   /** The program to run instead of the shell (an agent's command), with its arguments. */
   program?: string | null;
   args?: string[];
+  /** SET-027: the user's environment variables for this agent. */
+  env?: [string, string][];
   onRunning?: (running: boolean) => void;
   /** TERM-045: the session id once it runs, so the window can ask whether closing would stop a program. */
   onPty?: (id: number) => void;
@@ -58,7 +60,7 @@ type Props = {
   card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
@@ -152,7 +154,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args });
+        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;

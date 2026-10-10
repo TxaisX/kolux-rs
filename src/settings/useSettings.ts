@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-/** The saved settings for a Settings page, and `save(patch)`, which merges into what is on disk. */
+/** The saved settings for a Settings page, and `save(patch)`, which merges into what is on disk
+ * and settles once it is written. */
 export function useSettings() {
   const [settings, setSettings] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -12,7 +13,7 @@ export function useSettings() {
   }, []);
   const save = (patch: Record<string, unknown>) => {
     setError(null);
-    invoke<Record<string, unknown>>("get_settings")
+    return invoke<Record<string, unknown>>("get_settings")
       .then((s) => {
         const next = { ...s, ...patch };
         setSettings(next);

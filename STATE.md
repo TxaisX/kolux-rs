@@ -316,6 +316,15 @@ shows it as it is now. Ctrl+Shift+Backspace asks to delete the workspace shown. 
 worktrees can switch the question off for clean workspaces. After a delete the window moves to
 the workspace in the same project used last, and the list keeps its scroll position.
 
+[accounts] Settings > Agents is built (T-036). It lists the agents found on this PC, each with an
+on/off switch; switched-off agents leave the New tab and New session menus. The default agent
+can be set to Auto (the first one available); switching the default off leaves Auto, and a
+saved default that is not installed right now keeps its name with "(saved, not found right now)".
+Agent Permissions picks Yolo (agents skip their permission prompts where they have a switch for
+it: Claude Code in its automatic mode, Codex without approvals) or Manual. Under "How it starts"
+each agent shows the exact line it starts with and takes its own command, default arguments and
+environment variables; Refresh looks for agents again.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -761,7 +770,16 @@ recorded default until told otherwise; nothing here blocks a pass.
   so reduced motion has nothing to turn off. The move-to-sibling only picks a sibling that still
   has panes, so the window never lands on an empty workspace.
 
+- 2026-10-09 · [accounts] T-036 · Settings fields: `disabledAgents` (ids switched off),
+  `agentOptions` ({id: {command, args, env}}, args split on spaces with double quotes keeping a
+  part together, env one NAME=value per line), `agentPermissions` ("manual", anything else is
+  Yolo), `defaultAgent` "" now means no default (Auto). An agent's own default arguments replace
+  the built-in ones and the permission mode leaves them alone. Kolux's account variable wins over
+  a user variable of the same name. No new no-prompt switch was added for other agents (that
+  stays with T-056). Reading these fields from an old Kolux profile waits for the compat import task.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-09 · [accounts] T-036 · done: `agents.rs` (`StartLine` gains `program` and `env`; `start_line` applies the saved permission mode and the agent's command, arguments and environment; `split_args`, `parse_env`; `agent_start_line` reads the settings), `terminal.rs` (`terminal_spawn` takes `env`), App and TerminalPane pass them through, `src/launch/agents.ts` (`disabledAgents`, `offeredAgents`, `switchAgent`; no default means the first agent), new `src/settings/AgentsPage.tsx`; 1 Rust test (84 total), 1 front-end test (120 total); live: the page listed Claude Code and Codex, Claude given powershell.exe with `-NoLogo -NoExit -Command "echo $env:KOLUX_T036"` and KOLUX_T036=hello opened from New tab and printed hello, Manual dropped both agents' prompt-skipping flags, Claude switched off left Auto selected, no chip and a New tab menu without Claude, a saved default of aider showed "Aider (saved, not found right now)" through Refresh; build / clippy / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-036.txt, evidence/T-036-*.png
 - 2026-10-09 · [accounts] T-055 · done: `git.rs` (worktree `locked` read from `git worktree list --porcelain`, `changes` keeps the porcelain lines' leading space), `projects.rs` (`RemoveCheck`, `remove_check`, `removal_refused`: stamp, nested, locked never forced, changes need force; new `workspace_remove_check`, `workspace_remove` checks again before deleting), `src/projects/deleting.ts` (question rules), ProjectsPanel question lists up to five changes with a force box and shows a refusal in place, `workspace.delete` shortcut wired, `src/settings/GitPage.tsx`, `activeAfterRemove` picks the sibling used last; 1 Rust test (83 total), 4 front-end tests (119 total); live: lima with a changed and an untracked file listed both, Remove without the box refused and kept the folder, a file added while asking refused with the stamp message and listed three, forced delete removed it and moved to kilo with the list still at scroll 200, a locked workspace showed its reason with Remove disabled and a direct forced call was refused, the question switched off in Settings deleted clean golf from Ctrl+Shift+Backspace at once while dirty hotel still asked; build / clippy / cargo-deny / tsc / JS licence check / plan-check green; no orphan process · evidence/T-055.txt, evidence/T-055-*.png
 - 2026-10-09 · [accounts] T-057 · done: `src-tauri/src/procs.rs` (has a process started a child), `terminal_busy` command and `Terminals::busy` (program panes live while running, shells while they have a child, ended or failed reads idle), each session keeps its process id, `src/terminal/closing.ts` + `CloseAsk.tsx` (the question naming the tab), every close in App goes through `closeTab`, the pane's own Close defers to the window, Settings > Terminal & sessions gets the switch; 1 Rust test (82 total), 3 front-end tests (115 total); live: a background tab running ping closed from its x asks "Close “Terminal 1”?" with Close tab focused, Escape keeps it, Close tab removes it and ping is gone, an idle shell closes with Ctrl+W without a question, Ctrl+W and the pane header's close button on a busy tab ask too, with the switch off a busy tab closes at once; build / clippy / 82 Rust tests / 115 front-end tests / tsc / cargo-deny / JS licence check / plan-check green; no orphan process · evidence/T-057.txt, evidence/T-057-*.png
 - 2026-10-09 · [accounts] T-056 · NOT BUILT, left unticked, needs Txais: the permission check that guards this build session refused the edit that gives more agents their no-prompt start (Gemini CLI `--yolo`, Aider `--yes-always`, Goose `GOOSE_MODE` auto) as an unsafe-agent change, so nothing was changed. Claude Code (`--permission-mode auto`) and Codex (`--dangerously-bypass-approvals-and-sandbox`) already start that way from the agent catalogue. The rest of the card (the user's default arguments replacing the built-in ones, Kilo Code's refused argument dropped) waits with it. Txais decides: allow it for the build agent, or build it in a session of his own · no evidence
