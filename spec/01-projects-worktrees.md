@@ -422,6 +422,7 @@ Acceptance:
   - [ ] Add several worktrees at once → a single notice appears.
 Compat: —
 Source: D-01-041
+Amended 2026-10-09 (DT-O2): new worktrees are noticed by a 5 s poll of Git's worktree list while the window is visible, in both layouts, rather than a folder watcher.
 
 ### PROJ-042 · Show or hide individual worktrees, with defaults for new projects
 Tier: P1 · Pushed: 2 · State at 0.15.0: live-unverified

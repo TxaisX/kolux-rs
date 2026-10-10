@@ -20,8 +20,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { nestRows, openedWorktree, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
-import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { nestRows, openedWorktree, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
+import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
 
@@ -75,7 +75,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
-  const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
+  const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones the sidebar shows
+  const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
+  const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
+  const [review, setReview] = useState<string | null>(null); // project id whose new-worktree review is open
+  const [hiddenPage, setHiddenPage] = useState(0);
   const [place, setPlace] = useState<PlaceInfo>({ dir: "", flat: false, used: [], fromEnv: false });
   const [rootDraft, setRootDraft] = useState("");
   const [flatDraft, setFlatDraft] = useState(false);
@@ -130,15 +134,19 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
 
   const refreshWorktrees = useCallback(async (list: Project[]) => {
     const next: Record<string, Worktree[]> = {};
+    const unseen: Record<string, Worktree[]> = {};
     for (const p of list) {
       try {
         next[p.id] = await invoke<Worktree[]>("workspace_list", { projectId: p.id });
+        unseen[p.id] = await invoke<Worktree[]>("workspace_unseen", { projectId: p.id });
       } catch (err) {
         next[p.id] = [];
         fail(err);
       }
     }
-    setWorktrees(next);
+    setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
+    setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
+    setFresh(unseen);
     const owner: Record<string, string> = {};
     for (const p of list) for (const w of next[p.id] ?? []) owner[w.path] = p.id;
     const key = JSON.stringify([list, owner]);
@@ -146,7 +154,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     indexed.current = key;
   }, []);
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
-  // ponytail: a 5 s poll while the window is visible; watching the folders is PROJ-041 (T-107).
+  // PROJ-041: the same poll notices worktrees made outside Kolux, in both layouts (DT-O2).
   useEffect(() => {
     const t = window.setInterval(() => document.visibilityState === "visible" && refreshWorktrees(projects).catch(fail), 5000);
     return () => window.clearInterval(t);
@@ -364,6 +372,59 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     }
   };
 
+  // PROJ-042: hide or show one worktree; the poll shows the change, this just does not wait for it.
+  const hide = async (w: Worktree, hidden: boolean) => {
+    try {
+      await invoke("workspace_hide", { path: w.path, hidden });
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const doneReview = async (p: Project) => {
+    try {
+      await invoke("workspace_seen", { projectId: p.id });
+      setReview(null);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  // ponytail: the global and per-source visibility defaults (and the link to them) are T-107-e / T-108.
+  const PAGE = 10;
+  const hiddenList = (p: Project) => {
+    const all = hiddenWts[p.id] ?? [];
+    const pages = Math.max(1, Math.ceil(all.length / PAGE));
+    const at = Math.min(hiddenPage, pages - 1);
+    return (
+      <>
+        <label>Hidden worktrees ({all.length})</label>
+        {all.length === 0 && <div className="preview">None hidden.</div>}
+        {all.slice(at * PAGE, at * PAGE + PAGE).map((w) => (
+          <div className="vis-row" key={w.path}>
+            <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
+            <button className="btn" onClick={() => hide(w, false)}>
+              Show
+            </button>
+          </div>
+        ))}
+        {pages > 1 && (
+          <div className="btn-row">
+            <button className="btn" disabled={at === 0} onClick={() => setHiddenPage(at - 1)}>
+              Previous
+            </button>
+            <span className="preview">
+              page {at + 1} of {pages}
+            </span>
+            <button className="btn" disabled={at >= pages - 1} onClick={() => setHiddenPage(at + 1)}>
+              Next
+            </button>
+          </div>
+        )}
+      </>
+    );
+  };
+
   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
@@ -415,6 +476,18 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               }}
             >
               <Bell size={11} />
+            </button>
+          )}
+          {!asking && !w.isMain && (
+            <button
+              className="ib"
+              title="Hide this worktree from the sidebar (project settings list it to show again)"
+              onClick={(e) => {
+                e.stopPropagation();
+                hide(w, true);
+              }}
+            >
+              <EyeOff size={11} />
             </button>
           )}
           {!asking && !w.isMain && (
@@ -612,6 +685,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                     <div className="sb-form" data-project-settings={p.id}>
                       <label>Workspaces folder for {p.name}</label>
                       <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+                      {hiddenList(p)}
                       <label>Base ref</label>
                       <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
                       <div className="btn-row">
@@ -620,6 +694,29 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                         </button>
                         <button className="btn" onClick={() => setSettingsFor(null)}>
                           Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
+                    <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
+                      {fresh[p.id].length} new worktree{fresh[p.id].length === 1 ? "" : "s"}
+                    </button>
+                  )}
+                  {review === p.id && (
+                    <div className="sb-form" data-review={p.id}>
+                      <label>New worktrees in {p.name}</label>
+                      {(fresh[p.id] ?? []).map((w) => (
+                        <div className="vis-row" key={w.path}>
+                          <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
+                          <button className="btn" onClick={() => hide(w, !w.hidden)}>
+                            {w.hidden ? "Show" : "Hide"}
+                          </button>
+                        </div>
+                      ))}
+                      <div className="btn-row">
+                        <button className="btn" onClick={() => doneReview(p)}>
+                          Done
                         </button>
                       </div>
                     </div>

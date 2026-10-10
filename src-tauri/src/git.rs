@@ -26,6 +26,8 @@ pub struct Worktree {
     pub name: Option<String>,
     /// The workspace it was made from (PROJ-047), by path; the sidebar nests it there.
     pub parent: Option<String>,
+    /// The user hid it from the sidebar (PROJ-042); the main checkout never is.
+    pub hidden: bool,
 }
 
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
@@ -221,7 +223,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, hidden: false });
         }
     }
     out

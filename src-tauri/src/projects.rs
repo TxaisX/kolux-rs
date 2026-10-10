@@ -70,6 +70,10 @@ const PARENTS_KEY: &str = "workspaceParents";
 /// How each workspace came to be (CLI-018): who made it, its parent worktree, the calling folder,
 /// an issue number and a comment, keyed like the names. Lineage views (PROJ-047) read it.
 const ORIGINS_KEY: &str = "workspaceOrigins";
+/// Per project id, the worktrees (as `name_key` writes them) already shown to the user (PROJ-041).
+const SEEN_KEY: &str = "worktreesSeen";
+/// Worktrees the user hid from the sidebar (PROJ-042), keyed like the names.
+const HIDDEN_KEY: &str = "worktreesHidden";
 const WORKSPACES_DIR_SETTING: &str = "workspacesDir";
 /// "nested" (the default) or "flat" (PROJ-025).
 const LAYOUT_SETTING: &str = "workspacesLayout";
@@ -143,6 +147,69 @@ pub fn set_origin(store: &Store, path: &str, origin: Option<&serde_json::Value>)
     store.set(ORIGINS_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
+fn load_map(store: &Store, key: &str) -> serde_json::Map<String, serde_json::Value> {
+    store.get(key).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// PROJ-042: hides the worktree at `path` from the sidebar, or shows it again.
+pub fn set_hidden(store: &Store, path: &str, hidden: bool) -> Result<(), String> {
+    let mut all = load_map(store, HIDDEN_KEY);
+    if hidden {
+        all.insert(name_key(path), true.into());
+    } else {
+        all.remove(&name_key(path));
+    }
+    store.set(HIDDEN_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
+}
+
+fn seen_of(store: &Store, project: &Project) -> Option<std::collections::HashSet<String>> {
+    load_map(store, SEEN_KEY).get(&project.id).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+}
+
+fn save_seen<'a>(store: &Store, project: &Project, keys: impl IntoIterator<Item = &'a String>) -> Result<(), String> {
+    let mut all = load_map(store, SEEN_KEY);
+    all.insert(project.id.clone(), keys.into_iter().cloned().collect::<Vec<_>>().into());
+    store.set(SEEN_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
+}
+
+/// A worktree Kolux itself just made is never offered as new (PROJ-041).
+pub fn note_seen(store: &Store, project: &Project, path: &str) -> Result<(), String> {
+    match seen_of(store, project) {
+        Some(mut seen) => {
+            seen.insert(name_key(path));
+            save_seen(store, project, &seen)
+        }
+        None => Ok(()), // the first scan takes everything there as seen
+    }
+}
+
+/// PROJ-041: the worktrees that appeared since the user last looked, made with plain Git or another
+/// tool (scratch worktrees are already left out by `list_workspaces`). The first scan of a project
+/// takes what is there as seen, so adding a project never floods the notice. One list per scan, so a
+/// burst of new worktrees is one notice. Worktrees that went away are forgotten, so the same folder
+/// made again later counts as new.
+/// ponytail: the sidebar polls this every 5 s instead of watching folders (DT-O2); a watcher can feed
+/// the same call if 5 s ever feels slow.
+pub fn unseen(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
+    let list = list_workspaces(git, store, project)?;
+    let keys: Vec<String> = list.iter().map(|w| name_key(&w.path)).collect();
+    let Some(seen) = seen_of(store, project) else {
+        save_seen(store, project, &keys)?;
+        return Ok(Vec::new());
+    };
+    let kept: Vec<&String> = keys.iter().filter(|k| seen.contains(*k)).collect();
+    if kept.len() != seen.len() {
+        save_seen(store, project, kept)?;
+    }
+    Ok(list.into_iter().filter(|w| !w.is_main && !seen.contains(&name_key(&w.path))).collect())
+}
+
+/// The review is closed: everything listed now counts as seen.
+pub fn mark_all_seen(git: &Git, store: &Store, project: &Project) -> Result<(), String> {
+    let keys: Vec<String> = git.worktrees(Path::new(&project.path))?.iter().map(|w| name_key(&w.path)).collect();
+    save_seen(store, project, &keys)
+}
+
 /// How the workspace at `path` came to be, when Kolux recorded it.
 pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
     load_origins(store).remove(&name_key(path))
@@ -154,6 +221,7 @@ pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let hidden = load_map(store, HIDDEN_KEY);
     let all = git.worktrees(Path::new(&project.path))?;
     // The scratch folders sit in the main checkout even when the project is a linked worktree (PROJ-006).
     let main = all.iter().find(|w| w.is_main).map(|w| PathBuf::from(&w.path)).unwrap_or_else(|| PathBuf::from(&project.path));
@@ -163,6 +231,7 @@ pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Ve
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
+            w.hidden = !w.is_main && hidden.contains_key(&name_key(&w.path));
             w
         })
         .collect())
@@ -378,7 +447,9 @@ pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects:
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let name = fresh_name(git, store, projects, seed);
     remember_retired(store, &name)?;
-    create_workspace(git, place, project, &name, base).map(|c| c.worktree)
+    let made = create_workspace(git, place, project, &name, base)?.worktree;
+    note_seen(store, project, &made.path)?;
+    Ok(made)
 }
 
 /// GIT-067: uncommitted work (submodule work included) stops the removal unless `force`; the
@@ -456,6 +527,7 @@ pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project
     let made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
     let store = store.lock().map_err(|e| e.to_string())?;
     set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
+    note_seen(&store, &project, &made.worktree.path)?;
     Ok(made)
 }
 
@@ -480,6 +552,27 @@ pub fn project_list(store: StoreState<'_>) -> Result<Vec<Project>, String> {
 pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> Result<Project, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     add_project(&git, &store, Path::new(path.trim()))
+}
+
+/// PROJ-041: the new worktrees made outside Kolux, for the sidebar's count line.
+#[tauri::command]
+pub fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let project = find_project(&store, &project_id)?;
+    unseen(&git, &store, &project)
+}
+
+#[tauri::command]
+pub fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let project = find_project(&store, &project_id)?;
+    mark_all_seen(&git, &store, &project)
+}
+
+/// PROJ-042: hide a worktree from the sidebar, or show it again.
+#[tauri::command]
+pub fn workspace_hide(store: StoreState<'_>, path: String, hidden: bool) -> Result<(), String> {
+    set_hidden(&*store.lock().map_err(|e| e.to_string())?, &path, hidden)
 }
 
 #[tauri::command]
@@ -523,6 +616,7 @@ pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &st
         (project, place)
     };
     let mut made = create_workspace(git, &place, &project, name, base)?;
+    note_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &made.worktree.path)?;
     let typed = name.trim();
     if typed != made.worktree.branch.as_deref().unwrap_or_default() {
         let store = store.lock().map_err(|e| e.to_string())?;
@@ -828,6 +922,47 @@ mod tests {
         assert_eq!(rev(&repo, "feat/x"), tip, "the branch stays when the workspace goes");
         drop(store);
         for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn worktrees_made_outside_kolux_are_noticed_once_and_can_be_hidden() {
+        let git = Git::detect().unwrap();
+        let profile = temp("unseen");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("unseen-r");
+        let side = temp("unseen-side");
+        let root = temp("unseen-root");
+        git_in(&repo, &["worktree", "add", "-q", "-b", "before", &side.join("before").to_string_lossy()]);
+        let project = add_project(&git, &store, &repo).unwrap();
+        assert!(unseen(&git, &store, &project).unwrap().is_empty(), "the first scan takes what is there as seen");
+        // Three made at once with plain Git: one list, so one notice.
+        for n in ["a", "b", "c"] {
+            git_in(&repo, &["worktree", "add", "-q", "-b", n, &side.join(n).to_string_lossy()]);
+        }
+        // One Kolux makes itself is not offered.
+        create_fresh_workspace(&git, &store, &nested(&root), &load_projects(&store), &project, None).unwrap();
+        let fresh: Vec<_> = unseen(&git, &store, &project).unwrap().into_iter().map(|w| w.branch.unwrap()).collect();
+        assert_eq!(fresh.len(), 3, "{fresh:?}");
+        assert!(fresh.iter().all(|b| ["a", "b", "c"].contains(&b.as_str())));
+        mark_all_seen(&git, &store, &project).unwrap();
+        assert!(unseen(&git, &store, &project).unwrap().is_empty());
+        // Gone and made again: new again.
+        git_in(&repo, &["worktree", "remove", &side.join("a").to_string_lossy()]);
+        assert!(unseen(&git, &store, &project).unwrap().is_empty());
+        git_in(&repo, &["worktree", "add", "-q", &side.join("a").to_string_lossy(), "a"]);
+        assert_eq!(unseen(&git, &store, &project).unwrap().len(), 1);
+        // PROJ-042: hide one, show it again; the main checkout is never hidden.
+        let b = side.join("b").to_string_lossy().to_string();
+        let hidden = |store: &Store| list_workspaces(&git, store, &project).unwrap().into_iter().filter(|w| w.hidden).map(|w| w.branch.unwrap()).collect::<Vec<_>>();
+        set_hidden(&store, &b, true).unwrap();
+        set_hidden(&store, &project.path, true).unwrap();
+        assert_eq!(hidden(&store), vec!["b".to_string()]);
+        set_hidden(&store, &b, false).unwrap();
+        assert!(hidden(&store).is_empty());
+        drop(store);
+        for d in [profile, repo, side, root] {
             let _ = fs::remove_dir_all(d);
         }
     }

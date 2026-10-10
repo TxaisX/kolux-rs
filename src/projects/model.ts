@@ -15,7 +15,18 @@ export function placeFieldAction(key: string, composing: boolean): "save" | "rev
   return key === "Enter" ? "save" : key === "Escape" ? "revert" : null;
 }
 /** `parent` is the workspace it was made from (PROJ-047); gone or main means it sits at the top level. */
-export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null };
+export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null; hidden?: boolean };
+
+/** PROJ-042: a worktree's folder as the visibility lists show it, relative to the project's folder. */
+export function relPath(from: string, to: string): string {
+  const parts = (p: string) => p.split(/[\\/]+/).filter(Boolean);
+  const a = parts(from);
+  const b = parts(to);
+  let i = 0;
+  while (i < a.length && i < b.length && a[i].toLowerCase() === b[i].toLowerCase()) i++;
+  if (i === 0) return to;
+  return [...a.slice(i).map(() => ".."), ...b.slice(i)].join("/") || ".";
+}
 
 /** The last folder name of a path, whichever slash style it uses. */
 export function folderName(path: string): string {
