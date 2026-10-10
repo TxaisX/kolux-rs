@@ -18,6 +18,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
+import SettingsPage from "./settings/SettingsPage";
+import SignInNotice from "./settings/SignInNotice";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -86,6 +88,7 @@ function Window() {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>("terminals");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [scmOpen, setScmOpen] = useState(false);
@@ -145,7 +148,10 @@ function Window() {
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
     invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
-    invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    const readSettings = () => void invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    readSettings();
+    const off = listen("settings-saved", readSettings);
+    return () => void off.then((u) => u()).catch(() => {});
   }, []);
 
   const saveSetting = (key: string, value: unknown) => {
@@ -191,6 +197,9 @@ function Window() {
           break;
         case "browser.reload":
           void invoke("browser_go", { id: focused, what: "reload" });
+          break;
+        case "app.settings":
+          setSettingsOpen(true);
           break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
@@ -563,8 +572,9 @@ function Window() {
   });
   return (
     <div className="app">
-      <TopBar screen={screen} onScreen={setScreen} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
+      <TopBar screen={screen} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
       <div className="body">
+        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
         {terminals && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
@@ -592,6 +602,7 @@ function Window() {
           />
         )}
         <div className="content">
+          <SignInNotice />
           {terminals && (
             <>
               <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />
@@ -661,7 +672,7 @@ function Window() {
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || settingsOpen || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
                   <ChooserPane
                     key={p.key}

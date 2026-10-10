@@ -365,6 +365,28 @@ pub fn agent_start_line(id: String, extra: Vec<String>, prompt: String) -> Resul
     start_args(&id, &extra, &prompt)
 }
 
+/// ACCT-013 "Open install page": the agent's own install page in the default browser. Only these
+/// fixed addresses are ever opened.
+pub fn install_page(agent: &str) -> Option<&'static str> {
+    match agent {
+        "claude" => Some("https://code.claude.com/docs/en/setup"),
+        "codex" => Some("https://developers.openai.com/codex/cli"),
+        _ => None,
+    }
+}
+
+#[tauri::command]
+pub fn open_install_page(agent: String) -> Result<(), String> {
+    let url = install_page(&agent).ok_or_else(|| format!("No install page is known for {agent}."))?;
+    #[cfg(windows)]
+    let opener = "explorer.exe";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

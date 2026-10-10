@@ -1,0 +1,55 @@
+// ACCT-012: a lapsed sign-in is flagged in the main window, outside Settings, with Sign in again.
+// Only for the active managed Claude account once it is stale (and only while Kolux, not Claude
+// Code, looks after sign-ins, ACCT-006; the 1-year key, when connected, is what panes use), or a
+// managed Codex account that hit a sign-in error. Codex's system-default login never raises it.
+// Nothing shows until both account lists have loaded, so it never flickers at startup.
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { AccountsView } from "./ClaudeAccounts";
+import type { CodexView } from "./CodexCard";
+
+export type Lapsed = { agent: "claude" | "codex"; id: string; label: string; busy: boolean };
+
+export function lapsed(claude: AccountsView | null, codex: CodexView | null): Lapsed | null {
+  if (!claude || !codex) return null;
+  if (!claude.upkeepLeftToClaude && !claude.keyMode) {
+    const a = claude.accounts.find((a) => a.id === claude.active && a.stale);
+    if (a) return { agent: "claude", id: a.id, label: `Claude account ${a.email ?? a.id}`, busy: claude.signingIn !== null };
+  }
+  const c = codex.accounts.find((a) => a.signInError);
+  if (c) return { agent: "codex", id: c.id, label: `Codex account ${c.email ?? c.id}`, busy: codex.signingIn !== null };
+  return null;
+}
+
+export function SignInNoticeView({ lapsed: l, onSignIn }: { lapsed: Lapsed | null; onSignIn: (l: Lapsed) => void }) {
+  if (!l) return null;
+  return (
+    <div className="notice signin-notice" role="status" data-agent={l.agent}>
+      <span>{l.label} is no longer signed in.</span>
+      <button className="btn" disabled={l.busy} onClick={() => onSignIn(l)}>
+        {l.busy ? "Signing in…" : "Sign in again"}
+      </button>
+    </div>
+  );
+}
+
+export default function SignInNotice() {
+  const [claude, setClaude] = useState<AccountsView | null>(null);
+  const [codex, setCodex] = useState<CodexView | null>(null);
+  useEffect(() => {
+    const readClaude = () => void invoke<AccountsView>("claude_accounts").then(setClaude).catch(() => {});
+    const readCodex = () => void invoke<CodexView>("codex_accounts").then(setCodex).catch(() => {});
+    readClaude();
+    readCodex();
+    // Asks Claude Code once at start whether the active account is still signed in.
+    invoke("claude_account_check").catch(() => {});
+    const offs = [listen("claude-accounts", readClaude), listen("codex-accounts", readCodex), listen("settings-saved", readClaude)];
+    return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
+  }, []);
+  const signIn = (l: Lapsed) => {
+    const call = l.agent === "claude" ? invoke("claude_account_sign_in", { id: l.id }) : invoke("codex_account_sign_in", { device: false, again: l.id });
+    call.catch(() => {});
+  };
+  return <SignInNoticeView lapsed={lapsed(claude, codex)} onSignIn={signIn} />;
+}

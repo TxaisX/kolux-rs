@@ -1,7 +1,8 @@
 # Captures the running Kolux RS window into a PNG by PrintWindow (the window draws itself into
 # the bitmap, so nothing else on the screen is caught). Optional: -Grow <px> widens and heightens
 # the window first, to prove resizing. Usage: .\shot.ps1 -Out C:\path\T-00x.png
-param([Parameter(Mandatory)][string]$Out, [int]$Grow = 0)
+# -ProcessId <pid> picks one app by its process (two lanes may run at once); default: by title.
+param([Parameter(Mandatory)][string]$Out, [int]$Grow = 0, [int]$ProcessId = 0)
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
 using System;
@@ -13,7 +14,8 @@ public static class Shot {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 }
 "@
-$p = Get-Process | Where-Object { $_.MainWindowTitle -like "Kolux RS*" } | Select-Object -First 1
+if ($ProcessId -ne 0) { $p = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue }
+else { $p = Get-Process | Where-Object { $_.MainWindowTitle -like "Kolux RS*" } | Select-Object -First 1 }
 if (-not $p) { Write-Error "no Kolux RS window"; exit 1 }
 $h = $p.MainWindowHandle
 if ($Grow -ne 0) {

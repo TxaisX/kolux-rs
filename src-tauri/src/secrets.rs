@@ -1,0 +1,476 @@
+//! Secrets sealed on disk (ACCT-009). Every key and sign-in Kolux keeps is sealed with the
+//! operating system's own user-bound protection before it touches a file: Windows DPAPI
+//! (`CryptProtectData`, current-user scope) through `windows-sys`. Elsewhere there is no real
+//! keyring in this build, so values are only scrambled and the log says so once.
+//!
+//! Two places hold secrets:
+//! - the settings file, in the fields named by [`SECRET_SETTINGS`] (the Claude 1-year key and
+//!   the xAI key); the front end never receives them (ACCT-011, T-154) and never writes them;
+//!   they change only through [`secret_set`] / [`secret_clear`];
+//! - the `vault` folder in the profile, one sealed file per managed sign-in (managed Claude
+//!   credentials, Codex account details; written by T-043 through [`write_file`]).
+//!
+//! A value or file that is still in the clear (older release, or sealing unavailable at the
+//! time) always loads, and the one-off pass after the first window seals it. Nothing is ever
+//! lost: a value that cannot be sealed stays as it was, a sealed file that cannot be opened is
+//! moved aside, not deleted.
+
+use crate::state::Store;
+use base64::Engine;
+use serde_json::Value;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+/// Settings fields that hold secrets: the Claude 1-year key (ACCT-004) and the xAI key (ACCT-008).
+pub const SECRET_SETTINGS: &[&str] = &["claudeOauthToken", "xaiApiKey"];
+/// Marks a sealed value; the part after it is base64 of the sealed bytes.
+const PREFIX: &str = "kolux-sealed:v1:";
+/// A sealed value made where only scrambling was available.
+const PREFIX_SCRAMBLED: &str = "kolux-scrambled:v1:";
+/// The folder in the profile holding one sealed file per managed sign-in.
+pub const VAULT: &str = "vault";
+/// State key: the one-off sealing pass has run (carried over, COMPAT ACCT-009).
+pub const PASS_DONE: &str = "secretsSealingPassDone";
+/// State key: which protection sealed values last time, so the log notes a change once.
+const BACKEND_KEY: &str = "secretsBackend";
+
+/// Which protection this computer gives secrets.
+pub fn backend() -> &'static str {
+    if cfg!(windows) {
+        "dpapi"
+    } else {
+        "scrambled"
+    }
+}
+
+pub fn is_sealed(v: &str) -> bool {
+    v.starts_with(PREFIX) || v.starts_with(PREFIX_SCRAMBLED)
+}
+
+/// Seals `plain`. An already sealed value is returned as it is.
+pub fn seal(plain: &str) -> Result<String, String> {
+    if is_sealed(plain) {
+        return Ok(plain.to_string());
+    }
+    let b64 = base64::engine::general_purpose::STANDARD;
+    #[cfg(windows)]
+    {
+        Ok(format!("{PREFIX}{}", b64.encode(dpapi::protect(plain.as_bytes())?)))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(format!("{PREFIX_SCRAMBLED}{}", b64.encode(scramble(plain.as_bytes()))))
+    }
+}
+
+/// Opens a value. A value in the clear (older release) is returned as it is.
+pub fn unseal(v: &str) -> Result<String, String> {
+    let b64 = base64::engine::general_purpose::STANDARD;
+    if let Some(rest) = v.strip_prefix(PREFIX) {
+        let bytes = b64.decode(rest).map_err(|_| "the sealed value is damaged".to_string())?;
+        #[cfg(windows)]
+        let plain = dpapi::unprotect(&bytes)?;
+        #[cfg(not(windows))]
+        let plain: Vec<u8> = {
+            let _ = bytes;
+            return Err("this value was sealed on Windows and cannot be opened here".into());
+        };
+        return String::from_utf8(plain).map_err(|_| "the sealed value is damaged".to_string());
+    }
+    if let Some(rest) = v.strip_prefix(PREFIX_SCRAMBLED) {
+        let bytes = b64.decode(rest).map_err(|_| "the sealed value is damaged".to_string())?;
+        return String::from_utf8(scramble(&bytes)).map_err(|_| "the sealed value is damaged".to_string());
+    }
+    Ok(v.to_string())
+}
+
+/// Reversible scramble for systems without a real keyring; not protection, and logged as such.
+fn scramble(bytes: &[u8]) -> Vec<u8> {
+    bytes.iter().enumerate().map(|(i, b)| b ^ (0x5a ^ (i as u8).wrapping_mul(31))).collect()
+}
+
+/// Seals every clear secret field of a settings object in place. A field that cannot be sealed
+/// is left as it was. Returns how many fields were sealed.
+pub fn seal_settings(value: &mut Value) -> usize {
+    let mut n = 0;
+    if let Some(obj) = value.as_object_mut() {
+        for key in SECRET_SETTINGS {
+            if let Some(Value::String(s)) = obj.get(*key) {
+                if !s.is_empty() && !is_sealed(s) {
+                    if let Ok(sealed) = seal(s) {
+                        obj.insert((*key).to_string(), Value::String(sealed));
+                        n += 1;
+                    }
+                }
+            }
+        }
+    }
+    n
+}
+
+/// Settings as the window may see them: the secret fields are taken out.
+pub fn without_secrets(mut value: Value) -> Value {
+    if let Some(obj) = value.as_object_mut() {
+        for key in SECRET_SETTINGS {
+            obj.remove(*key);
+        }
+    }
+    value
+}
+
+/// Settings the window sends back: its secret fields are ignored and the stored ones kept.
+pub fn keep_stored_secrets(stored: &Value, mut incoming: Value) -> Value {
+    if let Some(obj) = incoming.as_object_mut() {
+        for key in SECRET_SETTINGS {
+            obj.remove(*key);
+            if let Some(v) = stored.get(*key) {
+                obj.insert((*key).to_string(), v.clone());
+            }
+        }
+    }
+    incoming
+}
+
+/// Reads a secret settings field, opened. `None` when it is not set.
+pub fn read_setting(store: &Store, key: &str) -> Result<Option<String>, String> {
+    match store.settings().get(key) {
+        Some(Value::String(s)) if !s.is_empty() => unseal(s).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// Stores a secret settings field sealed. Refuses to store it in the clear.
+pub fn write_setting(store: &Store, key: &str, plain: &str) -> Result<(), String> {
+    if !SECRET_SETTINGS.contains(&key) {
+        return Err(format!("{key} is not a secret field"));
+    }
+    let sealed = seal(plain)?;
+    let mut settings = store.settings();
+    if !settings.is_object() {
+        settings = serde_json::json!({});
+    }
+    settings[key] = Value::String(sealed);
+    store.save_settings(&settings).map_err(|e| e.to_string())
+}
+
+/// Writes a vault file sealed, whole or not at all.
+pub fn write_file(path: &Path, plain: &str) -> Result<(), String> {
+    let sealed = seal(plain)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, sealed).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// Reads a vault file, opened. A clear file (older release) is read and sealed again. A sealed
+/// file that cannot be opened is moved aside (`<name>.unreadable-<secs>`) and reads as `None`.
+/// The managed sign-ins of T-043 read through it.
+#[allow(dead_code)]
+pub fn read_file(path: &Path, log_dir: &Path) -> Result<Option<String>, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    match unseal(text.trim_end()) {
+        Ok(plain) => {
+            if !is_sealed(text.trim_end()) && write_file(path, &plain).is_err() {
+                log(log_dir, &format!("secrets: could not seal {} again; left as it was", file_name(path)));
+            }
+            Ok(Some(plain))
+        }
+        Err(_) => {
+            let aside = move_aside(path)?;
+            log(log_dir, &format!("secrets: {} could not be opened; moved to {}", file_name(path), file_name(&aside)));
+            Ok(None)
+        }
+    }
+}
+
+fn file_name(p: &Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+#[allow(dead_code)]
+fn move_aside(path: &Path) -> Result<PathBuf, String> {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let aside = PathBuf::from(format!("{}.unreadable-{secs}", path.display()));
+    fs::rename(path, &aside).map_err(|e| e.to_string())?;
+    Ok(aside)
+}
+
+/// One line in `<profile>/logs/kolux.log`. Never carries a secret. Failures are ignored.
+pub fn log(dir: &Path, line: &str) {
+    let logs = dir.join("logs");
+    if fs::create_dir_all(&logs).is_err() {
+        return;
+    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(logs.join("kolux.log")) {
+        let _ = writeln!(f, "{secs} {line}");
+    }
+}
+
+/// What the one-off pass did, for the tests and the log.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PassReport {
+    pub settings_sealed: usize,
+    pub files_sealed: usize,
+    pub files_moved: usize,
+    pub skipped: bool,
+}
+
+/// The pass that runs shortly after the first window appears. Notes the protection in use (one
+/// log line when it starts, changes or ends being only a scramble), limits the profile folder to
+/// the current user, and, once per profile, seals every secret still in the clear. Best effort:
+/// failures go to the log, nothing is raised.
+pub fn sealing_pass(store: &Mutex<Store>, dir: &Path) -> PassReport {
+    let mut report = PassReport::default();
+    let Ok(store) = store.lock() else { return report };
+    let now = backend();
+    let before = store.get(BACKEND_KEY).ok().flatten();
+    if before.as_deref() != Some(now) {
+        let weak_now = now != "dpapi";
+        let weak_before = before.as_deref().is_some_and(|b| b != "dpapi");
+        if weak_now || weak_before {
+            log(dir, &format!(
+                "secrets: protection is now {now}{}",
+                if weak_now { " (no real keyring here; values are only scrambled)" } else { "" }
+            ));
+        }
+        let _ = store.set(BACKEND_KEY, now);
+    }
+    restrict_to_user(dir, dir);
+    if store.get(PASS_DONE).ok().flatten().as_deref() == Some("1") {
+        report.skipped = true;
+        return report;
+    }
+    let mut settings = store.settings();
+    report.settings_sealed = seal_settings(&mut settings);
+    if report.settings_sealed > 0 {
+        if let Err(e) = store.save_settings(&settings) {
+            log(dir, &format!("secrets: could not save the sealed settings ({e}); left as they were"));
+            return report;
+        }
+    }
+    for path in vault_files(&dir.join(VAULT)) {
+        let Ok(text) = fs::read_to_string(&path) else { continue };
+        if is_sealed(text.trim_end()) {
+            continue;
+        }
+        match write_file(&path, text.trim_end()) {
+            Ok(()) => report.files_sealed += 1,
+            Err(e) => log(dir, &format!("secrets: could not seal {} ({e}); left as it was", file_name(&path))),
+        }
+    }
+    let _ = store.set(PASS_DONE, "1");
+    log(dir, &format!("secrets: one-off sealing pass sealed {} settings field(s) and {} file(s)", report.settings_sealed, report.files_sealed));
+    report
+}
+
+fn vault_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir(dir) else { return out };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(vault_files(&p));
+        } else if !file_name(&p).contains(".unreadable-") && p.extension().is_none_or(|x| x != "tmp") {
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Rewrites the folder's permissions so only the current user has access (files inside inherit
+/// it). Best effort: failures go to the log.
+pub fn restrict_to_user(path: &Path, log_dir: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let (Ok(user), domain) = (std::env::var("USERNAME"), std::env::var("USERDOMAIN").ok()) else {
+            log(log_dir, "secrets: could not tell the current user; folder permissions left as they were");
+            return;
+        };
+        let who = match domain { Some(d) if !d.is_empty() => format!("{d}\\{user}"), _ => user };
+        let out = std::process::Command::new("icacls")
+            .arg(path)
+            .args(["/inheritance:r", "/grant:r"])
+            .arg(format!("{who}:(OI)(CI)F"))
+            .arg("/q")
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => log(log_dir, &format!("secrets: folder permissions not changed (icacls exit {:?})", o.status.code())),
+            Err(e) => log(log_dir, &format!("secrets: folder permissions not changed ({e})")),
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = fs::set_permissions(path, fs::Permissions::from_mode(0o700)) {
+            log(log_dir, &format!("secrets: folder permissions not changed ({e})"));
+        }
+    }
+}
+
+#[cfg(windows)]
+mod dpapi {
+    use windows_sys::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+
+    fn run(input: &[u8], seal: bool) -> Result<Vec<u8>, String> {
+        let len = u32::try_from(input.len()).map_err(|_| "the value is too large".to_string())?;
+        let blob_in = CRYPT_INTEGER_BLOB { cbData: len, pbData: input.as_ptr() as *mut u8 };
+        let mut blob_out = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
+        // SAFETY: both blobs point at valid memory for the call; the output buffer is allocated
+        // by the system, copied out, then freed with LocalFree as the API requires.
+        let ok = unsafe {
+            if seal {
+                CryptProtectData(&blob_in, std::ptr::null(), std::ptr::null(), std::ptr::null(), std::ptr::null(), CRYPTPROTECT_UI_FORBIDDEN, &mut blob_out)
+            } else {
+                CryptUnprotectData(&blob_in, std::ptr::null_mut(), std::ptr::null(), std::ptr::null(), std::ptr::null(), CRYPTPROTECT_UI_FORBIDDEN, &mut blob_out)
+            }
+        };
+        if ok == 0 || blob_out.pbData.is_null() {
+            return Err(if seal { "the system could not seal the value" } else { "the system could not open the sealed value" }.into());
+        }
+        // SAFETY: the system returned cbData bytes at pbData.
+        let out = unsafe { std::slice::from_raw_parts(blob_out.pbData, blob_out.cbData as usize).to_vec() };
+        unsafe { LocalFree(blob_out.pbData as HLOCAL) };
+        Ok(out)
+    }
+
+    pub fn protect(plain: &[u8]) -> Result<Vec<u8>, String> {
+        run(plain, true)
+    }
+
+    pub fn unprotect(sealed: &[u8]) -> Result<Vec<u8>, String> {
+        run(sealed, false)
+    }
+}
+
+/// Whether a secret settings field is set (never its value).
+#[tauri::command]
+pub fn secret_status(store: tauri::State<'_, Mutex<Store>>, key: String) -> Result<bool, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(read_setting(&store, &key).ok().flatten().is_some())
+}
+
+/// Stores a secret settings field, sealed.
+#[tauri::command]
+pub fn secret_set(store: tauri::State<'_, Mutex<Store>>, key: String, value: String) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    write_setting(&store, &key, value.trim())
+}
+
+/// Removes a secret settings field.
+#[tauri::command]
+pub fn secret_clear(store: tauri::State<'_, Mutex<Store>>, key: String) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    if !SECRET_SETTINGS.contains(&key.as_str()) {
+        return Err(format!("{key} is not a secret field"));
+    }
+    let mut settings = store.settings();
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove(&key);
+    }
+    store.save_settings(&settings).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-secrets-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn seal_round_trips_and_hides_the_text() {
+        let key = "sk-ant-oat01-EXAMPLE-not-a-real-key";
+        let sealed = seal(key).unwrap();
+        assert!(is_sealed(&sealed));
+        assert!(!sealed.contains("EXAMPLE"));
+        assert_eq!(unseal(&sealed).unwrap(), key);
+        // sealing twice changes nothing; a clear value from an older release opens as it is
+        assert_eq!(seal(&sealed).unwrap(), sealed);
+        assert_eq!(unseal(key).unwrap(), key);
+        // a damaged sealed value is refused, not returned as text
+        assert!(unseal(&format!("{PREFIX}AAAA")).is_err());
+    }
+
+    #[test]
+    fn the_window_never_sees_or_overwrites_a_secret() {
+        let stored = serde_json::json!({ "theme": "classic", "claudeOauthToken": "kolux-sealed:v1:abc" });
+        let shown = without_secrets(stored.clone());
+        assert_eq!(shown, serde_json::json!({ "theme": "classic" }));
+        let back = keep_stored_secrets(&stored, serde_json::json!({ "theme": "dark", "claudeOauthToken": "typed" , "xaiApiKey": "x"}));
+        assert_eq!(back, serde_json::json!({ "theme": "dark", "claudeOauthToken": "kolux-sealed:v1:abc" }));
+    }
+
+    #[test]
+    fn a_clear_profile_is_sealed_once_and_still_works() {
+        let dir = temp_dir("pass");
+        let store = Store::open(&dir).unwrap();
+        store
+            .save_settings(&serde_json::json!({ "claudeOauthToken": "sk-ant-oat01-CLEAR", "xaiApiKey": "", "theme": "x" }))
+            .unwrap();
+        fs::create_dir_all(dir.join(VAULT).join("claude")).unwrap();
+        fs::write(dir.join(VAULT).join("claude").join("a.json"), "{\"token\":\"CLEARFILE\"}").unwrap();
+        let store = Mutex::new(store);
+        let r = sealing_pass(&store, &dir);
+        assert_eq!((r.settings_sealed, r.files_sealed, r.skipped), (1, 1, false));
+        let raw = fs::read_to_string(dir.join("settings.json")).unwrap();
+        assert!(!raw.contains("CLEAR"), "settings file still holds the key text");
+        assert!(!fs::read_to_string(dir.join(VAULT).join("claude").join("a.json")).unwrap().contains("CLEARFILE"));
+        {
+            let s = store.lock().unwrap();
+            assert_eq!(read_setting(&s, "claudeOauthToken").unwrap().as_deref(), Some("sk-ant-oat01-CLEAR"));
+            assert_eq!(read_setting(&s, "xaiApiKey").unwrap(), None);
+            assert_eq!(s.settings()["theme"], "x");
+        }
+        assert_eq!(read_file(&dir.join(VAULT).join("claude").join("a.json"), &dir).unwrap().as_deref(), Some("{\"token\":\"CLEARFILE\"}"));
+        // the pass is one-off; a clear value written later by hand stays readable
+        assert!(sealing_pass(&store, &dir).skipped);
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn written_secrets_are_sealed_and_unopenable_files_move_aside() {
+        let dir = temp_dir("write");
+        let store = Store::open(&dir).unwrap();
+        write_setting(&store, "claudeOauthToken", "sk-ant-oat01-WRITTEN").unwrap();
+        assert!(!fs::read_to_string(dir.join("settings.json")).unwrap().contains("WRITTEN"));
+        assert_eq!(read_setting(&store, "claudeOauthToken").unwrap().as_deref(), Some("sk-ant-oat01-WRITTEN"));
+        assert!(write_setting(&store, "theme", "x").is_err());
+        let f = dir.join(VAULT).join("codex.json");
+        write_file(&f, "ACCOUNT").unwrap();
+        assert!(!fs::read_to_string(&f).unwrap().contains("ACCOUNT"));
+        assert_eq!(read_file(&f, &dir).unwrap().as_deref(), Some("ACCOUNT"));
+        // a clear file from an older release is read and sealed again
+        fs::write(&f, "OLDCLEAR").unwrap();
+        assert_eq!(read_file(&f, &dir).unwrap().as_deref(), Some("OLDCLEAR"));
+        assert!(is_sealed(&fs::read_to_string(&f).unwrap()));
+        // a sealed file that cannot be opened is moved aside, not deleted
+        fs::write(&f, format!("{PREFIX}AAAAAAAA")).unwrap();
+        assert_eq!(read_file(&f, &dir).unwrap(), None);
+        assert!(!f.exists());
+        let moved: Vec<_> = fs::read_dir(dir.join(VAULT)).unwrap().flatten().map(|e| file_name(&e.path())).collect();
+        assert!(moved.iter().any(|n| n.starts_with("codex.json.unreadable-")), "{moved:?}");
+        assert!(fs::read_to_string(dir.join("logs").join("kolux.log")).unwrap().contains("moved to"));
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

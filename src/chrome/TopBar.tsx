@@ -8,6 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
 import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
+import CodexPill from "../usage/CodexPill";
 
 export type Screen = "agents" | "board" | "terminals";
 export const screens: Array<{ id: Screen; label: string }> = [
@@ -16,9 +17,9 @@ export const screens: Array<{ id: Screen; label: string }> = [
   { id: "terminals", label: "Terminals" },
 ];
 
-type Props = { screen: Screen; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
+type Props = { screen: Screen; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
 
-export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
+export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -74,12 +75,11 @@ export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar,
         <button className="ib bell" title="Inbox (not built yet)">
           <Bell />
         </button>
-        <div className="usage" title="Usage is read from running sessions once accounts are built">
+        <button className="usage" title="Claude usage is read from running sessions once T-041 is built. Click for AI connections." onClick={onSettings}>
           <VendorMark agent="claude" size={13} />
           <span>Claude · unknown</span>
-          <VendorMark agent="codex" size={13} />
-          <span>Codex · unknown</span>
-        </div>
+          <CodexPill />
+        </button>
         <div className="wc">
           <button title="Minimize" onClick={() => win().minimize()}>
             <Minimize size={16} />

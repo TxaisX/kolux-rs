@@ -48,6 +48,9 @@ input { font: inherit; }
 .kbd-part { display: inline-flex; align-items: center; gap: 6px; }
 .kbd-none { font-size: 11px; color: var(--fg-faint); }
 .topbar-right .bell { margin-right: 8px; }
+/* the Codex half of the pill (USAGE-022); warn yellow from DESIGN.md section 3 */
+.usage-part { display: inline-flex; align-items: center; gap: 6px; }
+.usage-part.warn { color: #fdc030; }
 .usage { display: inline-flex; align-items: center; gap: 6px; height: 23px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg-muted); font-size: 12px; margin-right: 14px; white-space: nowrap; }
 
 .wc { display: flex; height: 100%; }
@@ -273,3 +276,49 @@ input { font: inherit; }
 .statusbar .item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .statusbar .on { width: 6px; height: 6px; border-radius: 50%; background: var(--fg); margin-left: -2px; }
 .statusbar .sep { margin: 0 -12px; }
+
+/* Settings (T-043-a): laid over the window body; the panes underneath stay mounted */
+.body { position: relative; }
+.settings { position: absolute; inset: 0; z-index: 40; display: flex; gap: 8px; padding: 8px; background: var(--app-bg); }
+.settings-nav { flex: none; width: 288px; display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; }
+.settings-title { padding: 0 9px 10px; font-size: 13px; font-weight: 600; color: var(--fg-label); }
+.settings-link { height: 32px; padding: 0 9px; border-radius: 6px; text-align: left; font-size: 13px; color: var(--fg-row); }
+.settings-link[aria-current="page"] { background: var(--row-selected); color: var(--fg); font-weight: 600; }
+.settings-main { flex: 1; min-width: 0; overflow: auto; padding: 20px 28px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 12px; }
+.settings-head { display: flex; align-items: center; justify-content: space-between; }
+.settings-head h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--fg); }
+.settings-sub { margin: 6px 0 18px; font-size: 12px; color: var(--fg-muted); }
+.conn-card { max-width: 560px; display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 10px; }
+.conn-head { display: flex; align-items: center; gap: 8px; }
+.conn-name { font-size: 14px; font-weight: 600; color: var(--fg); }
+.conn-chip { margin-left: auto; padding: 1px 8px; border-radius: 999px; font-size: 11px; color: var(--fg-muted); background: var(--chip-bg); }
+.conn-chip.connected, .conn-chip.warning { color: var(--done); }
+.conn-chip.expired, .conn-chip.attention { color: #fdc030; }
+.conn-chip.connecting { color: var(--working); }
+.conn-headline { font-size: 13px; color: var(--fg-row); }
+.conn-detail { margin: 0; font-size: 12px; color: var(--fg-muted); }
+.conn-detail.warn { color: #fdc030; }
+
+/* Claude accounts (T-043-b) */
+.settings-main .conn-card + .conn-card { margin-top: 12px; }
+.conn-add { margin-left: auto; }
+.btn.link { background: none; border-color: transparent; color: var(--fg-muted); text-decoration: underline; }
+.acct-pending { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--working); }
+.acct-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.acct-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.acct-email { font-size: 13px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.acct-org { font-size: 11px; color: var(--fg-muted); }
+.acct-row .conn-chip { margin-left: 0; }
+.device-code { display: flex; flex-direction: column; gap: 6px; }
+.device-link { color: var(--fg); user-select: all; word-break: break-all; }
+.device-value { align-self: flex-start; padding: 4px 12px; border-radius: 6px; background: var(--chip-bg); color: var(--fg); font-size: 18px; letter-spacing: 0.12em; user-select: all; }
+/* ACCT-012 lapsed sign-in notice; ACCT-013 needs-attention reason with its one fix */
+.signin-notice { color: var(--fg); border-color: #7a5a1e; }
+.signin-notice span { color: #f0c27a; }
+.signin-notice .btn { margin-left: auto; }
+.attn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.attn .conn-detail { flex: 1 1 240px; margin: 0; }
+.own-sign-in { margin-top: 2px; }
+.conn-switch { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--chip-bg); cursor: pointer; }
+.conn-switch input { margin-top: 2px; accent-color: var(--done); }
+.conn-switch small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: 12px; }
