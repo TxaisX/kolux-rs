@@ -48,6 +48,125 @@ pub fn md_list(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<N
     Ok(Notes { files, capped })
 }
 
+/// Quick Open's list of the worktree's files (EDIT-036), as paths relative to the worktree with
+/// forward slashes, in natural order. ripgrep lists them: it honours .gitignore and stays quick on
+/// trees of 100,000 files. When it is not installed, git's own list stands in where the folder is
+/// a repository (`source` says which one answered, "none" when neither could).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileList {
+    files: Vec<String>,
+    capped: bool,
+    source: &'static str,
+    rg_missing: bool,
+}
+
+const LIST_CAP: usize = 200_000;
+/// Build caches and editor settings (the Next framework's, VS Code's and JetBrains IDEs'), plus git's own folder.
+const LEFT_OUT: [&str; 4] = [".git", ".next", ".vscode", ".idea"];
+
+fn rg(root: &Path) -> std::io::Result<std::process::Output> {
+    let mut cmd = std::process::Command::new("rg");
+    cmd.args(["--files", "--hidden", "--no-messages", "--no-config"]);
+    for dir in LEFT_OUT {
+        cmd.args(["-g", &format!("!{dir}/")]);
+    }
+    cmd.current_dir(root);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd.output()
+}
+
+/// Splits a name into runs of digits and runs of anything else.
+fn runs(s: &str) -> Vec<&str> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    for i in 1..b.len() {
+        if b[i].is_ascii_digit() != b[i - 1].is_ascii_digit() {
+            out.push(&s[start..i]);
+            start = i;
+        }
+    }
+    if !s.is_empty() {
+        out.push(&s[start..]);
+    }
+    out
+}
+
+/// A sort key for natural order: "file2" before "file10", letters compared without case. Each run
+/// of digits is padded to 20 places, so plain string order on the keys counts the numbers.
+pub fn natural_key(s: &str) -> String {
+    runs(s)
+        .into_iter()
+        .map(|r| if r.as_bytes()[0].is_ascii_digit() { format!("{:0>20}", r.trim_start_matches('0')) } else { r.to_lowercase() })
+        .collect()
+}
+
+/// Normalises a raw listing: forward slashes, nothing inside a nested worktree (a folder holding a
+/// `.git` file or folder of its own) or a left-out folder, natural order, at most `cap` names.
+pub fn shape(raw: &str, cap: usize) -> (Vec<String>, bool) {
+    let names: Vec<String> = raw.split(['\n', '\0']).map(|n| n.trim_end_matches('\r').replace('\\', "/")).filter(|n| !n.is_empty()).collect();
+    // git lists a nested repository as "dir/"; ripgrep lists a nested worktree's ".git" file.
+    let nested: Vec<String> = names.iter().filter_map(|n| n.strip_suffix("/.git").map(|d| format!("{d}/")).or_else(|| n.ends_with('/').then(|| n.clone()))).collect();
+    let mut files: Vec<String> = names
+        .into_iter()
+        .filter(|n| !n.ends_with('/') && n != ".git" && !n.split('/').any(|s| LEFT_OUT.contains(&s)) && !nested.iter().any(|d| n.starts_with(d.as_str())))
+        .collect();
+    files.sort_by_cached_key(|n| (natural_key(n), n.clone()));
+    let capped = files.len() > cap;
+    files.truncate(cap);
+    (files, capped)
+}
+
+#[tauri::command]
+pub async fn file_list(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<FileList, String> {
+    let git = git.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = Path::new(&root);
+        // A one-off failure to start ripgrep is tried once more; only "not found" means it is missing.
+        let out = rg(root).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Err(e) } else { rg(root) });
+        match out {
+            Ok(o) => {
+                let (files, capped) = shape(&String::from_utf8_lossy(&o.stdout), LIST_CAP);
+                Ok(FileList { files, capped, source: "rg", rg_missing: false })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(match git.listed_files(root) {
+                Ok(raw) => {
+                    let (files, capped) = shape(&raw, LIST_CAP);
+                    FileList { files, capped, source: "git", rg_missing: true }
+                }
+                Err(_) => FileList { files: Vec::new(), capped: false, source: "none", rg_missing: true },
+            }),
+            Err(e) => Err(format!("could not start ripgrep: {e}")),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+
+    #[test]
+    fn natural_order_counts_numbers() {
+        let mut v = vec!["mod10.ts", "Mod2.ts", "mod1.ts", "a/b.ts", "mod02.ts"];
+        v.sort_by_cached_key(|n| (natural_key(n), n.to_string()));
+        assert_eq!(v, ["a/b.ts", "mod1.ts", "Mod2.ts", "mod02.ts", "mod10.ts"]);
+    }
+
+    #[test]
+    fn leaves_out_nested_worktrees_and_tool_folders() {
+        let raw = "src\\main.rs\r\nwt\\.git\nwt\\sub\\w.txt\n.next\\x.js\napp\\.idea\\w.xml\n.git\nsub/\nsub/x.txt\nfile10\nfile2\n";
+        assert_eq!(shape(raw, 10), (vec!["file2".to_string(), "file10".into(), "src/main.rs".into()], false));
+        assert!(shape(raw, 2).1);
+    }
+}
+
 /// The two texts of a diff tab (EDIT-027); see Git::diff_sides.
 #[derive(serde::Serialize)]
 pub struct Sides {

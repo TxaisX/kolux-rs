@@ -272,7 +272,7 @@ input { font: inherit; }
 @media (prefers-reduced-motion: reduce) { .upd-card, .upd-pop { animation: none; } .upd-bar > div { transition: none; } .upd-icon svg { animation: none !important; } }
 /* EDIT-001: an editor tab is one file in CodeMirror; the dot is the unsaved marker, in the header and the tab. */
 .pane.editor .pane-body { padding: 0; overflow: hidden; }
-.pane-head .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-faint); font: 11px var(--mono-font); direction: rtl; text-align: left; }
+.pane-head .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-faint); font: 11px var(--mono-font); }
 .unsaved { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--working-icon); }
 .notice.load-failed .btn { margin-left: auto; }
 
@@ -311,7 +311,10 @@ input { font: inherit; }
 .picker-input:focus { outline: none; border-color: var(--line-focus); }
 .picker-list { max-height: min(420px, 60vh); overflow-y: auto; }
 .picker-list .menu-item.at { background: var(--row-selected); }
-.picker-list .menu-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-list .menu-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; max-width: 60%; }
+.picker-folder { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-faint); }
+.picker-tip { position: fixed; z-index: 60; max-width: min(640px, 70vw); padding: 4px 8px; border: 1px solid var(--line-focus); border-radius: 6px; background: var(--pane-bg); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; pointer-events: none; }
+.picker-tip-folder { color: var(--fg-muted); }
 .md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
 
 /* EDIT-027: the diff tab. Its body scrolls (both columns move together in side by side). */

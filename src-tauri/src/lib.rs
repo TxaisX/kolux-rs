@@ -101,6 +101,7 @@ pub fn run() {
             files::file_read,
             files::file_write,
             files::md_list,
+            files::file_list,
             files::md_new,
             files::diff_sides,
             files::git_changes,

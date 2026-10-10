@@ -205,6 +205,12 @@ impl Git {
         Ok((names.into_iter().take(cap).map(|n| worktree.join(native(n)).to_string_lossy().into_owned()).collect(), capped))
     }
 
+    /// Every file git knows in the worktree, tracked and untracked but not ignored, NUL-separated
+    /// and relative to it: Quick Open's list when ripgrep is missing (EDIT-036).
+    pub fn listed_files(&self, worktree: &Path) -> Result<String, String> {
+        output(&["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"], Some(worktree)).map(|o| String::from_utf8_lossy(&o).into_owned())
+    }
+
     /// The worktree's changed files, staged and unstaged, for the diff picker (EDIT-027).
     pub fn changes(&self, worktree: &Path) -> Result<Vec<Change>, String> {
         let out = output(&["status", "--porcelain=v1", "-z", "--untracked-files=all"], Some(worktree))?;

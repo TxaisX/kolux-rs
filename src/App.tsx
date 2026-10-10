@@ -24,7 +24,7 @@ import BrowserPane from "./browser/BrowserPane";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
-import FilePicker, { type Pick } from "./editor/FilePicker";
+import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
@@ -106,7 +106,7 @@ function Window() {
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
-  const [picking, setPicking] = useState<"markdown" | "change" | null>(null); // EDIT-012 / EDIT-027: which file picker is open
+  const [picking, setPicking] = useState<"file" | "markdown" | "change" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>({});
   const defaultId = defaultAgentId(settings);
@@ -220,6 +220,10 @@ function Window() {
           openPreview(p.path);
           break;
         }
+        case "worktree.quickOpen":
+          if (!activeDir) setToast("Open a workspace to find a file in it.");
+          else setPicking("file");
+          break;
         case "tab.openMarkdown":
           if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
           else setPicking("markdown");
@@ -589,6 +593,15 @@ function Window() {
           {terminals && (
             <>
               <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />
+              {picking === "file" && activeDir && (
+                <FilePicker
+                  root={activeDir}
+                  what="file"
+                  load={() => invoke<{ files: string[]; capped: boolean; source: string; rgMissing: boolean }>("file_list", { root: activeDir }).then((l) => quickOpenList(activeDir, l))}
+                  onPick={(f) => openFile(f.path)}
+                  onClose={() => setPicking(null)}
+                />
+              )}
               {picking === "markdown" && activeDir && (
                 <FilePicker
                   root={activeDir}

@@ -167,7 +167,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-094-a · EDIT-033 [compat] Explorer tree with mouse and keyboard · also from T-093-a: the explorer and Quick Open are the editor's main open routes, and the editor card's check 'take away read permission on a file and open it, failure with Retry, give it back, Retry loads' runs from the explorer (Windows' own Open dialog refuses an unreadable file before Kolux sees it); a pane rebuilt by a move to another pane keeps caret, selection and scroll, which needs the state kept per tab once tabs can move
 - [x] T-094-b · EDIT-034 [compat] Explorer file operations, part 1: create a file or folder, inline rename, delete to the trash with one confirmation, undo and redo, copy path and relative path, Delete key, permanent delete on a WSL share
 - [x] T-094-b2 · Explorer file operations, part 2 (the rest of the card built in T-094-b): copy and paste without overwriting, drag to move (a folder dragged with its own children moves only the folder) with edge scrolling, drop in from the desktop (folders copied whole, clashing top-level items renamed, symlinks refused)
-- [ ] T-094-c · EDIT-036 [compat] Quick Open a file by name with Mod+P
+- [x] T-094-c · EDIT-036 [compat] Quick Open a file by name with Mod+P
 - [ ] T-095 · SKILL-035 Pages Claude publishes are kept in Kolux automatically · SKILL-036 Artifacts library page and offline viewer · also passes: VIEW-012 Artifacts library
 - [ ] T-096 · SET-008 Shortcuts page lists every command with its keys · SET-009 Record, add, disable or reset a shortcut · SET-010 Clashing shortcuts are flagged, scope by scope
 - [ ] T-097 · CLI-011 [compat] kolux open starts the app or brings it to the front
