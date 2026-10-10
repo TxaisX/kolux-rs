@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
@@ -161,6 +161,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   const fail = (err: unknown) => say("error", String(err));
 
+  const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
   const refreshWorktrees = useCallback(async (list: Project[]) => {
     const next: Record<string, Worktree[]> = {};
     const unseen: Record<string, Worktree[]> = {};
@@ -169,10 +170,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         next[p.id] = await invoke<Worktree[]>("workspace_list", { projectId: p.id });
         unseen[p.id] = await invoke<Worktree[]>("workspace_unseen", { projectId: p.id });
       } catch (err) {
-        next[p.id] = [];
-        fail(err);
+        // ACCT-056: a failed scan removes nothing; the worktrees already known stay listed.
+        next[p.id] = afterScan(scanned.current[p.id], null);
+        say("warn", `Could not list the worktrees of ${p.name}, so the last known list stays: ${String(err)}`);
       }
     }
+    scanned.current = next;
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
     setFresh(unseen);

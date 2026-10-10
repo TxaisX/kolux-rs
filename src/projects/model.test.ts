@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { afterScan, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -115,4 +115,11 @@ test("projects sharing a name get enough of their path to tell them apart, long 
 test("emoji shortcodes turn into emoji and unknown ones are left alone", () => {
   expect(shortcodes("Fix :bug: fast :rocket:")).toBe("Fix \u{1F41B} fast \u{1F680}");
   expect(shortcodes(":nope: a:b")).toBe(":nope: a:b");
+});
+
+test("ACCT-056: a failed scan keeps the worktrees already known; a scan that worked replaces them", () => {
+  const known = [{ path: "C:/r/a", branch: "a", head: "1", isMain: false }];
+  expect(afterScan(known, null)).toBe(known);
+  expect(afterScan(undefined, null)).toEqual([]);
+  expect(afterScan(known, [])).toEqual([]);
 });

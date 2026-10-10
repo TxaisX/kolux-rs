@@ -181,3 +181,7 @@ const SHORTCODES: Record<string, string> = {
   star: "\u{2B50}", heart: "\u{2764}\u{FE0F}", eyes: "\u{1F440}", bulb: "\u{1F4A1}", gear: "\u{2699}\u{FE0F}", boom: "\u{1F4A5}",
 };
 export const shortcodes = (s: string) => s.replace(/:([a-z0-9_+-]+):/g, (all, code: string) => SHORTCODES[code] ?? all);
+
+/** ACCT-056: what the sidebar lists after a scan; one that failed (null) keeps the worktrees
+ * already known instead of emptying the project. */
+export const afterScan = (known: Worktree[] | undefined, scanned: Worktree[] | null): Worktree[] => scanned ?? known ?? [];

@@ -207,7 +207,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-111-a · VIEW-068 Branch summary against the base branch
 - [ ] T-111-b · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette · VIEW-048 [compat] Delete-workspace and rename-tab shortcuts (needs the worktree palette on T-098, a tab-rename field, and workspace delete on T-055)
 - [ ] T-112 · VIEW-076 Folder workspaces: attached worktrees and PR checks · VIEW-112 [compat] Import setup scripts from other tools' configs
-- [ ] T-113 · ACCT-056 A failed scan never drops worktrees from the list
+- [x] T-113-a · ACCT-056 A failed scan never drops worktrees from the list (the sidebar half)
+- [ ] T-113-b · The cleanup half of the failed-scan card on T-113-a: cleanup offers and removes only worktrees Kolux can show it made (its origin record), and a worktree Kolux did not create is left in place; built with the cleanup dialog on T-162
 - [ ] T-114 · AUTO-010 Choose whether per-run worktrees run the project setup
 - [ ] T-115 · EDIT-040 [compat] Per-workspace handoff note that can be given to an agent · EDIT-047 Worktree switcher search in the Mod+J palette
 - [ ] T-116 · SET-031 Git & worktrees page: branch names and source control defaults · SET-033 Per-repository page: base branch, setup script, folder
