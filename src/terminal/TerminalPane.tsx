@@ -13,6 +13,7 @@ import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
 import { monoFont, terminalTheme } from "../theme";
 import { folderName } from "../projects/model";
+import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
@@ -223,7 +224,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             {branch}
           </span>
         )}
-        <span className="word" title={program ? [program, ...args].join(" ") : undefined}>
+        {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
+        <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
           {programWord(agent)}
           {model && ` · ${model}`}
         </span>

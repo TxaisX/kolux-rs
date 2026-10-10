@@ -87,6 +87,7 @@ pub fn run() {
             projects::workspace_preview,
             projects::workspace_create,
             projects::workspace_create_fresh,
+            projects::handoff_note_prepare,
             projects::workspace_remove,
             projects::project_set,
             agents::agent_list,

@@ -466,10 +466,55 @@ pub fn workspaces_place_set(store: StoreState<'_>, dir: String, flat: bool) -> R
     Ok(place_info(&store))
 }
 
+/// SESS-025: the handoff note of one agent launched side by side: `<repo>/.kolux/handoffs/<name>.md`
+/// (COMPAT.md: one Markdown note per worktree, in the project's hidden Kolux folder, named after the
+/// worktree). It is made before the agent starts, holding the headings the agent keeps current; an
+/// existing note is never overwritten, so a relaunch keeps what the last agent wrote.
+// ponytail: the notes sit untracked in the main checkout; add `.kolux/` to the repo's ignore list
+// if they ever clutter its status.
+pub fn prepare_handoff(repo: &Path, name: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+    let file = safe_name(name).ok_or_else(|| format!("{name} cannot name a handoff note"))?;
+    let dir = repo.join(".kolux").join("handoffs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
+    let path = dir.join(format!("{file}.md"));
+    let note = format!("# Handoff: {name}\n\n## Files added\n\n## Files updated\n\n## Files removed\n\n## Left to do\n");
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(mut f) => f.write_all(note.as_bytes()).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(format!("cannot write {}: {e}", path.display())),
+    }
+    Ok(path)
+}
+
+/// SESS-025: makes (or keeps) the handoff note `name` under `root` (the project's main checkout,
+/// or the chooser's folder outside any project); its path.
+#[tauri::command]
+pub fn handoff_note_prepare(root: String, name: String) -> Result<String, String> {
+    prepare_handoff(Path::new(&root), &name).map(|p| p.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn sess025_handoff_note_is_made_once_and_never_overwritten() {
+        let repo = temp("handoff");
+        let path = prepare_handoff(&repo, "gentle-squid").unwrap();
+        assert_eq!(path, repo.join(".kolux").join("handoffs").join("gentle-squid.md"));
+        let text = fs::read_to_string(&path).unwrap();
+        for heading in ["## Files added", "## Files updated", "## Files removed", "## Left to do"] {
+            assert!(text.contains(heading), "{heading} in {text}");
+        }
+        fs::write(&path, "kept").unwrap();
+        assert_eq!(prepare_handoff(&repo, "gentle-squid").unwrap(), path);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "kept");
+        let odd = prepare_handoff(&repo, "../escape").unwrap();
+        assert_eq!(odd.parent().unwrap(), repo.join(".kolux").join("handoffs"));
+        assert!(prepare_handoff(&repo, "///").is_err());
+    }
     use std::process::Command;
 
     fn temp(name: &str) -> PathBuf {

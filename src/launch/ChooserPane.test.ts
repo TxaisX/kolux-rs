@@ -5,11 +5,11 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import ChooserPane from "./ChooserPane";
 import type { AgentInfo } from "./PlusMenu";
-import { defaultCopies, TERMINAL, type Copies, type Seat } from "./seats";
+import { defaultCopies, pickShape, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:\\bin\\claude.exe" };
-const render = (seats: Seat[], closable = true, inGit = true, copies: Copies = defaultCopies(seats.length, inGit)) =>
-  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onStart: () => {}, copies, inGit, onCopies: () => {}, closable, onClose: () => {} }));
+const render = (seats: Seat[], closable = true, inGit = true, copies: Copies = defaultCopies(seats.length, inGit), shape: Shape = "custom", task = "") =>
+  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape, task, onTask: () => {}, onStart: () => {}, copies, inGit, onCopies: () => {}, closable, onClose: () => {} }));
 const radio = (html: string, label: string) => html.split("<label").find((l) => l.includes(label))!;
 const startButton = (html: string) => html.split("<button").find((b) => b.includes("Start"))!;
 
@@ -76,4 +76,18 @@ test("SESS-014: three seats in Git pick separate copies; sharing them warns with
   expect(radio(outside, "Same folder for all")).toContain("checked");
   expect(outside).toContain("Not a Git project: there is nothing to copy");
   expect(outside).not.toContain("Give each its own copy");
+});
+
+test("SESS-012: the lineup shows the shape row, a task for every seat, and each seat with its role before anything starts", () => {
+  const swarm = pickShape("swarm", [{ agent: "claude", model: "opus" }]);
+  const html = render(swarm, true, true, "separate", "swarm", "Fix the login page");
+  for (const s of ["Solo", "Pair", "Workbench", "Swarm", "Custom"]) expect(html).toContain(`>${s}</button>`);
+  expect(html.split("<button").find((b) => b.includes(">Swarm<"))).toContain('aria-pressed="true"');
+  expect(html).toContain("Task for every seat");
+  expect(html).toContain("Fix the login page");
+  const roles = [...html.matchAll(/class="chip seat-role"[^>]*>([a-z]+)</g)].map((m) => m[1]);
+  expect(roles).toEqual(["scout", "builder", "builder", "tester", "reviewer"]);
+  const custom = render(swarm.slice(0, 2).map((s) => ({ ...s, role: undefined })));
+  expect(custom.split("<button").find((b) => b.includes(">Custom<"))).toContain('aria-pressed="true"');
+  expect(custom).not.toContain("seat-role");
 });
