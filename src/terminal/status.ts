@@ -8,6 +8,20 @@ import type { AgentState } from "../projects/rows";
 export type Kind = "starting" | "running" | "ended" | "failed";
 export type Tone = "" | "working" | "done" | "attention";
 export type Header = { word: string; tone: Tone; icon: "working" | "done" | "idle"; age: string; needsYou: boolean };
+/** STAT-026: a lead session's sub-agents and teammates as the hooks report them. */
+export type Crew = { id: string; kind: string; model?: string; state: "working" | "permission" | "waiting" | "idle" }[];
+
+/** "2 agents", or "1 agent, 1 waiting" when some need the user. */
+export function crewLabel(crew: Crew): string {
+  const n = crew.length;
+  const waiting = crew.filter((c) => c.state === "permission" || c.state === "waiting").length;
+  return `${n} agent${n === 1 ? "" : "s"}${waiting ? `, ${waiting} waiting` : ""}`;
+}
+
+/** One roster line: role, model and state (the hover text). */
+export function crewLine(c: Crew[number]): string {
+  return `${c.kind}${c.model ? ` (${c.model})` : ""} · ${c.state === "permission" ? "needs you" : c.state}`;
+}
 
 /** TERM-023: "just now" in the first minute, then whole minutes. */
 export function ageLabel(finishedAt: number, now: number): string {

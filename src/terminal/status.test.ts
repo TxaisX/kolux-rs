@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { ageLabel, headerOf, nextNeedsYou } from "./status";
+import { ageLabel, headerOf, nextNeedsYou, crewLabel, crewLine, type Crew } from "./status";
 
 test("a plain shell reads as a terminal with a neutral status; an agent's word is tinted (TERM-020, TERM-021)", () => {
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ word: "Ready", tone: "", needsYou: false });
@@ -38,4 +38,15 @@ test("the hooks feed the header while the program still runs: needs you, blocked
   // The hook never speaks for a shell and never changes an ended program.
   expect(headerOf("shell", "running", undefined, false, null, 0, "permission")).toMatchObject({ word: "Ready", needsYou: false });
   expect(headerOf("claude", "ended", 0, false, 0, 0, "permission")).toMatchObject({ word: "Done", needsYou: false });
+});
+
+test("the roster label counts agents and those waiting on the user; a line names role, model and state (STAT-026)", () => {
+  const crew: Crew = [
+    { id: "a1", kind: "code-reviewer", model: "opus", state: "permission" },
+    { id: "a2", kind: "tester", state: "working" },
+  ];
+  expect(crewLabel(crew)).toBe("2 agents, 1 waiting");
+  expect(crewLabel(crew.slice(1))).toBe("1 agent");
+  expect(crewLine(crew[0])).toBe("code-reviewer (opus) · needs you");
+  expect(crewLine(crew[1])).toBe("tester · working");
 });

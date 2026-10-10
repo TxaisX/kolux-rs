@@ -16,6 +16,7 @@ mod scm;
 mod pty;
 mod secrets;
 mod state;
+mod status;
 mod sysmem;
 mod terminal;
 mod trust;
@@ -103,6 +104,7 @@ pub fn run() {
             sysmem::process_memory,
             terminal::terminal_spawn,
             terminal::terminal_write,
+            status::agent_history,
             terminal::terminal_resize,
             terminal::terminal_kill,
             projects::git_version,

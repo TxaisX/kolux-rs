@@ -203,6 +203,10 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
 
 #[tauri::command]
 pub fn terminal_write(terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
+    // STAT-028: Ctrl+C or Escape on its own, while the agent works, marks the coming Stop interrupted.
+    if data == "\x03" || data == "\x1b" {
+        crate::status::cancel(id);
+    }
     terminals.write(id, &data)
 }
 

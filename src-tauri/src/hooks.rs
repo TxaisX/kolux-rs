@@ -2,7 +2,8 @@
 //! is a batch script Kolux writes once; the agent runs it on every event and the script POSTs the
 //! event JSON to this loopback listener (COMPAT.md section 3.1 and 3.2). The listener turns the
 //! event into a pane state and raises it to the window as `agent-status`. Claude Code's twelve
-//! events and Codex's eight (STAT-008) are installed here; the sub-agent roster (T-025-c) builds on it.
+//! events and Codex's eight (STAT-008) are installed here; `status.rs` keeps each pane's session
+//! (roster, permissions, interrupts, history; STAT-026, T-025-c) and resolves the state shown.
 
 use base64::Engine as _;
 use serde_json::{json, Value};
@@ -62,15 +63,6 @@ pub struct Change {
     pub boundary: bool,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Status {
-    pub pane_key: u32,
-    pub terminal: Option<u32>,
-    #[serde(flatten)]
-    pub change: Change,
-}
-
 fn trim(s: &str, max: usize) -> String {
     let s = s.trim();
     if s.chars().count() <= max { s.to_string() } else { format!("{}…", s.chars().take(max).collect::<String>()) }
@@ -94,7 +86,7 @@ fn tool_detail(input: Option<&Value>) -> Option<String> {
 /// Claude Code's event mapping (COMPAT 3.5). `None` means the pane's state does not change.
 pub fn claude_change(event: &Value) -> Option<Change> {
     let name = event.get("hook_event_name")?.as_str()?;
-    // A sub-agent's events belong to the roster (STAT-026, T-025-c), never to the lead's own state.
+    // A sub-agent's events belong to the roster (STAT-026, status.rs), never to the lead's own state.
     if event.get("agent_id").and_then(Value::as_str).is_some_and(|a| !a.is_empty()) {
         return None;
     }
@@ -108,8 +100,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             prompt: str_of("prompt").or_else(|| str_of("user_prompt")).map(|p| trim(&fold(p), 16000)),
             ..Change::default()
         }),
-        // ponytail: the interrupted flag (Txais cancelled the turn) and "stays working while a child
-        // works" arrive with the roster (T-025-c).
+        // The interrupted flag and "stays working while a child works" are the session's (status.rs).
         "Stop" => plain("done"),
         "StopFailure" => Some(Change {
             state: "blocked",
@@ -125,7 +116,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
         "PostToolUse" | "PostToolUseFailure" => plain("working"),
         "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), tool, ..Change::default() }),
         "PostCompact" => (str_of("trigger") == Some("manual")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
-        // SubagentStart, SubagentStop and TeammateIdle feed the roster (T-025-c); PreCompact is refused.
+        // SubagentStart, SubagentStop and TeammateIdle feed the roster (status.rs); PreCompact is refused.
         _ => None,
     }
 }
@@ -152,7 +143,6 @@ pub fn codex_change(event: &Value) -> Option<Change> {
         // The hook only reports; it never answers an approval (COMPAT 3.1).
         "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), tool, ..Change::default() }),
         "PostToolUse" => plain("working"),
-        // ponytail: the reply text and "stays working while a child works" arrive with the roster (T-025-c).
         "Stop" => plain("done"),
         _ => None,
     }
@@ -200,18 +190,18 @@ pub fn identity(header: &str) -> Option<(u32, Option<u32>)> {
 }
 
 /// Answers one hook: `(status code, the status to raise)`.
-pub fn answer(req: &Request, token: &str) -> (u16, Option<Status>) {
+pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>) {
     if req.headers.get(TOKEN_HEADER).map(String::as_str) != Some(token) {
         return (403, None);
     }
     let Some((pane_key, terminal)) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)) else { return (400, None) };
     let Ok(event) = serde_json::from_slice::<Value>(&req.body) else { return (400, None) };
-    let change = match req.path.as_str() {
-        "/claude" => claude_change(&event),
-        "/codex" => codex_change(&event),
+    let agent = match req.path.as_str() {
+        "/claude" => crate::status::Agent::Claude,
+        "/codex" => crate::status::Agent::Codex,
         _ => return (404, None),
     };
-    (200, change.map(|change| Status { pane_key, terminal, change }))
+    (200, crate::status::report(pane_key, terminal, agent, &event))
 }
 
 fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {

@@ -31,7 +31,7 @@ import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
-import { nextNeedsYou } from "./terminal/status";
+import { nextNeedsYou, type Crew } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
@@ -108,6 +108,7 @@ function Window() {
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
   const [hook, setHook] = useState<Record<number, AgentState>>({}); // STAT-001: each pane's last hook-fed state
+  const [crew, setCrew] = useState<Record<number, Crew>>({}); // STAT-026: each pane's sub-agents and teammates
   const hookRef = useRef(hook);
   hookRef.current = hook;
   const runRef = useRef(running); // TERM-118: the last reported running flags, to see a finish
@@ -572,8 +573,9 @@ function Window() {
   panesRef.current = panes;
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; state: AgentState; boundary: boolean }>("agent-status", (e) => {
-      const { paneKey, state } = e.payload;
+    const off = listen<{ paneKey: number; state: AgentState; boundary: boolean; children: Crew }>("agent-status", (e) => {
+      const { paneKey, state, children } = e.payload;
+      setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
       const prev = hookRef.current[paneKey];
       if (prev === state) return;
       if (state === "done" && prev !== undefined && prev !== "done") {
@@ -734,6 +736,7 @@ function Window() {
                       if (!on && p.key in hookRef.current) setHook((h) => Object.fromEntries(Object.entries(h).filter(([k]) => Number(k) !== p.key)));
                     }}
                     hook={hook[p.key]}
+                    crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onBell={() => noticed(p, "rang the bell")}
                     unread={unreadPanes.has(p.key)}

@@ -109,8 +109,8 @@ User sees: the lead session keeps reading working while any child is busy, lists
   role and model, and raises needs you when a child is waiting for permission.
 Rules: a child's pending permission clears when that teammate goes idle or when a complete roster no
   longer includes it, never because the lead made unrelated progress; rosters have a size cap, a
-  background-task list that arrived cut short is marked as partial, and live children missing from
-  it are kept; each subagent turn is announced at its own Stop with its own text; a teammate going
+  background-task list that arrived cut short is marked as partial (Kolux RS, DT-C6: not built, the
+  list carries no such mark), and live children missing from it are kept; each subagent turn is announced at its own Stop with its own text; a teammate going
   idle never ends the lead's working state, even when Kolux holds no stored status for the lead; a
   child already cleared away as gone never comes back as working.
 Acceptance:

@@ -3,7 +3,7 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { headerOf } from "./status";
+import { crewLabel, crewLine, headerOf, type Crew } from "./status";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -38,6 +38,8 @@ type Props = {
   onNeedsYou?: (needs: boolean) => void;
   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
   hook?: AgentState;
+  /** STAT-026: the sub-agents and teammates under this session, shown beside the status word. */
+  crew?: Crew;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -66,7 +68,7 @@ type Props = {
   card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, crew, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -263,6 +265,11 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           {programWord(agent)}
         </span>
         <span className={`status ${tone}`}>{word}</span>
+        {crew && crew.length > 0 && (
+          <span className="crew" title={crew.map(crewLine).join("\n")}>
+            {crewLabel(crew)}
+          </span>
+        )}
         {age && (
           <span className="age" title="when the agent finished">
             {age}
