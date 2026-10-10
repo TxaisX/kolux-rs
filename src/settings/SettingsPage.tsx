@@ -6,13 +6,14 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
-import { actionLabel, keyCard, type KeyAction, type KeyStatus } from "./claudeKey";
+import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 
-export function ClaudeCardView({ status, busy, error, onAction, onUseAccount }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void }) {
+export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
+  const ownLine = card.state === "disconnected" || card.state === "attention" ? ownSignInLine(own) : null;
   const fix = (f: Fix) => (f === "Open install page" ? void openInstallPage("claude").catch(() => {}) : onAction("connect"));
   const chip = card.state === "connected" || card.state === "warning" ? "Connected" : card.state === "expired" ? "Ran out" : card.state === "connecting" ? "Connecting" : card.state === "attention" ? "Needs attention" : card.state === "reading" ? "" : "Not connected";
   return (
@@ -24,6 +25,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount }: 
       </header>
       <div className="conn-headline">{card.headline}</div>
       {card.detail && <p className={card.state === "warning" || card.state === "expired" || card.state === "attention" ? "conn-detail warn" : "conn-detail"}>{card.detail}</p>}
+      {ownLine && <p className={ownLine.warn ? "conn-detail warn own-sign-in" : "conn-detail own-sign-in"}>{ownLine.text}</p>}
       <AttentionNote attention={card.attention} route="claude-key" busy={busy} offer={card.state === "attention"} onFix={fix} />
       {error && (
         <p className="conn-detail warn" role="alert">
@@ -42,27 +44,50 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount }: 
           </button>
         )}
       </div>
+      {onResume && (
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={resume} onChange={(e) => onResume(e.target.checked)} />
+          <span>
+            Carry on by itself once a usage limit resets
+            <small>Off unless you turn it on. Kolux saves the choice now; the resume itself is not built yet.</small>
+          </span>
+        </label>
+      )}
     </section>
   );
 }
 
 function ClaudeCard() {
   const [status, setStatus] = useState<KeyStatus | null>(null);
+  const [own, setOwn] = useState<OwnSignIn | null>(null);
+  const [resume, setResume] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const read = useCallback(() => {
     invoke<KeyStatus>("claude_key_status")
       .then(setStatus)
       .catch((e) => setError(String(e)));
+    invoke<OwnSignIn | null>("claude_own_sign_in")
+      .then(setOwn)
+      .catch(() => setOwn(null));
   }, []);
   useEffect(() => {
     read();
-    let stop = () => {};
-    listen("claude-key", read)
-      .then((un) => (stop = un))
+    invoke<Record<string, unknown>>("get_settings")
+      .then((s) => setResume(resumeOn(s)))
       .catch(() => {});
-    return () => stop();
+    const offs = [listen("claude-key", read), listen("claude-accounts", read)];
+    return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
   }, [read]);
+  const saveResume = (on: boolean) => {
+    setResume(on);
+    invoke<Record<string, unknown>>("get_settings")
+      .then((s) => invoke("save_settings", { value: { ...s, [RESUME_FIELD]: on } }))
+      .catch((e) => {
+        setResume(!on);
+        setError(String(e));
+      });
+  };
   // While a setup runs the days-left figure cannot change, but its browser step can: read again.
   useEffect(() => {
     if (!status?.settingUp) return;
@@ -84,7 +109,7 @@ function ClaudeCard() {
     setError(null);
     addClaudeAccount().catch((e) => setError(String(e)));
   };
-  return <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} />;
+  return <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />;
 }
 
 export default function SettingsPage({ onClose }: { onClose: () => void }) {

@@ -235,12 +235,13 @@ fn app_server(program: &Path, home: &Path) -> std::io::Result<Child> {
 }
 
 /// Ends the server: input closed first, a grace period, then the whole process tree by force.
-fn finish(mut child: Child) {
+/// Gives back how it ended when it ended by itself.
+fn finish(mut child: Child) -> Option<std::process::ExitStatus> {
     drop(child.stdin.take());
     let start = Instant::now();
     while start.elapsed() < CLOSE_GRACE {
-        if let Ok(Some(_)) = child.try_wait() {
-            return;
+        if let Ok(Some(status)) = child.try_wait() {
+            return Some(status);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -251,6 +252,7 @@ fn finish(mut child: Child) {
     }
     let _ = child.kill();
     let _ = child.wait();
+    None
 }
 
 /// Reads the plan figures for one Codex home through the background app server.
@@ -301,7 +303,12 @@ pub fn read_with(program: &Path, home: &Path) -> CodexUsage {
         }
     }
     child.stdin = stdin;
-    finish(child);
+    let ended = finish(child);
+    // SET-030: a helper that quit without a word (Codex refusing how it was started) is an error,
+    // never a sign-in problem.
+    if let (None, None, Some(status)) = (&account, &limits, ended.filter(|s| !s.success())) {
+        return CodexUsage::state("error", Some(format!("Codex's usage helper quit before answering ({status}); this Codex version may not accept how Kolux starts it")));
+    }
     conclude(account.as_ref(), limits.as_ref(), home)
 }
 
@@ -428,6 +435,19 @@ mod tests {
         let m = e.message.unwrap();
         assert!(!m.contains("someone") && !m.contains("sk-abc123"), "{m}");
         assert_eq!(conclude(Some(&ok_account), None, &home()).state, "error");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_helper_that_quits_at_once_is_an_error_and_not_a_sign_in_problem() {
+        let dir = std::env::temp_dir().join(format!("kolux-codex-quit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("codex.cmd");
+        std::fs::write(&program, "@exit /b 2\r\n").unwrap();
+        let u = read_with(&program, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(u.state, "error");
+        assert!(u.message.as_deref().unwrap_or("").contains("quit before answering"), "{:?}", u.message);
     }
 
     #[test]

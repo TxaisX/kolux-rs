@@ -70,4 +70,18 @@ export function keyCard(s: KeyStatus | null): KeyCard {
   };
 }
 
+/** SET-030: Claude Code's own sign-in, reported only when new Claude panes run on it. */
+export type OwnSignIn = { state: "signed-in" | "signed-out" | "not-installed" | "unknown"; email: string | null };
+
+export function ownSignInLine(o: OwnSignIn | null): { text: string; warn: boolean } | null {
+  if (!o || o.state === "unknown") return null;
+  if (o.state === "signed-in") return { text: `New Claude panes use Claude Code's own sign-in on this PC${o.email ? ` (${o.email})` : ""}.`, warn: false };
+  if (o.state === "signed-out") return { text: "Claude Code is not signed in on this PC, so new Claude panes will ask you to sign in. Connect, or use your Claude account.", warn: true };
+  return { text: "Claude Code is not installed on this PC.", warn: true };
+}
+
+/** USAGE-007's switch: off unless the user turned it on. */
+export const RESUME_FIELD = "claudeResumeAfterLimit";
+export const resumeOn = (settings: Record<string, unknown>): boolean => settings[RESUME_FIELD] === true;
+
 export const actionLabel: Record<KeyAction, string> = { connect: "Connect", renew: "Renew", cancel: "Cancel", disconnect: "Disconnect" };

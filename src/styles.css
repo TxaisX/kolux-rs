@@ -273,3 +273,7 @@ input { font: inherit; }
 .signin-notice .btn { margin-left: auto; }
 .attn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .attn .conn-detail { flex: 1 1 240px; margin: 0; }
+.own-sign-in { margin-top: 2px; }
+.conn-switch { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--chip-bg); cursor: pointer; }
+.conn-switch input { margin-top: 2px; accent-color: var(--done); }
+.conn-switch small { display: block; margin-top: 2px; color: var(--fg-muted); font-size: 12px; }

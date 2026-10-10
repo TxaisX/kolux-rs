@@ -96,17 +96,28 @@ pub fn system_default(codex_home_env: Option<&str>, user_home: Option<&Path>) ->
 
 /// A top-level `model_provider` other than OpenAI's: the key then comes from that provider's
 /// own settings. ponytail: a line scan, not a TOML parser; only the top-level key counts.
-fn custom_provider(config: &str) -> bool {
+/// A top-level `key = value` of a config.toml (before the first table), quotes and comment removed.
+fn top_level(config: &str, key: &str) -> Option<String> {
     for line in config.lines().map(str::trim) {
         if line.starts_with('[') {
-            return false;
+            return None;
         }
-        if let Some(v) = line.strip_prefix("model_provider").map(str::trim_start).and_then(|r| r.strip_prefix('=')) {
-            let v = v.split('#').next().unwrap_or("").trim().trim_matches(|c| c == '"' || c == '\'');
-            return !v.is_empty() && v != "openai";
+        if let Some(v) = line.strip_prefix(key).map(str::trim_start).and_then(|r| r.strip_prefix('=')) {
+            return Some(v.split('#').next().unwrap_or("").trim().trim_matches(|c| c == '"' || c == '\'').to_string());
         }
     }
-    false
+    None
+}
+
+fn custom_provider(config: &str) -> bool {
+    top_level(config, "model_provider").is_some_and(|v| !v.is_empty() && v != "openai")
+}
+
+/// SET-030: an account home's config.toml no longer agrees with what Kolux wrote there: the
+/// sign-in is not kept in the home's own file any more, or another model provider took over.
+pub fn config_drift(home: &Path) -> bool {
+    let config = fs::read_to_string(home.join("config.toml")).unwrap_or_default();
+    top_level(&config, "cli_auth_credentials_store").as_deref() != Some("file") || custom_provider(&config)
 }
 
 /// The link and the one-time code of a device sign-in, only once both have been printed.
@@ -144,11 +155,19 @@ pub fn failure(ended: &Ended, output: &str, code: Option<&str>) -> Attention {
         Ended::Cancelled => Attention::new("cancelled", "Sign-in cancelled."),
         Ended::TimedOut => Attention::new("browser-blocked", "The Codex sign-in was not finished within 15 minutes."),
         Ended::NotStarted(e) => format!("Codex's sign-in could not start: {}", clean(e)).into(),
+        // SET-030: Codex refusing the command line itself is no sign-in problem.
+        Ended::Exited(_) if bad_arguments(output) => Attention::new("unknown", "This Codex version did not accept Kolux's sign-in command; update Codex and try again."),
         Ended::Exited(_) | Ended::Stopped => match output.lines().map(str::trim).rfind(|l| !l.is_empty()) {
             Some(last) => Attention::new("sign-in-refused", format!("Codex's sign-in ended without signing in: {}", clean(last))),
             None => Attention::new("sign-in-refused", "Codex's sign-in ended without signing in."),
         },
     }
+}
+
+/// Codex's command-line parser rejecting what it was given (its usual usage-error wording).
+pub fn bad_arguments(output: &str) -> bool {
+    let o = output.to_lowercase();
+    ["unexpected argument", "unrecognized subcommand", "unrecognized option", "for more information, try '--help'"].iter().any(|k| o.contains(k))
 }
 
 /// The command a sign-in runs: `codex login` (or with `--device-auth`) inside `home`.
@@ -223,6 +242,8 @@ pub struct CodexView {
     pub device_link: Option<String>,
     pub device_code: Option<String>,
     pub attention: Option<Attention>,
+    /// Ids of accounts whose home's config.toml has drifted (SET-030).
+    pub drifted: Vec<String>,
 }
 
 #[tauri::command]
@@ -233,7 +254,9 @@ pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::St
     let device = sign_ins.device.lock().ok().and_then(|d| d.clone());
     let accounts = load(&store);
     let active = store.get(ACTIVE_KEY).ok().flatten().filter(|id| accounts.iter().any(|a| &a.id == id));
+    let drifted = accounts.iter().filter(|a| config_drift(Path::new(&a.home))).map(|a| a.id.clone()).collect();
     Ok(CodexView {
+        drifted,
         accounts,
         active,
         system_default: system_default(env.as_deref(), user.as_deref()).into(),
@@ -376,6 +399,31 @@ mod tests {
         // The console host places lines with cursor moves, not line breaks (seen live).
         let placed = crate::claude_key::strip_ansi("\u{1b}[4;1H   https://auth.example.com/device\u{1b}[6;1H2. Enter this one-time code\u{1b}[7;1H\u{1b}[3CWXYZ-6789");
         assert_eq!(device_prompt(&placed), Some(("https://auth.example.com/device".into(), "WXYZ-6789".into())));
+    }
+
+    #[test]
+    fn a_home_whose_config_no_longer_keeps_the_sign_in_in_its_file_has_drifted() {
+        let d = temp("drift");
+        let home = d.as_path();
+        assert!(config_drift(home), "no config.toml at all");
+        fs::write(home.join("config.toml"), HOME_CONFIG).unwrap();
+        assert!(!config_drift(home), "what Kolux wrote");
+        fs::write(home.join("config.toml"), "model = \"o3\"\ncli_auth_credentials_store = 'file' # kept\n[tui]\n").unwrap();
+        assert!(!config_drift(home), "other keys and a comment are fine");
+        fs::write(home.join("config.toml"), "cli_auth_credentials_store = \"keyring\"\n").unwrap();
+        assert!(config_drift(home));
+        fs::write(home.join("config.toml"), "[x]\ncli_auth_credentials_store = \"file\"\n").unwrap();
+        assert!(config_drift(home), "inside a table it is not the top-level setting");
+        fs::write(home.join("config.toml"), format!("{HOME_CONFIG}model_provider = \"ollama\"\n")).unwrap();
+        assert!(config_drift(home));
+    }
+
+    #[test]
+    fn a_codex_that_rejects_its_arguments_is_not_a_refused_sign_in() {
+        let clap = "error: unexpected argument '--device-auth' found\n\nUsage: codex login\n\nFor more information, try '--help'.\n";
+        let a = failure(&Ended::Exited(Some(2)), clap, None);
+        assert_eq!((a.reason, a.message.contains("did not accept")), ("unknown", true));
+        assert_eq!(failure(&Ended::Exited(Some(1)), "Login was not completed\n", None).reason, "sign-in-refused");
     }
 
     #[test]

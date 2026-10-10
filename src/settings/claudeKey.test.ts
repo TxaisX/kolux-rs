@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { keyCard, monthYear, type KeyStatus } from "./claudeKey";
+import { keyCard, monthYear, ownSignInLine, resumeOn, type KeyStatus } from "./claudeKey";
 import { ClaudeCardView } from "./SettingsPage";
 
 const DAY = 86_400_000;
@@ -77,4 +77,24 @@ test("the card renders the buttons its state offers", () => {
   expect(html).toContain("Renew");
   expect(html).toContain("Disconnect");
   expect(html).toContain('data-state="warning"');
+});
+
+test("Claude Code's own sign-in shows on the card only while it is what panes use, and a signed-out one warns (SET-030)", () => {
+  expect(ownSignInLine(null)).toBeNull();
+  expect(ownSignInLine({ state: "unknown", email: null })).toBeNull();
+  expect(ownSignInLine({ state: "signed-in", email: "sam@example.com" })).toEqual({ text: "New Claude panes use Claude Code's own sign-in on this PC (sam@example.com).", warn: false });
+  expect(ownSignInLine({ state: "signed-out", email: null })?.warn).toBe(true);
+  const card = (own: Parameters<typeof ownSignInLine>[0], status: KeyStatus) => renderToString(createElement(ClaudeCardView, { status, busy: false, onAction: () => {}, own }));
+  expect(card({ state: "signed-out", email: null }, off)).toContain("Claude Code is not signed in on this PC");
+  expect(card({ state: "signed-out", email: null }, made(10, 355, false))).not.toContain("Claude Code is not signed in"); // the key is what panes use
+});
+
+test("resume after a usage limit is off unless turned on (SET-030, USAGE-007)", () => {
+  expect(resumeOn({})).toBe(false);
+  expect(resumeOn({ claudeResumeAfterLimit: "yes" })).toBe(false);
+  expect(resumeOn({ claudeResumeAfterLimit: true })).toBe(true);
+  const sw = (resume: boolean) => renderToString(createElement(ClaudeCardView, { status: off, busy: false, onAction: () => {}, resume, onResume: () => {} }));
+  expect(sw(false)).toContain("Carry on by itself once a usage limit resets");
+  expect(sw(false)).not.toContain("checked");
+  expect(sw(true)).toContain("checked");
 });

@@ -153,10 +153,14 @@ fn hide(cmd: &mut std::process::Command) {
     let _ = cmd;
 }
 
-/// `claude auth status --json` inside `dir`, hidden, given up on after 20 s.
-pub fn auth_status(program: &Path, dir: &Path) -> Option<String> {
+/// `claude auth status --json` inside `dir` (None: Claude Code's own sign-in, as a plain pane
+/// would see it), hidden, given up on after 20 s.
+pub fn auth_status(program: &Path, dir: Option<&Path>) -> Option<String> {
     let mut cmd = std::process::Command::new(program);
-    cmd.args(["auth", "status", "--json"]).env(CONFIG_ENV, dir).env_remove(crate::claude_key::ENV);
+    cmd.args(["auth", "status", "--json"]).env_remove(crate::claude_key::ENV);
+    if let Some(dir) = dir {
+        cmd.env(CONFIG_ENV, dir);
+    }
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
     hide(&mut cmd);
     let mut child = cmd.spawn().ok()?;
@@ -334,7 +338,7 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
                     |_| false,
                 )
             },
-            |dir| auth_status(&program, dir),
+            |dir| auth_status(&program, Some(dir)),
         );
         let sign_ins = app.state::<SignIns>();
         if let Ok(mut g) = sign_ins.attention.lock() {
@@ -397,7 +401,7 @@ pub async fn claude_account_check(app: AppHandle) -> Result<(), String> {
     let (Some((id, dir)), Some(program)) = (target, crate::agents::find_program("claude")) else {
         return Ok(());
     };
-    let answer = tauri::async_runtime::spawn_blocking(move || auth_status(&program, Path::new(&dir))).await.map_err(|e| e.to_string())?;
+    let answer = tauri::async_runtime::spawn_blocking(move || auth_status(&program, Some(Path::new(&dir)))).await.map_err(|e| e.to_string())?;
     let Some(answer) = answer else { return Ok(()) };
     let store = app.state::<Mutex<Store>>();
     let changed = mark_stale(&*store.lock().map_err(|e| e.to_string())?, &id, identity(&answer).is_none())?;
@@ -405,6 +409,44 @@ pub async fn claude_account_check(app: AppHandle) -> Result<(), String> {
         let _ = app.emit(EVENT, ());
     }
     Ok(())
+}
+
+/// SET-030: what Claude Code's own sign-in on this PC says, as the card shows it.
+#[derive(serde::Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnSignIn {
+    /// `signed-in`, `signed-out`, `not-installed` or `unknown` (no answer in time).
+    pub state: &'static str,
+    pub email: Option<String>,
+}
+
+pub fn own_sign_in(answer: Option<&str>) -> OwnSignIn {
+    match answer {
+        None => OwnSignIn { state: "unknown", email: None },
+        Some(a) => match identity(a) {
+            Some((email, _)) => OwnSignIn { state: "signed-in", email },
+            None => OwnSignIn { state: "signed-out", email: None },
+        },
+    }
+}
+
+/// Claude Code's own sign-in, only when that is what new Claude panes run on: not in key mode
+/// and with no active managed account (null otherwise; those report on their own cards).
+#[tauri::command]
+pub async fn claude_own_sign_in(app: AppHandle) -> Result<Option<OwnSignIn>, String> {
+    {
+        let store = app.state::<Mutex<Store>>();
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let key_mode = store.settings().get(crate::claude_key::MODE_FIELD).and_then(Value::as_str) == Some(crate::claude_key::KEY_MODE);
+        if key_mode || active_dir(&store).is_some() {
+            return Ok(None);
+        }
+    }
+    let Some(program) = crate::agents::find_program("claude") else {
+        return Ok(Some(OwnSignIn { state: "not-installed", email: None }));
+    };
+    let answer = tauri::async_runtime::spawn_blocking(move || auth_status(&program, None)).await.map_err(|e| e.to_string())?;
+    Ok(Some(own_sign_in(answer.as_deref())))
 }
 
 /// The active account's folder for a new pane, if it is still there.
@@ -495,6 +537,14 @@ mod tests {
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
         assert_eq!(load(&store.lock().unwrap())[0].last_sign_in, 7, "the row is unchanged");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn claude_codes_own_sign_in_is_reported_as_signed_in_signed_out_or_unknown() {
+        assert_eq!(own_sign_in(Some(SIGNED_IN)), OwnSignIn { state: "signed-in", email: Some("sam@example.com".into()) });
+        assert_eq!(own_sign_in(Some(r#"{"loggedIn":false}"#)).state, "signed-out");
+        assert_eq!(own_sign_in(Some("")).state, "signed-out", "an empty answer is not a sign-in");
+        assert_eq!(own_sign_in(None).state, "unknown", "no answer in time is not reported as signed out");
     }
 
     #[test]

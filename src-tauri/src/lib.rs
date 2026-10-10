@@ -128,6 +128,7 @@ pub fn run() {
             claude_accounts::claude_account_cancel,
             claude_accounts::claude_account_activate,
             claude_accounts::claude_account_check,
+            claude_accounts::claude_own_sign_in,
             agents::open_install_page,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,

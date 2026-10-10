@@ -19,6 +19,8 @@ export type CodexView = {
   deviceLink: string | null;
   deviceCode: string | null;
   attention: Attention | null;
+  /** Accounts whose home's config.toml no longer agrees with what Kolux wrote (SET-030). */
+  drifted: string[];
 };
 export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string } | { kind: "again"; id: string } | { kind: "install" };
 
@@ -28,6 +30,13 @@ const systemLabel: Record<CodexView["systemDefault"], string> = {
   "custom-provider": "an API key with a custom provider",
   "signed-out": "",
 };
+
+/** SET-030: what is wrong with one account, if anything. */
+export function codexTrouble(v: CodexView, a: CodexAccount): string | null {
+  if (a.signInError) return "Needs sign-in";
+  if (v.drifted.includes(a.id)) return "Settings changed";
+  return null;
+}
 
 export function codexHeadline(v: CodexView): string {
   if (v.signingIn === "device") return v.deviceCode ? "Enter the code on any device" : "Asking for a sign-in code…";
@@ -66,6 +75,7 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
               <div className="acct-who">
                 <span className="acct-email">{a.email ?? "ChatGPT account"}</span>
               </div>
+              {codexTrouble(view, a) && <span className="conn-chip attention">{codexTrouble(view, a)}</span>}
               {view.active === a.id ? (
                 <span className="conn-chip connected">Active</span>
               ) : (
@@ -73,8 +83,16 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
                   Make active
                 </button>
               )}
+              {codexTrouble(view, a) && (
+                <button className="btn" onClick={() => onAction({ kind: "again", id: a.id })}>
+                  Sign in again
+                </button>
+              )}
             </div>
           ))}
+          {view.accounts.some((a) => view.drifted.includes(a.id)) && (
+            <p className="conn-detail warn">Codex's settings file for a marked account was changed, so Codex may keep its sign-in where Kolux cannot see it. Sign in again puts Kolux's settings back.</p>
+          )}
         </div>
       )}
       {!busy && view.accounts.length === 0 && view.systemDefault !== "signed-out" && <p className="conn-detail">Connect adds a ChatGPT account in a Codex home of Kolux's own; your Codex folder stays as it is.</p>}

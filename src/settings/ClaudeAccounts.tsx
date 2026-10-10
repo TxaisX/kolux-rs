@@ -51,6 +51,7 @@ export function ClaudeAccountsView({ view, error, onAction }: { view: AccountsVi
               <span className="acct-email">{a.email ?? "Claude account"}</span>
               <span className="acct-org">{a.organization ?? "No organisation"}</span>
             </div>
+            {a.stale && <span className="conn-chip attention">Needs sign-in</span>}
             {isActive ? <span className="conn-chip connected">Active</span> : null}
             <div className="btn-row">
               {!isActive && (

@@ -103,7 +103,10 @@ function Window() {
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
     invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
-    invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    const readSettings = () => void invoke<Record<string, unknown>>("get_settings").then(setSettings).catch(() => setSettings({}));
+    readSettings();
+    const off = listen("settings-saved", readSettings);
+    return () => void off.then((u) => u()).catch(() => {});
   }, []);
 
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
