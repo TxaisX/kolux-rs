@@ -444,13 +444,10 @@ turned on, kept across restarts; it only stores the choice until the resume itse
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
 recorded default until told otherwise; nothing here blocks a pass.
 
-- [accounts] 2026-10-09 · **Please revoke one Claude Code long-lived key.** During the T-043-a live
-  check, clicking Connect ran Claude Code's real key setup; your browser was already signed in to
-  claude.ai, so it finished by itself in a few seconds and made a real 1-year key on your account.
-  Nobody read or printed it; it was stored sealed in the lane's test profile and removed with
-  Disconnect about two minutes later, but it stays valid at Anthropic until revoked. Revoke the
-  long-lived Claude Code key created 2026-10-09 around 12:45 in your claude.ai account settings.
-  Every later check uses a stand-in program and fake keys only.
+- [accounts] 2026-10-09 · Resolved: the T-043-a live check made a real 1-year Claude Code key on
+  Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
+  Txais said the same evening that this was intended, not accidental; the key stays and no builder
+  should ask for it to be revoked. Live checks still use stand-in programs and fake keys.
 
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
