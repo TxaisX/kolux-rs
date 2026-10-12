@@ -510,6 +510,33 @@ input { font: inherit; }
 .first-files label { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; min-width: 0; }
 .first-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-row); }
 .first-secret { margin-left: auto; flex: none; color: var(--fg-muted); font-size: 11px; }
+/* SKILL-002..005: the starter-kit gallery and a kit's setup */
+.kits { width: min(760px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; box-sizing: border-box; padding: 16px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.kits.kit-setup { width: min(560px, calc(100vw - 32px)); }
+.kits-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.kits-head .ask-title { margin: 0; flex: 1; min-width: 0; }
+.kit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.kit-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px; text-align: left; font: inherit; color: var(--fg); background: var(--chip-bg); border: 1px solid var(--line-subtle); border-radius: 8px; cursor: pointer; }
+.kit-card:hover, .kit-card:focus-visible { border-color: var(--line-focus); outline: none; }
+.kit-top { display: flex; align-items: center; gap: 8px; }
+.kit-icon { display: inline-flex; color: var(--fg); }
+.kit-badge { padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--row-selected); color: var(--fg); }
+.kit-time { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
+.kit-title { font-weight: 600; font-size: 13px; }
+.kit-sum { font-size: 12px; color: var(--fg-muted); }
+.kit-roles { list-style: none; margin: 4px 0 10px; padding: 0; font-size: 12px; }
+.kit-roles li { display: flex; justify-content: space-between; gap: 8px; min-height: 20px; align-items: center; }
+.kit-ai { color: var(--fg); }
+.kit-ai.off { color: var(--fg-muted); font-style: italic; }
+.kit-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 12px; }
+.kit-row { display: flex; gap: 6px; min-width: 0; }
+.kits .kit-row .field { flex: 1; min-width: 0; margin: 0; }
+.kit-hint { font-size: 11px; color: var(--fg-muted); }
+.kit-note { margin: 0; font-size: 12px; }
+.kit-note.warn { color: var(--warn); }
+.kit-opt { color: var(--fg-muted); font-weight: normal; }
+.kit-gap { flex: 1; }
+.kits .btn-row { flex-wrap: wrap; align-items: center; }
 .first-none { color: var(--fg-muted); }
 .agent-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--chip-bg); min-width: 0; }
 .agent-on { display: flex; align-items: center; gap: 10px; cursor: pointer; }

@@ -23,9 +23,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
 import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
-import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { Bell, Box, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
+import { openKits } from "../kits/Kits";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
@@ -881,6 +882,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               <FileCode />
             </span>
             Artifacts
+          </button>
+          <button className="row" onClick={openKits}>
+            <span className="ic">
+              <Box />
+            </span>
+            Starter kits
           </button>
         </nav>
 

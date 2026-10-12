@@ -36,6 +36,8 @@ import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
+import { KitGallery, KitSetup, OPEN_KITS } from "./kits/Kits";
+import { KITS, VENDORS, RECALL_KEY, remember, type Vendor } from "./kits/catalog";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
@@ -260,6 +262,31 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     });
   }, [agentPass, offeredKey]);
 
+  // SKILL-002: the kit gallery and a kit's setup float over every screen; any part of the app opens
+  // the gallery with the kolux-open-kits event.
+  const [kits, setKits] = useState<{ kit: string | null; sampleDir: string | null } | null>(null);
+  const [samplesBusy, setSamplesBusy] = useState(false);
+  useEffect(() => {
+    const show = () => setKits((k) => k ?? { kit: null, sampleDir: null });
+    window.addEventListener(OPEN_KITS, show);
+    return () => window.removeEventListener(OPEN_KITS, show);
+  }, []);
+  // SKILL-003: Claude, Codex and Grok, when found and not switched off, can take kit roles.
+  const kitAIs = useMemo(() => VENDORS.filter((v) => agents.some((a) => a.id === v && a.installed)), [agents]) as Vendor[];
+  const pickKit = (id: string) => {
+    setKits({ kit: id, sampleDir: null });
+    invoke<string>("kit_samples_dir", { kit: id }).then((d) => setKits((k) => (k?.kit === id ? { ...k, sampleDir: d } : k)), () => {});
+  };
+  const trySamples = (id: string) => {
+    setSamplesBusy(true);
+    invoke<{ path: string; name: string }>("kit_samples", { kit: id })
+      .then((p) => {
+        setRefresh((n) => n + 1);
+        select(p.path, null);
+      })
+      .catch((err) => setToast(`Kolux could not set up the sample data: ${String(err)}`))
+      .finally(() => setSamplesBusy(false));
+  };
   const saveSetting = (key: string, value: unknown) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
@@ -1164,6 +1191,31 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         )}
         {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
       </div>
+      {kits && kits.kit === null && <KitGallery connected={kitAIs} onPick={pickKit} onClose={() => setKits(null)} />}
+      {kits && kits.kit !== null && (() => {
+        const kit = KITS.find((k) => k.id === kits.kit)!;
+        return (
+          <KitSetup
+            key={kit.id}
+            kit={kit}
+            connected={kitAIs}
+            dir={activeDir}
+            sampleDir={kits.sampleDir}
+            settings={settings}
+            samplesBusy={samplesBusy}
+            onSamples={() => trySamples(kit.id)}
+            onBack={() => setKits({ kit: null, sampleDir: null })}
+            onClose={() => setKits(null)}
+            onStart={(values) => {
+              // SKILL-005: real inputs are remembered for this workspace; a sample workspace's are not.
+              const real = !!activeDir && !sameDir(activeDir, kits.sampleDir);
+              if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
+              setKits(null);
+              setToast(real ? "Starting a kit's AIs is not built yet; its inputs are saved for next time." : "Starting a kit's AIs is not built yet.");
+            }}
+          />
+        );
+      })()}
       <UpdateCenter />
       <StatusBar
         terminals={live.length}

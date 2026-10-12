@@ -16,6 +16,7 @@ mod include;
 mod grok;
 mod install;
 mod keybindings;
+mod kits;
 mod names;
 mod orchestration;
 mod procs;
@@ -211,6 +212,8 @@ pub fn run() {
             codex_accounts::codex_account_remove,
             projects::git_first_commit_preview,
             projects::git_start,
+            kits::kit_samples,
+            kits::kit_samples_dir,
             files::file_read,
             files::file_write,
             files::md_list,
