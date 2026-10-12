@@ -45,6 +45,8 @@ type Props = {
   crew?: Crew;
   /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */
   stop?: StopInfo;
+  /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report. */
+  context?: number;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -82,7 +84,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, crew, stop, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -283,11 +285,12 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           </span>
         )}
         <span className="right">
-          <span className="gauge" title="Context used (agents only)">
+          <span className="gauge" title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
             <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
               <circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--gauge-track)" strokeWidth="2" />
+              {context !== undefined && <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray={`${(Math.round(context) / 100) * 34.56} 34.56`} transform="rotate(-90 7 7)" />}
             </svg>
-            0%
+            {Math.round(context ?? 0)}%
           </span>
           <button className="ib" title="Pane menu (not built yet)">
             <Dots size={12} />

@@ -570,7 +570,8 @@ background app server, in a hidden process that only reads and is closed afterwa
 plan figures. The pill reads "Codex 100% left" (weekly figure); hovering lists the 5-hour and
 weekly figures each with its own reset time, the limit-reset credits and the plan. A sign-in
 Codex no longer accepts turns it into a yellow "Codex · sign in again" with no figures. The
-Claude half still reads "unknown" until T-041.
+Claude half reads "Claude N% left" from Claude Code's own status-line reports once a Claude
+pane has produced one (T-039-b, [core]); until then it reads "unknown".
 
 [accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
 the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
@@ -1354,7 +1355,32 @@ recorded default until told otherwise; nothing here blocks a pass.
   (`evidence/T-039-a-stopped.png`). Not live-proven: the desktop notification and the sign-in
   recheck (no lapsed account to hand).
 
+- 2026-10-12 · [core] T-039-b: Claude Code's status line feeds Kolux. At start the hook installer
+  also takes the `statusLine` slot in Claude's settings (`hooks::install_claude_status`, padding
+  and the rest of the object kept) with a bash command that saves the report to a temp file,
+  posts it through `~/.kolux-rs/agent-hooks/claude-status.cmd` to the endpoint's new
+  `/claude-status` route, then runs the status line the user had (written once to
+  `claude-status-prev.sh`, run only when that file exists) from the same file, so whatever they
+  had keeps drawing; a stale Kolux command from another home is replaced, not chained. The route
+  checks the token (403) and the pane identity (400), reads `context_window.used_percentage`
+  (else input tokens over window size) and the `rate_limits` windows (kind, percent used, reset
+  as ISO stamp or seconds/ms, kept as ms), writes the windows to kv `claudeRateLimits`, and when
+  a window is used up writes when it lifts to kv `claudeUsageLimitResetsAt` and raises
+  `claude-key` so the Claude card re-reads. The top-bar pill (`usage/ClaudePill.tsx`) shows
+  "Claude N% left" from a used-up window first, else the weekly one, else the 5-hour one, from
+  the last report at start (`claude_usage`) and each `claude-usage` event after; hovering lists
+  each window with its reset time. The pane header's gauge draws the pane's context fill as an
+  arc with the figure. A limit stop now carries the reset time (`status::LIMIT_RESETS_AT`) when
+  it is still ahead, so the tooltip, chip and notification say "resets at …". Live: posted a
+  report for the Claude pane → pill "Claude 63% left", hover with both windows' reset times,
+  gauge 42% (`evidence/T-039-b-usage.png`); wrong token → 403, figures unchanged; a used-up
+  5-hour window plus a rate_limit StopFailure → header "Limit reached · resets at 1:48 AM", kv
+  both keys written, Settings' Claude card "It can be used again at 1:48 AM". Not live-proven:
+  a real Claude Code session driving the command (the pane's Claude Code read the real user
+  settings, not the scratch ones, as in T-025-a), and the chained previous status line.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-039-b · done: statusLine slot taken with a chaining bash command, /claude-status route → kv claudeRateLimits + claudeUsageLimitResetsAt, pill 'Claude N% left', header gauge, limit stop carries the reset; evidence/T-039-b-usage.png
 - 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
 - 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
 - 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
@@ -1365,6 +1391,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-013-fix-a · done: `createOpens()` in `model.ts` (+ test), `ProjectsPanel.tsx` routes Mod+N and the header button through it, T-013-c added; `evidence/T-013-fix-a-no-project.png`
 - 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
 - 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
-- 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
 
 

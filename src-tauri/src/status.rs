@@ -7,6 +7,7 @@
 use crate::hooks::{claude_change, codex_change, Change};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -17,6 +18,9 @@ const MAX_HISTORY: usize = 20;
 /// Every pane's stored status, by pane key. ponytail: in memory only; a restart starts clean
 /// (STAT-006's catch-up is its own card).
 pub static SESSIONS: Mutex<Option<HashMap<u32, Session>>> = Mutex::new(None);
+/// When the usage window the status line last saw used up lifts (ms), 0 for none (STAT-040); a
+/// limit stop carries it (STAT-022).
+pub static LIMIT_RESETS_AT: AtomicI64 = AtomicI64::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Agent {
@@ -281,7 +285,9 @@ impl Session {
                 } else {
                     // One episode keeps the first report's words, however many reports arrive.
                     if self.own != Some("blocked") || self.stop.is_none() {
-                        self.stop = Some(Stop { cause: change.cause.unwrap_or("error"), detail: change.detail.clone(), resets_at: None });
+                        let cause = change.cause.unwrap_or("error");
+                        let resets_at = (cause == "limit").then(|| LIMIT_RESETS_AT.load(Ordering::Relaxed)).filter(|t| *t > crate::claude_key::now_ms()).map(|t| t as u64);
+                        self.stop = Some(Stop { cause, detail: change.detail.clone(), resets_at });
                     }
                     self.own = Some("blocked");
                 }
@@ -507,6 +513,21 @@ mod tests {
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
         assert_eq!(state(&mut s, r#"{"hook_event_name":"StopFailure","error":"rate_limit","error_details":"5-hour limit"}"#), Some("blocked"));
         assert_eq!(s.stop, Some(Stop { cause: "limit", detail: Some("5-hour limit".into()), resets_at: None }));
+        // T-039-b: the reset time the status line last reported rides on a limit stop, when it is
+        // still ahead; a stop for another cause never carries it.
+        let ahead = crate::claude_key::now_ms() + 3_600_000;
+        LIMIT_RESETS_AT.store(ahead, std::sync::atomic::Ordering::Relaxed);
+        let mut t = Session::default();
+        state(&mut t, r#"{"hook_event_name":"StopFailure","error":"rate_limit"}"#);
+        assert_eq!(t.stop.as_ref().and_then(|x| x.resets_at), Some(ahead as u64));
+        let mut t = Session::default();
+        state(&mut t, r#"{"hook_event_name":"StopFailure","error":"server_error"}"#);
+        assert_eq!(t.stop.as_ref().and_then(|x| x.resets_at), None);
+        LIMIT_RESETS_AT.store(ahead - 7_200_000, std::sync::atomic::Ordering::Relaxed);
+        let mut t = Session::default();
+        state(&mut t, r#"{"hook_event_name":"StopFailure","error":"rate_limit"}"#);
+        assert_eq!(t.stop.as_ref().and_then(|x| x.resets_at), None, "a reset already past is no reset");
+        LIMIT_RESETS_AT.store(0, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(state(&mut s, r#"{"hook_event_name":"StopFailure","error":"rate_limit"}"#), Some("blocked"));
         assert_eq!(s.stop.as_ref().map(|t| t.detail.as_deref()), Some(Some("5-hour limit")), "the first report's words stay");
         assert_eq!(s.history.iter().filter(|e| e.state == "blocked").count(), 1, "one episode, one history line");

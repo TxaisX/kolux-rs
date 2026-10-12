@@ -11,9 +11,10 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const EVENT: &str = "agent-status";
 pub const TOKEN_HEADER: &str = "x-kolux-token";
@@ -23,6 +24,14 @@ pub const IDENTITY_HEADER: &str = "x-kolux-pane";
 pub const SCRIPT_DIR: &str = ".kolux-rs/agent-hooks";
 pub const CLAUDE_SCRIPT: &str = "claude.cmd";
 pub const CODEX_SCRIPT: &str = "codex.cmd";
+/// STAT-040: the script Claude Code's status line feeds, and the user's own status line command
+/// Kolux displaced, kept beside it and still run after Kolux's post.
+pub const STATUS_SCRIPT: &str = "claude-status.cmd";
+pub const STATUS_PREV: &str = "claude-status-prev.sh";
+/// Raised with a `Usage` on every status-line report.
+pub const USAGE_EVENT: &str = "claude-usage";
+/// Store key: the rate-limit windows the last status-line report carried (JSON `Limit` list).
+pub const LIMITS_KEY: &str = "claudeRateLimits";
 /// The running Kolux's port and token, read by the script on every run (a pane outlives a restart).
 pub const ENDPOINT_FILE: &str = "agent-hooks-endpoint.txt";
 pub const HOOK_VERSION: u32 = 1;
@@ -228,10 +237,140 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
     (200, crate::status::report(pane_key, terminal, agent, &event))
 }
 
+/// One rate-limit window as Claude Code's status line reports it (STAT-040), reset in ms.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Limit {
+    pub kind: String,
+    pub used_percent: f64,
+    pub resets_at: Option<i64>,
+}
+
+/// What one status-line report says: the pane's context fill and the account's windows.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Usage {
+    pub pane_key: u32,
+    pub context_percent: Option<f64>,
+    pub limits: Vec<Limit>,
+}
+
+/// A status-line report: token-checked like a hook, then the figures. `Err` is the status code.
+pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
+    if req.headers.get(TOKEN_HEADER).map(String::as_str) != Some(token) {
+        return Err(403);
+    }
+    let (pane_key, _) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)).ok_or(400u16)?;
+    let v: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
+    let cw = &v["context_window"];
+    let context_percent = cw
+        .get("used_percentage")
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            let window = cw.get("context_window_size")?.as_f64().filter(|w| *w > 0.0)?;
+            Some((cw.get("total_input_tokens")?.as_f64()? / window * 100.0).round())
+        })
+        .map(|p| p.clamp(0.0, 100.0));
+    let limits = v["rate_limits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| {
+            Some(Limit {
+                kind: l.get("kind")?.as_str()?.to_string(),
+                used_percent: l.get("percentUsed").or_else(|| l.get("used_percentage")).and_then(Value::as_f64)?,
+                resets_at: l.get("resetsAt").or_else(|| l.get("resets_at")).and_then(when_ms),
+            })
+        })
+        .collect();
+    Ok(Usage { pane_key, context_percent, limits })
+}
+
+/// When the soonest window that is used up lifts, in ms; none when nothing is used up.
+pub fn exhausted(limits: &[Limit]) -> Option<i64> {
+    limits.iter().filter(|l| l.used_percent >= 100.0).filter_map(|l| l.resets_at).min()
+}
+
+/// A time as ms since 1970: an ISO 8601 stamp (the status line's form), or a number in seconds
+/// or ms.
+pub fn when_ms(v: &Value) -> Option<i64> {
+    if let Some(n) = v.as_f64() {
+        return Some(if n < 1e12 { (n * 1000.0) as i64 } else { n as i64 });
+    }
+    iso_ms(v.as_str()?)
+}
+
+/// `YYYY-MM-DDTHH:MM:SS`, optional fraction, then `Z` or `+HH:MM`. Hand-rolled: nothing in the
+/// tree parses dates and the status line's one form does not earn a crate.
+fn iso_ms(s: &str) -> Option<i64> {
+    let num = |a: usize, n: usize| s.get(a..a + n)?.parse::<i64>().ok();
+    let (y, mo, d, h, mi, se) = (num(0, 4)?, num(5, 2)?, num(8, 2)?, num(11, 2)?, num(14, 2)?, num(17, 2)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let mut rest = s.get(19..)?;
+    let mut frac = 0;
+    if let Some(after) = rest.strip_prefix('.') {
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+        frac = format!("{digits:0<3}").get(..3)?.parse::<i64>().ok()?;
+        rest = &after[digits.len()..];
+    }
+    let offset = match rest {
+        "" | "Z" => 0,
+        o => {
+            let sign = match o.as_bytes()[0] { b'+' => 1, b'-' => -1, _ => return None };
+            sign * (o.get(1..3)?.parse::<i64>().ok()? * 60 + o.get(4..6)?.parse::<i64>().ok()?) * 60
+        }
+    };
+    // Days since 1970-01-01 from the civil date (Howard Hinnant's days_from_civil).
+    let (y, mo) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * mo + 2) / 5 + d - 1;
+    let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
+    Some((days * 86_400 + h * 3_600 + mi * 60 + se - offset) * 1_000 + frac)
+}
+
+/// STAT-040: keeps the figures and raises them. A report with only the context size leaves the
+/// rate-limit figures alone; a window that is used up writes when it lifts for the Claude card
+/// (`claudeUsageLimitResetsAt`) and for the next limit stop.
+fn record_usage(app: &AppHandle, u: &Usage) {
+    if !u.limits.is_empty() {
+        let lifts = exhausted(&u.limits);
+        if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
+            if let Ok(store) = store.lock() {
+                let _ = store.set(LIMITS_KEY, &json!(u.limits).to_string());
+                if let Some(at) = lifts {
+                    let _ = store.set(crate::claude_key::LIMIT_KEY, &at.to_string());
+                }
+            }
+        }
+        crate::status::LIMIT_RESETS_AT.store(lifts.unwrap_or(0), Ordering::Relaxed);
+        if lifts.is_some() {
+            let _ = app.emit(crate::claude_key::EVENT, ());
+        }
+    }
+    let _ = app.emit(USAGE_EVENT, u);
+}
+
+/// The rate-limit windows the last status-line report carried, for the usage pill at start.
+#[tauri::command]
+pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Result<Vec<Limit>, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(store.get(LIMITS_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default())
+}
+
 fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
     let mut reader = BufReader::new(&stream);
     let code = match parse_request(&mut reader) {
+        Some(req) if req.path == "/claude-status" => match usage(&req, token) {
+            Ok(u) => {
+                record_usage(app, &u);
+                200
+            }
+            Err(code) => code,
+        },
         Some(req) => {
             let (code, status) = answer(&req, token);
             if let Some(status) = status {
@@ -288,6 +427,19 @@ pub fn codex_script() -> String {
     script("Codex (STAT-008)", "codex")
 }
 
+/// The status-line script (STAT-040): the same guards and post, to the status route.
+pub fn status_script() -> String {
+    script("Claude Code's status line (STAT-040)", "claude-status")
+}
+
+/// The `statusLine` command (STAT-040). Claude Code runs it through a POSIX shell on Windows
+/// too, so it keeps stdin in a file, posts it with the script, then feeds the user's own status
+/// line (`prev`, the command Kolux displaced, when that file exists) from the same file, so what
+/// the user had keeps drawing.
+pub fn status_command(script: &str, prev: &str) -> String {
+    format!("k=\"${{TMPDIR:-/tmp}}/kolux-rs-status-$$\"; cat >\"$k\"; \"{script}\" <\"$k\" >/dev/null 2>&1; [ -f \"{prev}\" ] && sh \"{prev}\" <\"$k\"; rm -f \"$k\"; exit 0")
+}
+
 fn script(agent: &str, route: &str) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
     let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" --data-binary @- -o NUL \"http://127.0.0.1:%KP%/{route}\" >NUL 2>&1");
@@ -319,6 +471,10 @@ pub fn write_codex_script(home: &Path) -> Result<String, String> {
     write_script(home, CODEX_SCRIPT, &codex_script())
 }
 
+pub fn write_status_script(home: &Path) -> Result<String, String> {
+    write_script(home, STATUS_SCRIPT, &status_script())
+}
+
 fn write_script(home: &Path, name: &str, script: &str) -> Result<String, String> {
     let dir = home.join(SCRIPT_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -348,6 +504,27 @@ fn is_mine(group: &Value) -> bool {
 /// (another tool's hooks, the user's own) as it is. True when `settings` changed.
 pub fn install_claude_hooks(settings: &mut Value, command: &str) -> bool {
     install_groups(settings, &CLAUDE_EVENTS, &TOOL_EVENTS, command)
+}
+
+/// STAT-040: Kolux's command takes the `statusLine` slot, keeping padding and whatever else is
+/// set there. Returns whether `settings` changed and the command found in the slot when it was
+/// somebody else's, so the caller can keep it running after Kolux's post.
+pub fn install_claude_status(settings: &mut Value, command: &str) -> (bool, Option<String>) {
+    if !settings.is_object() {
+        *settings = json!({});
+    }
+    let slot = settings.as_object_mut().unwrap().entry("statusLine").or_insert_with(|| json!({}));
+    if !slot.is_object() {
+        *slot = json!({});
+    }
+    let had = slot.get("command").and_then(Value::as_str).map(str::to_string);
+    if had.as_deref() == Some(command) {
+        return (false, None);
+    }
+    let displaced = had.filter(|c| !is_my_command(c) && !c.trim().is_empty());
+    slot["type"] = json!("command");
+    slot["command"] = json!(command);
+    (true, displaced)
 }
 
 /// The same for Codex's `hooks.json` (STAT-008): one Kolux group per event, after the user's own.
@@ -389,19 +566,22 @@ fn indent_of(text: &str) -> usize {
     text.lines().find_map(|l| { let n = l.len() - l.trim_start_matches(' ').len(); (n > 0).then_some(n) }).unwrap_or(2)
 }
 
-/// Installs the Claude hooks into `file` (created when missing, never rewritten when unreadable).
-pub fn install_claude(file: &Path, command: &str) -> Result<bool, String> {
+/// Installs the Claude hooks and the status line into `file` (created when missing, never
+/// rewritten when unreadable): whether it changed, and the status-line command displaced.
+pub fn install_claude(file: &Path, command: &str, status: &str) -> Result<(bool, Option<String>), String> {
     let text = match std::fs::read_to_string(file) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".to_string(),
         Err(e) => return Err(e.to_string()),
     };
     let mut settings: Value = serde_json::from_str(&text).map_err(|e| format!("{} is not JSON ({e}); hooks not installed", file.display()))?;
-    if !install_claude_hooks(&mut settings, command) {
-        return Ok(false);
+    let hooks = install_claude_hooks(&mut settings, command);
+    let (line, displaced) = install_claude_status(&mut settings, status);
+    if !(hooks || line) {
+        return Ok((false, None));
     }
     write_json(file, &settings, indent_of(&text))?;
-    Ok(true)
+    Ok((true, displaced))
 }
 
 /// Pretty JSON with `indent` spaces, whole file then a rename.
@@ -583,10 +763,19 @@ fn home_dir() -> PathBuf {
 /// launch; problems go to stderr.
 pub fn install_all() {
     let home = home_dir();
-    match write_claude_script(&home) {
-        Ok(path) => {
-            if let Err(e) = install_claude(&claude_settings_file(), &format!("\"{path}\" || exit 0")) {
-                eprintln!("kolux-rs: claude hooks: {e}");
+    match write_claude_script(&home).and_then(|path| write_status_script(&home).map(|status| (path, status))) {
+        Ok((path, status)) => {
+            let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
+            let status = status_command(&status, &prev.to_string_lossy().replace('\\', "/"));
+            match install_claude(&claude_settings_file(), &format!("\"{path}\" || exit 0"), &status) {
+                // The status line the user had keeps running from this file (STAT-040).
+                Ok((_, Some(displaced))) => {
+                    if let Err(e) = std::fs::write(&prev, format!("{displaced}\n")) {
+                        eprintln!("kolux-rs: claude status line: {e}");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("kolux-rs: claude hooks: {e}"),
             }
         }
         Err(e) => eprintln!("kolux-rs: claude hook script: {e}"),
@@ -770,22 +959,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let file = dir.join("settings.json");
         let x = "\"C:/u/.kolux-rs/agent-hooks/claude.cmd\" || exit 0";
-        assert!(install_claude(&file, x).unwrap());
+        let st = status_command("C:/u/.kolux-rs/agent-hooks/claude-status.cmd", "C:/u/.kolux-rs/agent-hooks/claude-status-prev.sh");
+        assert_eq!(install_claude(&file, x, &st).unwrap(), (true, None));
         let v: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], x);
+        assert_eq!(v["statusLine"]["command"], st, "STAT-040: the status line is installed beside the hooks");
         std::fs::write(&file, "{\n    \"env\": {\n        \"A\": \"1\"\n    }\n}\n").unwrap();
-        assert!(install_claude(&file, x).unwrap());
+        assert!(install_claude(&file, x, &st).unwrap().0);
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.starts_with("{\n    \"env\": {\n        \"A\": \"1\"\n    },\n    \"hooks\""), "{text}");
-        assert!(!install_claude(&file, x).unwrap());
+        assert!(!install_claude(&file, x, &st).unwrap().0);
         std::fs::write(&file, "not json").unwrap();
-        assert!(install_claude(&file, x).is_err());
+        assert!(install_claude(&file, x, &st).is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "not json", "an unreadable file is left alone");
         let script = write_claude_script(&dir).unwrap();
         assert!(script.ends_with(".kolux-rs/agent-hooks/claude.cmd") && !script.contains('\\'));
         let body = std::fs::read_to_string(&script).unwrap();
         assert!(body.starts_with("@echo off\r\n") && body.contains("curl.exe -s -m 1.5") && body.ends_with("exit /b 0\r\n"));
+        let status = write_status_script(&dir).unwrap();
+        assert!(status.ends_with(".kolux-rs/agent-hooks/claude-status.cmd"));
+        assert!(std::fs::read_to_string(&status).unwrap().contains("%KP%/claude-status\""));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_status_line_takes_the_slot_and_chains_the_one_it_displaced() {
+        // STAT-040: Kolux's command keeps stdin in a file, posts it, then feeds the user's own
+        // status line from the same file; the displaced command is handed back for that file.
+        let st = status_command("C:/u/.kolux-rs/agent-hooks/claude-status.cmd", "C:/u/.kolux-rs/agent-hooks/claude-status-prev.sh");
+        assert!(st.contains("cat >\"$k\"") && st.contains("\"C:/u/.kolux-rs/agent-hooks/claude-status.cmd\" <\"$k\"") && st.contains("sh \"C:/u/.kolux-rs/agent-hooks/claude-status-prev.sh\" <\"$k\""), "{st}");
+        let mut s = ev(r#"{"statusLine":{"type":"command","command":"node ~/line.js","padding":0}}"#);
+        assert_eq!(install_claude_status(&mut s, &st), (true, Some("node ~/line.js".into())));
+        assert_eq!(s["statusLine"], json!({ "type": "command", "command": st, "padding": 0 }), "padding and the rest stay");
+        assert_eq!(install_claude_status(&mut s, &st), (false, None), "a second install changes nothing");
+        // A stale Kolux RS command (another home) is replaced and not chained; an empty slot is filled.
+        let mut stale = ev(r#"{"statusLine":{"type":"command","command":"k=1; \"C:/old/.kolux-rs/agent-hooks/claude-status.cmd\""}}"#);
+        assert_eq!(install_claude_status(&mut stale, &st), (true, None));
+        let mut none = ev(r#"{"env":{}}"#);
+        assert_eq!(install_claude_status(&mut none, &st), (true, None));
+        assert_eq!(none["statusLine"]["type"], "command");
+        assert_eq!(none["env"], json!({}));
+    }
+
+    #[test]
+    fn a_status_line_report_is_checked_and_read() {
+        // STAT-040: the token is checked; the figures come out as Kolux keeps them (ms resets);
+        // a report with only the context size carries no limits.
+        let id = base64::engine::general_purpose::STANDARD.encode(r#"{"paneKey":4,"terminal":2,"hookVersion":1}"#);
+        let body = r#"{"model":{"id":"claude-fable-5-1"},"context_window":{"context_window_size":200000,"total_input_tokens":50000,"used_percentage":25},"rate_limits":[{"kind":"five_hour","percentUsed":40,"resetsAt":"2026-10-12T20:00:00Z"},{"kind":"seven_day","percentUsed":100.0,"resetsAt":"2026-10-12T20:00:00.5+02:00"},{"kind":"odd"}]}"#;
+        let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let req = parse_request(&mut raw.as_bytes()).unwrap();
+        let u = usage(&req, "tok").unwrap();
+        assert_eq!((u.pane_key, u.context_percent), (4, Some(25.0)));
+        assert_eq!(u.limits, vec![
+            Limit { kind: "five_hour".into(), used_percent: 40.0, resets_at: Some(1_791_835_200_000) },
+            Limit { kind: "seven_day".into(), used_percent: 100.0, resets_at: Some(1_791_828_000_500) },
+        ]);
+        assert_eq!(exhausted(&u.limits), Some(1_791_828_000_500));
+        assert_eq!(usage(&req, "other"), Err(403));
+        let only = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: 76\r\n\r\n{{\"context_window\":{{\"context_window_size\":200000,\"total_input_tokens\":30000}}}}");
+        let u = usage(&parse_request(&mut only.as_bytes()).unwrap(), "tok").unwrap();
+        assert_eq!((u.context_percent, u.limits.len()), (Some(15.0), 0));
+        assert_eq!(when_ms(&json!(1_700_000_000)), Some(1_700_000_000_000), "seconds become ms");
+        assert_eq!(when_ms(&json!(1_700_000_000_000i64)), Some(1_700_000_000_000));
+        assert_eq!(when_ms(&json!("2000-02-29T00:00:00Z")), Some(951_782_400_000));
+        assert_eq!(when_ms(&json!("soon")), None);
     }
 
     #[test]

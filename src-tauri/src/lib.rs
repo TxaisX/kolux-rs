@@ -163,6 +163,7 @@ pub fn run() {
             secrets::secret_set,
             secrets::secret_clear,
             codex_usage::codex_usage,
+            hooks::claude_usage,
             claude_key::claude_key_status,
             claude_key::claude_key_connect,
             claude_key::claude_key_cancel,

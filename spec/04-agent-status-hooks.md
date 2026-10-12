@@ -261,9 +261,20 @@ User sees: Kolux's usage and context numbers refresh from the figures Claude Cod
 Rules: reports without the right token are refused; reports carrying only the context size stay out
   of the rate-limit figures; this is where the context number in the session usage meter on Board
   cards, tabs and the Agents view comes from.
+  (Kolux RS, T-039-b: Kolux's `statusLine` command is a bash line, since Claude Code runs the
+  status line through a POSIX shell on Windows too; it saves the report to a temp file, posts it
+  through `~/.kolux-rs/agent-hooks/claude-status.cmd` with the hook token and pane identity to
+  the endpoint's `/claude-status` route, then runs the status line the user had before Kolux,
+  saved once to `claude-status-prev.sh`, from the same file. The report's fields are Claude
+  Code's: `context_window.used_percentage` (else `total_input_tokens` over
+  `context_window_size`) and `rate_limits[]` with `kind` (five_hour, seven_day, spend_limit),
+  `percentUsed` and `resetsAt`. The windows are kept in kv `claudeRateLimits`; a used-up window
+  writes when it lifts to kv `claudeUsageLimitResetsAt`, which the Claude card and the next limit
+  stop read. The pane header's gauge is the first place the context figure shows; Board cards,
+  tabs and the Agents view take it from the same `claude-usage` event when they get a meter.)
 Acceptance:
-  - [ ] Finish a Claude Code turn → the usage pill shows the latest rate-limit figures.
-  - [ ] Send a report with a wrong token → it is refused and the figures stay as they were.
+  - [x] Finish a Claude Code turn → the usage pill shows the latest rate-limit figures. (T-039-b, by a posted report)
+  - [x] Send a report with a wrong token → it is refused and the figures stay as they were. (T-039-b)
 Compat: —
 Source: D-04-040
 

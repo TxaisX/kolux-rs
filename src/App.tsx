@@ -120,6 +120,7 @@ function Window() {
   const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo }>>({});
   // STAT-045: the terminal has printed nothing for the quiet window; cleared by the next event.
   const [stale, setStale] = useState<Record<number, boolean>>({});
+  const [context, setContext] = useState<Record<number, number>>({}); // STAT-040: each Claude pane's context fill
   const [crew, setCrew] = useState<Record<number, Crew>>({}); // STAT-026: each pane's sub-agents and teammates
   const hookRef = useRef(hook);
   hookRef.current = hook;
@@ -692,6 +693,10 @@ function Window() {
       }
     });
     // STAT-045: the quiet alert comes from the terminal's own silence, judged in Rust.
+    const offUsage = listen<{ paneKey: number; contextPercent: number | null }>("claude-usage", (e) => {
+      const { paneKey, contextPercent } = e.payload;
+      if (contextPercent !== null) setContext((c) => ({ ...c, [paneKey]: contextPercent }));
+    });
     const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
       const p = panesRef.current.find((x) => x.key === e.payload.paneKey);
       if (p) quietRef.current(p, e.payload.minutes);
@@ -700,6 +705,7 @@ function Window() {
     return () => {
       off.then((f) => f());
       offQuiet.then((f) => f());
+      offUsage.then((f) => f());
     };
   }, []);
   useEffect(() => {
@@ -851,6 +857,7 @@ function Window() {
                     program={p.program}
                     args={p.args}
                     stop={turn[p.key]?.stop}
+                    context={context[p.key]}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {

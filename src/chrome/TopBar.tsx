@@ -6,9 +6,9 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
-import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import CodexPill from "../usage/CodexPill";
+import ClaudePill from "../usage/ClaudePill";
 
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
 export type Screen = "agents" | "board" | "terminals" | "inbox";
@@ -76,9 +76,8 @@ export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onTo
         <button className="ib bell" aria-label="Notifications" title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
           <Bell />
         </button>
-        <button className="usage" title="Claude usage is read from running sessions once T-041 is built. Click for AI connections." onClick={onSettings}>
-          <VendorMark agent="claude" size={13} />
-          <span>Claude · unknown</span>
+        <button className="usage" title="Usage. Click for AI connections." onClick={onSettings}>
+          <ClaudePill />
           <CodexPill />
         </button>
         <div className="wc">
