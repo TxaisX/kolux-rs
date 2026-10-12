@@ -38,6 +38,8 @@ export type PaneNotice = { title: string; body: string; primary: string; onPrima
 type Props = {
   /** Kept mounted but not shown: another workspace is in front (PROJ-066). */
   hidden?: boolean;
+  /** VIEW-024: the saved agent's name, shown in the header in place of the program word. */
+  name?: string;
   cwd?: string | null;
   branch?: string | null;
   focused?: boolean;
@@ -104,7 +106,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
+export default function TerminalPane({ hidden = false, name, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -301,7 +303,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   // The seat's job title names the pane; else the workspace folder (an agent launch's creature
   // name); else "Terminal N" (SESS-024).
   const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
-  const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
+  const agentLabel = name ?? (agent === "shell" ? "Plain shell" : programWord(agent));
   // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
   const model = agent === "shell" ? null : modelOf(args);
 
@@ -324,7 +326,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
         <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
-          {programWord(agent)}
+          {name ?? programWord(agent)}
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`} data-tip={explain}>

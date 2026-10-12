@@ -44,6 +44,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
+import AgentsRail from "./agents/AgentsRail";
+import { cardPanes, pickSession, railGroups } from "./agents/rail";
 import UpdateCenter from "./update/UpdateCenter";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
 import { chromeShown } from "./chrome/chromeItems";
@@ -82,7 +84,7 @@ import { useUsageAlerts } from "./usage/alerts";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -156,6 +158,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
   // whose active tab was closed falls back to its last tab.
   const [activeTab, setActiveTab] = useState<Record<number, number>>({});
+  // VIEW-015: the session picked on the Agents screen, kept across screen switches.
+  const [agentSel, setAgentSel] = useState<number | null>(null);
   useEffect(() => {
     const p = panes.find((x) => x.key === focused);
     if (p) setActiveTab((m) => (m[groupOf(p)] === focused ? m : { ...m, [groupOf(p)]: focused }));
@@ -506,7 +510,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     try {
       if (a) await pretrust(a.id, [activeDir]);
       const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: [], prompt: "" }) : null;
-      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
+      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), agentId: a.id, program: line.program ?? a.program, args: line.args, env: line.env, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
       setPanes((ps) => [...ps, pane]);
       setFocused(key);
     } catch (err) {
@@ -648,10 +652,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         const title = s.title?.trim() || (s.role && s.role[0].toUpperCase() + s.role.slice(1)) || undefined;
         const { cwd, branch } = places[i];
         return a && line
-          ? { key: k, cwd, branch, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
+          ? { key: k, cwd, branch, agent: markFor(a.id), agentId: a.id, program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
           : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
+      // VIEW-021: a preset started from the Agents rail stays the selected session once it runs.
+      setAgentSel((sel) => (sel === key ? made[0].key : sel));
       setToast(made.length === 1 ? "Starting 1 session" : `Starting ${made.length} sessions`);
       setActiveDir(made[0].cwd);
       setFocused(made[0].key);
@@ -679,7 +685,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     await pretrust(agent.id, [dir]);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined }]);
+    setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined }]);
     if (show) {
       setActiveDir(dir);
       setFocused(key);
@@ -780,7 +786,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     try {
       const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
       const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: wt.path, branch: wt.branch, agent: markFor(agent.id), program: agent.program, args: agent.args }]);
+      setPanes((ps) => [...ps, { key, cwd: wt.path, branch: wt.branch, agent: markFor(agent.id), agentId: agent.id, program: agent.program, args: agent.args }]);
       setActiveDir(wt.path);
       setFocused(key);
       setRefresh((n) => n + 1);
@@ -864,6 +870,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const terminals = screen === "terminals";
   const board = screen === "board";
   const inbox = screen === "inbox";
+  const agentsScreen = screen === "agents";
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
   const timed = inbox || board;
@@ -904,10 +911,26 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
   const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
+  // VIEW-015 / VIEW-021: the Agents rail groups sessions under the saved (switched-on, installed)
+  // agents; the shown session is the remembered pick, else the first agent's newest; + adds a
+  // not-started preset under that agent. VIEW-024: cards carry the saved agent's name.
+  const saved = agents.filter((a) => a.installed);
+  const groups = railGroups(panes, saved);
+  const selected = agentsScreen ? pickSession(groups, agentSel) : agentSel;
+  useEffect(() => {
+    if (agentsScreen && selected !== agentSel) setAgentSel(selected);
+  }, [agentsScreen, selected, agentSel]);
+  const savedName = (p: Pane) => saved.find((a) => a.id === p.agentId)?.name;
+  const addPreset = (id: string) => {
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", agentId: id, program: null, args: [], seats: [{ agent: id, model: null }] }]);
+    setAgentSel(key);
+    setFocused(key);
+  };
   // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
   const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
-  const lanes = board ? LANES.filter((l) => panes.some((p) => laneOf(p) === l.id)) : [];
+  const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
   const answer = (p: Pane, approve: boolean) =>
     invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve })
@@ -1072,6 +1095,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             }}
           />
         )}
+        {agentsScreen && (
+          <AgentsRail
+            groups={groups}
+            selected={selected}
+            classic={classic}
+            onSelect={(key) => {
+              setAgentSel(key);
+              setFocused(key);
+            }}
+            onAdd={addPreset}
+            onSettings={() => openSettings("agents")}
+          />
+        )}
         <div className="content">
           <SignInNotice />
           {terminals && page === "automations" && (
@@ -1157,21 +1193,21 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             </>
           )}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
-          {!terminals && !board && !inbox && screen !== "artifacts" && (
+          {agentsScreen && selected === null && (
             <div className="empty">
-              <h2>{screens.find((s) => s.id === screen)?.label}</h2>
-              <p>Nothing here yet. This screen is built in a later task.</p>
+              <h2>Agents</h2>
+              <p>{saved.length ? "No session yet. Add one with + under an agent." : "No agents yet."}</p>
             </div>
           )}
-          {board && panes.length === 0 && (
+          {board && cardPanes(panes).length === 0 && (
             <div className="empty">
               <h2>Board</h2>
               <p>No session yet.</p>
             </div>
           )}
           <div
-            className={board ? "board" : "grid"}
-            hidden={(!terminals && !board) || (terminals && page !== null)}
+            className={board ? "board" : agentsScreen ? "grid agents" : "grid"}
+            hidden={(!terminals && !board && !agentsScreen) || (terminals && page !== null) || (agentsScreen && selected === null)}
             style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
           >
               {board &&
@@ -1195,9 +1231,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                 </div>
               )}
               {cells.map((c) => {
-                const active = activeOf(c);
+                // VIEW-015: on the Agents screen the picked session is the one shown, whatever tab its cell had in front.
+                const mine = agentsScreen && c.panes.some((p) => p.key === selected);
+                const active = mine ? (selected as number) : activeOf(c);
                 return (
-                  <div key={c.group} className="cell" hidden={!board && !sameDir(c.panes[0].cwd, activeDir)}>
+                  <div key={c.group} className="cell" hidden={agentsScreen ? !mine : !board && !sameDir(c.panes[0].cwd, activeDir)}>
                     {c.panes.length > 1 && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
@@ -1279,6 +1317,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}
+                    name={savedName(p)}
                     program={p.program}
                     args={p.args}
                     env={p.env}
