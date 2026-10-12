@@ -43,7 +43,7 @@ import { nextNeedsYou } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
+import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -831,6 +831,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     busy={launching}
                     closable
                     onClose={() => closePane(p.key)}
+                    saved={Array.isArray(settings[SAVED_SHAPES_KEY]) ? (settings[SAVED_SHAPES_KEY] as SavedShape[]) : []}
+                    onSaved={(list) => saveSetting(SAVED_SHAPES_KEY, list)}
+                    onPickSaved={(t) => setChooser(p.key, { shape: "custom", seats: restoreShape(t, installedIds), task: t.task ?? "", copies: t.copies })}
                   />
                 ) : (
                   <TerminalPane

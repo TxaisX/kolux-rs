@@ -5,11 +5,11 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import ChooserPane from "./ChooserPane";
 import type { AgentInfo } from "./PlusMenu";
-import { defaultCopies, pickShape, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
+import { defaultCopies, pickShape, TERMINAL, type Copies, type SavedShape, type Seat, type Shape } from "./seats";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:\\bin\\claude.exe" };
-const render = (seats: Seat[], closable = true, inGit = true, copies: Copies = defaultCopies(seats.length, inGit), shape: Shape = "custom", task = "") =>
-  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape, task, onTask: () => {}, onStart: () => {}, copies, inGit, onCopies: () => {}, closable, onClose: () => {} }));
+const render = (seats: Seat[], closable = true, inGit = true, copies: Copies = defaultCopies(seats.length, inGit), shape: Shape = "custom", task = "", saved: SavedShape[] = []) =>
+  renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape, task, onTask: () => {}, onStart: () => {}, copies, inGit, onCopies: () => {}, closable, onClose: () => {}, saved, onSaved: () => {}, onPickSaved: () => {} }));
 const radio = (html: string, label: string) => html.split("<label").find((l) => l.includes(label))!;
 const startButton = (html: string) => html.split("<button").find((b) => b.includes("Start"))!;
 
@@ -90,4 +90,13 @@ test("SESS-012: the lineup shows the shape row, a task for every seat, and each 
   const custom = render(swarm.slice(0, 2).map((s) => ({ ...s, role: undefined })));
   expect(custom.split("<button").find((b) => b.includes(">Custom<"))).toContain('aria-pressed="true"');
   expect(custom).not.toContain("seat-role");
+});
+
+test("SESS-020: Save as team waits until every seat is picked; saved shapes sit after the built-in ones", () => {
+  const save = (html: string) => html.split("<button").find((b) => b.includes("Save as team"))!;
+  expect(save(render([{ agent: "claude", model: null }]))).toContain("disabled");
+  expect(save(render([{ agent: "claude", model: "opus" }]))).not.toContain("disabled");
+  const html = render([{ agent: "claude", model: "opus" }], true, true, "shared", "custom", "", [{ name: "Review crew", seats: [{ agent: "claude", model: "opus", role: "builder" }], copies: "shared" }]);
+  expect(html.indexOf("Review crew")).toBeGreaterThan(html.indexOf("Custom"));
+  expect(html).toContain("Rename or delete Review crew");
 });
