@@ -885,6 +885,12 @@ signed out once a GitHub project is registered, when GitLab's glab does not star
 project is registered, and when no AI program is installed. Each has Check again and Dismiss; a
 dismissed notice stays hidden across restarts until the set of GitHub projects changes.
 
+[accounts] Token analytics (T-136-b): Settings › Usage now has an Overview / Claude / Codex
+picker. Tracking starts off for each agent; turn it on and Kolux reads the logs Claude Code and
+Codex already keep on this PC (nothing is sent anywhere). The overview shows total tokens, days
+with use, the share read from cache, a 26-week green day grid with the best day ringed, and the
+token mix. The cost reads n/a, marked partial, until the price table lands (T-137-a).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -902,6 +908,11 @@ recorded default until told otherwise; nothing here blocks a pass.
   text) of a few of your own `~.claudeprojects` and `~.codexsessions` files; (b) count
   tokens only from what Kolux sees live; (c) leave token analytics out. Until you pick, T-136-b
   and T-137 stay unbuilt. USAGE-011's activity counts also wait for the status hooks (T-025).
+  RESOLVED 2026-10-12: Txais chose (a). A builder may read the FIELD NAMES and value types (never
+  the message text, prompts or paths) of a few of his own ~/.claude/projects/*.jsonl and
+  ~/.codex/sessions files, record the observed shape with a date in PROVENANCE.md section 5, and
+  parse defensively (unknown fields ignored, format changes degrade to "unknown", never crash).
+  T-136-b, T-137 and T-140 are unblocked. (Mirrors main 56ce04e; shape recorded 2026-10-12.)
 
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
@@ -1641,7 +1652,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-211 · The landing screen is the main Terminals screen with no Settings or Automations page open (the app opens a terminal straight away, so the empty state is rarely seen); the notices sit at its top beside the other main-window notices. "Agent CLIs are missing" is read as no AI program from the catalogue being installed at all. A probe that hangs past 6 s reads as unknown and shows no notice (gh's sign-in check can be slow offline), except glab, whose failed or hung version check counts as not installed; GitLab's notice follows the GitHub rule (only once a project with a GitLab remote exists). Every notice's dismissal is recorded under the GitHub project set, so Git's and the AI-program notice also come back when that set changes. Without Git the app now starts (Git::detect no longer stops the launch) and each Git action fails with its own error.
 
+- [accounts] T-136-b · Token tracking for a provider is off until turned on; a profile with saved results but no recorded choice counts as on and is rescanned on opening. "Served from cache" is cache reads over all input (fresh + cache reads + cache writes). Codex's cached input is taken as part of its input count, so fresh input is input minus cached; Codex cache writes stay inside fresh input (OpenAI bills them as input). A Claude reply counts once by message id, the last piece written winning; a Codex token event counts its own last-turn figures and only when the running total moved. The days are local days (system time zone). A missing log folder is a failed scan: saved figures stay with a plain warning, and with no saved figures the empty state shows. The provider picker leaves Grok out until its credits panel (T-137-b).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-136-b · done (T-136 split again: -c is USAGE-011's activity counts, waiting on T-025): new `src-tauri/src/token_usage.rs` (Claude / Codex log scan into local-day buckets, saved results, single-flight `Flights`, `token_usage` / `token_usage_scan` / `token_tracking_set`, 6 tests) and `src/usage/tokens.ts`, `pricing.ts` (empty until T-137-a), `TokenAnalytics.tsx`, `tokens.test.ts` (7 tests); Settings › Usage draws it; live with invented stand-in logs: off state, Enable Claude, Codex panel off then on, combined overview, broken folder keeps the figures, restart shows saved figures, both off shows the two enable buttons; build / clippy / 199 Rust + 343 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-136-b.txt, T-136-b-1..7 png
 - 2026-10-12 · [accounts] T-211 · done: new `src-tauri/src/tools.rs` (time-limited probes of git, gh, gh auth status and glab, cached until Check again; GitHub/GitLab-hosted projects read fresh; dismissals in kv), `src/launch/toolChecks.ts` and `ToolNotices.tsx` on the main screen; the app starts without Git · evidence/T-211.txt, T-211-1..4 png
 - 2026-10-12 · [accounts] T-210-a · done: new `src/language.ts` (choices, System resolution, locale, apply on load) and `src/language.test.ts`; Language select in Appearance; every date, time and sort call reads `locale()` · evidence/T-210-a.txt, T-210-a-1..2 png
 - 2026-10-12 · [accounts] T-209-a · done: new `src/glossary.ts` (banned words, plain words with hover text, the Connect cards' lines) and `src/plainWords.test.ts` (TypeScript syntax scan of 13 in-scope files plus a hover check); Add Project, sidebar and toast wording changed · evidence/T-209-a.txt, T-209-a-1..2 png

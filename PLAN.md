@@ -251,7 +251,8 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [x] T-135 · SESS-022 Warning before launching close to a usage limit
 - [x] T-136-a · USAGE-009 [compat] Alerts at 80% and 95% of a usage window · USAGE-010 Launch dialogs warn when an account is nearly spent (built with T-135)
-- [ ] T-136-b · USAGE-011 [compat] Stats & Usage page with Kolux activity counts · USAGE-012 Usage analytics opens on a combined overview · USAGE-013 Token tracking is opt-in for each provider
+- [x] T-136-b · USAGE-012 Usage analytics opens on a combined overview · USAGE-013 Token tracking is opt-in for each provider (Settings › Usage: Overview / Claude / Codex picker, the scan of Claude Code's and Codex's own logs, saved results, single-flight rescans)
+- [ ] T-136-c · USAGE-011 [compat] Stats & Usage page with Kolux activity counts (waits on the status hooks, T-025-a/b/c, not in this lane; also USAGE 012's rule that opening the page counts as having tried the usage feature, once in-app guidance exists, and USAGE 011's palette search for usage)
 - [ ] T-137 · USAGE-014 Claude and Codex token analytics panels · USAGE-015 Estimated cost from each model's published prices · USAGE-018 Grok credits panel
 - [x] T-138 · ACCT-016 The Claude accounts list: system default and managed accounts · ACCT-017 Changing the active Claude account is safe with sessions running · ACCT-018 The same Claude account cannot be added twice · ACCT-019 [compat] The Codex accounts list for fast switching · ACCT-020 Codex's system-default login is shown truthfully
 - [x] T-138-b · Codex accounts list (ACCT 019): label a personal and a business workspace on one email so they can be told apart (today both rows show the email and their own last sign-in time; the workspace kind lives in token claims OpenAI does not document, so it needs a public source first)

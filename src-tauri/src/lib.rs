@@ -30,6 +30,7 @@ mod state;
 mod sysmem;
 mod terminal;
 mod tools;
+mod token_usage;
 mod trust;
 mod update;
 mod visibility;
@@ -108,6 +109,7 @@ pub fn run() {
             // Git the app still opens, and the landing screen says so (APP-023).
             app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
             app.manage(tools::Cache::default());
+            app.manage(token_usage::Flights::default());
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
@@ -166,6 +168,9 @@ pub fn run() {
             agents::agent_list,
             tools::tools_check,
             tools::tools_dismiss,
+            token_usage::token_usage,
+            token_usage::token_usage_scan,
+            token_usage::token_tracking_set,
             agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_summary,
