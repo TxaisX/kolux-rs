@@ -35,7 +35,7 @@ import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type Turn } from "./terminal/notify";
 import { FINISH_FIELD } from "./settings/Notifications";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
-import { Bell, StatusGlyph } from "./chrome/icons";
+import { Bell, Globe, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
@@ -789,7 +789,7 @@ function Window() {
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
-                            <VendorMark agent={p.agent} size={12} />
+                            {p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>

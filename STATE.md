@@ -1262,7 +1262,22 @@ recorded default until told otherwise; nothing here blocks a pass.
   removes its temp folder no longer panics when Windows still holds the store file for a moment
   (it flaked once in T-025-c and once here).
 
+- 2026-10-12 · [core] T-003b-fix-b: DESIGN.md names the two additions the look got in T-003b:
+  section 6 the strip's "+ New tab" button (86 x 28 at x 1302..1388 in a 1400 px window, 12 px
+  from the right edge, the layout group's border and type) and section 7 the pane header's split
+  button (between Expand and "+", 24 px hit target). In the tab strip a browser tab now shows the
+  globe where a terminal tab shows its program's mark (`App.tsx`). The native web view cannot be
+  clipped by the pane's rounded corners, so `.pane.browser .pane-body` keeps a 1 px side margin
+  and a 12 px bottom margin: the ring and the bottom curve stay visible around the page
+  (`styles.css`; the web view follows the body's rect as before). Proved live with a shell and a
+  browser tab in one cell (`evidence/T-003b-fix-b-browser.png`: globe on the New Tab tab, the
+  page 1 px inside the ring and 13 px above the pane's bottom edge). Nothing pure to unit-test;
+  the capture is the check. The projects test flake has its real cause: two tests shared the
+  temp folder "profile4" and wiped each other when run in parallel; the second now has its own,
+  and the full suite passed three runs in a row. No DECISIONS row.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-003b-fix-b · done: DESIGN.md sections 6 and 7, globe tab glyph in `App.tsx`, web view inset in `styles.css`, projects test temp-folder collision fixed; `evidence/T-003b-fix-b-browser.png`
 - 2026-10-12 · [core] T-013-fix-b · done: Unicode-name fallback in `names.rs` (+ tests, crate `unicode_names2`), `nameOf()` in `workspaces.ts` (+ test), typed names flow `ProjectsPanel` → `App` → pane header; `evidence/T-013-fix-b-preview.png`, `-header.png`
 - 2026-10-12 · [core] T-013-fix-a · done: `createOpens()` in `model.ts` (+ test), `ProjectsPanel.tsx` routes Mod+N and the header button through it, T-013-c added; `evidence/T-013-fix-a-no-project.png`
 - 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
@@ -1273,6 +1288,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
 - 2026-10-11 · [core] T-028-a · done: `src/board/chip.ts` (+ test), Board lanes and chip rows in `App.tsx` / `TerminalPane.tsx` / `styles.css`, `agent_answer` and `Change.wrote` in `status.rs` / `hooks.rs`; `evidence/T-028-a-board.png`, `-approved.png`, `-deny-ask.png`, `-denied.png`
 - 2026-10-11 · [core] T-027 · deferred (0 passes): needs T-325 / T-326 / T-050; rules moved onto the T-326 line
-- 2026-10-11 · [core] T-026-c · done: `src/inbox/inbox.ts` (+ test), `InboxView.tsx`, the bell and `view.inbox` in `TopBar.tsx` / `App.tsx`, pane state stamps; `evidence/T-026-c-all-clear.png`, `-groups.png`, `-detail.png`, `-opened.png`
 
 

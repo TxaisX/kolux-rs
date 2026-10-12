@@ -832,7 +832,7 @@ mod tests {
 
     #[test]
     fn saving_a_folder_that_cannot_be_made_fails_and_keeps_the_old_one() {
-        let profile = temp("profile4");
+        let profile = temp("profile9");
         let store = Store::open(&profile).unwrap();
         let bad = profile.join("file-not-folder");
         fs::write(&bad, "x").unwrap();
