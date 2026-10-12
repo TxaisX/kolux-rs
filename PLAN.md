@@ -488,7 +488,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [ ] T-288 · PROJ-036 Linked issues can start with a per-project issue command
 - [ ] T-289 · TERM-036 Copy session, terminal and pane IDs · TERM-096 Links to other terminals and orchestration tasks
-- [ ] T-290 · ORCH-043 Kolux checks whether each agent has the orchestration skill
+- [x] T-290 · ORCH-043 Kolux checks whether each agent has the orchestration skill
 - [ ] T-291 · AUTO-023 Automations row in the sidebar, off by default · AUTO-024 Hide or tag worktrees made by automations
 - [ ] T-292 · SKILL-025 Skill freshness pill · SKILL-027 Status bar shows a running skill update · also passes: VIEW-100 Skill and app update progress in the status bar
 
