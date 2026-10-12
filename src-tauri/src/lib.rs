@@ -190,6 +190,7 @@ pub fn run() {
             resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,
+            terminal::terminal_screen_reply,
             status::agent_history,
             status::agent_answer,
             terminal::terminal_resize,

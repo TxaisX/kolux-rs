@@ -283,6 +283,8 @@ failed or empty included, is reused for 1.5 seconds so polling does not start gi
 terminal polling with `--json` gets the whole snapshot once, then `{"unchanged": true}` while
 nothing changes; text output is always the full list.
 
+[core] T-134-a adds `kolux-dev terminal read | send | wait` (CLI-024, CLI-025). The reader thread keeps an `OutputLog` per session in `terminal.rs` (last 2000 lines, each numbered with a cursor, escapes stripped, a split UTF-8 character joined across chunks, a redrawn progress line kept in its last state); `read --cursor n --limit k` pages forward and warns when kept lines were dropped or more follow; `--screen` asks the window for the pane's xterm rows (`terminal-screen-request` event, `terminal_screen_reply` command, 1.5 s wait) and falls back to the stream with a warning. The stream is output with escapes removed, not a rendering: a line editor's redraws can leave traces in it. `send` writes `--text` (bracketed paste into an agent pane), `--enter`, `--interrupt` (Ctrl-C and the status cancel); a prompt (text + Enter to an agent) is watched for `--wait-submit` seconds through the status hooks' history and answers `turn_began`, `queued` or `unknown`; `--retry-request` replays a receipt kept in memory. `wait --for exit|tui-idle --timeout-ms` polls from the CLI side; a pane without hook reports counts as idle after 3 s without output, with a warning; permission, waiting and blocked end the wait non-zero. On this PC a pane's PowerShell start sets CLAUDE_CONFIG_DIR back to the user's real folder whatever the app was started with, so the Claude hook proof used a hand-posted report; a real pane's hooks firing is T-025-d's.
+
 T-015 gives the chooser a "Folders" row (SESS-014): "Separate copy for each AI" or "Same folder
 for all". With two or more seats in a Git project the separate copy is picked for you; one seat,
 or no Git project, picks the shared folder (and the separate choice is disabled with "Not a Git
@@ -2323,6 +2325,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   each read the stale selection, so the updater now takes the previous state. Proof files removed.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-134-a · done: terminal read (log, cursor paging, --screen via xterm rows), send (paste, Enter, interrupt, prompt receipt, retry), wait (exit, tui-idle, blocked states, quiet fallback); T-134-b split off for the agent hooks commands; DT-C18; evidence/T-134-a-cli.txt, T-134-a-claude.png, T-134-a-app.png
 - 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png
 - 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
 - 2026-10-12 · [core] T-043-d · done: sign-in upkeep switch, lapsed warnings follow it, check on switch-off; Kolux-side renewal dropped (DT-C16); keychain rules → T-043-e; evidence/T-043-d-upkeep.png

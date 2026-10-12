@@ -19,6 +19,9 @@ const SCHEMA: u32 = 1;
 const SUMMARIES: &[(&str, &str)] = &[
     ("worktree create", "Make a worktree in a repo, optionally starting an agent in it."),
     ("worktree rm", "Remove a worktree and its folder."),
+    ("terminal read", "Read a terminal's output after a cursor, or its visible screen with --screen."),
+    ("terminal send", "Type text, Enter or an interrupt into a terminal; a prompt to an agent gets a receipt."),
+    ("terminal wait", "Wait until a terminal exits or its agent goes idle."),
     ("orchestration worker-start", "Start a worker agent on a task, in a new or chosen worktree."),
     ("account add", "Sign in to a Claude or Codex account with the agent's own login, and add it to Kolux."),
     ("account list", "List the Claude and Codex accounts Kolux holds."),

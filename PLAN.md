@@ -271,7 +271,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-131 · SAFE-005 Unsent comments are kept when the sheet closes and reopens · SAFE-006 A very long plan is cut down in the sheet, with a pointer to the terminal · SAFE-007 The sheet turns read-only once Claude stops waiting on that plan
 - [ ] T-132 · EDIT-007 [compat] Copy a selection together with its path and line numbers · EDIT-020 [compat] Review notes on a file, sent to an agent
 - [x] T-133 · SET-034 Notifications page: which alerts, which sounds
-- [ ] T-134 · CLI-024 [compat] kolux terminal read: output history or the screen as it looks now · CLI-025 [compat] kolux terminal send and wait · CLI-040 [compat] kolux agent hooks: status, on, off and prepare-codex
+- [x] T-134-a · CLI-024 [compat] kolux terminal read: output history or the screen as it looks now · CLI-025 [compat] kolux terminal send and wait · done 2026-10-12: kept output log per session (2000 lines, cursor-numbered, escapes stripped, UTF-8 joined across chunks), `--screen` round trip to the window's xterm rows, send with bracketed paste for agents, prompt receipt from the status hooks, wait on exit or tui-idle with a 3 s quiet fallback for panes without hooks; DT-C18 (unsent input-box text is part of the screen)
+- [ ] T-134-b · CLI-040 [compat] kolux agent hooks: status, on, off and prepare-codex · split from T-134: needs a hooks on/off setting (the Settings switch is T-120's) and an uninstall path for Kolux's own entries in each agent's hooks file (COMPAT 3.4); `install_groups`/`is_mine` in hooks.rs identify them
 
 ### P1 · theme 4 · Accounts, sign-in and usage limits (21 cards)
 

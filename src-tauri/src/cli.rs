@@ -91,10 +91,10 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev terminal read [--terminal <handle>] [--cursor <n>] [--limit <n>] [--screen] [--json]\n      (the output after a cursor, or with --screen the frame visible now; inside a Kolux terminal --terminal defaults to it)\n  kolux-dev terminal send [--terminal <handle>] [--text <text>] [--enter] [--interrupt] [--wait-submit <seconds>] [--retry-request <id>] [--json]\n  kolux-dev terminal wait [--terminal <handle>] --for exit|tui-idle [--timeout-ms <ms>] [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing
 acts on yet go to stderr and into the result's `warnings` list. Exit 0 worked, 1 any error.\n";
 
-const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "enabled", "disabled", "references"];
+const SWITCHES: &[&str] = &["screen", "enter", "interrupt", "force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "enabled", "disabled", "references"];
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
 /// and their flags. `--dispatch-capability` is accepted and unused until the dispatch pass (ORCH-067, T-155).
 const MAIL: &[(&str, &str, &[&str])] = &[
@@ -120,6 +120,12 @@ const MAIL: &[(&str, &str, &[&str])] = &[
     ("orchestration dispatch", "orchestration.dispatch", &["task", "to", "from", "run", "inject", "dry-run", "return-preamble", "max-depth", "retry-request"]),
     ("orchestration dispatch-show", "orchestration.dispatch-show", &["task", "preamble", "from"]),
     ("orchestration worker-abandon", ABANDON, &["dispatch", "run", "from", "retry-request"]),
+];
+/// CLI-024 / CLI-025: reading, typing into and waiting on a terminal by its handle.
+const TERM: &[(&str, &str, &[&str])] = &[
+    ("terminal read", "terminal.read", &["terminal", "cursor", "limit", "screen"]),
+    ("terminal send", "terminal.send", &["terminal", "text", "enter", "interrupt", "wait-submit", "retry-request"]),
+    ("terminal wait", "terminal.wait", &["terminal", "for", "timeout-ms"]),
 ];
 /// CLI-015..017: the repo, project and worktree lookups and their flags.
 const QUERY: &[(&str, &str, &[&str])] = &[
@@ -188,6 +194,7 @@ fn commands() -> Vec<Command> {
         ("open", "app.open", OPEN_FLAGS),
     ];
     all.extend(QUERY.iter().copied());
+    all.extend(TERM.iter().copied());
     all.extend(MAIL.iter().copied());
     all.extend(automations_cli::COMMANDS.iter().copied());
     all.extend(local_cli::COMMANDS.iter().copied());
@@ -524,6 +531,14 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             args = automations_cli::check(command, &flags)?;
         } else if local_cli::COMMANDS.iter().any(|c| c.1 == command) {
             args = flags.clone();
+        } else if TERM.iter().any(|(_, c, _)| *c == command) {
+            // CLI-024 / CLI-025: --text may be anything, even blank; the rest are keys and numbers.
+            for (k, v) in &flags {
+                if k != "text" && v.as_str().is_some_and(|s| s.trim().is_empty()) {
+                    return Err(Fail::args(format!("--{k} cannot be empty")));
+                }
+                args.insert(camel(k), v.clone());
+            }
         } else if QUERY.iter().any(|(_, c, _)| *c == command) {
             for (k, v) in &flags {
                 if v.as_str().is_some_and(|s| s.trim().is_empty()) {
@@ -735,6 +750,28 @@ fn text_of(command: &str, r: &Value) -> String {
     let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
     match command {
         c if c.starts_with("account.") => cli_accounts::text(c, r),
+        "terminal.read" => {
+            let strs = |v: &Value| v.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
+            if r["screen"] == Value::Bool(true) {
+                return strs(&r["rows"]).join("\n").trim_end().to_string();
+            }
+            let mut out: Vec<String> = r["lines"].as_array().into_iter().flatten().filter_map(|l| l["text"].as_str().map(str::to_string)).collect();
+            if let Some(p) = r["pending"].as_str().filter(|p| !p.is_empty()) {
+                out.push(p.to_string());
+            }
+            out.push(format!("-- cursor {}", r["cursor"]));
+            out.join("\n")
+        }
+        "terminal.send" => {
+            let what = r["delivered"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join("+");
+            let tail = match r["receipt"].as_str() {
+                Some("turn_began") => ": the agent began a turn".to_string(),
+                Some(rc) => format!(": {rc}; {}", r["next"].as_str().map(|n| format!("look with {n}")).unwrap_or_default()),
+                None => String::new(),
+            };
+            format!("sent {what} to {}{}", s("terminal"), tail.trim_end_matches("; "))
+        }
+        "terminal.wait" => format!("{} is {}", s("terminal"), s("state")),
         "worktree.create" => {
             let mut line = format!("created {} at {} (from {})", if s("name").is_empty() { s("branch") } else { s("name") }, s("path"), s("base"));
             if let Some(n) = r["note"].as_str() {
@@ -942,6 +979,41 @@ fn wait_for_mail(port: u16, mut req: Request) -> Result<Value, Fail> {
     }
 }
 
+/// CLI-025: `terminal wait` asks again every half second until the condition holds or the time
+/// is up (`--timeout-ms`, default `WAIT_DEFAULT_MS`). A terminal that ends blocked on the user,
+/// or the time running out, is a failure, so the exit status is 1.
+fn wait_for_terminal(port: u16, req: Request) -> Result<Value, Fail> {
+    let timeout = req.args["timeoutMs"].as_str().and_then(|s| s.trim().parse::<u64>().ok()).filter(|n| *n > 0).unwrap_or(WAIT_DEFAULT_MS);
+    let start = Instant::now();
+    loop {
+        let env = call(port, &req)?;
+        if env["success"] != Value::Bool(true) || wait_step(&env["result"])? {
+            return Ok(env);
+        }
+        let elapsed = start.elapsed().as_millis() as u64;
+        if elapsed >= timeout {
+            let r = &env["result"];
+            let mut f = Fail::new("timeout", format!("{} did not reach {} within {timeout} ms (it is {})", r["terminal"].as_str().unwrap_or_default(), req.args["for"].as_str().unwrap_or_default(), r["state"].as_str().unwrap_or_default()));
+            f.data = r.clone();
+            return Err(f);
+        }
+        std::thread::sleep(Duration::from_millis(500.min(timeout - elapsed)));
+    }
+}
+
+/// One answer of `terminal.wait`: done, keep asking, or blocked on the user (an error).
+fn wait_step(r: &Value) -> Result<bool, Fail> {
+    if r["done"] != Value::Bool(true) {
+        return Ok(false);
+    }
+    if r["blocked"] == Value::Bool(true) {
+        let mut f = Fail::new("blocked", format!("{} is {}, not idle: the agent needs an answer", r["terminal"].as_str().unwrap_or_default(), r["state"].as_str().unwrap_or_default()));
+        f.data = r.clone();
+        return Err(f);
+    }
+    Ok(true)
+}
+
 /// ORCH-041: Claude Code with Agent Teams turned on, in the Kolux terminal it is run from; every
 /// argument after `claude-teams` goes to Claude untouched. Windows is not supported, and outside a
 /// Kolux terminal there is no pane for the team, so both refuse with exit status 1.
@@ -1065,6 +1137,11 @@ pub fn main(words: Vec<String>) -> i32 {
             let (port, token) = read_endpoint(&data_dir())?;
             let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane };
             return Ok((parsed.command.clone(), wait_for_mail(port, req)?));
+        }
+        if parsed.command == "terminal.wait" {
+            let (port, token) = read_endpoint(&data_dir())?;
+            let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane };
+            return Ok((parsed.command.clone(), wait_for_terminal(port, req)?));
         }
         let send = || {
             let (port, token) = read_endpoint(&data_dir())?;
@@ -1297,6 +1374,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         }
         WORKER_START => worker_start(ctx, req),
         c if QUERY.iter().any(|(_, w, _)| *w == c) => query(ctx, req),
+        c if TERM.iter().any(|(_, w, _)| *w == c) => terminal_cmd(ctx, req),
         c if c.starts_with("orchestration.") => mail(ctx, req),
         c if c.starts_with("account.") => cli_accounts::dispatch(ctx, req),
         c if c.starts_with("automations.") => automations_cli::dispatch(ctx, req),
@@ -1957,6 +2035,171 @@ fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
     crate::agents::agent_list().into_iter().find(|x| x.id == stem || x.program.eq_ignore_ascii_case(&stem)).map(|x| x.id)
 }
 
+// ---------------------------------------------------------------- terminal read, send, wait (CLI-024, CLI-025)
+
+/// How long `send` watches for the agent to take a prompt unless `--wait-submit` says otherwise.
+const SUBMIT_WATCH: Duration = Duration::from_secs(3);
+/// Receipts by terminal and `--retry-request` id: an exact retry answers without sending again.
+/// ponytail: in memory, bounded; a retry after a Kolux restart sends anew.
+static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
+const BLOCKED: [&str; 3] = ["permission", "waiting", "blocked"];
+
+fn terminal_cmd(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    let a = &req.args;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let num = |k: &str, flag: &str| -> Result<Option<u64>, Fail> {
+        match a[k].as_str() {
+            None => Ok(None),
+            Some(v) => v.trim().parse::<u64>().map(Some).map_err(|_| Fail::args(format!("{flag} takes a whole number, not `{}`", v.trim()))),
+        }
+    };
+    // COMPAT 2.1: inside a Kolux terminal the command works on that terminal unless told otherwise.
+    let handle = text("terminal").or_else(|| req.pane.as_ref().map(|p| p.handle.clone())).ok_or_else(|| Fail::args("--terminal <handle> is required outside a Kolux terminal (kolux worktree ps --json lists them)"))?;
+    let id = handle.strip_prefix("term-").and_then(|n| n.parse::<u32>().ok()).ok_or_else(|| Fail::args(format!("{handle} is not a terminal handle (term-<n>)")))?;
+    let live = ctx.terminals.live(&handle);
+    let gone = || Fail::new("not_found", format!("no open Kolux terminal is called {handle}"));
+    match req.command.as_str() {
+        "terminal.read" => {
+            let cursor = num("cursor", "--cursor")?;
+            let limit = num("limit", "--limit")?.map(|n| n as usize);
+            if a["screen"].as_bool().unwrap_or(false) {
+                if cursor.is_some() {
+                    return Err(Fail::args("--screen and --cursor cannot be combined: a screen has no history"));
+                }
+                if !live {
+                    return Err(gone());
+                }
+                let request = request_id();
+                crate::terminal::screen_open(&request);
+                (ctx.notify)(json!({ "emit": crate::terminal::SCREEN_EVENT, "payload": { "id": id, "request": request } }));
+                if let Some(rows) = crate::terminal::screen_wait(&request) {
+                    return Ok(json!({ "terminal": handle, "screen": true, "rows": rows }));
+                }
+                let r = ctx.terminals.read(id, None, limit).ok_or_else(gone)?;
+                let mut out = serde_json::to_value(r).unwrap_or_default();
+                out["terminal"] = json!(handle);
+                out["screen"] = json!(false);
+                out["warnings"] = json!([format!("the window did not supply {handle}'s screen; this is its output stream, not a screen")]);
+                return Ok(out);
+            }
+            let r = ctx.terminals.read(id, cursor, limit).ok_or_else(gone)?;
+            let mut warnings = Vec::new();
+            if r.dropped {
+                warnings.push(format!("only part of the output is kept: lines before cursor {} are gone; the oldest cursor to read on from is {}", r.oldest, r.oldest.saturating_sub(1)));
+            }
+            if r.more {
+                warnings.push(match cursor {
+                    Some(_) => format!("more lines follow; read on with --cursor {}", r.cursor),
+                    None => "older lines were left out by --limit; page through them with --cursor".to_string(),
+                });
+            }
+            let mut out = serde_json::to_value(r).unwrap_or_default();
+            out["terminal"] = json!(handle);
+            out["screen"] = json!(false);
+            out["warnings"] = json!(warnings);
+            Ok(out)
+        }
+        "terminal.send" => {
+            let body = text("text");
+            let enter = a["enter"].as_bool().unwrap_or(false);
+            let interrupt = a["interrupt"].as_bool().unwrap_or(false);
+            if body.is_none() && !enter && !interrupt {
+                return Err(Fail::args("nothing to send: give --text, --enter or --interrupt"));
+            }
+            let watch = num("waitSubmit", "--wait-submit")?.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
+            let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
+            if let Some(key) = &retry {
+                if let Some(receipt) = SENT.lock().ok().and_then(|s| s.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())) {
+                    let mut again = receipt;
+                    again["retried"] = json!(true);
+                    return Ok(again);
+                }
+            }
+            if !live {
+                return Err(gone());
+            }
+            let agent = ctx.terminals.program(id).flatten();
+            let prompt = agent.is_some() && body.is_some() && enter;
+            let before = if prompt { Some(crate::status::activity(id)) } else { None };
+            let write = |s: &str| ctx.terminals.write(id, s).map_err(|e| Fail::new("failed", e));
+            let mut delivered = Vec::new();
+            if interrupt {
+                write("\u{3}")?;
+                crate::status::cancel(id);
+                delivered.push("interrupt");
+            }
+            if let Some(t) = &body {
+                // An agent's input box takes the text as one paste, so its line breaks do not send it early.
+                if agent.is_some() { write(&format!("\u{1b}[200~{t}\u{1b}[201~"))? } else { write(t)? }
+                delivered.push("text");
+            }
+            if enter {
+                if prompt {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                write("\r")?;
+                delivered.push("enter");
+            }
+            let mut out = json!({ "terminal": handle, "delivered": delivered, "agent": agent, "prompt": prompt });
+            if let Some(before) = before {
+                let next = format!("kolux terminal read --terminal {handle} --screen");
+                let (receipt, warning) = match before {
+                    None => ("unknown", Some(format!("no status hooks report for {handle}; whether the agent took the prompt cannot be told"))),
+                    Some((_, true)) => ("queued", Some("the agent was already working; the prompt waits behind its turn".to_string())),
+                    Some((mark, false)) => {
+                        let until = Instant::now() + watch;
+                        let mut took = false;
+                        while !took && Instant::now() < until {
+                            took = crate::status::activity(id).is_some_and(|(m, working)| m != mark || working);
+                            if !took {
+                                std::thread::sleep(Duration::from_millis(100));
+                            }
+                        }
+                        if took { ("turn_began", None) } else { ("queued", Some(format!("the agent did not begin a turn within {} s; Enter may have been lost", watch.as_secs()))) }
+                    }
+                };
+                out["receipt"] = json!(receipt);
+                if receipt != "turn_began" {
+                    out["next"] = json!(next);
+                }
+                out["warnings"] = json!(warning.into_iter().collect::<Vec<_>>());
+            }
+            if let Some(key) = retry {
+                if let Ok(mut s) = SENT.lock() {
+                    s.retain(|(k, _)| k != &key);
+                    s.push((key, out.clone()));
+                    if s.len() > 100 {
+                        s.remove(0);
+                    }
+                }
+            }
+            Ok(out)
+        }
+        "terminal.wait" => {
+            let what = text("for").ok_or_else(|| Fail::args("--for exit|tui-idle is required"))?;
+            if !matches!(what.as_str(), "exit" | "tui-idle") {
+                return Err(Fail::args(format!("--for takes exit or tui-idle, not `{what}`")));
+            }
+            if !live {
+                // Either condition holds for a terminal that has ended.
+                return Ok(json!({ "terminal": handle, "done": true, "state": "exited", "blocked": false }));
+            }
+            if what == "exit" {
+                return Ok(json!({ "terminal": handle, "done": false, "state": "running", "blocked": false }));
+            }
+            match crate::status::state_of(id) {
+                Some(state) => Ok(json!({ "terminal": handle, "done": state != "working", "state": state, "blocked": BLOCKED.contains(&state) })),
+                None => {
+                    // ponytail: no hooks report (a shell, or an agent without them): silence stands in for idle.
+                    let quiet = ctx.terminals.quiet_for(id).is_none_or(|d| d >= IDLE);
+                    Ok(json!({ "terminal": handle, "done": quiet, "state": if quiet { "quiet" } else { "writing" }, "blocked": false, "warnings": [format!("no status hooks report for {handle}; idle means {} s without output", IDLE.as_secs())] }))
+                }
+            }
+        }
+        other => Err(Fail::args(format!("unknown command {other}"))),
+    }
+}
+
 fn same_dir(a: &str, b: &str) -> bool {
     Path::new(a).canonicalize().ok().is_some_and(|x| Path::new(b).canonicalize().ok() == Some(x))
 }
@@ -2415,6 +2658,64 @@ mod tests {
             assert!(refused(&format!("account list {flag}")).contains("this machine"), "{flag}");
         }
         assert!(refused("account list --agent claude").contains("--agent"));
+    }
+
+    #[test]
+    fn terminal_read_send_and_wait_parse_and_refuse_what_the_cards_say() {
+        let ok = |s: &str| parse(&words(s)).1.unwrap().unwrap();
+        let p = ok("terminal read --terminal term-3 --cursor 5 --limit 10");
+        assert_eq!((p.command.as_str(), p.args["terminal"].as_str(), p.args["cursor"].as_str(), p.args["limit"].as_str()), ("terminal.read", Some("term-3"), Some("5"), Some("10")));
+        assert_eq!(ok("terminal read --screen").args["screen"], true);
+        let p = ok("terminal send --text hi --enter --interrupt --wait-submit 5 --retry-request r1");
+        assert_eq!((p.args["text"].as_str(), p.args["enter"].as_bool(), p.args["interrupt"].as_bool(), p.args["waitSubmit"].as_str(), p.args["retryRequest"].as_str()), (Some("hi"), Some(true), Some(true), Some("5"), Some("r1")));
+        let p = ok("terminal wait --for tui-idle --timeout-ms 100");
+        assert_eq!((p.command.as_str(), p.args["for"].as_str(), p.args["timeoutMs"].as_str()), ("terminal.wait", Some("tui-idle"), Some("100")));
+        for c in ["terminal read", "terminal send", "terminal wait"] {
+            assert!(HELP.contains(&format!("kolux-dev {c} ")), "{c} in help");
+        }
+
+        let dir = std::env::temp_dir().join(format!("kolux-rs-term-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let pane = Some(Pane { handle: "term-7".into(), key: "k".into() });
+        let req = |command: &str, args: Value, pane: Option<Pane>| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane };
+        // Outside a Kolux terminal --terminal is required; inside one it defaults to that terminal.
+        assert!(dispatch(&ctx, &req("terminal.read", json!({}), None)).unwrap_err().message.contains("--terminal"));
+        assert_eq!(dispatch(&ctx, &req("terminal.read", json!({}), pane.clone())).unwrap_err().message, "no open Kolux terminal is called term-7");
+        assert_eq!(dispatch(&ctx, &req("terminal.read", json!({ "terminal": "term-9" }), None)).unwrap_err().code, "not_found");
+        assert!(dispatch(&ctx, &req("terminal.read", json!({ "terminal": "nine" }), None)).unwrap_err().message.contains("term-<n>"));
+        // CLI-024: a screen has no history, so --screen --cursor is refused before anything is looked up.
+        let both = dispatch(&ctx, &req("terminal.read", json!({ "terminal": "term-9", "screen": true, "cursor": "5" }), None)).unwrap_err();
+        assert!(both.message.contains("--screen and --cursor"), "{}", both.message);
+        assert!(dispatch(&ctx, &req("terminal.read", json!({ "terminal": "term-9", "cursor": "x" }), None)).unwrap_err().message.contains("--cursor takes a whole number"));
+        // CLI-025: send needs something to send; a retry of a known request answers without a terminal.
+        assert!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9" }), None)).unwrap_err().message.contains("--text, --enter or --interrupt"));
+        assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "enter": true }), None)).unwrap_err().code, "not_found");
+        SENT.lock().unwrap().push(("term-9|r1".into(), json!({ "terminal": "term-9", "receipt": "turn_began" })));
+        let again = dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r1" }), None)).unwrap();
+        assert_eq!((again["receipt"].as_str(), again["retried"].as_bool()), (Some("turn_began"), Some(true)));
+        assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r2" }), None)).unwrap_err().code, "not_found");
+        // CLI-025: wait needs a condition it knows; an ended terminal has met either.
+        assert!(dispatch(&ctx, &req("terminal.wait", json!({ "terminal": "term-9" }), None)).unwrap_err().message.contains("--for"));
+        assert!(dispatch(&ctx, &req("terminal.wait", json!({ "terminal": "term-9", "for": "idle" }), None)).unwrap_err().message.contains("exit or tui-idle"));
+        let ended = dispatch(&ctx, &req("terminal.wait", json!({ "terminal": "term-9", "for": "tui-idle" }), None)).unwrap();
+        assert_eq!((ended["done"].as_bool(), ended["state"].as_str()), (Some(true), Some("exited")));
+        assert!(wait_step(&ended).unwrap());
+        assert!(!wait_step(&json!({ "done": false })).unwrap());
+        let blocked = wait_step(&json!({ "terminal": "term-2", "done": true, "state": "permission", "blocked": true })).unwrap_err();
+        assert_eq!((blocked.code, blocked.message.as_str()), ("blocked", "term-2 is permission, not idle: the agent needs an answer"));
+        // Text output: a screen is its rows; a read is its lines, the unfinished one, and the cursor.
+        assert_eq!(text_of("terminal.read", &json!({ "screen": true, "rows": ["a", "b", ""] })), "a\nb");
+        assert_eq!(text_of("terminal.read", &json!({ "screen": false, "lines": [{ "cursor": 4, "text": "x" }], "pending": "> ", "cursor": 4 })), "x\n> \n-- cursor 4");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "turn_began" })), "sent text+enter to term-1: the agent began a turn");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "queued", "next": "kolux terminal read --terminal term-1 --screen" })), "sent text+enter to term-1: queued; look with kolux terminal read --terminal term-1 --screen");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-1", "state": "done" })), "term-1 is done");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

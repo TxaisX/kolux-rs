@@ -4,12 +4,18 @@
 use crate::pty::{program_command, shell_command, start_dir, PtySession};
 use base64::Engine as _;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const OUTPUT_EVENT: &str = "terminal-output";
 pub const EXIT_EVENT: &str = "terminal-exit";
+/// CLI-024: the app asks the window for a pane's visible frame; the window answers with
+/// `terminal_screen_reply`.
+pub const SCREEN_EVENT: &str = "terminal-screen-request";
+/// Lines kept per terminal for `kolux terminal read` (CLI-024); older ones are dropped.
+pub const LOG_LINES: usize = 2000;
+const SCREEN_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 #[derive(Default, Clone)]
 pub struct Terminals {
@@ -29,6 +35,191 @@ struct Inner {
     /// CLI-007 / ORCH-001: each session secret pane key, put in its environment as
     /// `KOLUX_PANE_KEY` next to its handle, so a command run inside it can prove which pane it is.
     keys: HashMap<u32, String>,
+    /// CLI-024: what each session wrote, by line, for `kolux terminal read`.
+    logs: HashMap<u32, OutputLog>,
+}
+
+/// CLI-024: a terminal's output by line, each line numbered with a cursor that only grows, so a
+/// reader carries on from where it left off. Escape sequences are stripped; `\r` overwrites keep
+/// the last version of the line. Bounded to `LOG_LINES`: the oldest lines go when it is full.
+#[derive(Default, Debug)]
+pub struct OutputLog {
+    lines: std::collections::VecDeque<String>,
+    /// The cursor of the first kept line; 1 until something was dropped.
+    oldest: u64,
+    /// Bytes since the last line break: a prompt, a progress line, a question. Bytes, not text,
+    /// because a UTF-8 character can arrive split across two PTY chunks.
+    pending: Vec<u8>,
+    dropped: bool,
+    /// When the session last wrote anything (CLI-025's idle fallback for panes without hooks).
+    written: Option<Instant>,
+}
+
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+pub struct Line {
+    pub cursor: u64,
+    pub text: String,
+}
+
+/// One read of the log (CLI-024).
+#[derive(serde::Serialize, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Read {
+    pub lines: Vec<Line>,
+    /// Text after the last line break, not yet a numbered line.
+    pub pending: String,
+    /// The cursor to read on from (the last line's number; 0 before any line).
+    pub cursor: u64,
+    /// The oldest cursor still kept.
+    pub oldest: u64,
+    /// Lines after the cursor asked for were dropped before this read.
+    pub dropped: bool,
+    /// More lines follow the ones returned (`limit` cut them).
+    pub more: bool,
+}
+
+/// Drops CSI, OSC and two-byte escape sequences, control characters other than tab.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        match c {
+            '\x1b' => match it.next() {
+                Some('[') => {
+                    let mut n = 0usize;
+                    for d in it.by_ref() {
+                        if ('@'..='~').contains(&d) {
+                            // Cursor forward (`C`) and erase characters (`X`) leave a gap in the
+                            // text; keep it as spaces so columns stay apart.
+                            if matches!(d, 'C' | 'X') {
+                                out.extend(std::iter::repeat_n(' ', n.max(1)));
+                            }
+                            break;
+                        }
+                        if let Some(v) = d.to_digit(10) {
+                            n = n.saturating_mul(10).saturating_add(v as usize);
+                        }
+                    }
+                }
+                Some('(' | ')') => {
+                    it.next();
+                }
+                Some(']') => {
+                    let mut last = '\0';
+                    for d in it.by_ref() {
+                        if d == '\x07' || (last == '\x1b' && d == '\\') {
+                            break;
+                        }
+                        last = d;
+                    }
+                }
+                _ => {}
+            },
+            '\t' => out.push(c),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+impl OutputLog {
+    pub fn push(&mut self, chunk: &[u8]) {
+        self.written = Some(Instant::now());
+        self.pending.extend_from_slice(chunk);
+        while let Some(i) = self.pending.iter().position(|b| *b == b'\n') {
+            let rest = self.pending.split_off(i + 1);
+            let raw = String::from_utf8_lossy(&std::mem::replace(&mut self.pending, rest)).into_owned();
+            let line = raw.trim_end_matches(['\n', '\r']);
+            // A carriage return redraws the line from its start: keep what was drawn last.
+            let line = line.rsplit('\r').next().unwrap_or(line);
+            if self.lines.is_empty() && self.oldest == 0 {
+                self.oldest = 1;
+            }
+            self.lines.push_back(strip_ansi(line));
+            while self.lines.len() > LOG_LINES {
+                self.lines.pop_front();
+                self.oldest += 1;
+                self.dropped = true;
+            }
+        }
+    }
+
+    /// The pending bytes as text, minus a UTF-8 character still arriving at the end.
+    fn pending_text(&self) -> &str {
+        match std::str::from_utf8(&self.pending) {
+            Ok(t) => t,
+            Err(e) => std::str::from_utf8(&self.pending[..e.valid_up_to()]).unwrap_or_default(),
+        }
+    }
+
+    /// The cursor to carry on from: the newest line's number, 0 before any line.
+    pub fn cursor(&self) -> u64 {
+        (self.oldest + self.lines.len() as u64).saturating_sub(1)
+    }
+
+    /// The lines after `after` (all of them when none is given). With `limit`, the first `limit`
+    /// after a cursor (a reader pages forward), else the last `limit` (a reader wants the latest).
+    pub fn read(&self, after: Option<u64>, limit: Option<usize>) -> Read {
+        let from = after.unwrap_or(0);
+        let oldest = self.oldest.max(1);
+        let skip = (from + 1).saturating_sub(oldest) as usize;
+        let mut lines: Vec<Line> = self.lines.iter().enumerate().skip(skip).map(|(i, t)| Line { cursor: self.oldest + i as u64, text: t.clone() }).collect();
+        let mut more = false;
+        if let Some(n) = limit {
+            if lines.len() > n {
+                more = true;
+                if after.is_some() {
+                    lines.truncate(n);
+                } else {
+                    lines.drain(..lines.len() - n);
+                }
+            }
+        }
+        let pending = if more && after.is_some() { String::new() } else { strip_ansi(self.pending_text().rsplit('\r').next().unwrap_or_default()) };
+        let cursor = lines.last().map_or(if from < oldest { 0 } else { from.min(self.cursor()) }, |l| l.cursor);
+        Read { lines, pending, cursor, oldest, dropped: self.dropped && from + 1 < self.oldest, more }
+    }
+}
+
+/// CLI-024's screen round trip: the serve thread opens a slot, emits `SCREEN_EVENT`, and waits for
+/// the window to fill it. ponytail: a Vec, there is never more than one request in flight.
+static SCREENS: Mutex<Vec<(String, Option<Vec<String>>)>> = Mutex::new(Vec::new());
+static SCREEN_READY: Condvar = Condvar::new();
+
+pub fn screen_open(request: &str) {
+    if let Ok(mut s) = SCREENS.lock() {
+        s.push((request.to_string(), None));
+    }
+}
+
+/// The rows the window answered with, or none when it did not answer in time.
+pub fn screen_wait(request: &str) -> Option<Vec<String>> {
+    let mut guard = SCREENS.lock().ok()?;
+    let until = Instant::now() + SCREEN_WAIT;
+    loop {
+        let i = guard.iter().position(|(r, _)| r == request)?;
+        if guard[i].1.is_some() {
+            return guard.remove(i).1;
+        }
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            guard.remove(i);
+            return None;
+        }
+        guard = SCREEN_READY.wait_timeout(guard, left).ok()?.0;
+    }
+}
+
+/// The window's answer to `SCREEN_EVENT`: the visible rows of that pane (CLI-024).
+#[tauri::command]
+pub fn terminal_screen_reply(request: String, rows: Vec<String>) {
+    if let Ok(mut s) = SCREENS.lock() {
+        if let Some(slot) = s.iter_mut().find(|(r, _)| *r == request) {
+            slot.1 = Some(rows);
+            SCREEN_READY.notify_all();
+        }
+    }
 }
 
 /// `dir` at the front of a search path (CLI-007).
@@ -127,8 +318,9 @@ impl Terminals {
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                 let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data });
-                if is_program {
-                    if let Ok(mut inner) = out_registry.lock() {
+                if let Ok(mut inner) = out_registry.lock() {
+                    inner.logs.entry(id).or_default().push(chunk);
+                    if is_program {
                         if let Some(m) = inner.marks.get_mut(&id) {
                             m.last_output = Some(Instant::now());
                         }
@@ -142,6 +334,7 @@ impl Terminals {
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
                     inner.keys.remove(&id);
+                    inner.logs.remove(&id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
@@ -156,6 +349,21 @@ impl Terminals {
             inner.dirs.insert(id, dir);
         }
         Ok(id)
+    }
+
+    /// CLI-024: what session `id` wrote after `cursor` (none for an open session that wrote nothing yet).
+    pub fn read(&self, id: u32, cursor: Option<u64>, limit: Option<usize>) -> Option<Read> {
+        let inner = self.inner.lock().ok()?;
+        if !inner.sessions.contains_key(&id) {
+            return None;
+        }
+        Some(inner.logs.get(&id).map(|l| l.read(cursor, limit)).unwrap_or_else(|| Read { oldest: 1, ..Read::default() }))
+    }
+
+    /// How long session `id` has written nothing (shells included); none when it never wrote.
+    pub fn quiet_for(&self, id: u32) -> Option<std::time::Duration> {
+        let inner = self.inner.lock().ok()?;
+        inner.logs.get(&id).and_then(|l| l.written).map(|t| t.elapsed())
     }
 
     pub fn write(&self, id: u32, data: &str) -> Result<(), String> {
@@ -359,6 +567,75 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cursors(r: &Read) -> Vec<u64> {
+        r.lines.iter().map(|l| l.cursor).collect()
+    }
+
+    #[test]
+    fn log_numbers_lines_and_pages_by_cursor() {
+        let mut log = OutputLog::default();
+        assert_eq!(log.read(None, None), Read { oldest: 1, ..Read::default() });
+        log.push(b"one\r\ntwo\n\x1b[32mgreen\x1b[0m three\nprom");
+        log.push(b"pt> ");
+        let all = log.read(None, None);
+        assert_eq!(all.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["one", "two", "green three"]);
+        assert_eq!((all.cursor, all.pending.as_str(), all.dropped, all.more), (3, "prompt> ", false, false));
+        let later = log.read(Some(2), None);
+        assert_eq!((cursors(&later), later.cursor), (vec![3], 3));
+        let nothing = log.read(Some(3), None);
+        assert_eq!((cursors(&nothing), nothing.cursor, nothing.pending.as_str()), (vec![], 3, "prompt> "));
+        // The last two without a cursor, the first two after one: both say more remains.
+        let last = log.read(None, Some(2));
+        assert_eq!((cursors(&last), last.more), (vec![2, 3], true));
+        log.push(b"four\n");
+        let page = log.read(Some(1), Some(2));
+        assert_eq!((cursors(&page), page.cursor, page.more, page.pending.as_str()), (vec![2, 3], 3, true, ""));
+        // A progress line redrawn with carriage returns keeps its last drawing.
+        log.push(b"10%\r50%\r100%\n");
+        assert_eq!(log.read(Some(4), None).lines[0].text, "100%");
+        // A character split across two chunks is whole once both arrived, and not shown half-way.
+        let bytes = "\u{2588}>\n".as_bytes();
+        log.push(&bytes[..2]);
+        assert_eq!(log.read(Some(5), None).pending, "");
+        log.push(&bytes[2..]);
+        assert_eq!(log.read(Some(5), None).lines[0].text, "\u{2588}>");
+    }
+
+    #[test]
+    fn log_drops_the_oldest_lines_and_says_so() {
+        let mut log = OutputLog::default();
+        for i in 1..=(LOG_LINES as u64 + 5) {
+            log.push(format!("line {i}\n").as_bytes());
+        }
+        let r = log.read(None, Some(1));
+        assert_eq!((r.oldest, r.cursor, r.dropped, r.lines[0].text.as_str()), (6, LOG_LINES as u64 + 5, true, "line 2005"));
+        // A cursor older than what is kept: dropped; one inside what is kept: not.
+        assert!(log.read(Some(3), None).dropped);
+        assert_eq!(log.read(Some(3), None).lines[0].cursor, 6);
+        assert!(!log.read(Some(5), None).dropped);
+        assert!(!log.read(Some(100), None).dropped);
+    }
+
+    #[test]
+    fn strip_ansi_keeps_text_only() {
+        assert_eq!(strip_ansi("\x1b]0;title\x07a\x1b[1;31mb\x1b[0m\tc\x1b(Bd\x07"), "ab\tcd");
+        // Cursor moves and erases that make a gap keep it, so columns do not run together.
+        assert_eq!(strip_ansi("A\x1b[5CB\x1b[CC\x1b[2XD"), "A     B C  D");
+    }
+
+    #[test]
+    fn screen_reply_wakes_the_waiter_and_a_missing_reply_times_out() {
+        screen_open("r1");
+        let t = std::thread::spawn(|| screen_wait("r1"));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        terminal_screen_reply("r1".into(), vec!["row".into()]);
+        assert_eq!(t.join().unwrap(), Some(vec!["row".to_string()]));
+        terminal_screen_reply("nobody".into(), vec![]);
+        screen_open("r2");
+        assert_eq!(screen_wait("r2"), None);
+        assert!(SCREENS.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn the_bundled_cli_folder_comes_first_on_the_search_path() {

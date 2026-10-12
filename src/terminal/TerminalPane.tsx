@@ -191,6 +191,14 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           term.write(decodeOutput(e.payload.data));
           sawOutput();
         }),
+        // CLI-024: the app asks for the frame as it looks now; the rows on screen go back by id.
+        await listen<{ id: number; request: string }>("terminal-screen-request", (e) => {
+          if (e.payload.id !== idRef.current) return;
+          const buf = term.buffer.active;
+          const rows: string[] = [];
+          for (let y = 0; y < term.rows; y++) rows.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? "");
+          invoke("terminal_screen_reply", { request: e.payload.request, rows }).catch(() => {});
+        }),
         await listen<ExitEvent>("terminal-exit", (e) => {
           if (e.payload.id !== idRef.current) return;
           ended = true;
@@ -204,7 +212,12 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           setStatus({ kind: "ended", code: e.payload.code });
         }),
       );
-      if (!alive) return;
+      if (!alive) {
+        // Unmounted while the listeners were registering (StrictMode's double mount): let them go,
+        // or a disposed terminal keeps answering screen requests for this pane.
+        unlisteners.forEach((u) => u());
+        return;
+      }
       try {
         const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number });
         if (!alive) {

@@ -403,6 +403,29 @@ pub fn terminal_of(pane_key: u32) -> Option<u32> {
     with_sessions(|s| s.get(&pane_key).and_then(|x| x.terminal))
 }
 
+/// CLI-025: the newest history entry's time and count across `terminal`'s panes, and whether one
+/// is working; a prompt taken changes the first. None when no pane's hooks report for it.
+pub fn activity(terminal: u32) -> Option<((u64, usize), bool)> {
+    with_sessions(|s| {
+        let panes: Vec<&Session> = s.values().filter(|x| x.terminal == Some(terminal)).collect();
+        if panes.is_empty() {
+            return None;
+        }
+        let newest = panes.iter().flat_map(|x| x.history.iter().map(|e| e.started)).max().unwrap_or(0);
+        let count = panes.iter().map(|x| x.history.len()).sum();
+        Some(((newest, count), panes.iter().any(|x| x.resolved() == "working")))
+    })
+}
+
+/// CLI-025: the state `terminal` shows, the neediest of its panes' states; none when no pane's
+/// hooks report for it.
+pub fn state_of(terminal: u32) -> Option<&'static str> {
+    const ORDER: [&str; 6] = ["permission", "waiting", "blocked", "interrupted", "working", "done"];
+    with_sessions(|s| {
+        s.values().filter(|x| x.terminal == Some(terminal)).map(Session::resolved).min_by_key(|r| ORDER.iter().position(|o| o == r).unwrap_or(ORDER.len()))
+    })
+}
+
 /// The panes currently blocked on a usage limit (USAGE-007's pick-up when the switch goes on).
 pub fn limit_stops() -> Vec<(u32, Stop)> {
     with_sessions(|s| s.iter().filter(|(_, x)| x.own == Some("blocked")).filter_map(|(k, x)| x.stop.clone().filter(|st| st.cause == "limit").map(|st| (*k, st))).collect())
