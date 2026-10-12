@@ -57,7 +57,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-011 · VIEW-026 Open a session's live terminal inside its Board card
 - [x] T-012-a · BROW-001 [compat] Open a browser tab next to the terminals · BROW-002 Browser pages survive switching away and back
 - [x] T-012-b · BROW-003 [compat] Address bar goes to a site or searches the web · BROW-005 [compat] Back, forward, reload and stop
-- [ ] T-012-b-fix · review 2026-10-09 item 6: Mod+L and Alt+Left pressed inside the browser page never reach the app, and Alt+Left triggers the web view's own back and desyncs the history (the address-bar and back-forward cards): an init script in the child web view forwards the browser-scope chords; history is synced from navigation events; live test
+- [x] T-012-b-fix · done 2026-10-12 (a script in every page's main frame takes Mod+L, Alt+Left/Right, Mod+R and the mouse side buttons away from the web view and hands them to the app as a cancelled `kolux-chord:` navigation; the app runs them for that tab and focuses its split; a page's own back or forward to a neighbouring entry moves the toolbar history too; proved live with Alt+Left, Alt+Right, the mouse back button and Ctrl+L pressed inside iana.org / example.com, `evidence/T-012-b-fix-chords.png`) · review 2026-10-09 item 6: Mod+L and Alt+Left pressed inside the browser page never reach the app, and Alt+Left triggers the web view's own back and desyncs the history (the address-bar and back-forward cards): an init script in the child web view forwards the browser-scope chords; history is synced from navigation events; live test
 
 ### P0 · theme 2 · Isolation: one worktree per agent (20 cards)
 

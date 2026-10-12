@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
+import { can as canGo, fresh, started, type Pending } from "./history";
 
 type Props = { id: number; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
 
@@ -27,11 +28,11 @@ export default function BrowserPane({ id, title, hidden = false, focused = false
   const [loading, setLoading] = useState(false);
   const [can, setCan] = useState({ back: false, forward: false });
   // ponytail: wry has no can-go-back, so history is tracked from this tab's own actions and the
-  // page loads it sees: a load that starts before the last one finished is a redirect, so it
-  // replaces the entry instead of adding one. A page's own history.back() or pushState still
+  // page loads it sees (history.ts). The chords pressed inside the page come back through the
+  // app (T-012-b-fix), so the web view never goes back on its own; a page's pushState still
   // drifts it. Upgrade when wry exposes navigation history.
-  const hist = useRef({ urls: [BLANK], at: 0, busy: false });
-  const pending = useRef<"back" | "forward" | "same" | null>(null);
+  const hist = useRef(fresh());
+  const pending = useRef<Pending>(null);
 
   useEffect(() => {
     let alive = true;
@@ -40,23 +41,15 @@ export default function BrowserPane({ id, title, hidden = false, focused = false
       unlisteners.push(
         await listen<{ id: number; event: string; url: string }>("browser-load", (e) => {
           if (e.payload.id !== id) return;
-          const h = hist.current;
           if (e.payload.event !== "started") {
-            h.busy = false;
+            hist.current.busy = false;
             return setLoading(false);
           }
           const { url } = e.payload;
-          const p = pending.current;
+          const h = started(hist.current, pending.current, url);
           pending.current = null;
-          if (p === "back") h.at = Math.max(0, h.at - 1);
-          else if (p === "forward") h.at = Math.min(h.urls.length - 1, h.at + 1);
-          else if (h.busy) h.urls[h.at] = url;
-          else if (p !== "same" && url !== h.urls[h.at]) {
-            h.urls = [...h.urls.slice(0, h.at + 1), url];
-            h.at = h.urls.length - 1;
-          }
-          h.busy = true;
-          setCan({ back: h.at > 0, forward: h.at < h.urls.length - 1 });
+          hist.current = h;
+          setCan(canGo(h));
           setLoading(true);
           setAddress(url === BLANK ? "" : url);
         }),

@@ -193,6 +193,31 @@ function Window() {
     if (keymap.errors.length) setNotice(keymap.errors.join(" "));
   }, [keymap]);
 
+  // BROW-003, BROW-005: a browser chord for one tab, pressed in the app or forwarded by the page
+  // itself when the keyboard was inside it (T-012-b-fix; the back end's `browser-chord` event).
+  const browserAction = (key: number, what: string) => {
+    const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${key}"] ${sel}`);
+    if (what === "focusAddressBar") {
+      const bar = inBrowser(".address") as HTMLInputElement | null;
+      bar?.focus();
+      bar?.select();
+    } else if (what === "reload") void invoke("browser_go", { id: key, what: "reload" });
+    else inBrowser(`[data-go="${what}"]`)?.click();
+  };
+  const chord = useRef(browserAction);
+  chord.current = browserAction;
+  useEffect(() => {
+    // A chord from inside a page also makes that page's split the focused one: a click into the
+    // page never reaches the app, so the app may still think another split has the keyboard.
+    const un = listen<{ id: number; what: string }>("browser-chord", (e) => {
+      setFocused(e.payload.id);
+      chord.current(e.payload.id, e.payload.what);
+    });
+    return () => {
+      un.then((u) => u());
+    };
+  }, []);
+
   // Global-scope shortcuts are pressed here, wherever focus is (the terminal policy comes with
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
@@ -201,20 +226,12 @@ function Window() {
       const hit = (browser && matchEvent(keymap, e, ["browser"])) || matchEvent(keymap, e, screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
-      const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
       switch (hit.id) {
-        case "browser.focusAddressBar": {
-          const bar = inBrowser(".address") as HTMLInputElement | null;
-          bar?.focus();
-          bar?.select();
-          break;
-        }
+        case "browser.focusAddressBar":
         case "browser.back":
         case "browser.forward":
-          inBrowser(`[data-go="${hit.id.slice("browser.".length)}"]`)?.click();
-          break;
         case "browser.reload":
-          void invoke("browser_go", { id: focused, what: "reload" });
+          browserAction(focused, hit.id.slice("browser.".length));
           break;
         case "app.settings":
           setSettingsOpen(true);

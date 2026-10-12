@@ -1300,7 +1300,28 @@ recorded default until told otherwise; nothing here blocks a pass.
   its stale "first caller is the poll" note and dead-code attribute went. No behaviour change,
   no new test.
 
+- 2026-10-12 · [core] T-012-b-fix: chords pressed inside a browser page reach the app. Pages get
+  no Tauri capability (by design), so the channel is a navigation: `browser.rs` gives every tab
+  an initialization script (main frame only) that catches Mod+L, Alt+Left / Alt+Right (Mod+[ /
+  Mod+] on a Mac), Mod+R and mouse buttons 4 and 5 on the way down, stops the web view's own
+  handling, and calls `location.assign("kolux-chord:<action>")`; the tab's `on_navigation`
+  handler recognises the four actions, emits `browser-chord` {id, what} and cancels the
+  navigation (nothing reaches the network or the OS; a cancelled navigation never starts a
+  page load, so the history stays untouched). For Mod+L the back end also hands the keyboard
+  to the app's web view. `App.tsx` runs the same `browserAction` for a forwarded chord as for
+  one pressed in the app, for the tab that sent it, and makes that split the focused one (a
+  click into a page never reaches the app, so its focus could be stale). The toolbar history
+  moved to `src/browser/history.ts` (`started`, `can`): a load with nothing asked that lands on
+  the neighbouring entry is the page's own back or forward and moves the cursor instead of
+  adding an entry. Proved live on the lane app with example.com and iana.org: Alt+Left in the
+  page went back with back and forward both lit, Alt+Right went forward, the mouse back button
+  went back, Ctrl+L put the cursor in the address bar with the text selected, no dialog
+  appeared (`evidence/T-012-b-fix-chords.png`). Tests: `chord_of` and the script's contents in
+  Rust; `history.test.ts` for the entries. Still open: a page's `pushState` and app chords
+  such as Ctrl+T / Ctrl+W pressed inside a page (not browser-scope; they stay with the page).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
 - 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
 - 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
 - 2026-10-12 · [core] T-003b-fix-b · done: DESIGN.md sections 6 and 7, globe tab glyph in `App.tsx`, web view inset in `styles.css`, projects test temp-folder collision fixed; `evidence/T-003b-fix-b-browser.png`
@@ -1311,6 +1332,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
 - 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
 - 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
-- 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
 
 
