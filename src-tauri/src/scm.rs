@@ -352,6 +352,96 @@ pub struct Pr {
 const PR_FIELDS: &str = "number,url,state,title,headRefName,isDraft";
 
 /// The GitHub CLI, which carries the user's sign-in and works with GitHub Enterprise Server too.
+/// GIT-060: a GitHub (or GitHub Enterprise) repository named by a remote. `api` is the REST
+/// address (api.github.com, or `/api/v3` on an Enterprise host); `key` is one per project, so
+/// checkouts with different remote forms group together.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct GhRepo {
+    pub host: String,
+    pub owner: String,
+    pub name: String,
+    pub api: String,
+    pub key: String,
+}
+
+impl GhRepo {
+    fn new(host: String, owner: &str, name: &str) -> Self {
+        let api = if host.eq_ignore_ascii_case("github.com") { "https://api.github.com".into() } else { format!("https://{host}/api/v3") };
+        let key = format!("{host}/{owner}/{name}").to_lowercase();
+        GhRepo { host, owner: owner.to_string(), name: name.to_string(), api, key }
+    }
+}
+
+/// The real host an SSH alias stands for, from `Host` / `HostName` lines; wildcard blocks and
+/// `Include` are not followed.
+// ponytail: plain Host blocks only; Include and Match come if someone's config needs them.
+fn ssh_host(alias: &str, config: &str) -> Option<String> {
+    let mut hit = false;
+    for line in config.lines().map(str::trim) {
+        let (key, rest) = line.split_once(|c: char| c.is_whitespace() || c == '=').unwrap_or((line, ""));
+        let rest = rest.trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim();
+        if key.eq_ignore_ascii_case("host") {
+            hit = rest.split_whitespace().any(|h| h == alias);
+        } else if hit && key.eq_ignore_ascii_case("hostname") && !rest.is_empty() {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// GIT-060: reads HTTPS, SSH (`ssh://` or `user@host:path`), `git://` and SSH-alias remotes.
+/// `ssh_config` is the text of the user's SSH config, used only for SSH forms.
+pub fn github_repo(url: &str, ssh_config: &str) -> Option<GhRepo> {
+    let url = url.trim();
+    let (host, path, ssh) = if let Some((scheme, rest)) = url.split_once("://") {
+        let ssh = match scheme {
+            "https" | "http" | "git" => false,
+            "ssh" | "git+ssh" => true,
+            _ => return None,
+        };
+        let (auth, path) = rest.split_once('/')?;
+        let host = auth.rsplit('@').next()?.split(':').next()?;
+        (host, path, ssh)
+    } else {
+        // scp form; one letter before the colon is a Windows drive, not a host.
+        let (auth, path) = url.split_once(':')?;
+        let host = auth.rsplit('@').next()?;
+        if host.len() < 2 || host.contains(['/', '\\']) {
+            return None;
+        }
+        (host, path, true)
+    };
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let (owner, name) = path.split_once('/')?;
+    let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+    if host.is_empty() || !ok(owner) || !ok(name) {
+        return None;
+    }
+    let host = if ssh { ssh_host(host, ssh_config).unwrap_or_else(|| host.to_string()) } else { host.to_string() };
+    Some(GhRepo::new(host, owner, name))
+}
+
+/// The user's SSH config text, empty when there is none.
+fn ssh_config() -> String {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    home.and_then(|h| std::fs::read_to_string(Path::new(&h).join(".ssh").join("config")).ok()).unwrap_or_default()
+}
+
+/// GIT-060: `HOST/OWNER/REPO` for gh's `--repo`, from origin, so gh never has to guess the host
+/// from a remote it cannot read (an SSH alias, an Enterprise host).
+fn gh_repo_arg(worktree: &Path, ssh_config: &str) -> Option<String> {
+    let url = run(&["remote", "get-url", "origin"], Some(worktree)).ok()?;
+    github_repo(&url, ssh_config).map(|g| format!("{}/{}/{}", g.host, g.owner, g.name))
+}
+
+/// GIT-060: the worktree's GitHub repository, for grouping checkouts (the Tasks picker, T-231-b).
+#[tauri::command]
+pub fn scm_github_repo(worktree: String) -> Option<GhRepo> {
+    let url = run(&["remote", "get-url", "origin"], Some(Path::new(&worktree))).ok()?;
+    github_repo(&url, &ssh_config())
+}
+
 fn gh_program() -> Result<std::path::PathBuf, String> {
     crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
 }
@@ -362,7 +452,14 @@ fn gh_program() -> Result<std::path::PathBuf, String> {
 fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
     use std::process::Stdio;
     let mut cmd = std::process::Command::new(program);
-    cmd.args(args).current_dir(worktree).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    cmd.args(args);
+    // A pull request link names its own repository; everything else is pointed at origin's.
+    if !args.iter().any(|a| a.starts_with("https://")) {
+        if let Some(repo) = gh_repo_arg(worktree, &ssh_config()) {
+            cmd.args(["--repo", &repo]);
+        }
+    }
+    cmd.current_dir(worktree).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
     cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
@@ -963,6 +1060,36 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&bare);
         let _ = fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn github_repositories_are_read_from_every_remote_form() {
+        let ssh = "# work account\nHost gh-work other-alias\n  HostName github.com\n  User git\n\nHost *\n  ServerAliveInterval 30\n";
+        let r = |url: &str| github_repo(url, ssh).map(|g| (g.host, g.owner, g.name));
+        let want = Some(("github.com".to_string(), "o".to_string(), "r".to_string()));
+        for url in ["https://github.com/o/r", "https://github.com/o/r.git", "https://github.com/o/r/", "https://user@github.com/o/r.git", "http://github.com/o/r", "ssh://git@github.com/o/r.git", "ssh://git@github.com:22/o/r.git", "git@github.com:o/r.git", "github.com:o/r", "git://github.com/o/r.git", "git@gh-work:o/r.git", "ssh://git@other-alias/o/r"] {
+            assert_eq!(r(url), want, "{url}");
+        }
+        // An HTTPS host is never an SSH alias.
+        assert_eq!(r("https://gh-work/o/r").map(|x| x.0), Some("gh-work".to_string()));
+        // GitHub Enterprise keeps its host and uses its own API address.
+        let ghe = github_repo("git@ghe.corp.example:Team/App.git", ssh).unwrap();
+        assert_eq!((ghe.host.as_str(), ghe.owner.as_str(), ghe.name.as_str()), ("ghe.corp.example", "Team", "App"));
+        assert_eq!(ghe.api, "https://ghe.corp.example/api/v3");
+        assert_eq!(github_repo("https://github.com/o/r", "").unwrap().api, "https://api.github.com");
+        // Two checkouts of one project share a key, whatever form or case their remote uses.
+        assert_eq!(github_repo("git@gh-work:O/R.git", ssh).unwrap().key, github_repo("https://github.com/o/r", "").unwrap().key);
+        // Local paths and odd shapes are not GitHub repositories.
+        for url in ["G:/Temp/x/remote.git", "C:\\repo\\r.git", "/srv/git/r.git", "file:///srv/o/r.git", "https://github.com/o", "https://github.com/o/r/pull/3", "", "git@github.com:o/r b.git"] {
+            assert_eq!(r(url), None, "{url}");
+        }
+
+        // gh is pointed at the resolved repository, so an alias remote still finds its pull request.
+        let dir = temp_repo("ghrepo");
+        assert_eq!(gh_repo_arg(&dir, ssh), None, "no origin, no repository");
+        run(&["remote", "add", "origin", "git@gh-work:o/r.git"], Some(&dir)).unwrap();
+        assert_eq!(gh_repo_arg(&dir, ssh).as_deref(), Some("github.com/o/r"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
