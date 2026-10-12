@@ -5,6 +5,12 @@
 use super::{commands, Fail, Parsed, HELP};
 use serde_json::{json, Value};
 
+/// CLI-001: every bundled guide and reference by name, so a test can check what they mention.
+#[cfg(test)]
+pub fn guides() -> Vec<(String, &'static str)> {
+    SKILLS.iter().flat_map(|s| std::iter::once((s.name.to_string(), s.guide)).chain(s.refs.iter().map(move |(r, t)| (format!("{}/{r}", s.name), *t)))).collect()
+}
+
 pub const COMMANDS: &[super::Command] = &[
     ("agent-context", "agent-context", &[]),
     ("skills list", "skills.list", &[]),

@@ -326,6 +326,9 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         while i < words.len() {
             let w = &words[i];
             i += 1;
+            if w == "--" && path.is_empty() {
+                continue;
+            }
             if let Some(flag) = w.strip_prefix("--") {
                 let (name, inline) = match flag.split_once('=') {
                     Some((n, v)) => (n.to_string(), Some(v.to_string())),
@@ -989,10 +992,86 @@ fn teams_allowed(windows: bool, in_kolux: bool) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// CLI-001: `--version` or `-v` asks for the version only when nothing else is typed.
+fn version_only(words: &[String]) -> bool {
+    matches!(words, [w] if w == "--version" || w == "-v")
+}
+
+/// CLI-001: the command words of a help request, the way `parse` reads them: flags and their
+/// values, `help` and `-h` are left out.
+fn help_path(words: &[String]) -> Vec<String> {
+    let mut path = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        let w = &words[i];
+        i += 1;
+        if let Some(flag) = w.strip_prefix("--") {
+            let takes = !flag.contains('=') && !SWITCHES.contains(&flag) && known_flag(flag);
+            if takes && i < words.len() && !words[i].starts_with("--") {
+                i += 1;
+            }
+        } else if !w.is_empty() && w != "-h" && !(w == "help" && path.is_empty()) {
+            path.push(w.clone());
+        }
+    }
+    path
+}
+
+/// The global options, listed under every help.
+const GLOBAL: &str = "Global options (every command): --help or -h prints help for the words before it; --json prints one envelope on stdout.\n";
+
+/// CLI-001: help for a group or a command, cut from the usage list (an entry is a usage line and
+/// the indented lines under it). An alias shows the command it stands for. A path nothing answers
+/// to gets the closest help there is, a suggestion and exit status 1.
+fn help(path: &[String]) -> (String, i32) {
+    let (title, rest) = HELP.split_once("\n\n").unwrap_or((HELP, ""));
+    let (body, footer) = rest.rsplit_once("\n\n").unwrap_or((rest, ""));
+    let mut entries: Vec<String> = Vec::new();
+    for l in body.lines() {
+        match entries.last_mut() {
+            Some(e) if !l.starts_with("  kolux-dev ") => {
+                e.push('\n');
+                e.push_str(l);
+            }
+            _ => entries.push(l.to_string()),
+        }
+    }
+    // The command paths an entry's first line names, e.g. "repo list | repo add --path <folder>".
+    let names = |e: &str| -> Vec<String> {
+        let first = e.lines().next().unwrap_or("").trim_start().trim_start_matches("kolux-dev ");
+        first.split(" | ").map(|seg| seg.split(' ').take_while(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase() || c == '-') && !w.starts_with('-')).collect::<Vec<_>>().join(" ")).filter(|n| !n.is_empty()).collect()
+    };
+    let all = commands();
+    let typed = path.join(" ");
+    // An alias answers with the command it stands for: the first path with the same wire name.
+    let want = all.iter().find(|c| c.0 == typed).and_then(|c| all.iter().find(|d| d.1 == c.1)).map_or(typed.clone(), |c| c.0.to_string());
+    let page = |want: &str| -> Option<String> {
+        let hits: Vec<&String> = entries.iter().filter(|e| names(e).iter().any(|n| n == want || n.starts_with(&format!("{want} ")))).collect();
+        (!hits.is_empty()).then(|| format!("kolux-dev {want}\n\n{}\n\n{footer}\n{GLOBAL}", hits.iter().map(|e| e.as_str()).collect::<Vec<_>>().join("\n")))
+    };
+    if path.is_empty() {
+        return (format!("{title}\n\n{body}\n\n{footer}\n{GLOBAL}"), 0);
+    }
+    if let Some(text) = page(&want) {
+        return (text, 0);
+    }
+    // The nearest command in the group typed, else the nearest group or one-word command.
+    let group = &path[0];
+    let in_group: Vec<&str> = all.iter().filter_map(|c| c.0.strip_prefix(&format!("{group} "))).collect();
+    let tops: Vec<&str> = all.iter().map(|c| c.0.split(' ').next().unwrap_or("")).collect();
+    let guess = match (in_group.is_empty(), path.get(1)) {
+        (false, Some(verb)) => nearest(verb, in_group.iter().copied()).map(|v| format!("{group} {v}")),
+        _ => nearest(group, tops.iter().copied()).map(String::from),
+    };
+    let base = guess.as_deref().and_then(|g| page(g.split(' ').next().unwrap_or(g))).or_else(|| page(group)).unwrap_or_else(|| help(&[]).0);
+    let tip = guess.map_or(String::new(), |g| format!("; did you mean kolux-dev {g}?"));
+    (format!("no command or group is called kolux-dev {typed}{tip}\n\n{base}"), 1)
+}
+
 /// The `kolux-dev` program: parses, talks to the app, prints, and returns the exit status.
 pub fn main(words: Vec<String>) -> i32 {
     // APP-059 Compat: the CLI reports the same version as the app and the update manifest.
-    if matches!(words.first().map(String::as_str), Some("--version" | "-V")) {
+    if version_only(&words) {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return 0;
     }
@@ -1039,8 +1118,13 @@ pub fn main(words: Vec<String>) -> i32 {
     let parsed = match parsed {
         Ok(Some(p)) => p,
         Ok(None) => {
-            print!("{HELP}");
-            return 0;
+            let (text, code) = help(&help_path(&words));
+            if code == 0 {
+                print!("{text}");
+            } else {
+                eprint!("{text}");
+            }
+            return code;
         }
         Err(f) => return finish(Err(f)),
     };
@@ -2462,6 +2546,77 @@ mod tests {
         assert!(refused("open --name x").contains("unknown flag --name"));
         assert!(parse(&words("--help")).1.unwrap().is_none());
         assert!(parse(&words("help worktree")).1.unwrap().is_none());
+    }
+
+    #[test]
+    fn help_answers_on_every_level_of_the_command_tree() {
+        let h = |s: &str| help(&help_path(&words(s)));
+        // The overview: every group, and the global options.
+        let (all, code) = h("--help");
+        assert_eq!(code, 0);
+        assert!(all.contains("Global options") && all.contains("--help") && all.contains("--json"), "{all}");
+        assert_eq!(h(""), h("help"));
+        // A group lists its commands and nothing else.
+        let (wt, code) = h("worktree --help");
+        assert_eq!(code, 0);
+        for verb in ["list", "show", "current", "create", "rm", "ps", "changes", "overlap"] {
+            assert!(wt.contains(&format!("worktree {verb}")), "worktree help lacks {verb}: {wt}");
+        }
+        assert!(!wt.contains("orchestration send") && wt.contains("Global options"), "{wt}");
+        assert_eq!(h("help worktree"), h("worktree --help"), "help <path> and <path> --help agree");
+        // A command, with its flags and its global options; an alias finds the command it stands for.
+        let (create, code) = h("worktree create --name x --help");
+        assert_eq!(code, 0);
+        assert!(create.contains("--base-branch") && !create.contains("worktree rm"), "{create}");
+        assert_eq!(h("worktree delete --help"), h("worktree rm --help"));
+        assert_eq!(h("skills show -h"), h("skills get -h"));
+        // Every command can be found from its own group's help.
+        for (path, _, _) in commands() {
+            let group = path.split(' ').next().unwrap();
+            let (text, code) = h(&format!("help {group}"));
+            assert_eq!(code, 0, "{group}");
+            assert!(text.contains(path.rsplit(' ').next().unwrap()), "{path} is missing from the {group} help");
+            assert_eq!(h(&format!("help {path}")).1, 0, "{path}");
+        }
+        // A path nothing answers to: the closest help, a suggestion, exit 1.
+        let (typo, code) = h("help worktree craete");
+        assert_eq!(code, 1);
+        assert!(typo.contains("did you mean kolux-dev worktree create") && typo.contains("worktree list"), "{typo}");
+        let (typo, code) = h("help wrktree");
+        assert_eq!(code, 1);
+        assert!(typo.contains("did you mean kolux-dev worktree"), "{typo}");
+        let (none, code) = h("help zzzzzzzzzz");
+        assert_eq!(code, 1);
+        assert!(none.contains("Global options"), "the overview when nothing is close");
+        // Flag values are not taken for command words.
+        assert_eq!(help_path(&words("--repo name:x worktree list --help")), vec!["worktree".to_string(), "list".to_string()]);
+    }
+
+    #[test]
+    fn the_version_flag_counts_only_on_its_own_and_a_leading_double_dash_is_ignored() {
+        assert!(version_only(&words("--version")) && version_only(&words("-v")));
+        assert!(!version_only(&words("--version --json")) && !version_only(&words("worktree list -v")));
+        assert_eq!(parse(&words("-- skills list")).1.unwrap().unwrap().command, parse(&words("skills list")).1.unwrap().unwrap().command);
+    }
+
+    #[test]
+    fn the_skill_guides_name_only_commands_and_flags_that_exist() {
+        let paths: Vec<&str> = commands().iter().map(|c| c.0).collect();
+        let groups: Vec<&str> = paths.iter().map(|p| p.split(' ').next().unwrap()).collect();
+        for (name, text) in local_cli::guides() {
+            let w: Vec<&str> = text.split(|c: char| c.is_whitespace() || "`'\"()[]|".contains(c)).filter(|s| !s.is_empty()).collect();
+            for i in 0..w.len() {
+                if (w[i] == "kolux" || w[i] == "kolux-dev") && i + 1 < w.len() && groups.contains(&w[i + 1]) {
+                    let one = w[i + 1];
+                    let two = w.get(i + 2).map(|v| format!("{one} {v}")).unwrap_or_default();
+                    assert!(paths.contains(&one) || paths.contains(&two.as_str()), "{name} names kolux {two}, which is not a command");
+                }
+                if let Some(flag) = w[i].strip_prefix("--") {
+                    let flag = flag.split('=').next().unwrap().trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+                    assert!(flag.is_empty() || ["json", "help", "version"].contains(&flag) || known_flag(flag) || SWITCHES.contains(&flag), "{name} names --{flag}, which no command takes");
+                }
+            }
+        }
     }
 
     #[test]
