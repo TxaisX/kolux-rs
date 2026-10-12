@@ -367,3 +367,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-11 · T-026-c · Nothing read outside the repo: the Inbox's groups, rules and keys come from the card and COMPAT; the data is the lane's own hook state, `scm_status` and `agent_history`.
 
 > 2026-10-11 · T-028-a · context7 /openai/codex `codex-rs/tui/src/keymap.rs` for the approval modal's default keys (y approves, n declines); Claude Code's dialog keys (Enter / Esc) from general knowledge of its public UI; nothing else outside the repo. T-027 read nothing outside the repo.
+
+> 2026-10-11 · T-029, T-030 · deferred; nothing read outside the repo.

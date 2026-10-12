@@ -129,6 +129,7 @@ Acceptance:
   - [ ] Agent waiting on approval with unread output → row shows the permission mark.
   - [ ] Agent finished 50 minutes ago → age reads 50m; one finished three days ago → 3d.
 Compat: —
+  (Kolux RS, T-029 deferred: waits for the palette, T-098.)
 Source: D-05-040
 
 ### VIEW-047 · Jump to the next session that needs you

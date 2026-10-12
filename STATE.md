@@ -539,6 +539,13 @@ Claude's are known), and the Agents-screen words of T-028-b. The Claude answer k
 proved against a live prompt (no Claude prompt is typed in a build pass); the real-session proof
 is for Txais, like the hook installs.
 
+[core] T-029 (VIEW-040 palette row marks and ages) and T-030 (ORCH-007 mail pointer, ORCH-015
+done reports and heartbeats, ORCH-020 worker-show, ORCH-021 worker-read): deferred, not built.
+The palette (T-098) does not exist, and the orchestration store (Runs, mail, dispatches: T-082,
+T-083, T-089 on the orchestration lane) and the transcript reader (T-325) do not exist in this
+checkout; `cli.rs` only checks worker-start's flags. Both lines stay unticked with a note on
+what they wait for.
+
 [accounts] Secrets are sealed on disk (T-038): the Claude 1-year key and the xAI key live in
 settings.json only as Windows-sealed values (DPAPI, this user only), the window never receives
 them and cannot overwrite them, and a vault folder in the profile holds one sealed file per
@@ -1202,7 +1209,11 @@ recorded default until told otherwise; nothing here blocks a pass.
   full path in its tooltip until an editor exists. The duration on a chip counts from the moment
   the window saw the state move. No card or COMPAT rule contradicted, so no DECISIONS row.
 
+- 2026-10-11 · [core] T-029 and T-030: deferred to their feeders (T-098; T-082 / T-083 / T-089 /
+  T-325). Ordering, not a contradiction; no DECISIONS row.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
 - 2026-10-11 · [core] T-028-a · done: `src/board/chip.ts` (+ test), Board lanes and chip rows in `App.tsx` / `TerminalPane.tsx` / `styles.css`, `agent_answer` and `Change.wrote` in `status.rs` / `hooks.rs`; `evidence/T-028-a-board.png`, `-approved.png`, `-deny-ask.png`, `-denied.png`
 - 2026-10-11 · [core] T-027 · deferred (0 passes): needs T-325 / T-326 / T-050; rules moved onto the T-326 line
 - 2026-10-11 · [core] T-026-c · done: `src/inbox/inbox.ts` (+ test), `InboxView.tsx`, the bell and `view.inbox` in `TopBar.tsx` / `App.tsx`, pane state stamps; `evidence/T-026-c-all-clear.png`, `-groups.png`, `-detail.png`, `-opened.png`
@@ -1212,6 +1223,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-09 · [core] T-025-b · done: `src-tauri/src/hooks.rs` (Codex event mapping, script, `hooks.json` installer after the user's groups, trust from Codex's own `hooks/list`, managed-home install at spawn) + 3 tests; `terminal.rs` spawn hook; `codex_usage.rs` and `trust.rs` helpers shared; `evidence/T-025-b-trust.txt`, `-needs.png`, `-done.png` (scratch Codex home; no real Codex session yet, T-025-e)
 - 2026-10-09 · [core] T-025-a · done: `src-tauri/src/hooks.rs` (loopback listener, Claude event mapping, hook script, settings installer, pane variables) + 5 tests; `terminal.rs` env list and pane key; `lib.rs` start and exit; `status.ts`, `tabs.ts`, `TerminalPane.tsx`, `App.tsx` hook-fed states + tests; `evidence/T-025-a-needs.png`, `-cycle.png`, `-done.png` (events sent through the real script to the lane app; no real Claude session yet, T-025-d)
 - 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.
-- 2026-10-09 · T-023 · done: `src/terminal/status.ts` (header word, tone, icon, age, needs-you cycle) + `status.test.ts`; `TerminalPane.tsx` finish time, minute tick, glow until focused, `onNeedsYou`; `App.tsx` Ctrl+J handler across workspaces; `styles.css` glow and age. Live: agent workspace via CLI, split shell focused, `/exit` sent to the agent → "Done · just now" with a glow, "1m ago" after a minute, glow gone on focus; Ctrl+J with nothing waiting left focus where it was. Evidence: `evidence/T-023-glow.png`, `evidence/T-023-focused.png`.
 
 
