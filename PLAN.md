@@ -252,7 +252,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-148-a · SET-023 Terminal colour schemes for dark and for light: a searchable scheme catalogue, one pick for dark mode and one for light mode (Tango-style light by default), custom schemes added by pasting a Windows Terminal scheme, kept in settings and tidied when loaded · also: the rest of T-053's card: the scheme catalogue, the separate light scheme and imported schemes go in the same Terminal colours picker as Kolux dark and Match app theme (Settings > Appearance, settings field `terminalScheme`); also TERM 098 rule: custom terminal themes can be added (they go in that same picker)
 - [x] T-148-b · SET-016 Appearance page in three foldable sections · SET-018 App font and editor font
 - [x] T-148-c · SET-020 Show or hide the title, toolbar buttons and status bar items
-- [ ] T-148-d · SET 023 rules for the panes: divider colour set per mode and divider width starting at 3 px; panes not in focus dim to an adjustable opacity over a 140 ms fade
+- [x] T-148-d · SET 023 rules for the panes: divider colour set per mode and divider width starting at 3 px; panes not in focus dim to an adjustable opacity over a 140 ms fade
 
 ### P1 · theme 5 · Safety and trust (37 cards)
 

@@ -96,10 +96,12 @@ export type TerminalScheme = string;
 export type Mode = "system" | "light" | "dark";
 export const MODES: Mode[] = ["system", "light", "dark"];
 /** `lightTerminal`: in light mode terminals use `lightScheme`; off keeps `terminal` for both. */
-export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string };
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string; dividerWidth: number; dividerDark: string; dividerLight: string; paneDim: number };
 /** The settings fields the appearance lives in. */
-export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont" } as const;
-export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0] } as const;
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont", dividerWidth: "paneDividerWidth", dividerDark: "paneDividerDark", dividerLight: "paneDividerLight", paneDim: "paneDim" } as const;
+export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0], dividerWidth: [2, 12, 6], paneDim: [30, 100, 100] } as const;
+/** A divider colour is #rrggbb or empty (the window shows through, as DESIGN.md measured). */
+const hexOrEmpty = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim().toLowerCase() : "");
 
 /** Out of span is pulled to the nearest end; anything not a number falls back to the default. */
 function clampNum(v: unknown, [lo, hi, dflt]: readonly [number, number, number]): number {
@@ -131,6 +133,10 @@ export function readAppearance(s: Record<string, unknown>): Appearance {
     custom,
     appFont: typeof s[FIELD.appFont] === "string" ? (s[FIELD.appFont] as string).trim().slice(0, 100) : "",
     editorFont: typeof s[FIELD.editorFont] === "string" ? (s[FIELD.editorFont] as string).trim().slice(0, 100) : "",
+    dividerWidth: Math.round(clampNum(s[FIELD.dividerWidth], SPAN.dividerWidth)),
+    dividerDark: hexOrEmpty(s[FIELD.dividerDark]),
+    dividerLight: hexOrEmpty(s[FIELD.dividerLight]),
+    paneDim: Math.round(clampNum(s[FIELD.paneDim], SPAN.paneDim)),
   };
 }
 
@@ -240,8 +246,15 @@ export const TERMINAL_EVENT = "kolux-terminal-theme";
 /** TERM-098: whether the app is in dark mode now (what a program asking the terminal is told). */
 export const currentDark = () => lastDark ?? true;
 
-/** SET-018: the chosen fonts with a safe fallback after each; an empty editor font is the terminal font. */
-export const appearanceVars = (a: Appearance) => ({ "--ui-font": fontStack(a.appFont, uiFont), "--editor-font": fontStack(a.editorFont, monoFont) });
+/** SET-018: the chosen fonts with a safe fallback after each; an empty editor font is the terminal font.
+ *  SET-023: the gap between panes, its colour in this mode, and how far panes not in focus fade. */
+export const appearanceVars = (a: Appearance, dark = isDark(a)) => ({
+  "--ui-font": fontStack(a.appFont, uiFont),
+  "--editor-font": fontStack(a.editorFont, monoFont),
+  "--divider-width": a.dividerWidth + "px",
+  "--divider": (dark ? a.dividerDark : a.dividerLight) || "transparent",
+  "--pane-dim": String(a.paneDim / 100),
+});
 
 export function themeVars(t: Theme): Record<string, string> {
   const vars: Record<string, string> = { "--ui-font": uiFont, "--mono-font": monoFont };
@@ -273,7 +286,7 @@ export function applyAppearance(a: Appearance, root: StyleHost = document.docume
   if (lastDark !== null && lastDark !== dark && typeof document !== "undefined") holdTransitions();
   last = a;
   lastDark = dark;
-  const vars = { ...themeVars(buildTheme(a, dark)), ...appearanceVars(a), "color-scheme": dark ? "dark" : "light" };
+  const vars = { ...themeVars(buildTheme(a, dark)), ...appearanceVars(a, dark), "color-scheme": dark ? "dark" : "light" };
   if (typeof document !== "undefined") document.documentElement.dataset.mode = dark ? "dark" : "light";
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   try {

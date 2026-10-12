@@ -13,3 +13,13 @@ test("SET-016: Interface, Terminal and Window & Sidebar, all open at first; font
   expect(html.indexOf("App font")).toBeLessThan(html.indexOf('data-fold="terminal"'));
   expect(html).toContain("Editor font");
 });
+
+test("SET-023: the Panes card in Terminal holds divider width, a colour per mode and the dim", () => {
+  const html = renderToString(createElement(AppearanceView, { look: readAppearance({ paneDividerDark: "#aa3300", paneDim: 70 }), onChange: () => {} }));
+  const panes = html.slice(html.indexOf('data-section="panes"'), html.indexOf('data-fold="window"'));
+  expect(panes).toContain("Divider width");
+  expect(panes).toContain('aria-label="Divider colour, dark mode" value="#aa3300"');
+  expect(panes).toContain("Divider colour, light mode");
+  expect(panes.match(/>Clear</g)?.length, "only the set colour can be cleared").toBe(1);
+  expect(panes).toMatch(/Panes not in focus.*value="70"/);
+});

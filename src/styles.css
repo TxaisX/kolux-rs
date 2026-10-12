@@ -204,7 +204,11 @@ input { font: inherit; }
 .layouts button:hover:not([aria-pressed="true"]):not(:disabled) { background: var(--row-selected); }
 
 /* ---- 7. pane grid and pane cards ---- */
-.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: 6px; grid-template-columns: 1fr; }
+.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: var(--divider-width, 6px); grid-template-columns: 1fr; background: var(--divider, transparent); border-radius: 12px; }
+/* SET-023: panes not in focus fade to the chosen opacity (100% = no dim, the default). The content fades
+   over the pane's own ground, so a divider colour behind the grid never shows through. */
+.grid .pane > * { transition: opacity 140ms ease; }
+.grid .pane:not(.focused) > * { opacity: var(--pane-dim, 1); }
 .strip .newtab { margin-left: auto; margin-right: 12px; height: 28px; }
 /* a cell holds tabs (TERM-040); the tab strip shows only for two tabs or more (TERM-028 clean look) */
 .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 4px; }
@@ -424,6 +428,11 @@ input { font: inherit; }
 .look-slider output { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg-muted); }
 .look-select { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--fg-row); }
 .look-select select { height: 28px; padding: 0 8px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.pane-look .look-slider { grid-template-columns: 170px 1fr 56px; }
+.pane-colour { justify-content: flex-start; }
+.pane-colour > span:first-child { width: 170px; flex: none; }
+.pane-colour input[type=color] { width: 36px; height: 24px; padding: 0 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); }
+.pane-colour .conn-detail { margin: 0; font-variant-numeric: tabular-nums; }
 
 /* SET-004 / SET-005: a switch between light and dark shows at once, with no colour transition. */
 .no-anim, .no-anim * { transition: none !important; }

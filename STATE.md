@@ -664,6 +664,11 @@ app name beside the mark, and hide the sidebar's Tasks row, its Automations butt
 or single status bar items. Changes show at once; the status bar's right-click menu and the
 Settings ticks always agree. The app name starts off and Automations starts on (DT-A6).
 
+[accounts] Pane dividers and dim (T-148-d): Settings > Appearance > Terminal > Panes sets the gap
+between panes (2 to 12 px), a divider colour for dark mode and one for light mode, and how far panes
+not in focus fade. Moving focus fades the pane left behind over about 140 ms. Defaults keep the
+measured look: 6 px, no colour, no dim (DT-A7).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1344,7 +1349,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-148-c · DT-A6: the title bar app name is off by default (DESIGN.md draws it nowhere) and the Automations button is on by default until the command palette exists; SET-020's card says shown and hidden. Confirm or flip.
 
+- [accounts] T-148-d · DT-A7: the divider starts at 6 px with no colour and panes not in focus start undimmed; SET-023's card says 3 px and dimmed. Confirm or flip.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-148-d · done: Appearance fields `paneDividerWidth`, `paneDividerDark`, `paneDividerLight`, `paneDim` (clamped, colours #rrggbb only) as CSS vars `--divider-width`, `--divider`, `--pane-dim`; the grid gap and ground follow them, unfocused pane content fades over 140 ms; Panes card under Terminal; DT-A7 + SET-023 amendment · evidence/T-148-d.txt, evidence/T-148-d-1.png .. T-148-d-3.png
 - 2026-10-12 · [accounts] T-148-c · done: new `src/chrome/chromeItems.ts` (`titleBarAppName`, `tasksButton`, `automationsButton` with DT-A6 defaults, folded summary), Window & Sidebar switches and status bar item ticks in Settings > Appearance, TopBar app name, ProjectsPanel Tasks row and Automations button follow the switches; DT-A6 + SET-020 amendment; View-menu submenu on T-248, used/left usage on T-041 · evidence/T-148-c.txt, evidence/T-148-c-1-defaults.png .. T-148-c-5-automations-hidden.png
 - 2026-10-12 · [accounts] T-148-b · done: Appearance page in three `<details>` sections with folded summaries (SET-016), links unfold their section (SettingsPage), App font / Editor font fields with installed-font suggestions (new `src-tauri/src/fonts.rs` `list_fonts`, `src/settings/fonts.ts`), fonts kept in `appFont` / `editorFont` and cached for the first frame; icon chooser, search unfolding, terminal font and editor noted on T-300, T-246, T-247, T-323 · evidence/T-148-b.txt, evidence/T-148-b-1-sections.png .. T-148-b-7-link-unfolds-window.png
 - 2026-10-12 · [accounts] T-148-a · done: new `src/terminal/schemes.ts` (catalogue, search, Windows Terminal import, tidy on load), `src/settings/SchemePicker.tsx` (scheme lists), theme.ts dark/light picks (`terminalScheme`, `terminalSchemeLight`, `terminalCustomSchemes`), Appearance page Terminal colours rebuilt · evidence/T-148-a.txt, evidence/T-148-a-1-pickers.png .. T-148-a-5-custom-terminal.png

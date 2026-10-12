@@ -167,11 +167,48 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "" 
         <h2 className="conn-name">Terminal colours</h2>
         <TerminalColours look={look} onChange={onChange} />
       </section>
+      <PaneLook look={look} onChange={onChange} />
       </Fold>
       <Fold id="window" title="Window & Sidebar" summary={windowSummary} {...fold("window")}>
         {windowPart}
       </Fold>
     </>
+  );
+}
+
+/** SET-023: the gap between panes (width, and a colour per mode) and how far panes not in focus fade. */
+export function PaneLook({ look, onChange }: { look: Appearance; onChange: (a: Appearance) => void }) {
+  const colour = (key: "dividerDark" | "dividerLight", label: string, blank: string) => (
+    <div className="look-select pane-colour">
+      <span>{label}</span>
+      <input type="color" aria-label={label} value={look[key] || blank} onChange={(e) => onChange({ ...look, [key]: e.target.value })} />
+      <span className="conn-detail">{look[key] || "None"}</span>
+      {look[key] && (
+        <button type="button" className="menu-item scheme-add-btn" onClick={() => onChange({ ...look, [key]: "" })}>
+          Clear
+        </button>
+      )}
+    </div>
+  );
+  const slider = (key: "dividerWidth" | "paneDim", label: string, unit: string) => (
+    <label className="look-slider">
+      <span>{label}</span>
+      <input type="range" min={SPAN[key][0]} max={SPAN[key][1]} step={1} value={look[key]} onChange={(e) => onChange({ ...look, [key]: Number(e.target.value) })} />
+      <output>
+        {look[key]}
+        {unit}
+      </output>
+    </label>
+  );
+  return (
+    <section className="conn-card pane-look" data-section="panes">
+      <h2 className="conn-name">Panes</h2>
+      {slider("dividerWidth", "Divider width", " px")}
+      {colour("dividerDark", "Divider colour, dark mode", "#2f2f2f")}
+      {colour("dividerLight", "Divider colour, light mode", "#d0d0d0")}
+      {slider("paneDim", "Panes not in focus", "%")}
+      <p className="conn-detail">With no divider colour the window shows between panes. At 100% panes not in focus do not dim; lower fades them over a moment when focus moves.</p>
+    </section>
   );
 }
 
