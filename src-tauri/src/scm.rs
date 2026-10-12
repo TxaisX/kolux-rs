@@ -339,7 +339,17 @@ pub struct Pr {
     pub number: u64,
     pub url: String,
     pub state: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// GIT-025: the branch the pull request is for, so a hand link to another branch is flagged.
+    #[serde(alias = "headRefName", default)]
+    pub head: Option<String>,
+    #[serde(alias = "isDraft", default)]
+    pub draft: bool,
 }
+
+/// What every lookup asks gh for.
+const PR_FIELDS: &str = "number,url,state,title,headRefName,isDraft";
 
 /// The GitHub CLI, which carries the user's sign-in and works with GitHub Enterprise Server too.
 fn gh_program() -> Result<std::path::PathBuf, String> {
@@ -383,11 +393,21 @@ pub fn gh_words(said: &str) -> String {
 /// GIT-021 / GIT-023: the branch's pull request, None when it has none. Err when gh cannot
 /// say (signed out, offline, another host), so creation is refused rather than risking a second.
 pub fn pr_find(gh: &Path, worktree: &Path, branch: &str) -> Result<Option<Pr>, String> {
-    match gh_run(gh, worktree, &["pr", "view", branch, "--json", "number,url,state"], None) {
+    match gh_run(gh, worktree, &["pr", "view", branch, "--json", PR_FIELDS], None) {
         Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}")),
         Err(e) if e.to_lowercase().contains("no pull requests found") => Ok(None),
         Err(e) => Err(gh_words(&e)),
     }
+}
+
+/// GIT-025: a pull request linked by hand, read through its link wherever its branch is.
+pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
+    let url = url.trim();
+    if !safe_pr_url(url) {
+        return Err("Paste a pull request link, such as https://github.com/owner/repo/pull/12".into());
+    }
+    let text = gh_run(gh, worktree, &["pr", "view", url, "--json", PR_FIELDS], None).map_err(|e| gh_words(&e))?;
+    serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
 
 /// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work
@@ -435,7 +455,7 @@ pub fn pr_create(gh: &Path, worktree: &Path, title: &str, body: &str, base: &str
     let said = gh_run(gh, worktree, &args, Some(body)).map_err(|e| gh_words(&e))?;
     let url = said.lines().rev().map(str::trim).find(|l| l.contains("/pull/")).ok_or_else(|| format!("gh did not say where the pull request is: {said}"))?;
     let number = url.rsplit('/').next().and_then(|n| n.parse().ok()).ok_or_else(|| format!("gh gave a link without a number: {url}"))?;
-    Ok(Pr { number, url: url.to_string(), state: "OPEN".into() })
+    Ok(Pr { number, url: url.to_string(), state: "OPEN".into(), title: Some(title.trim().to_string()), head: Some(branch.clone()), draft })
 }
 
 /// Only an https link to a pull request, with nothing a shell could read as an option.
@@ -444,9 +464,12 @@ fn safe_pr_url(url: &str) -> bool {
 }
 
 #[tauri::command]
-pub async fn scm_pr(worktree: String) -> Result<Option<Pr>, String> {
+pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<Option<Pr>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
+        if let Some(url) = linked {
+            return pr_link(&gh_program()?, dir, &url).map(Some);
+        }
         let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
         pr_find(&gh_program()?, dir, &branch)
     })
@@ -654,12 +677,16 @@ mod tests {
                 "@echo off",
                 "echo %*>>\"%~dp0calls.txt\"",
                 "if \"%2\"==\"create\" goto create",
+                "echo %3| findstr /b \"https\" >nul && goto linked",
                 "if exist \"%~dp0made\" (",
                 "  echo {\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}",
                 "  exit /b 0",
                 ")",
                 "echo no pull requests found for branch \"feat\" 1>&2",
                 "exit /b 1",
+                ":linked",
+                "echo {\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}",
+                "exit /b 0",
                 ":create",
                 "more > \"%~dp0body.txt\"",
                 "type nul > \"%~dp0made\"",
@@ -669,7 +696,7 @@ mod tests {
             file
         } else {
             let file = dir.join("gh");
-            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
+            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\ncase \"$3\" in https*) echo '{\"number\":12,\"url\":\"https://github.com/o/r/pull/12\",\"state\":\"MERGED\",\"title\":\"Other work\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0;; esac\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
             fs::write(&file, script).unwrap();
             #[cfg(unix)]
             {
@@ -733,6 +760,20 @@ mod tests {
         assert!(gh_words("To get started with GitHub CLI, please run:  gh auth login").contains("Sign in"));
         let _ = fs::remove_dir_all(&tools);
         let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pull_request_linked_by_hand_is_read_through_its_link_with_its_branch() {
+        let dir = temp_repo("prlink");
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-prlink-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let pr = pr_link(&gh, &dir, "https://github.com/o/r/pull/12").unwrap();
+        assert_eq!((pr.number, pr.state.as_str(), pr.title.as_deref(), pr.head.as_deref(), pr.draft), (12, "MERGED", Some("Other work"), Some("other"), false));
+        assert!(fs::read_to_string(tools.join("calls.txt")).unwrap().contains("headRefName"), "the branch is asked for, so a mismatch can be flagged");
+        assert!(pr_link(&gh, &dir, "file:///C:/Windows/notepad.exe").unwrap_err().contains("pull request link"));
+        let _ = fs::remove_dir_all(&tools);
         let _ = fs::remove_dir_all(&dir);
     }
 

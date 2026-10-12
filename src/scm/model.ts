@@ -69,8 +69,29 @@ export const nextStep = (s: Status | null, message: string): Step => {
   return { label: "Create pull request", action: "pr", reason: null };
 };
 
-/** GIT-021: a branch's pull request; `state` is OPEN, MERGED or CLOSED. */
-export type Pr = { number: number; url: string; state: string };
+/** GIT-021: a branch's pull request; `state` is OPEN, MERGED or CLOSED; `head` its branch. */
+export type Pr = { number: number; url: string; state: string; title?: string | null; head?: string | null; draft?: boolean };
+
+/** GIT-025: the settings key of the pull requests linked by hand, by worktree path. */
+export const SCM_LINKED_PR_KEY = "scmLinkedPrs";
+
+/** GIT-025: the saved links, keeping only text values. */
+export const linkedPrs = (v: unknown): Record<string, string> =>
+  v !== null && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, u]) => typeof u === "string")) : {};
+
+/** GIT-025: the links with one workspace's set, or removed when `url` is null. */
+export const withLink = (map: Record<string, string>, dir: string, url: string | null): Record<string, string> => {
+  const next = { ...map };
+  if (url === null) delete next[dir];
+  else next[dir] = url;
+  return next;
+};
+
+/** GIT-025: a hand link whose branch is not the workspace's is flagged, never quietly replaced. */
+export const prMismatch = (pr: Pr | null, branch: string | null): string | null => (pr?.head && branch && pr.head !== branch ? `Linked by hand to the pull request for ${pr.head}, not ${branch}` : null);
+
+/** GIT-025: the state as the panel shows it. */
+export const prStateWord = (pr: Pr): string => (pr.state === "OPEN" ? (pr.draft ? "Draft" : "Open") : pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.state);
 /** GIT-023: what the panel knows of the branch's pull request while it looks it up. */
 export type PrLook = { loading: boolean; pr: Pr | null; error: string | null };
 

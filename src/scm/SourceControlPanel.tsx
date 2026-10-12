@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { prMismatch, prStateWord, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -39,6 +39,9 @@ type Props = {
   fixAgent: unknown;
   onFixAgent: (id: string | null) => void;
   onAgentAction: (agent: AgentInfo, prompt: string) => Promise<string | null>;
+  /** GIT-025: the pull request linked by hand to this workspace, and saving or removing it. */
+  linkedPr: string | null;
+  onLinkPr: (url: string | null) => void;
 };
 
 type Asking = { agent: string; prompt: string; remember: boolean };
@@ -48,7 +51,7 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction }: Props) {
+export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
@@ -177,14 +180,30 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const [look, setLook] = useState<PrLook>({ loading: false, pr: null, error: null });
   const [composer, setComposer] = useState<Composer | null>(null);
   const lookable = status !== null && status.branch !== null && status.upstream !== null && status.base !== status.branch && status.base !== `origin/${status.branch}`;
-  const lookKey = lookable ? `${dir}|${status?.branch}|${status?.upstream}` : null;
+  // A hand link is looked up wherever the workspace is, the default branch included.
+  const lookKey = linkedPr ? `${dir}|link|${linkedPr}` : lookable ? `${dir}|${status?.branch}|${status?.upstream}` : null;
   const lookUp = useCallback(() => {
     if (dir === null) return;
     setLook((l) => ({ ...l, loading: true }));
-    invoke<Pr | null>("scm_pr", { worktree: dir })
+    invoke<Pr | null>("scm_pr", { worktree: dir, linked: linkedPr })
       .then((pr) => setLook({ loading: false, pr, error: null }))
       .catch((err) => setLook({ loading: false, pr: null, error: String(err) }));
-  }, [dir]);
+  }, [dir, linkedPr]);
+  const [linking, setLinking] = useState<{ url: string; error: string | null } | null>(null);
+  useEffect(() => setLinking(null), [dir]);
+  // GIT-025: a link is checked through gh before it is kept.
+  const linkPr = async () => {
+    if (!linking || dir === null) return;
+    try {
+      const pr = await invoke<Pr | null>("scm_pr", { worktree: dir, linked: linking.url.trim() });
+      onLinkPr(linking.url.trim());
+      setLinking(null);
+      setLook({ loading: false, pr, error: null });
+    } catch (err) {
+      setLinking({ ...linking, error: String(err) });
+    }
+  };
+  const mismatch = prMismatch(look.pr, status?.branch ?? null);
   useEffect(() => {
     setComposer(null);
     if (lookKey === null) return setLook({ loading: false, pr: null, error: null });
@@ -392,6 +411,57 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                   </button>
                 </div>
               </>
+            )}
+            {status?.branch !== undefined && (
+              <div className="scm-prrow" data-pr-row>
+                {look.pr ? (
+                  <>
+                    <button className="btn scm-prnum" title={`Open ${look.pr.url}`} onClick={() => openPr(look.pr as Pr)}>
+                      #{look.pr.number}
+                    </button>
+                    <span className={`scm-prstate ${look.pr.state.toLowerCase()}`}>{prStateWord(look.pr)}</span>
+                    <span className="scm-prtitle" title={look.pr.title ?? ""}>
+                      {look.pr.title ?? ""}
+                    </span>
+                  </>
+                ) : (
+                  <span className="scm-prtitle muted">{look.loading ? "Checking for a pull request\u2026" : (look.error ?? (lookKey ? "No pull request for this branch" : "Pull requests are looked up once the branch is published, off the base branch"))}</span>
+                )}
+                <button className="btn" title="Link another pull request by its link" onClick={() => setLinking({ url: "", error: null })}>
+                  Link{"\u2026"}
+                </button>
+                {linkedPr && (
+                  <button className="btn" data-pr-unlink title="Go back to the branch's own pull request" onClick={() => onLinkPr(null)}>
+                    Unlink
+                  </button>
+                )}
+              </div>
+            )}
+            {mismatch && <div className="note warn">{mismatch}</div>}
+            {linking && (
+              <form
+                className="scm-ask"
+                aria-label="Link a pull request"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void linkPr();
+                }}
+              >
+                <input className="field" aria-label="pull request link" placeholder="https://github.com/owner/repo/pull/12" value={linking.url} onChange={(e) => setLinking({ url: e.target.value, error: null })} />
+                {linking.error && (
+                  <div className="note error" role="alert">
+                    {linking.error}
+                  </div>
+                )}
+                <div className="btn-row">
+                  <button className="btn primary" type="submit" data-pr-link disabled={!linking.url.trim()}>
+                    Link
+                  </button>
+                  <button className="btn" type="button" onClick={() => setLinking(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </form>
             )}
             {composer && (
               <div className="scm-ask scm-pr" role="dialog" aria-label="Create pull request">

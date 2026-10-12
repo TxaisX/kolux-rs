@@ -1,6 +1,22 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { linkedPrs, withLink, prMismatch, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+
+test("GIT-025: a hand-linked pull request is kept per workspace and flagged when its branch differs", () => {
+  expect(linkedPrs({ "G:/a": "https://github.com/o/r/pull/3", "G:/b": 4, bad: null })).toEqual({ "G:/a": "https://github.com/o/r/pull/3" });
+  expect(linkedPrs("x")).toEqual({});
+  expect(linkedPrs(["u"])).toEqual({});
+  expect(withLink({ "G:/a": "u1" }, "G:/b", "u2")).toEqual({ "G:/a": "u1", "G:/b": "u2" });
+  expect(withLink({ "G:/a": "u1", "G:/b": "u2" }, "G:/a", null)).toEqual({ "G:/b": "u2" });
+  const pr = { number: 12, url: "https://github.com/o/r/pull/12", state: "MERGED", title: "Other", head: "other", draft: false };
+  expect(prMismatch(pr, "feat")).toBe("Linked by hand to the pull request for other, not feat");
+  expect(prMismatch({ ...pr, head: "feat" }, "feat")).toBe(null);
+  expect(prMismatch({ ...pr, head: null }, "feat")).toBe(null);
+  expect(prStateWord(pr)).toBe("Merged");
+  expect(prStateWord({ ...pr, state: "OPEN", draft: true })).toBe("Draft");
+  expect(prStateWord({ ...pr, state: "OPEN" })).toBe("Open");
+  expect(prStateWord({ ...pr, state: "CLOSED" })).toBe("Closed");
+});
 
 test("GIT-023: create pull request says why it cannot run, and an open one is offered instead", () => {
   const ready: Status = { ...emptyStatus, branch: "feat", upstream: "origin/feat", base: "origin/main" };
