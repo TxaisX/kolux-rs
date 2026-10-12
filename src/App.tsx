@@ -171,6 +171,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
+  // SESS-017: until the first detection answers, no agent is called missing.
+  const [agentsRead, setAgentsRead] = useState(false);
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
   const [settingsRead, setSettingsRead] = useState(false); // USAGE-009: no alert before this is true
   useUsageAlerts(settingsRead ? settings : null);
@@ -203,7 +205,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
-    const readAgents = () => void invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
+    const readAgents = () =>
+      void invoke<AgentInfo[]>("agent_list")
+        .then(setAgents)
+        .catch(() => setAgents([]))
+        .finally(() => setAgentsRead(true));
     readAgents();
     // SET-027: Refresh on the Agents page looks again; the window takes the new list too.
     const offAgents = listen("agents-changed", readAgents);
@@ -1048,7 +1054,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     hidden={!board && p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
-                    agents={agents.filter((a) => a.installed)}
+                    agents={agents}
+                    detecting={!agentsRead}
                     seats={clearMissing(p.seats, installedIds)}
                     onSeats={(s) => setSeats(p.key, s)}
                     shape={p.shape ?? "custom"}

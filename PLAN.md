@@ -347,7 +347,8 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P1 · theme 6 · Business-user frame (33 cards)
 
 - [x] T-200 · PROJ-002 The Add Project dialog opens on cloning, with browse and create one step away (the clone and new-project steps say they are not built yet and lead back until T-214)
-- [ ] T-201 · SESS-017 Featured agent cards show what is missing and how to set it up · SESS-019 The older launch dialog with starter kits and a folded Advanced section
+- [x] T-201-a · SESS-017 Featured agent cards show what is missing and how to set it up (Claude Code, Codex and Grok first; a missing one greyed with Set up to Settings › Accounts & keys; the rest folded under More agents; nothing reads not installed while detection runs)
+- [ ] T-201-b · SESS-019 The older launch dialog with starter kits and a folded Advanced section (needs the kits from T-204) · SESS 017 rest: docs links for agents beyond Claude Code and Codex (the install-page list knows only those two)
 - [ ] T-202 · ACCT-015 Disconnect removes only what Kolux made
 - [ ] T-203 · GIT-061 Turn a plain folder into a Git repository
 - [ ] T-204 · SKILL-001 Six ready-made starter kits for common business jobs · SKILL-002 Starter kit gallery and its entry points · SKILL-003 Kit roles go to the AIs the user has connected · SKILL-004 Kit setup dialog gathers inputs and stops bad files · SKILL-005 Try a kit on bundled sample data, and recall past inputs

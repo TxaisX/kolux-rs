@@ -326,6 +326,10 @@ input { font: inherit; }
 .choices { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; }
 .choice { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .choice input { margin: 0; accent-color: var(--fg); }
+.choice.missing { color: var(--fg-icon-dim); cursor: default; }
+.agent-card { display: inline-flex; align-items: center; gap: 2px; }
+.agent-missing { font-size: 11px; }
+.btn.agent-link { height: 20px; padding: 0 4px; font-size: 11px; }
 .btn.primary { background: var(--fg); color: var(--pane-bg); border-color: var(--fg); font-weight: 600; }
 .btn.primary:hover:not(:disabled) { background: var(--fg); opacity: 0.9; }
 .btn.primary:disabled { background: transparent; color: var(--fg-icon-dim); border-color: var(--button-border); }

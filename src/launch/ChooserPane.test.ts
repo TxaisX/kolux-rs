@@ -3,7 +3,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import ChooserPane from "./ChooserPane";
+import ChooserPane, { seatAgents } from "./ChooserPane";
 import type { AgentInfo } from "./PlusMenu";
 import { defaultCopies, pickShape, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
 
@@ -105,4 +105,37 @@ test("SESS-007: Start sits in a footer after the scrolling choices", () => {
 
 test("SESS-022: no usage figures, no warning line above Start", () => {
   expect(render([{ agent: "claude", model: "opus" }])).not.toContain("note warn");
+});
+
+const agent = (id: string, name: string, installed: boolean): AgentInfo => ({ id, name, program: id, args: [], installed, path: installed ? `C:/bin/${id}.exe` : null });
+const renderWith = (agents: AgentInfo[], detecting = false, seats: Seat[] = [{ agent: null, model: null }]) =>
+  renderToString(createElement(ChooserPane, { number: 2, agents, detecting, seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: true, onCopies: () => {}, closable: true, onClose: () => {} }));
+
+test("SESS-017: Claude, Codex and Grok come first; a missing one is greyed with a set-up link; the rest fold away", () => {
+  const list = [agent("aider", "Aider", true), agent("grok", "Grok", false), agent("codex", "Codex", true), claude, agent("goose", "Goose", false)];
+  const { featured, more, none } = seatAgents(list, false);
+  expect(featured.map((f) => [f.agent.id, f.missing])).toEqual([["claude", false], ["codex", false], ["grok", true]]);
+  expect(more.map((a) => a.id)).toEqual(["aider"]);
+  expect(none).toBe(false);
+  const html = renderWith(list);
+  expect(html.indexOf("Claude Code")).toBeLessThan(html.indexOf("Codex"));
+  expect(html.indexOf("Codex")).toBeLessThan(html.indexOf("Grok"));
+  expect(radio(html, "Grok")).toMatch(/<input[^>]*disabled/);
+  expect(html).toContain("Not installed");
+  expect(html).toContain("Set up Grok");
+  // Aider sits behind the fold until it is opened, or until a seat already uses it.
+  expect(html).toContain("More agents (1)");
+  expect(html).not.toContain(">Aider<");
+  expect(renderWith(list, false, [{ agent: "aider", model: null }])).toContain("Aider");
+  // Agents with a known page link out to it.
+  expect(html).toContain("Claude Code docs");
+});
+
+test("SESS-017: nothing reads not installed while detection runs, and finding no AI at all says so", () => {
+  const looking = renderWith([], true);
+  expect(looking).not.toContain("Not installed");
+  expect(looking).toContain("Looking for AI programs");
+  const none = renderWith([agent("claude", "Claude Code", false), agent("codex", "Codex", false), agent("grok", "Grok", false)]);
+  expect(none).toContain("No AI programs have been found yet");
+  expect(radio(none, "Terminal").match(/<input[^>]*>/)![0]).not.toContain("disabled");
 });

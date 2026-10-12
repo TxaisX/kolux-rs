@@ -861,6 +861,12 @@ with Open a folder… and New project beside it; arrow keys and Enter move betwe
 Escape closes. Open a folder works as before; cloning and new projects arrive with T-214, and
 until then their steps say so and offer Back or Open a folder.
 
+[accounts] In the Choose what to run pane each seat now lists Claude Code, Codex and Grok first
+(T-201-a); a featured agent that is not installed is greyed out with Not installed and a Set up
+link that opens Settings › Accounts & keys, Claude Code and Codex carry a Docs link, the other
+installed agents fold under More agents (n), and while the app is still looking for AI programs
+the seat says so instead of calling anything not installed.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1609,7 +1615,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-200 · The dialog's Browse choice is worded Open a folder… (clearer than Browse for a non-coder); the Clone and New project steps exist now with a plain not-built-yet line and a disabled Clone button until T-214 builds them.
 
+- [accounts] T-201-a · SESS-017's "AI connections" is the Settings › Accounts & keys page; the AI choice stays one native radio group (one tab stop), with Set up, Docs and More agents as their own links beside it; docs links for agents other than Claude Code and Codex wait for T-201-b.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-201-a · done: `seatAgents` in `src/launch/ChooserPane.tsx` orders featured, missing and folded agents per seat; App passes every offered agent plus whether detection is still running · evidence/T-201-a.txt, T-201-a-1..3 png
 - 2026-10-12 · [accounts] T-200 · done: new `src/projects/AddProject.tsx` (`nextChoice`, `AddProjectView`, focus kept inside the dialog on every step), opened from the sidebar folder button and the composer's Add project item; `scripts/evidence/cdp.mjs` learns the arrow keys · evidence/T-200.txt, T-200-1..3 png
 - 2026-10-12 · [accounts] T-157 · done: `secrets.rs` seals four fields (`httpProxy` and `browserSearchSessionUrl` added for T-240/T-323), a save while the store is down fails with "the system secret store is not answering; nothing was saved", `drop_unreadable` probes the store first so an outage never clears a key, `clear_setting` needs no store, `KOLUX_RS_SECRET_STORE_DOWN` stands in for an outage in development builds only · evidence/T-157.txt, T-157-1..2 png
 - 2026-10-12 · [accounts] T-156 · not built, left unticked · HAND TO FABLE: SAFE-016/017/018/020 sit on the protected-action hook that T-058/T-059 build (the PreToolUse hook program, the listener, the rule engine and the Safety page section do not exist yet, and hooks are a Fable theme); SAFE-025 / STAT-056 need the shared setup, archive and issue scripts to run first (T-107-b, T-107-c). Build after T-058, T-059 and T-107-b.
