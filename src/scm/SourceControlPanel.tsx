@@ -9,14 +9,14 @@
 // the base and the lines changed, split into source, tests and generated).
 // ponytail: the list refreshes after each action and every 4 s while the panel is open; the
 // watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033), the bulk
-// bar for several selected rows with T-018-c, and the pull-request step (create, merged, loading)
-// with GIT-021 (T-228).
+// bar for several selected rows with T-018-c. GIT-021 / GIT-023: the pull-request step looks the
+// branch's pull request up through gh once it is published, and Create pull request opens a composer.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -44,6 +44,8 @@ type Props = {
 type Asking = { agent: string; prompt: string; remember: boolean };
 
 type Failure = { title: string; output: string; fix?: string | null };
+
+type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
 export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction }: Props) {
@@ -171,7 +173,46 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const [commitMenu, setCommitMenu] = useState<{ left: number; top: number } | null>(null);
   const commitButton = useRef<HTMLButtonElement>(null);
 
-  const step = nextStep(status, draft);
+  // GIT-021: the branch's pull request, looked up once it is published and off the base branch.
+  const [look, setLook] = useState<PrLook>({ loading: false, pr: null, error: null });
+  const [composer, setComposer] = useState<Composer | null>(null);
+  const lookable = status !== null && status.branch !== null && status.upstream !== null && status.base !== status.branch && status.base !== `origin/${status.branch}`;
+  const lookKey = lookable ? `${dir}|${status?.branch}|${status?.upstream}` : null;
+  const lookUp = useCallback(() => {
+    if (dir === null) return;
+    setLook((l) => ({ ...l, loading: true }));
+    invoke<Pr | null>("scm_pr", { worktree: dir })
+      .then((pr) => setLook({ loading: false, pr, error: null }))
+      .catch((err) => setLook({ loading: false, pr: null, error: String(err) }));
+  }, [dir]);
+  useEffect(() => {
+    setComposer(null);
+    if (lookKey === null) return setLook({ loading: false, pr: null, error: null });
+    lookUp();
+  }, [lookKey, lookUp]);
+  const openPr = (pr: Pr) => void invoke("scm_open_pr", { url: pr.url }).catch((err) => setError(String(err)));
+  const startPr = () => {
+    if (look.pr?.state === "OPEN") return openPr(look.pr);
+    setComposer({ title: "", body: "", base: (status?.base ?? "").replace(/^origin\//, ""), draft: false, error: null, busy: false });
+  };
+  // A failed create keeps everything typed next to the error.
+  const createPr = async () => {
+    if (!composer || dir === null || composer.busy) return;
+    setComposer({ ...composer, busy: true, error: null });
+    try {
+      const pr = await invoke<Pr>("scm_pr_create", { worktree: dir, title: composer.title, body: composer.body, base: composer.base, draft: composer.draft });
+      setComposer(null);
+      setLook({ loading: false, pr, error: null });
+      setFailure(null);
+      setInfo(`Pull request #${pr.number} is open on GitHub`);
+    } catch (err) {
+      setComposer((c) => c && { ...c, busy: false, error: String(err) });
+    }
+    void load();
+  };
+  const prItemReason = look.pr?.state === "OPEN" ? null : prReason(status, look);
+
+  const step = withPr(nextStep(status, draft), status, look);
   const mainAction = () => {
     if (!status) return;
     switch (step.action) {
@@ -180,8 +221,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
       case "commit":
         return commit();
       case "pr":
-        // ponytail: the composer is GIT-021 (T-228); until then the button says where it leads.
-        return setInfo("Creating a pull request comes with GIT-021 (T-228).");
+        return startPr();
       default:
         return remote(step.action, step.label);
     }
@@ -336,8 +376,49 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                       {item.reason && <span className="reason">{item.reason}</span>}
                     </button>
                   ))}
+                  <button
+                    role="menuitem"
+                    className="menu-item"
+                    data-action="pr"
+                    disabled={prItemReason !== null}
+                    title={prItemReason ?? "Create pull request"}
+                    onClick={() => {
+                      setMenu(null);
+                      startPr();
+                    }}
+                  >
+                    <span className="name">{look.pr?.state === "OPEN" ? `Open pull request #${look.pr.number}` : "Create pull request"}</span>
+                    {prItemReason && <span className="reason">{prItemReason}</span>}
+                  </button>
                 </div>
               </>
+            )}
+            {composer && (
+              <div className="scm-ask scm-pr" role="dialog" aria-label="Create pull request">
+                <input className="field" aria-label="pull request title" placeholder="Title" value={composer.title} onChange={(e) => setComposer({ ...composer, title: e.target.value })} />
+                <textarea className="field multi" aria-label="pull request description" placeholder="Description" value={composer.body} onChange={(e) => setComposer({ ...composer, body: e.target.value })} />
+                <label className="scm-pr-base">
+                  <span>Base</span>
+                  <input className="field" aria-label="base branch" value={composer.base} onChange={(e) => setComposer({ ...composer, base: e.target.value })} />
+                </label>
+                <label className="conn-switch">
+                  <input type="checkbox" checked={composer.draft} onChange={(e) => setComposer({ ...composer, draft: e.target.checked })} />
+                  <span>Open as a draft</span>
+                </label>
+                {composer.error && (
+                  <div className="note error" role="alert">
+                    {composer.error}
+                  </div>
+                )}
+                <div className="btn-row">
+                  <button className="btn primary" data-pr-create disabled={composer.busy || !composer.title.trim() || !composer.base.trim()} title={!composer.title.trim() ? "Write a title first" : undefined} onClick={() => void createPr()}>
+                    {composer.busy ? "Creating…" : `Create${composer.draft ? " draft" : ""} pull request`}
+                  </button>
+                  <button className="btn" onClick={() => setComposer(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
             )}
             {info && (
               <div className="note ok" role="status">

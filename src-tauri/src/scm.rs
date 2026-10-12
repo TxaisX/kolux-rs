@@ -332,6 +332,148 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
     Ok(ActionOutcome { ok: true, output: output.trim().to_string(), kind: None, detail: None })
 }
 
+/// GIT-021: a branch's pull request as `gh pr view --json number,url,state` gives it; `state`
+/// is OPEN, MERGED or CLOSED.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Pr {
+    pub number: u64,
+    pub url: String,
+    pub state: String,
+}
+
+/// The GitHub CLI, which carries the user's sign-in and works with GitHub Enterprise Server too.
+fn gh_program() -> Result<std::path::PathBuf, String> {
+    crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
+}
+
+/// Runs gh in the worktree with every prompt off; `input` goes to standard input. A failure
+/// carries what gh printed.
+// ponytail: no time limit yet; a stuck gh holds only this call. GIT-028's limits come with T-176-b.
+fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
+    use std::process::Stdio;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).current_dir(worktree).envs(crate::git::NO_PROMPT).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("could not run gh: {e}"))?;
+    if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
+        pipe.write_all(text.as_bytes()).map_err(|e| format!("could not hand gh the description: {e}"))?;
+    }
+    let out = child.wait_with_output().map_err(|e| format!("gh did not finish: {e}"))?;
+    let said = format!("{}\n{}", String::from_utf8_lossy(&out.stdout).trim(), String::from_utf8_lossy(&out.stderr).trim()).trim().to_string();
+    if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()) } else { Err(plain(&said)) }
+}
+
+/// GIT-023: gh's failures in the words the panel shows.
+pub fn gh_words(said: &str) -> String {
+    let low = said.to_lowercase();
+    if low.contains("known github host") || low.contains("not a github") {
+        "This remote's host is not supported; pull requests need a GitHub remote".into()
+    } else if low.contains("gh auth login") || low.contains("not logged in") || low.contains("authentication") {
+        "Sign in to GitHub first: run gh auth login".into()
+    } else {
+        said.trim().to_string()
+    }
+}
+
+/// GIT-021 / GIT-023: the branch's pull request, None when it has none. Err when gh cannot
+/// say (signed out, offline, another host), so creation is refused rather than risking a second.
+pub fn pr_find(gh: &Path, worktree: &Path, branch: &str) -> Result<Option<Pr>, String> {
+    match gh_run(gh, worktree, &["pr", "view", branch, "--json", "number,url,state"], None) {
+        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}")),
+        Err(e) if e.to_lowercase().contains("no pull requests found") => Ok(None),
+        Err(e) => Err(gh_words(&e)),
+    }
+}
+
+/// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work
+/// first. An open one the branch already has is returned instead of a second being made. The
+/// head must still be checked out and ahead of the base, with no uncommitted tracked change.
+pub fn pr_create(gh: &Path, worktree: &Path, title: &str, body: &str, base: &str, draft: bool) -> Result<Pr, String> {
+    let st = status(worktree)?;
+    let branch = st.branch.clone().ok_or("No branch is checked out here; check out the head branch first")?;
+    let base = base.trim().trim_start_matches("origin/");
+    if base.is_empty() || base == branch {
+        return Err(format!("{branch} is the base branch; move to a feature branch first"));
+    }
+    if !st.staged.is_empty() || !st.changed.is_empty() || !st.conflicts.is_empty() {
+        return Err("Commit or stash the changes to tracked files first".into());
+    }
+    let remote_base = format!("refs/remotes/origin/{base}");
+    if run(&["rev-parse", "--verify", "-q", &remote_base], Some(worktree)).is_err() {
+        let local = run(&["rev-parse", "--verify", "-q", &format!("refs/heads/{base}")], Some(worktree)).is_ok();
+        return Err(if local { format!("{base} is only on this computer; publish it, then create the pull request") } else { format!("origin has no branch {base}; pick another base") });
+    }
+    // Counted again now, not taken from the panel's last refresh.
+    let ahead = run(&["rev-list", "--count", &format!("{remote_base}..HEAD")], Some(worktree)).ok().and_then(|n| n.parse::<u32>().ok()).unwrap_or(0);
+    if ahead == 0 {
+        return Err(format!("No commits ahead of {base}; there is nothing to review"));
+    }
+    if title.trim().is_empty() {
+        return Err("Write a title first".into());
+    }
+    match pr_find(gh, worktree, &branch)? {
+        Some(pr) if pr.state == "OPEN" => return Ok(pr),
+        Some(pr) if pr.state == "MERGED" => return Err(format!("Pull request #{} for {branch} is already merged", pr.number)),
+        _ => {}
+    }
+    let push: Vec<&str> = if st.upstream.is_none() { vec!["push", "--set-upstream", "origin", &branch] } else { vec!["push"] };
+    if st.upstream.is_none() || st.ahead > 0 {
+        let out = command(&push, Some(worktree)).envs(crate::git::NO_PROMPT).output().map_err(|e| format!("could not run git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("Push failed, so no pull request was made: {}", plain(String::from_utf8_lossy(&out.stderr).trim())));
+        }
+    }
+    let mut args = vec!["pr", "create", "--title", title.trim(), "--body-file", "-", "--base", base, "--head", &branch];
+    if draft {
+        args.push("--draft");
+    }
+    let said = gh_run(gh, worktree, &args, Some(body)).map_err(|e| gh_words(&e))?;
+    let url = said.lines().rev().map(str::trim).find(|l| l.contains("/pull/")).ok_or_else(|| format!("gh did not say where the pull request is: {said}"))?;
+    let number = url.rsplit('/').next().and_then(|n| n.parse().ok()).ok_or_else(|| format!("gh gave a link without a number: {url}"))?;
+    Ok(Pr { number, url: url.to_string(), state: "OPEN".into() })
+}
+
+/// Only an https link to a pull request, with nothing a shell could read as an option.
+fn safe_pr_url(url: &str) -> bool {
+    url.starts_with("https://") && url.contains("/pull/") && !url.chars().any(|c| c.is_whitespace() || c == '"')
+}
+
+#[tauri::command]
+pub async fn scm_pr(worktree: String) -> Result<Option<Pr>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let branch = status(dir)?.branch.ok_or("No branch is checked out here")?;
+        pr_find(&gh_program()?, dir, &branch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_pr_create(worktree: String, title: String, body: String, base: String, draft: bool) -> Result<Pr, String> {
+    tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
+}
+
+/// Opens a pull request in the browser.
+#[tauri::command]
+pub fn scm_open_pr(url: String) -> Result<(), String> {
+    if !safe_pr_url(&url) {
+        return Err("That is not a pull request link".into());
+    }
+    #[cfg(windows)]
+    let opener = "explorer.exe";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Parses porcelain v2 with NUL separators, so names with spaces, quotes or non-ASCII letters
 /// come through as they are. A file changed in both the index and the tree is in both lists.
 pub fn parse_status(text: &str) -> Status {
@@ -500,6 +642,107 @@ mod tests {
     fn counts(dir: &Path) -> (Option<String>, u32, u32, bool) {
         let st = status(dir).unwrap();
         (st.upstream, st.ahead, st.behind, st.rewritten)
+    }
+
+    /// A stand-in for gh: `pr view` finds nothing until `pr create` has run, every call is noted
+    /// in calls.txt and the description read from standard input lands in body.txt.
+    fn stand_in_gh(dir: &Path) -> PathBuf {
+        fs::create_dir_all(dir).unwrap();
+        if cfg!(windows) {
+            let file = dir.join("gh.cmd");
+            let script = [
+                "@echo off",
+                "echo %*>>\"%~dp0calls.txt\"",
+                "if \"%2\"==\"create\" goto create",
+                "if exist \"%~dp0made\" (",
+                "  echo {\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}",
+                "  exit /b 0",
+                ")",
+                "echo no pull requests found for branch \"feat\" 1>&2",
+                "exit /b 1",
+                ":create",
+                "more > \"%~dp0body.txt\"",
+                "type nul > \"%~dp0made\"",
+                "echo https://github.com/o/r/pull/7",
+            ];
+            fs::write(&file, script.join("\r\n")).unwrap();
+            file
+        } else {
+            let file = dir.join("gh");
+            let script = "#!/bin/sh\nd=$(dirname \"$0\")\necho \"$*\" >> \"$d/calls.txt\"\nif [ \"$2\" = create ]; then cat > \"$d/body.txt\"; touch \"$d/made\"; echo https://github.com/o/r/pull/7; exit 0; fi\nif [ -f \"$d/made\" ]; then echo '{\"number\":7,\"url\":\"https://github.com/o/r/pull/7\",\"state\":\"OPEN\"}'; exit 0; fi\necho 'no pull requests found for branch \"feat\"' >&2\nexit 1\n";
+            fs::write(&file, script).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            file
+        }
+    }
+
+    #[test]
+    fn a_pull_request_is_made_once_after_the_branch_is_pushed_and_states_that_cannot_have_one_are_refused() {
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-pr-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("pr");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        run(&["remote", "set-head", "origin", "main"], Some(&dir)).unwrap();
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-pr-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let calls = || fs::read_to_string(tools.join("calls.txt")).unwrap_or_default();
+
+        // GIT-023: on the default branch there is nothing to compare.
+        let err = pr_create(&gh, &dir, "Title", "", "main", false).unwrap_err();
+        assert!(err.contains("feature branch"), "{err}");
+
+        run(&["checkout", "-q", "-b", "feat"], Some(&dir)).unwrap();
+        let err = pr_create(&gh, &dir, "Title", "", "main", false).unwrap_err();
+        assert!(err.contains("No commits"), "{err}");
+        commit_file(&dir, "feat.txt", "f\n");
+
+        // GIT-021: uncommitted tracked changes block it; a base only on this computer says what to do.
+        fs::write(dir.join("README.md"), "changed\n").unwrap();
+        let err = pr_create(&gh, &dir, "Title", "", "main", false).unwrap_err();
+        assert!(err.contains("Commit or stash"), "{err}");
+        run(&["checkout", "--", "README.md"], Some(&dir)).unwrap();
+        run(&["branch", "only-here", "main"], Some(&dir)).unwrap();
+        let err = pr_create(&gh, &dir, "Title", "", "only-here", false).unwrap_err();
+        assert!(err.contains("only on this computer"), "{err}");
+        assert!(calls().is_empty(), "nothing reached gh while the branch could not have a PR");
+
+        // None yet; creating pushes the unpublished branch first, then hands gh the title, base,
+        // head and draft flag, with the description on standard input.
+        assert_eq!(pr_find(&gh, &dir, "feat").unwrap(), None);
+        let pr = pr_create(&gh, &dir, "Add feat", "Why:\nbecause", "origin/main", true).unwrap();
+        assert_eq!((pr.number, pr.url.as_str(), pr.state.as_str()), (7, "https://github.com/o/r/pull/7", "OPEN"));
+        assert!(run(&["rev-parse", "--verify", "refs/heads/feat"], Some(&bare)).is_ok(), "the branch was pushed first");
+        let said = calls();
+        assert!(said.contains("pr create") && said.contains("--draft") && said.contains("--base main") && said.contains("--head feat"), "{said}");
+        assert!(fs::read_to_string(tools.join("body.txt")).unwrap().contains("because"));
+
+        // A second create links the PR the branch already has instead of making another.
+        assert_eq!(pr_create(&gh, &dir, "Add feat", "", "main", false).unwrap().number, 7);
+        assert_eq!(calls().matches("pr create").count(), 1);
+
+        // gh's own failures come back in plain words.
+        assert!(gh_words("none of the git remotes configured for this repository point to a known GitHub host").contains("not supported"));
+        assert!(gh_words("To get started with GitHub CLI, please run:  gh auth login").contains("Sign in"));
+        let _ = fs::remove_dir_all(&tools);
+        let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_a_plain_https_pull_request_link_is_opened() {
+        assert!(safe_pr_url("https://github.com/o/r/pull/7"));
+        assert!(safe_pr_url("https://git.example.com/o/r/pull/12"));
+        assert!(!safe_pr_url("file:///C:/Windows/System32/calc.exe"));
+        assert!(!safe_pr_url("https://github.com/o/r/pull/7 --flag"));
+        assert!(!safe_pr_url("https://github.com/o/r/issues/7"));
     }
 
     #[test]

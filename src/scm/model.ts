@@ -69,6 +69,37 @@ export const nextStep = (s: Status | null, message: string): Step => {
   return { label: "Create pull request", action: "pr", reason: null };
 };
 
+/** GIT-021: a branch's pull request; `state` is OPEN, MERGED or CLOSED. */
+export type Pr = { number: number; url: string; state: string };
+/** GIT-023: what the panel knows of the branch's pull request while it looks it up. */
+export type PrLook = { loading: boolean; pr: Pr | null; error: string | null };
+
+/** GIT-023: why Create pull request cannot run yet, null when it can. Untracked files do not
+ * block it; tracked changes, a missing push and a missing base do. */
+export const prReason = (s: Status | null, look: PrLook): string | null => {
+  if (s === null) return "Loading";
+  if (s.conflicts.length > 0) return "Resolve the conflicts first";
+  if (s.staged.length + s.changed.length > 0) return "Commit your changes first";
+  if (s.branch === null) return "No branch checked out";
+  if (s.base !== null && (s.base === s.branch || s.base === `origin/${s.branch}`)) return "Move to a feature branch first";
+  if (s.upstream === null) return "Push the branch first";
+  if (s.behind > 0) return `Sync first: the remote has ${plural(s.behind, "commit")} this copy lacks`;
+  if (s.ahead > 0) return `Push ${plural(s.ahead, "commit")} first`;
+  if (s.base === null) return "No base branch on the remote";
+  if (look.loading) return "Checking for a pull request";
+  if (look.error) return look.error;
+  if (look.pr?.state === "MERGED") return `Pull request #${look.pr.number} already merged`;
+  return null;
+};
+
+/** GIT-021: the main button's pull-request step waits while the check loads and opens the
+ * branch's open pull request once it has one. Other steps pass through. */
+export const withPr = (step: Step, s: Status | null, look: PrLook): Step => {
+  if (step.action !== "pr") return step;
+  if (look.pr?.state === "OPEN") return { label: `Open pull request #${look.pr.number}`, action: "pr", reason: null };
+  return { ...step, reason: prReason(s, look) };
+};
+
 export type RemoteItem = { id: RemoteAction; label: string; reason: string | null };
 
 const plural = (k: number, word: string) => `${k} ${word}${k === 1 ? "" : "s"}`;

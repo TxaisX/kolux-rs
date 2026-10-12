@@ -169,6 +169,7 @@ pub fn run() {
             scm::scm_pushed, scm::scm_summary,
             scm::scm_stage,
             scm::scm_commit, scm::scm_remote,
+            scm::scm_pr, scm::scm_pr_create, scm::scm_open_pr,
             terminal::terminal_busy,
             keybindings::keybindings_read,
             keybindings::keybindings_write,

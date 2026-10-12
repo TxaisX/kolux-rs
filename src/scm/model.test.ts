@@ -1,6 +1,28 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+
+test("GIT-023: create pull request says why it cannot run, and an open one is offered instead", () => {
+  const ready: Status = { ...emptyStatus, branch: "feat", upstream: "origin/feat", base: "origin/main" };
+  const none: PrLook = { loading: false, pr: null, error: null };
+  expect(prReason(ready, none)).toBe(null);
+  expect(prReason(null, none)).toBe("Loading");
+  expect(prReason({ ...ready, branch: "main", upstream: "origin/main" }, none)).toBe("Move to a feature branch first");
+  expect(prReason({ ...ready, changed: [{ path: "a.txt", status: "M", from: null }] }, none)).toBe("Commit your changes first");
+  expect(prReason({ ...ready, untracked: [{ path: "new.txt", status: "U", from: null }] }, none)).toBe(null);
+  expect(prReason({ ...ready, upstream: null }, none)).toBe("Push the branch first");
+  expect(prReason({ ...ready, ahead: 2 }, none)).toBe("Push 2 commits first");
+  expect(prReason({ ...ready, ahead: 1, behind: 3 }, none)).toBe("Sync first: the remote has 3 commits this copy lacks");
+  expect(prReason({ ...ready, base: null }, none)).toBe("No base branch on the remote");
+  expect(prReason({ ...ready, branch: null }, none)).toBe("No branch checked out");
+  expect(prReason(ready, { ...none, loading: true })).toBe("Checking for a pull request");
+  expect(prReason(ready, { ...none, error: "Sign in to GitHub first: run gh auth login" })).toBe("Sign in to GitHub first: run gh auth login");
+  expect(prReason(ready, { ...none, pr: { number: 4, url: "https://github.com/o/r/pull/4", state: "MERGED" } })).toBe("Pull request #4 already merged");
+  const step = nextStep(ready, "");
+  expect(withPr(step, ready, { ...none, loading: true })).toEqual({ label: "Create pull request", action: "pr", reason: "Checking for a pull request" });
+  expect(withPr(step, ready, { ...none, pr: { number: 9, url: "https://github.com/o/r/pull/9", state: "OPEN" } })).toEqual({ label: "Open pull request #9", action: "pr", reason: null });
+  expect(withPr(nextStep({ ...ready, ahead: 1 }, ""), ready, none).action).toBe("push");
+});
 
 test("GIT-005: commit-and items fit the branch and say why when they cannot run", () => {
   const ready: Status = { ...emptyStatus, branch: "fix", upstream: "origin/fix", base: "origin/main", staged: [{ path: "a.txt", status: "M", from: null }] };
