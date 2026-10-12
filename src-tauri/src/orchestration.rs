@@ -36,6 +36,22 @@ pub struct Mail {
     pub deliveries: Vec<Delivery>,
     pub answers: BTreeMap<String, Value>,
     pub seq: u64,
+    pub gates: Vec<Gate>,
+}
+
+/// ORCH-028: a decision the coordinator still has to make, holding one task blocked meanwhile.
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Gate {
+    pub id: String,
+    pub run: Option<String>,
+    pub task: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub status: String,
+    pub resolution: Option<String>,
+    pub created: u64,
+    pub resolved: Option<u64>,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -580,6 +596,101 @@ impl Mail {
         let new = self.next("msg");
         self.messages.push(Message { id: new.clone(), to: to.clone(), run: m.run.clone(), from: from.to_string(), subject, body: body.to_string(), kind: "status".into(), priority: "normal".into(), extras, at: now });
         Ok(json!({ "messageIds": [new], "to": to, "runId": m.run, "threadId": thread }))
+    }
+
+    /// ORCH-028: a gate on a task of Run `run`, which turns the task blocked. Choices are a JSON
+    /// list of strings; a task with a supervised worker still at work, or one that has finished,
+    /// cannot be held, and then nothing is made.
+    pub fn gate_create(&mut self, run: Option<&str>, tasks: &mut [Value], dispatches: &[Value], a: &Value, now: u64) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let task = text("task").ok_or_else(|| args("--task is required"))?;
+        let question = text("question").ok_or_else(|| args("--question is required: say what needs deciding"))?;
+        let options = match text("options") {
+            Some(o) => parse_deps(&o).ok_or_else(|| args("--options takes a JSON list of strings, like [\"yes\",\"no\"]"))?,
+            None => Vec::new(),
+        };
+        let i = task_in(tasks, &task, run)?;
+        if let Some(d) = dispatches.iter().find(|d| d["taskId"] == task.as_str() && !finished(d)) {
+            let id = d["id"].as_str().unwrap_or_default();
+            return Err(Fail::new("worker_active", format!("{task} has a supervised worker at work ({id}); a gate cannot hold it until that worker finishes or is abandoned")));
+        }
+        let was = status(&tasks[i]).to_string();
+        if !["pending", "ready", "blocked"].contains(&was.as_str()) {
+            return Err(Fail::new("invalid_state", format!("{task} is {was}; only a pending or ready task can be held by a gate")));
+        }
+        tasks[i]["status"] = json!("blocked");
+        let g = Gate { id: self.next("gate"), run: run.map(str::to_string), task, question, options, status: "pending".into(), resolution: None, created: now, resolved: None };
+        let mut v = json!(g);
+        v["taskStatus"] = json!("blocked");
+        self.gates.push(g);
+        Ok(v)
+    }
+
+    /// ORCH-028: settles an open gate of Run `run`; a gate of another Run reads as missing. Once no
+    /// open gate holds the task any more it goes back to pending, and so on to ready when nothing
+    /// else holds it.
+    pub fn gate_resolve(&mut self, run: Option<&str>, tasks: &mut [Value], a: &Value, now: u64) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let id = text("id").ok_or_else(|| args("--id is required"))?;
+        let resolution = text("resolution").ok_or_else(|| args("--resolution is required: say what was decided"))?;
+        let g = self.gates.iter_mut().find(|g| g.id == id && g.run.as_deref() == run).ok_or_else(|| Fail::new("not_found", format!("no gate {id}")))?;
+        if g.status != "pending" {
+            return Err(Fail::new("gate_closed", format!("{id} is already {}", g.status)));
+        }
+        g.status = "resolved".into();
+        g.resolution = Some(resolution);
+        g.resolved = Some(now);
+        let mut v = json!(g);
+        let task = g.task.clone();
+        if !self.gates.iter().any(|g| g.task == task && g.run.as_deref() == run && g.status == "pending") {
+            if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task.as_str() && t["runId"].as_str() == run && status(t) == "blocked") {
+                t["status"] = json!("pending");
+            }
+            promote(tasks);
+        }
+        v["taskStatus"] = tasks.iter().find(|t| t["id"] == task.as_str() && t["runId"].as_str() == run).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+        Ok(v)
+    }
+
+    /// ORCH-028: the gates of Run `run`, oldest first, narrowed by task and state.
+    // ponytail: no gate times out yet (gate-create takes no deadline), so "timeout" lists nothing
+    // until one does.
+    pub fn gate_list(&self, run: Option<&str>, a: &Value) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let want = text("status");
+        if want.is_some_and(|s| !["pending", "resolved", "timeout"].contains(&s)) {
+            return Err(args("--status takes pending, resolved or timeout"));
+        }
+        let gates: Vec<Value> = self.gates.iter().filter(|g| g.run.as_deref() == run && want.is_none_or(|s| g.status == s) && text("task").is_none_or(|t| g.task == t)).map(|g| json!(g)).collect();
+        Ok(json!({ "runId": run, "gates": gates }))
+    }
+
+    /// ORCH-029: a question to one recipient (by default the caller's Run), or, with `resume`, the
+    /// state of one this terminal already asked: still open, or answered by the first reply to it.
+    /// A group address is refused and nothing is made.
+    pub fn ask(&mut self, from: &str, a: &Value, dispatches: &[Value], peers: &[Peer], now: u64) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let id = match (text("question"), text("resume")) {
+            (Some(_), Some(_)) => return Err(args("give --question or --resume, not both")),
+            (None, None) => return Err(args("--question is required (or --resume <message> to wait on one already asked)")),
+            (Some(q), None) => {
+                let options: Vec<String> = text("options").map(|o| o.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+                let to = text("to").or_else(|| self.run_of(from, dispatches).map(|r| format!("run:{r}")));
+                let mut q = json!({ "to": to, "run": a["run"], "subject": q, "type": "question" });
+                if !options.is_empty() {
+                    q["payload"] = json!(json!({ "options": options }).to_string());
+                }
+                let r = self.post(from, &q, dispatches, peers, now)?;
+                return Ok(json!({ "status": "open", "messageId": r["messageIds"][0], "to": r["to"], "runId": r["runId"], "options": options }));
+            }
+            (None, Some(id)) if text("options").is_some() => return Err(args(format!("--options goes with --question; {id} keeps the choices it was asked with"))),
+            (None, Some(id)) => id,
+        };
+        let q = self.messages.iter().find(|m| m.id == id && m.from == from && m.kind == "question").ok_or_else(|| Fail::new("not_found", format!("no question {id} was asked from this terminal")))?;
+        Ok(match self.messages.iter().find(|m| m.extras.get("inReplyTo").and_then(Value::as_str) == Some(id.as_str())) {
+            Some(r) => json!({ "status": "answered", "messageId": id, "answer": r.body, "answeredBy": r.from, "answerId": r.id }),
+            None => json!({ "status": "open", "messageId": id, "to": q.to, "runId": q.run }),
+        })
     }
 
     /// ORCH-006: the newest mail in `boxes`, newest first, bodies cut unless `full`; it only reads.
@@ -1183,5 +1294,63 @@ mod tests {
         // One-to-one sends still go through post.
         assert!(m.post("term-1", &json!({ "to": "term-4", "subject": "x" }), &[], &peers, 5).is_ok());
         assert_eq!(m.post("term-1", &json!({ "to": "term-7", "subject": "x" }), &[], &peers, 5).unwrap_err().code, "not_found");
+    }
+
+    #[test]
+    fn a_gate_holds_its_task_until_it_is_resolved() {
+        let mut m = Mail::default();
+        let mut tasks = vec![
+            json!({ "id": "task-1", "status": "ready", "runId": "run-1", "deps": [] }),
+            json!({ "id": "task-2", "status": "dispatched", "runId": "run-1", "deps": [] }),
+            json!({ "id": "task-3", "status": "ready", "runId": "run-2", "deps": [] }),
+        ];
+        let d = vec![json!({ "id": "dispatch-1", "taskId": "task-2", "status": "ready", "runId": "run-1" })];
+        let g = m.gate_create(Some("run-1"), &mut tasks, &d, &json!({ "task": "task-1", "question": "ship it?", "options": r#"["yes","no"]"# }), 1).unwrap();
+        assert_eq!(tasks[0]["status"], "blocked");
+        assert_eq!(g["options"], json!(["yes", "no"]));
+        assert_eq!(g["status"], "pending");
+        let id = g["id"].as_str().unwrap().to_string();
+        let count = |m: &Mail, run: &str, status: &str| m.gate_list(Some(run), &json!({ "status": status })).unwrap()["gates"].as_array().unwrap().len();
+        assert_eq!(count(&m, "run-1", "pending"), 1);
+        assert_eq!(count(&m, "run-2", "pending"), 0, "a gate belongs to its own Run");
+        assert_eq!(m.gate_resolve(Some("run-2"), &mut tasks, &json!({ "id": id, "resolution": "yes" }), 2).unwrap_err().code, "not_found");
+        let r = m.gate_resolve(Some("run-1"), &mut tasks, &json!({ "id": id, "resolution": "yes" }), 3).unwrap();
+        assert_eq!((r["status"].as_str(), r["resolution"].as_str()), (Some("resolved"), Some("yes")));
+        assert_eq!(tasks[0]["status"], "ready");
+        assert!(m.gate_resolve(Some("run-1"), &mut tasks, &json!({ "id": id, "resolution": "no" }), 4).unwrap_err().message.contains("already"));
+        assert_eq!(count(&m, "run-1", "resolved"), 1);
+        assert!(m.gate_list(Some("run-1"), &json!({ "status": "open" })).is_err());
+        // Nothing is left behind when the gate cannot be opened.
+        let before = (m.gates.len(), tasks.clone());
+        let no = |m: &mut Mail, tasks: &mut Vec<Value>, a: Value| m.gate_create(Some("run-1"), tasks, &d, &a, 5).unwrap_err();
+        assert!(no(&mut m, &mut tasks, json!({ "task": "task-1", "question": "q", "options": "yes,no" })).message.contains("JSON"));
+        assert!(no(&mut m, &mut tasks, json!({ "task": "task-2", "question": "q" })).message.contains("worker"));
+        assert_eq!(no(&mut m, &mut tasks, json!({ "task": "task-3", "question": "q" })).code, "not_found");
+        assert!(no(&mut m, &mut tasks, json!({ "task": "task-1" })).message.contains("--question"));
+        assert_eq!((m.gates.len(), tasks.clone()), before);
+    }
+
+    #[test]
+    fn a_question_waits_for_its_reply_and_can_be_resumed() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let peers = vec![peer("term-1", Some("claude"), true, "G:/r"), peer("term-2", Some("claude"), true, "G:/r/w")];
+        let q = m.ask("term-2", &json!({ "question": "tabs or spaces?", "options": "tabs, spaces", "to": format!("run:{run}") }), &[], &peers, 2).unwrap();
+        assert_eq!(q["status"], "open");
+        let id = q["messageId"].as_str().unwrap().to_string();
+        let msg = m.messages.iter().find(|x| x.id == id).unwrap();
+        assert_eq!((msg.kind.as_str(), msg.to.clone()), ("question", format!("run:{run}")));
+        assert_eq!(msg.extras["payload"]["options"], json!(["tabs", "spaces"]));
+        assert_eq!(m.ask("term-2", &json!({ "resume": id }), &[], &peers, 3).unwrap()["status"], "open");
+        let boxes = m.boxes_of("term-1", &[]);
+        m.reply("term-1", &id, "spaces", None, &boxes, Some(&run), 4).unwrap();
+        let a = m.ask("term-2", &json!({ "resume": id }), &[], &peers, 5).unwrap();
+        assert_eq!((a["status"].as_str(), a["answer"].as_str(), a["answeredBy"].as_str()), (Some("answered"), Some("spaces"), Some("term-1")));
+        let n = m.messages.len();
+        assert!(m.ask("term-2", &json!({ "question": "x", "to": "@all" }), &[], &peers, 6).unwrap_err().message.contains("one recipient"));
+        assert_eq!(m.messages.len(), n, "no question is made for a group");
+        assert!(m.ask("term-2", &json!({ "question": "x", "resume": id }), &[], &peers, 6).unwrap_err().message.contains("not both"));
+        assert!(m.ask("term-2", &json!({ "resume": id, "options": "a,b" }), &[], &peers, 6).unwrap_err().message.contains("--options"));
+        assert_eq!(m.ask("term-1", &json!({ "resume": id }), &[], &peers, 6).unwrap_err().code, "not_found", "only the asker resumes its question");
     }
 }
