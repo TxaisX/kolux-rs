@@ -7,6 +7,7 @@
 // holds the task every seat shares, so the whole lineup is in view before Start. A model with
 // effort levels or fast mode shows those options on its seat only (SESS-016); "Use last lineup"
 // (SESS-021) appears when this project has one whose agents are still here.
+import { useEffect, useRef } from "react";
 import { Close } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
@@ -48,6 +49,11 @@ type Props = {
 
 export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, pass, onRefresh, lastLineup, onUseLineup }: Props) {
   const nameOf = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
+  // TERM-012: a chooser Kolux focuses takes the keyboard, so typing no longer lands in the last pane.
+  const box = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (focused && !hidden && !box.current?.contains(document.activeElement)) box.current?.focus();
+  }, [focused, hidden]);
   // A program with no model list has nothing to pick: its seat uses the program's own default.
   const pickAgent = (i: number, id: string) => {
     const only = modelsFor(id).length === 1;
@@ -69,7 +75,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
     else e.currentTarget.value = String(seats.length);
   };
   return (
-    <section className={`pane chooser${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Session ${number} chooser`} onMouseDown={onFocus}>
+    <section ref={box} tabIndex={-1} className={`pane chooser${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Session ${number} chooser`} onMouseDown={onFocus}>
       <header className="pane-head">
         <span className="title">Session {number}</span>
         <span className="word">Choose what to run</span>

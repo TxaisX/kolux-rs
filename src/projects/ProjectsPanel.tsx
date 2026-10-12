@@ -49,7 +49,8 @@ type Props = {
   /** The workspace the grid shows (PROJ-066); its row is the selected one. */
   activeDir: string | null;
   /** A click on a row shows that workspace. */
-  onSelect: (dir: string, branch: string | null) => void;
+  /** `fresh`: the workspace was just made (TERM-005 seeds its grid). */
+  onSelect: (dir: string, branch: string | null, fresh?: boolean) => void;
   /** After a workspace and its folder are gone, so the window drops its panes. */
   onRemoved: (path: string) => void;
   /** The plus menu behind "New session" (T-004): agents found on the PATH, and the launch. */
@@ -404,7 +405,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       // Create more the new workspace does not take the front, so the next name can be typed.
       const front = !keepOpen && shown.current === from;
       if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
-      else if (front) onSelect(wt.path, wt.branch);
+      else if (front) onSelect(wt.path, wt.branch, true);
     } catch (err) {
       fail(err);
     } finally {

@@ -1,6 +1,6 @@
 // The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040, VIEW-026), pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./grid";
+import { cellsOf, clampCount, freeCell, PANE_COUNTS, seedCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./grid";
 
 const started = (key: number) => ({ key, started: true });
 const empty = (key: number) => ({ key, started: false });
@@ -89,4 +89,22 @@ test("VIEW-026: expanding a Board card shows its terminal, expanding it again or
   expect(toggleCard(null, 2)).toBe(2);
   expect(toggleCard(2, 2)).toBeNull();
   expect(toggleCard(2, 5)).toBe(5);
+});
+
+test("TERM-005: a new workspace starts with the saved pane count, 1 when unset or in the classic look", () => {
+  expect(PANE_COUNTS).toEqual([1, 2, 4, 6, 9, 12]);
+  expect(seedCount(undefined, false)).toBe(1);
+  expect(seedCount(4, false)).toBe(4);
+  expect(seedCount("9", false)).toBe(9);
+  expect(seedCount(5, false)).toBe(1);
+  expect(seedCount(12, true)).toBe(1);
+});
+
+test("TERM-007: a new session fills the first empty pane, and none when every cell has a session", () => {
+  const shell = { key: 1, cwd: "a" };
+  const chooser = { key: 2, cwd: "a", seats: [] };
+  const tabbed = [{ key: 3, cwd: "a", group: 3, seats: [] }, { key: 4, cwd: "a", group: 3 }];
+  expect(freeCell(cellsOf([shell, chooser]))).toBe(chooser);
+  expect(freeCell(cellsOf([shell, ...tabbed]))).toBeUndefined();
+  expect(freeCell(cellsOf([shell]))).toBeUndefined();
 });

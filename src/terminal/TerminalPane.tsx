@@ -73,6 +73,13 @@ type Props = {
 
 export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const box = useRef<HTMLElement>(null);
+  // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
+  // the keyboard is already somewhere inside it (a click on its own header field).
+  useEffect(() => {
+    if (focused && !hidden && !box.current?.contains(document.activeElement)) termRef.current?.focus();
+  }, [focused, hidden]);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const [glow, setGlow] = useState(false); // TERM-023: finished while not focused
@@ -126,6 +133,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
+    termRef.current = term;
     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon());
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
@@ -265,7 +273,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const model = agent === "shell" ? null : modelOf(args);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
+    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
       <header className="pane-head">
         <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
           {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}

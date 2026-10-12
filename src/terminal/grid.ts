@@ -75,3 +75,17 @@ export function insertBefore<P>(panes: P[], next: P | undefined, pane: P): P[] {
   const i = next ? panes.indexOf(next) : -1;
   return i < 0 ? [...panes, pane] : [...panes.slice(0, i), pane, ...panes.slice(i)];
 }
+
+/** TERM-005: the pane counts a new workspace may start with, and the setting that holds the pick. */
+export const PANE_COUNTS = [1, 2, 4, 6, 9, 12];
+export const DEFAULT_PANES_FIELD = "defaultPaneCount";
+
+/** TERM-005: how many panes a new workspace starts with: the saved count, 1 when unset or odd,
+ * and always 1 in the classic look. */
+export const seedCount = (saved: unknown, classic: boolean): number => (classic || !PANE_COUNTS.includes(Number(saved)) ? 1 : Number(saved));
+
+/** TERM-007: the first cell that is free for a new session: a lone pane that has not started
+ * (a chooser). None when every cell holds a session. */
+export function freeCell<P extends Tabbed & { seats?: unknown }>(cells: { panes: P[] }[]): P | undefined {
+  return cells.find((c) => c.panes.length === 1 && c.panes[0].seats)?.panes[0];
+}

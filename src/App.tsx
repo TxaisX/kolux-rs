@@ -48,7 +48,7 @@ import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
-import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
+import { cellsOf, clampCount, columnsFor, DEFAULT_PANES_FIELD, freeCell, groupOf, insertBefore, MAX_PANES, seedCount, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
 import UpdateCenter from "./update/UpdateCenter";
@@ -497,6 +497,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           setFocused(k);
           break;
         }
+        case "terminal.focusNextPane":
+        case "terminal.focusPreviousPane": {
+          // TERM-012: the next or previous cell in grid order, wrapping; its tab on top takes focus.
+          if (!inFront) return;
+          const order = cellsOf(panesIn(panes, activeDir)).map(activeOf);
+          const at = cellsOf(panesIn(panes, activeDir)).findIndex((c) => c.panes.some((p) => p.key === focused));
+          const t = navTarget(order.length, at, { step: hit.id === "terminal.focusNextPane" ? 1 : -1 });
+          if (t === null) return;
+          setFocused(order[t]);
+          break;
+        }
         case "terminal.splitRight":
         case "terminal.splitDown":
           if (!inFront) return;
@@ -774,7 +785,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       await pretrust(agent.id, [dir]);
       const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
       const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined }]);
+      const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined };
+      // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
+      setPanes((ps) => {
+        const free = freeCell(cellsOf(panesIn(ps, dir)));
+        return free ? ps.map((p) => (p === free ? pane : p)) : [...ps, pane];
+      });
       if (show) {
         setActiveDir(dir);
         setFocused(key);
@@ -788,13 +804,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
-  const select = (dir: string, branch: string | null) => {
+  // TERM-005: `fresh` says the workspace was just made: its grid starts with the default pane
+  // count, the shell counting as one and the rest empty. Only then, so nothing re-seeds later.
+  const select = (dir: string, branch: string | null, fresh = false) => {
     setPage(null);
     recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
     setActiveDir(dir);
     if (screen === "artifacts") setScreen("terminals");
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
-    else addShell(dir, branch);
+    else {
+      addShell(dir, branch);
+      const more = fresh ? seedCount(settings[DEFAULT_PANES_FIELD], readLook(settings) === "classic") - 1 : 0;
+      if (more > 0) setPanes((ps) => [...ps, ...Array.from({ length: more }, (): Pane => ({ key: nextKey.current++, cwd: dir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }))]);
+    }
   };
 
   // VIEW-046: every workspace and page shown is a stop for back and forward; a step back lands on
@@ -923,10 +945,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setLaunching(true);
     try {
       const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
-      const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: wt.path, branch: wt.branch, agent: markFor(agent.id), program: agent.program, args: agent.args }]);
-      setActiveDir(wt.path);
-      setFocused(key);
+      // The agent's own start line (its options, permission mode and unpicked model default).
+      if ((await startIn(agent, wt.path, wt.branch, "", true)) === null) return;
       setRefresh((n) => n + 1);
       setNotice(null);
     } catch (err) {
