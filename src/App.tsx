@@ -37,6 +37,8 @@ import { FINISH_FIELD } from "./settings/Notifications";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
+import InboxView from "./inbox/InboxView";
+import { inboxItems, type Source } from "./inbox/inbox";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -111,6 +113,8 @@ function Window() {
   const [running, setRunning] = useState<Record<number, boolean>>({});
   const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
   const [hook, setHook] = useState<Record<number, AgentState>>({}); // STAT-001: each pane's last hook-fed state
+  // STAT-050: when each pane's state last moved, and whether that turn was interrupted; the Inbox's clock.
+  const [stamp, setStamp] = useState<Record<number, { at: number; interrupted: boolean }>>({});
   const [crew, setCrew] = useState<Record<number, Crew>>({}); // STAT-026: each pane's sub-agents and teammates
   const hookRef = useRef(hook);
   hookRef.current = hook;
@@ -224,6 +228,9 @@ function Window() {
           break;
         case "view.cycleWorkspaceView":
           setScreen((s) => nextScreen(s));
+          break;
+        case "view.inbox":
+          setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
           break;
         case "tab.newTerminal":
           void newTab(null);
@@ -539,6 +546,29 @@ function Window() {
 
   const terminals = screen === "terminals";
   const board = screen === "board";
+  const inbox = screen === "inbox";
+  // STAT-050: the Inbox reads the panes the window already tracks; its clock ticks while it is open.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!inbox) return;
+    setNow(Date.now());
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, [inbox]);
+  const sources: Source[] = panes
+    .filter((p) => !p.kind && !p.seats)
+    .map((p) => {
+      const state = hook[p.key] ?? paneState(p.agent, running[p.key]);
+      const m = stamp[p.key];
+      return { key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, state, interrupted: m?.interrupted ?? false, running: running[p.key] !== false, changed: m?.at ?? 0, finishedAt: state === "done" ? (m?.at ?? null) : null };
+    });
+  const openPane = (key: number) => {
+    const p = panes.find((x) => x.key === key);
+    if (!p) return;
+    setScreen("terminals");
+    if (p.cwd) setActiveDir(p.cwd);
+    setFocused(key);
+  };
   const live = panes.filter((p) => running[p.key]);
   const openDirs = panes.map((p) => p.cwd).filter((d): d is string => d !== null);
   // PROJ-063 / PROJ-050: a workspace row shows the strongest state among its panes, and remembers
@@ -607,7 +637,10 @@ function Window() {
         const p = panesRef.current.find((x) => x.key === paneKey);
         if (p) noticedRef.current(p, note.what, note.body);
       }
-      if (prev !== state) setHook((h) => ({ ...h, [paneKey]: state }));
+      if (prev !== state) {
+        setHook((h) => ({ ...h, [paneKey]: state }));
+        setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted } }));
+      }
     });
     // STAT-045: the quiet alert comes from the terminal's own silence, judged in Rust.
     const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
@@ -679,7 +712,8 @@ function Window() {
               )}
             </>
           )}
-          {!terminals && !board && (
+          {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
+          {!terminals && !board && !inbox && (
             <div className="empty">
               <h2>{screens.find((s) => s.id === screen)?.label}</h2>
               <p>Nothing here yet. This screen is built in a later task.</p>
@@ -762,8 +796,13 @@ function Window() {
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {
-                      if (runRef.current[p.key] && !on && p.agent !== "shell") noticed(p, "finished");
+                      if (runRef.current[p.key] && !on && p.agent !== "shell") {
+                        noticed(p, "finished");
+                        setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+                      }
                       setRunning((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }));
+                      // STAT-050: a pane that just started counts from now in the Inbox.
+                      if (on) setStamp((m) => (m[p.key] ? m : { ...m, [p.key]: { at: Date.now(), interrupted: false } }));
                       // The program is gone: its last hook state goes with it.
                       if (!on && p.key in hookRef.current) setHook((h) => Object.fromEntries(Object.entries(h).filter(([k]) => Number(k) !== p.key)));
                     }}

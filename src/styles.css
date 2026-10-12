@@ -48,6 +48,7 @@ input { font: inherit; }
 .kbd-part { display: inline-flex; align-items: center; gap: 6px; }
 .kbd-none { font-size: 11px; color: var(--fg-faint); }
 .topbar-right .bell { margin-right: 8px; }
+.topbar-right .bell[aria-pressed="true"] { background: var(--seg-active); color: var(--fg); }
 /* the Codex half of the pill (USAGE-022); warn yellow from DESIGN.md section 3 */
 .usage-part { display: inline-flex; align-items: center; gap: 6px; }
 .usage-part.warn { color: #fdc030; }
@@ -206,6 +207,34 @@ input { font: inherit; }
 .board .pane.card:not(.expanded) .pane-body { display: none; }
 .board .pane.card:not(.expanded) .pane-head { border-bottom: 0; }
 .board .pane.card.expanded { height: 420px; }
+/* STAT-050: the Inbox, three groups of rows and the selected item's detail. */
+.inbox { flex: 1; min-height: 0; margin: 8px; display: flex; gap: 8px; outline: none; }
+.inbox .list { flex: none; width: 380px; min-height: 0; overflow-y: auto; padding: 6px; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; }
+.inbox .clear { display: flex; align-items: center; gap: 8px; padding: 10px 8px; font-size: 12px; color: var(--done); }
+.inbox h3 { margin: 8px 8px 2px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.inbox .row { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: 6px; font-size: 13px; color: var(--fg-row); cursor: default; }
+.inbox .row:hover { background: var(--row-selected); }
+.inbox .row[aria-selected="true"] { background: var(--row-selected); color: var(--fg); }
+.inbox:focus .row[aria-selected="true"] { box-shadow: inset 0 0 0 1px var(--line-focus); }
+.inbox .row .st { display: inline-flex; flex: none; color: var(--dot-idle); }
+.inbox .row.working .st { color: var(--working-icon); }
+.inbox .row.attention .st { color: var(--working-icon); }
+.inbox .row.done .st { color: var(--done-icon); }
+.inbox .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox .row .lbl { flex: none; font-size: 11px; color: var(--fg-muted); }
+.inbox .row .when { flex: none; width: 56px; text-align: right; font-size: 11px; color: var(--fg-muted); }
+.inbox .detail { flex: 1; min-width: 0; padding: 16px 18px; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; }
+.inbox .detail.empty { display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--fg-muted); }
+.inbox .detail h2 { margin: 0 0 12px; display: flex; align-items: baseline; gap: 10px; font-size: 15px; font-weight: 600; color: var(--fg); }
+.inbox .detail h2 .status { font-size: 12px; font-weight: 500; color: var(--fg-muted); }
+.inbox .detail h2 .status.working { color: var(--working); }
+.inbox .detail h2 .status.done { color: var(--done); }
+.inbox .detail h2 .status.attention { color: var(--working-icon); }
+.inbox .detail dl { display: grid; grid-template-columns: 90px 1fr; gap: 6px 12px; margin: 0 0 16px; font-size: 12px; }
+.inbox .detail dt { color: var(--fg-muted); }
+.inbox .detail dd { margin: 0; color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
+.inbox .detail dd.prompt { white-space: pre-wrap; max-height: 160px; overflow-y: auto; font: 12px/1.4 var(--mono-font); color: var(--fg-row); }
+.inbox .detail .actions { display: flex; gap: 8px; }
 .cell > .pane { flex: 1; }
 .tabs { flex: none; display: flex; gap: 4px; height: 26px; overflow-x: auto; font-size: 12px; }
 .tab { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px 0 10px; border: 1px solid var(--line-subtle); border-radius: 8px; color: var(--fg-muted); white-space: nowrap; cursor: default; }

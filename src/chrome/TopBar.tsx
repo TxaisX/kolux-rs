@@ -10,7 +10,8 @@ import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import CodexPill from "../usage/CodexPill";
 
-export type Screen = "agents" | "board" | "terminals";
+/** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
+export type Screen = "agents" | "board" | "terminals" | "inbox";
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },
@@ -72,7 +73,7 @@ export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onTo
           <span className="ph">Search</span>
           <Kbd id="worktree.palette" />
         </button>
-        <button className="ib bell" title="Inbox (not built yet)">
+        <button className="ib bell" aria-label="Notifications" title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
           <Bell />
         </button>
         <button className="usage" title="Claude usage is read from running sessions once T-041 is built. Click for AI connections." onClick={onSettings}>

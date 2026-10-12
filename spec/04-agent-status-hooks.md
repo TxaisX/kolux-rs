@@ -175,6 +175,8 @@ Acceptance:
   - [ ] Press Down with nothing selected → the first row is selected; Enter → it opens.
   - [ ] A session finished 40 minutes ago → not listed under done today.
 Compat: the Inbox is its own top-level view; its keybinding command id view.inbox ships with no key.
+  (Kolux RS, T-026-c: built; the buttons read Open / Answer and open the terminal pane until the
+  Code view exists, DT-C8; line counts, the host line and stale rows wait for their feeders.)
 Source: D-04-050
 
 ### STAT-052 · One status vocabulary for every dot, chip and label
