@@ -1276,7 +1276,20 @@ recorded default until told otherwise; nothing here blocks a pass.
   temp folder "profile4" and wiped each other when run in parallel; the second now has its own,
   and the full suite passed three runs in a row. No DECISIONS row.
 
+- 2026-10-12 · [core] T-007-a-fix: the installed-agent scan starts from the search path a fresh
+  shell would get, not from this process's PATH. On Windows `shell_path_dirs()` in `agents.rs`
+  reads the machine Path (HKLM Session Manager\Environment) then the user Path (HKCU Environment)
+  with `RegGetValueW` asking for a plain string, which expands `%SystemRoot%` and the like on the
+  way out; a read that fails gives nothing and the process PATH stands alone. `search_dirs()` is
+  shell path, then process PATH, then the usual install folders, each folder once as before. The
+  `windows-sys` crate already in the tree got its `Win32_System_Registry` feature; no new crate.
+  The test reads the real machine Path and checks it holds `system32` with no `%` left, that a
+  missing value reads as `None`, and that every existing shell-path folder is among the walked
+  ones. On macOS and Linux the shell's path is not read (a login shell would have to be spawned):
+  the process PATH plus the install folders stand for it, recorded as DT-C10.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
 - 2026-10-12 · [core] T-003b-fix-b · done: DESIGN.md sections 6 and 7, globe tab glyph in `App.tsx`, web view inset in `styles.css`, projects test temp-folder collision fixed; `evidence/T-003b-fix-b-browser.png`
 - 2026-10-12 · [core] T-013-fix-b · done: Unicode-name fallback in `names.rs` (+ tests, crate `unicode_names2`), `nameOf()` in `workspaces.ts` (+ test), typed names flow `ProjectsPanel` → `App` → pane header; `evidence/T-013-fix-b-preview.png`, `-header.png`
 - 2026-10-12 · [core] T-013-fix-a · done: `createOpens()` in `model.ts` (+ test), `ProjectsPanel.tsx` routes Mod+N and the header button through it, T-013-c added; `evidence/T-013-fix-a-no-project.png`
@@ -1287,6 +1300,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
 - 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
 - 2026-10-11 · [core] T-028-a · done: `src/board/chip.ts` (+ test), Board lanes and chip rows in `App.tsx` / `TerminalPane.tsx` / `styles.css`, `agent_answer` and `Change.wrote` in `status.rs` / `hooks.rs`; `evidence/T-028-a-board.png`, `-approved.png`, `-deny-ask.png`, `-denied.png`
-- 2026-10-11 · [core] T-027 · deferred (0 passes): needs T-325 / T-326 / T-050; rules moved onto the T-326 line
 
 

@@ -44,7 +44,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [x] T-006 · PROJ-066 Switching workspaces is instant and keeps each one's state
 - [x] T-007-a · SESS-001 [compat] Launch choices list only agents that are really installed · SESS-004 One click on the plus menu starts an agent in a new pane
-- [ ] T-007-a-fix · review 2026-10-09 item 10: the installed-agent scan reads the user's and the machine's shell PATH from the registry (HKCU and HKLM Environment, Path value) before walking, not only the process PATH plus the install folders (the really-installed card's rule)
+- [x] T-007-a-fix · done 2026-10-12 (`search_dirs` in `agents.rs` walks the machine and user Path values from the registry first, expanded through RegGetValueW, then the process PATH, then the install folders; test reads the real machine Path and checks `%SystemRoot%` came back expanded; non-Windows keeps the process PATH, DT-C10) · review 2026-10-09 item 10: the installed-agent scan reads the user's and the machine's shell PATH from the registry (HKCU and HKLM Environment, Path value) before walking, not only the process PATH plus the install folders (the really-installed card's rule)
 - [x] T-007-b · SESS-007 An empty pane asks what to run · SESS-013 Choose how many sessions to start
 - [x] T-008-a · SESS-015 Every seat needs an AI and a model the user chose; nothing is guessed · SESS-024 Launched sessions land one per pane, titled by seat
 - [x] T-008-b · SESS-051 Each catalogue agent's program, start line and opening-prompt route

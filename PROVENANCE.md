@@ -377,3 +377,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-013-fix-b · crates.io for `unicode_names2` 4.0.0 (index entry, licence, repository; added as a dependency); nothing else outside the repo.
 
 > 2026-10-12 · T-003b-fix-b · Nothing read outside the repo; the measurements are from the lane app's own window.
+> 2026-10-12 · T-007-a-fix · The vendored `windows-sys` 0.61.2 source in the cargo registry (the RegGetValueW declaration, the RRF and HKEY constants and the feature list) and the machine's own registry Path value through PowerShell, to see it holds %SystemRoot% unexpanded. Nothing else outside the repo.

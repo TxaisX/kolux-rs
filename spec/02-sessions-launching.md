@@ -45,6 +45,9 @@ Rules: an agent counts as installed only when a program that can actually run is
   21 Codebuff · 22 Command Code · 23 Continue · 24 Cursor · 25 Droid · 26 Kimi · 27 Mistral Vibe ·
   28 Qwen Code · 29 Rovo Dev · 30 Hermes · 31 OpenClaw · 32 GitHub Copilot · 33 Grok ·
   34 Devin; a hidden 35th entry, Claude Agent Teams (SESS-042), sits right after Claude Code.
+  (Kolux RS, T-007-a-fix: on Windows "the search path the user's shell would use" is the machine
+  Path then the user Path from the registry, expanded; on macOS and Linux the process PATH plus
+  the usual install folders stand for it, DT-C10.)
 Acceptance:
   - [ ] Install only Claude Code and Codex, open the plus menu → exactly those two agents are offered.
   - [ ] Launch Kolux from the Start menu while an agent exists only in its default install location → that agent is still offered.
