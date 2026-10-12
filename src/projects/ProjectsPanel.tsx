@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
+import { createOpens, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { VOCAB } from "../terminal/status";
@@ -247,7 +247,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   // PROJ-020: a stand-in row at once, then the workspace opens with a shell of its own; if the
   // user moved to another workspace meanwhile the create finishes without pulling focus back.
   // ponytail: one create at a time (the field is disabled while Git works); cancelling an
-  // overtaken create and removing its half-made checkout waits for a card that needs it.
+  // overtaken create and removing its half-made checkout, and the stand-in tab, are T-013-c.
   // PROJ-038: with a prompt and no agent picked, the default agent runs it, else the first installed.
   const installed = agents.filter((a) => a.installed);
   const fallbackAgent = installed.find((a) => a.id === defaultId) ?? installed[0] ?? null;
@@ -281,8 +281,13 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
 
   // The project in front: the one whose workspace is shown, else the first; "" with none yet.
   const projectInFront = () => projects.find((p) => (worktrees[p.id] ?? []).some((w) => activeDir !== null && same(activeDir, w.path)))?.id ?? projects[0]?.id ?? "";
+  const openCreate = () => {
+    const id = projectInFront();
+    if (createOpens(id) === "add") setShowAdd(true);
+    else setCreating(id);
+  };
   useEffect(() => {
-    if (createRequest > 0) setCreating(projectInFront());
+    if (createRequest > 0) openCreate();
   }, [createRequest]);
   const nameField = (p: Project | null) => (
     <div className="sb-form" data-create={p?.id ?? ""}>
@@ -441,7 +446,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             <button className="ib" title="Add a project: choose folders that hold a Git repository" onClick={browse} disabled={busy !== ""}>
               <FolderPlus size={13} />
             </button>
-            <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => setCreating(creating === null ? projectInFront() : null)}>
+            <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => (creating === null ? openCreate() : setCreating(null))}>
               <Plus size={13} />
             </button>
             <button className="ib" title="Launch (not built yet)">

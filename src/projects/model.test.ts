@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { folderName, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { createOpens, folderName, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -27,6 +27,11 @@ test("the preview sentence explains the branch and folder, or the refusal", () =
   expect(previewSentence("???", null, project)).toMatch(/nothing usable/);
   expect(previewSentence("Fix login", { branch: "fix-login", folder: "C:\\ws\\app\\fix-login" }, project)).toBe("branch fix-login · folder C:\\ws\\app\\fix-login");
   expect(previewSentence("x", { branch: "x", folder: "" }, null)).toBe("Add a project first.");
+});
+
+test("New workspace with no project yet opens the add-project form instead of a dead name field (T-013-fix-a)", () => {
+  expect(createOpens("")).toBe("add");
+  expect(createOpens("app-1")).toBe("name");
 });
 
 test("the workspaces-folder field saves on Enter, reverts on Escape and ignores keys mid-composition (SET-032)", () => {

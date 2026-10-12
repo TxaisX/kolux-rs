@@ -78,6 +78,8 @@ Acceptance:
   - [ ] Start a create and move to another workspace → the create finishes in the background without
         taking focus.
 Compat: Keybinding id workspace.create.
+  (Kolux RS, T-013-fix-a: with no project, Mod+N and the New workspace button open the add-project
+  form; the overtaken-create and stand-in tab rules are T-013-c.)
 Source: D-01-020
 
 ### PROJ-021 · Workspace names become safe branch and folder names

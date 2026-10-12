@@ -1237,7 +1237,16 @@ recorded default until told otherwise; nothing here blocks a pass.
   prompt (`evidence/T-010-fix-paste.png`). A real Ctrl+V from the keyboard is Txais's by-hand
   check: the driver cannot put text on the system clipboard. No DECISIONS row.
 
+- 2026-10-12 · [core] T-013-fix-a: with no project yet, Mod+N and the sidebar's New workspace
+  button open the add-project form instead of a name field that can only say "Add a project
+  first." (`createOpens()` in `src/projects/model.ts`, tested); with a project the name field opens
+  as before. Proved on a fresh state folder: Ctrl+N on the empty sidebar showed the Add project
+  form (`evidence/T-013-fix-a-no-project.png`). That reads the create-workspace card's "works even
+  before any project exists" as a door to adding the project, so no DECISIONS row. The two rules
+  T-013 left out, the overtaken create and the stand-in tab, now have an owner, T-013-c.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-013-fix-a · done: `createOpens()` in `model.ts` (+ test), `ProjectsPanel.tsx` routes Mod+N and the header button through it, T-013-c added; `evidence/T-013-fix-a-no-project.png`
 - 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
 - 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
 - 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
@@ -1248,6 +1257,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-027 · deferred (0 passes): needs T-325 / T-326 / T-050; rules moved onto the T-326 line
 - 2026-10-11 · [core] T-026-c · done: `src/inbox/inbox.ts` (+ test), `InboxView.tsx`, the bell and `view.inbox` in `TopBar.tsx` / `App.tsx`, pane state stamps; `evidence/T-026-c-all-clear.png`, `-groups.png`, `-detail.png`, `-opened.png`
 - 2026-10-11 · [core] T-026-b · done: `VOCAB` + `stoppedLabel` + `headerOf` on it (`status.ts`, tests), `StatusGlyph` + synced `Spinner` (`icons.tsx`), `Tip.tsx`, `.spin` 12 fps + reduced motion (`styles.css`), header / badge / dot wired; `evidence/T-026-b-working.png`, `-needs-you.png`, `-done.png`, `-tab-badge.png`, `-sidebar-dot.png`, `-reduced-motion.png`
-- 2026-10-11 · [core] T-026-a · done: `tauri-plugin-notification` + `notify` command, `src/terminal/notify.ts` (+ test), `Session::quiet` / `quiet_check` watcher (+ test), `Terminals::silence`, Settings > Notifications; `evidence/T-026-a-permission-toast.png`, `-finished-toast.png`, `-quiet-toast.png`, `-quiet-window.png`, `-settings.png`
 
 
