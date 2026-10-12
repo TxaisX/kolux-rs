@@ -1228,7 +1228,17 @@ recorded default until told otherwise; nothing here blocks a pass.
   default) instead of covering the search box. DESIGN.md section 4 notes the rule; no DECISIONS
   row (the review named this fix).
 
+- 2026-10-12 · [core] T-010-fix: the paste rule of the paste card is now its own module,
+  `src/terminal/paste.ts` (`attachPaste(textArea, paste, held)`), so the two rules the review asked
+  for have a test without a browser: a paste into pane B's text area reaches B only, and a paste
+  made while the opening prompt is still owed waits and goes in after it, oldest first. The
+  listener is removed when the pane unmounts. Live, with two shells open, a paste event carrying
+  "echo PASTED-INTO-PANE-B" dispatched into Terminal 2 landed there and Terminal 1 stayed at its
+  prompt (`evidence/T-010-fix-paste.png`). A real Ctrl+V from the keyboard is Txais's by-hand
+  check: the driver cannot put text on the system clipboard. No DECISIONS row.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
 - 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
 - 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
 - 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
