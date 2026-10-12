@@ -201,11 +201,24 @@ input { font: inherit; }
 /* VIEW-026: the Board is the same cells as cards, one per pane; the panes never move in the DOM,
    so an expanded card shows the live terminal and a collapsed one only its header. */
 .grid[hidden], .board[hidden], .board .tabs { display: none; }
-.board { flex: 1; min-height: 0; margin: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-.board .cell { flex: none; gap: 6px; }
+/* VIEW-023: the Board is one column per status lane; cards stack in their lane in session order. */
+.board { flex: 1; min-height: 0; margin: 8px; overflow-y: auto; display: grid; grid-auto-flow: row dense; grid-auto-rows: max-content; align-items: start; gap: 8px; }
+.board .lane { grid-row: 1; margin: 0; padding: 2px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
+.board .cell { display: contents; }
 .board .cell > .pane { flex: none; }
 .board .pane.card:not(.expanded) .pane-body { display: none; }
-.board .pane.card:not(.expanded) .pane-head { border-bottom: 0; }
+.board .pane.card:not(.expanded) .pane-head, .board .pane.card .pane-head:has(+ .chip-row) { border-bottom: 0; }
+.board .pane.card:not(.expanded) .chip-row { border-bottom: 0; }
+/* VIEW-023 chip under a card's header: the word, the line, the newest file, and the VIEW-025 answer buttons. */
+.chip-row { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 2px 10px 4px; font-size: 12px; color: var(--fg-muted); border-bottom: 1px solid var(--line-subtle); white-space: nowrap; }
+.chip-row .chip-word { flex: none; font-weight: 600; color: var(--fg); }
+.chip-row.needs .chip-word { color: var(--working-icon); }
+.chip-row.working .chip-word { color: var(--working); }
+.chip-row.done .chip-word { color: var(--done); }
+.chip-row .chip-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip-row .chip-file { flex: none; font: 11px var(--mono-font); color: var(--fg-row); }
+.chip-row .chip-actions { flex: none; display: flex; gap: 4px; }
+.chip-row .chip-actions .btn { padding: 1px 8px; font-size: 11px; }
 .board .pane.card.expanded { height: 420px; }
 /* STAT-050: the Inbox, three groups of rows and the selected item's detail. */
 .inbox { flex: 1; min-height: 0; margin: 8px; display: flex; gap: 8px; outline: none; }

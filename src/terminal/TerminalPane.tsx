@@ -4,6 +4,7 @@
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
 import { crewLabel, crewLine, headerOf, type Crew } from "./status";
+import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -65,7 +66,16 @@ type Props = {
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
   onSplit?: () => void;
   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
-  card?: { expanded: boolean; onToggle: () => void };
+  card?: {
+    expanded: boolean;
+    onToggle: () => void;
+    /** VIEW-023: the card's chip: the word, the line and the newest file written; null for a plain shell. */
+    chip?: Chip | null;
+    /** VIEW-025: approve or deny from the card. */
+    onAnswer?: (approve: boolean) => void;
+    /** VIEW-023: the Board column (status lane) this card sits in. */
+    column?: number;
+  };
 };
 
 export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, crew, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
@@ -245,7 +255,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
+    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
       <header className="pane-head">
         <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
@@ -337,6 +347,31 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             onLaunch?.(a);
           }}
         />
+      )}
+      {card?.chip && (
+        <div className={`chip-row ${card.chip.lane}`}>
+          <span className="chip-word">{card.chip.word}</span>
+          {card.chip.line && (
+            <span className="chip-line" title={card.chip.line}>
+              {card.chip.line}
+            </span>
+          )}
+          {card.chip.file && (
+            <span className="chip-file" title={card.chip.file} data-path={card.chip.file}>
+              {folderName(card.chip.file)}
+            </span>
+          )}
+          {card.chip.answer && card.onAnswer && (
+            <span className="chip-actions">
+              <button className="btn primary" onClick={() => card.onAnswer?.(true)} title="Approve: the agent carries on">
+                Approve
+              </button>
+              <button className="btn" onClick={() => card.onAnswer?.(false)} title="Deny: the agent is told no">
+                Deny
+              </button>
+            </span>
+          )}
+        </div>
       )}
       <div ref={host} className="pane-body" />
     </section>

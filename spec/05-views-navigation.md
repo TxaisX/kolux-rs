@@ -64,6 +64,8 @@ Acceptance:
   - [ ] Agent waiting on a file-edit approval → line names that approval.
   - [ ] Agent idle 12 minutes → line says idle with the duration.
 Compat: —
+  (Kolux RS, T-028-a: built as the chip line of the Board card, `src/board/chip.ts`; the Agents
+  screen reuses it when T-050 lands.)
 Source: D-05-016
 
 ### VIEW-017 · Fixed status words on the Agents screen
@@ -97,6 +99,8 @@ Acceptance:
   - [ ] Agent finished → chip shows first line of its last message.
   - [ ] Agent writes file A, then file B, then finishes → the card links to file B.
 Compat: —
+  (Kolux RS, T-028-a: built; Setup needed and Can't reach wait for the chooser and remote work;
+  the file link is the file's name with the full path as tooltip until an editor exists.)
 Source: D-05-023
 
 ### VIEW-025 · Approve or deny from a Board card
@@ -109,6 +113,8 @@ Acceptance:
   - [ ] Agent asks to run a command → card shows both buttons; approve → agent proceeds.
   - [ ] Deny on a card → the agent receives the refusal and the card leaves needs-you.
 Compat: —
+  (Kolux RS, T-028-a: built through `agent_answer`, which types the agent's own keys into its
+  terminal: Enter / Esc for Claude Code, y / n for Codex.)
 Source: D-05-025
 
 ### VIEW-040 · Palette rows show live agent state and age

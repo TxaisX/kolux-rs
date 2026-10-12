@@ -39,6 +39,7 @@ import { Bell, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
+import { LANES, chipOf } from "./board/chip";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -115,6 +116,10 @@ function Window() {
   const [hook, setHook] = useState<Record<number, AgentState>>({}); // STAT-001: each pane's last hook-fed state
   // STAT-050: when each pane's state last moved, and whether that turn was interrupted; the Inbox's clock.
   const [stamp, setStamp] = useState<Record<number, { at: number; interrupted: boolean }>>({});
+  // VIEW-023: what each pane's last event said it was doing, and the newest file it wrote this session.
+  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string }>>({});
+  // STAT-045: the terminal has printed nothing for the quiet window; cleared by the next event.
+  const [stale, setStale] = useState<Record<number, boolean>>({});
   const [crew, setCrew] = useState<Record<number, Crew>>({}); // STAT-026: each pane's sub-agents and teammates
   const hookRef = useRef(hook);
   hookRef.current = hook;
@@ -547,14 +552,15 @@ function Window() {
   const terminals = screen === "terminals";
   const board = screen === "board";
   const inbox = screen === "inbox";
-  // STAT-050: the Inbox reads the panes the window already tracks; its clock ticks while it is open.
+  // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
+  const timed = inbox || board;
   useEffect(() => {
-    if (!inbox) return;
+    if (!timed) return;
     setNow(Date.now());
     const t = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(t);
-  }, [inbox]);
+  }, [timed]);
   const sources: Source[] = panes
     .filter((p) => !p.kind && !p.seats)
     .map((p) => {
@@ -586,6 +592,18 @@ function Window() {
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
   const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
+  // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
+  const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
+  const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
+  const lanes = board ? LANES.filter((l) => panes.some((p) => laneOf(p) === l.id)) : [];
+  const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
+  const answer = (p: Pane, approve: boolean) =>
+    invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve })
+      .then(() => {
+        setHook((h) => ({ ...h, [p.key]: "working" }));
+        setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+      })
+      .catch(() => {});
   // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
   // shows every pane); a finish or bell anywhere else marks tab, pane and workspace row unread
   // and says so in the window. A desktop notification and the settings that gate it are T-026.
@@ -627,9 +645,11 @@ function Window() {
   panesRef.current = panes;
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; children: Crew } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children } = e.payload;
+    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string } & Turn>("agent-status", (e) => {
+      const { paneKey, state, children, tool, detail, reply, wrote, boundary } = e.payload;
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
+      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
+      setStale((m) => (m[paneKey] ? { ...m, [paneKey]: false } : m));
       const prev = hookRef.current[paneKey];
       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
       const note = turnNote(prev, e.payload);
@@ -646,6 +666,7 @@ function Window() {
     const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
       const p = panesRef.current.find((x) => x.key === e.payload.paneKey);
       if (p) quietRef.current(p, e.payload.minutes);
+      setStale((m) => ({ ...m, [e.payload.paneKey]: true }));
     });
     return () => {
       off.then((f) => f());
@@ -728,8 +749,14 @@ function Window() {
           <div
             className={board ? "board" : "grid"}
             hidden={!terminals && !board}
-            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` } : undefined}
+            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
           >
+              {board &&
+                lanes.map((l, i) => (
+                  <h3 key={l.id} className="lane" style={{ gridColumn: i + 1 }}>
+                    {l.title}
+                  </h3>
+                ))}
               {terminals && shown.length === 0 && (
                 <div className="empty">
                   <h2>{activeDir ? folderName(activeDir) : "Terminal"}</h2>
@@ -787,7 +814,7 @@ function Window() {
                   <TerminalPane
                     key={p.key}
                     hidden={!board && p.key !== active}
-                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)) } : undefined}
+                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok) } : undefined}
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}

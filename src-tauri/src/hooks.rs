@@ -61,6 +61,9 @@ pub struct Change {
     pub prompt: Option<String>,
     /// A session boundary: the agent started, resumed or cleared; earlier state is forgotten.
     pub boundary: bool,
+    /// The file a write tool just finished with (VIEW-023: the card links to the newest one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrote: Option<String>,
 }
 
 fn trim(s: &str, max: usize) -> String {
@@ -113,7 +116,14 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             tool,
             ..Change::default()
         }),
-        "PostToolUse" | "PostToolUseFailure" => plain("working"),
+        "PostToolUse" => Some(Change {
+            state: "working",
+            wrote: matches!(tool.as_deref(), Some("Write" | "Edit" | "MultiEdit" | "NotebookEdit"))
+                .then(|| event.get("tool_input").and_then(|i| i.get("file_path")).and_then(Value::as_str).map(str::to_string))
+                .flatten(),
+            ..Change::default()
+        }),
+        "PostToolUseFailure" => plain("working"),
         "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), tool, ..Change::default() }),
         "PostCompact" => (str_of("trigger") == Some("manual")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
         // SubagentStart, SubagentStop and TeammateIdle feed the roster (status.rs); PreCompact is refused.
@@ -595,6 +605,9 @@ mod tests {
         let perm = c(r#"{"hook_event_name":"PermissionRequest","tool_name":"Write","tool_input":{"file_path":"C:/x/hello.txt","content":"hi"}}"#).unwrap();
         assert_eq!((perm.state, perm.tool.as_deref(), perm.detail.as_deref()), ("permission", Some("Write"), Some("C:/x/hello.txt")));
         assert_eq!(c(r#"{"hook_event_name":"PostToolUse","tool_name":"Write"}"#).unwrap().state, "working");
+        let w = c(r#"{"hook_event_name":"PostToolUse","tool_name":"Edit","tool_input":{"file_path":"C:/x/b.ts","old_string":"a"}}"#).unwrap();
+        assert_eq!((w.state, w.wrote.as_deref()), ("working", Some("C:/x/b.ts")));
+        assert_eq!(c(r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"file_path":"C:/x/b.ts"}}"#).unwrap().wrote, None);
         assert_eq!(c(r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Write"}"#).unwrap().state, "working");
         assert_eq!(c(r#"{"hook_event_name":"Stop"}"#).unwrap().state, "done");
         let b = c(r#"{"hook_event_name":"StopFailure","error":"rate limit reached"}"#).unwrap();

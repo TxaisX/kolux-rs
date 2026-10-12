@@ -133,6 +133,7 @@ pub fn run() {
             terminal::terminal_spawn,
             terminal::terminal_write,
             status::agent_history,
+            status::agent_answer,
             terminal::terminal_resize,
             terminal::terminal_kill,
             projects::git_version,

@@ -290,6 +290,45 @@ impl Session {
             self.cancelled = true;
         }
     }
+
+    /// VIEW-025: the approval was answered from a card; the lead is working until its hooks say otherwise.
+    pub fn answered(&mut self) {
+        self.pending = None;
+        if self.own == Some("permission") {
+            self.own = Some("working");
+            let now = self.resolved();
+            self.remember(now);
+        }
+    }
+}
+
+/// VIEW-025: the keys that answer an approval at the agent's own prompt. Claude Code's dialog
+/// takes Enter for its first option (Yes) and Esc for No; Codex's approval modal takes y and n.
+pub fn answer_keys(agent: Agent, approve: bool) -> &'static str {
+    match (agent, approve) {
+        (Agent::Claude, true) => "\r",
+        (Agent::Claude, false) => "\x1b",
+        (Agent::Codex, true) => "y",
+        (Agent::Codex, false) => "n",
+    }
+}
+
+/// VIEW-025: approve or deny what `pane_key`'s agent is asking by typing the answer into its terminal.
+#[tauri::command]
+pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pane_key: u32, agent: String, approve: bool) -> Result<(), String> {
+    let agent = match agent.as_str() {
+        "claude" => Agent::Claude,
+        "codex" => Agent::Codex,
+        _ => return Err("not an agent pane".into()),
+    };
+    let terminal = with_sessions(|s| s.get(&pane_key).and_then(|x| x.terminal)).ok_or("no session for this pane")?;
+    terminals.write(terminal, answer_keys(agent, approve))?;
+    with_sessions(|s| {
+        if let Some(x) = s.get_mut(&pane_key) {
+            x.answered();
+        }
+    });
+    Ok(())
 }
 
 fn strip_agent(event: &Value) -> Value {
@@ -356,6 +395,19 @@ mod tests {
     }
     fn state(s: &mut Session, json: &str) -> Option<&'static str> {
         s.apply(Agent::Claude, &ev(json)).map(|(c, _)| c.state)
+    }
+
+    #[test]
+    fn an_answer_from_a_card_clears_the_pending_permission_and_types_the_agents_own_keys() {
+        let mut s = Session::default();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"Write"}"#), Some("permission"));
+        s.answered();
+        assert_eq!(s.resolved(), "working");
+        // Another tool carrying on is no longer refused as "a different tool than the pending one".
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), Some("working"));
+        assert_eq!(s.history.back().map(|e| e.state), Some("working"));
+        assert_eq!((answer_keys(Agent::Claude, true), answer_keys(Agent::Claude, false)), ("\r", "\x1b"));
+        assert_eq!((answer_keys(Agent::Codex, true), answer_keys(Agent::Codex, false)), ("y", "n"));
     }
 
     #[test]

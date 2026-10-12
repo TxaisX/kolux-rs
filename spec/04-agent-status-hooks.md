@@ -211,6 +211,7 @@ Acceptance:
         → all open.
   - [ ] Move keyboard focus to a Thought row and press Space → it opens; press Enter → it closes.
 Compat: —
+  (Kolux RS, T-027 deferred to T-326: the rows need the transcript reader and the Agents screen.)
 Source: D-04-053
 
 ### STAT-022 · Stopped state says why an agent halted
