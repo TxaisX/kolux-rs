@@ -1,5 +1,7 @@
-// APP-025 / APP-026 / APP-027 / APP-028 / APP-029: what the update card and the ready pop-up show. A pure reducer
-// (card.test.ts); UpdateCenter.tsx wires it to the timetable and the back end.
+// APP-025 / APP-026 / APP-027 / APP-028 / APP-029 / APP-031: what the update card and the ready pop-up show. A pure
+// reducer (card.test.ts); UpdateCenter.tsx wires it to the timetable and the back end.
+
+import type { Quiet } from "./schedule";
 
 export interface UpdateInfo {
   version: string;
@@ -11,7 +13,7 @@ export interface UpdateInfo {
 export type Phase =
   | { kind: "idle" }
   | { kind: "checking" }
-  | { kind: "upToDate" }
+  | { kind: "upToDate"; note?: string }
   | { kind: "available"; info: UpdateInfo }
   | { kind: "downloading"; info: UpdateInfo; received: number; total: number | null }
   | { kind: "ready"; info: UpdateInfo }
@@ -45,15 +47,15 @@ export interface CardState {
 
 export type Action =
   | { type: "checkStart"; requested: boolean }
-  | { type: "checkDone"; requested: boolean; found: UpdateInfo | null }
-  | { type: "checkFailed"; requested: boolean; message: string; offline: boolean; next?: string }
+  | { type: "checkDone"; requested: boolean; found: UpdateInfo | null; quiet?: Quiet }
+  | { type: "checkFailed"; requested: boolean; message: string; offline: boolean; next?: string; local?: boolean }
   | { type: "downloadStart"; info: UpdateInfo }
   | { type: "progress"; version: string; received: number; total: number | null }
   | { type: "ready"; info: UpdateInfo }
   | { type: "downloadFailed"; info: UpdateInfo; message: string; offline: boolean }
   | { type: "notReady" }
   | { type: "installFailed"; info: UpdateInfo | null; message: string }
-  | { type: "lastLaunch"; launch: LastLaunch }
+  | { type: "lastLaunch"; launch: LastLaunch; local?: boolean }
   | { type: "faded" }
   | { type: "collapse" }
   | { type: "expand" }
@@ -66,11 +68,20 @@ export function initialCard(dismissed: string | null, tipDone: boolean): CardSta
   return { phase: { kind: "idle" }, shown: false, collapsed: false, requested: false, notes: [], dismissed, tipDone, tipNow: false, popup: null, popupSeen: [] };
 }
 
-export function nextStep(offline: boolean, stage: "check" | "download"): string {
+export function nextStep(offline: boolean, stage: "check" | "download", local = false): string {
   if (offline) return "You look offline. Connect to the internet, then press Try again.";
   return stage === "check"
-    ? "Press Try again in a minute. If it keeps failing, get the newest version from the releases page."
+    ? local
+      ? "Press Try again in a minute." // APP-031: a local build is never sent to the download page
+      : "Press Try again in a minute. If it keeps failing, get the newest version from the releases page."
     : "Press Try again to download it once more; your work is not affected.";
+}
+
+/** APP-031: a calm line for a check the user asked for that found nothing to install. */
+export function quietNote(q: Quiet): string {
+  if (q === "halfPublished") return "A new version is being published right now. Kolux RS will look again in a few minutes.";
+  if (q === "noPlatform") return "The newest release has no download for this computer yet. Kolux RS will keep looking.";
+  return "The update server has nothing newer to offer right now.";
 }
 
 /** The updater's own words, turned into a sentence a user can act on. */
@@ -78,6 +89,7 @@ export function plainError(raw: string): string {
   if (/signature/i.test(raw)) return "The download's signature did not match, so it was thrown away.";
   if (/sending request|connect|dns|resolve|network|timed out|timeout|no answer/i.test(raw)) return "Kolux RS could not reach the update server.";
   if (/status code|404|not found/i.test(raw)) return "The update server did not have the release.";
+  if (/decoding|deserializ|invalid type|expected value|json/i.test(raw)) return "The update server sent an answer Kolux RS could not read.";
   return raw;
 }
 
@@ -99,13 +111,17 @@ export function cardReducer(s: CardState, a: Action): CardState {
       // A request while a quiet check runs takes that check over; either way the notes reset.
       const base = { ...s, notes: [] as string[] };
       if (!a.requested) return s.phase.kind === "ready" ? s : { ...base, phase: s.shown ? { kind: "checking" } : s.phase };
+      // A ready update stays on show (with Restart to update) while the check runs.
+      if (s.phase.kind === "ready") return { ...s, requested: true, shown: true, collapsed: false, tipNow: false };
       return { ...base, requested: true, shown: true, collapsed: false, tipNow: false, phase: { kind: "checking" } };
     }
     case "checkDone": {
       const requested = s.requested || a.requested;
       if (!a.found) {
         if (!requested) return { ...s, requested: false };
-        return { ...s, requested, shown: true, collapsed: false, phase: { kind: "upToDate" } };
+        // APP-031: an update already downloaded stays ready while the feed is being republished.
+        if (s.phase.kind === "ready") return { ...s, requested, shown: true, collapsed: false };
+        return { ...s, requested, shown: true, collapsed: false, phase: a.quiet ? { kind: "upToDate", note: quietNote(a.quiet) } : { kind: "upToDate" } };
       }
       const info = a.found;
       // A ready download of the same version stays ready.
@@ -123,7 +139,8 @@ export function cardReducer(s: CardState, a: Action): CardState {
         requested: true,
         shown: true,
         collapsed: false,
-        phase: { kind: "error", message: a.next ? a.message : plainError(a.message), next: a.next ?? nextStep(a.offline, "check"), info: null, retry: "check" },
+        notes: [],
+        phase: { kind: "error", message: a.next ? a.message : plainError(a.message), next: a.next ?? nextStep(a.offline, "check", a.local), info: null, retry: "check" },
       };
     }
     case "downloadStart": {
@@ -174,10 +191,10 @@ export function cardReducer(s: CardState, a: Action): CardState {
         phase: {
           kind: "error",
           message: "The update did not install. Another program may have been using Kolux RS's files, or the installer was stopped.",
-          next: `You are still on ${l.from}. Press Try again to fetch it once more, or download the installer.`,
+          next: `You are still on ${l.from}. Press Try again to fetch it once more${a.local ? "." : ", or download the installer."}`,
           info: { version: l.version, currentVersion: l.from, notes: [] },
           retry: "check",
-          installer: true,
+          installer: !a.local,
         },
       };
     }

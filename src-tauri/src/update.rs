@@ -1,4 +1,4 @@
-//! Updates (APP-024, APP-025, APP-026, APP-027, APP-028, APP-029).
+//! Updates (APP-024, APP-025, APP-026, APP-027, APP-028, APP-029, APP-031).
 //!
 //! The page owns the timetable (start-up, every 30 minutes, retries, offline, focus, wake: see
 //! `src/update/schedule.ts`); this module owns the feed, the signed download and the install.
@@ -13,7 +13,7 @@
 
 use crate::state::Store;
 use crate::terminal::Terminals;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -66,12 +66,22 @@ pub fn feed(debug: bool, installed: bool, env: impl Fn(&str) -> Option<String>) 
         };
     }
     if !installed {
-        return Err("This copy of Kolux RS was not installed, so it cannot install updates. Install it from the releases page to get updates.".into());
+        // APP-031: a copy built on this computer is never sent to the download page.
+        return Err(if local_build(false, RELEASE_PUBKEY) {
+            "This is a local build of Kolux RS and was not installed, so it does not update itself.".into()
+        } else {
+            "This copy of Kolux RS was not installed, so it cannot install updates. Install it from the releases page to get updates.".into()
+        });
     }
     if RELEASE_PUBKEY.trim().is_empty() {
         return Err("This build has no update signing key, so it cannot check updates safely.".into());
     }
     Ok(Feed { endpoint: RELEASE_ENDPOINT.into(), pubkey: RELEASE_PUBKEY.into() })
+}
+
+/// APP-031: built on this computer rather than by the release job (which builds the key in).
+pub fn local_build(debug: bool, release_key: &str) -> bool {
+    debug || release_key.trim().is_empty()
 }
 
 fn installed_copy() -> bool {
@@ -130,6 +140,48 @@ pub struct Updates {
     watchdog: Watchdog,
     /// APP-028: what the last install attempt means at this launch, worked out once.
     launch: OnceLock<Option<LastLaunch>>,
+    /// APP-031: counts checks, so one that answers after a newer one started is ignored.
+    checks: AtomicU64,
+}
+
+/// APP-031: why a check that reached the feed has nothing to offer. None of these is an error.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Quiet {
+    /// The newest release has its manifest but its installer is not uploaded yet.
+    HalfPublished,
+    /// The feed has no manifest yet.
+    NoManifest,
+    /// The newest release has no download for this computer.
+    NoPlatform,
+}
+
+/// APP-031: the feed answers that mean "nothing to install" rather than a failure.
+pub fn quiet_of(e: &tauri_plugin_updater::Error) -> Option<Quiet> {
+    use tauri_plugin_updater::Error as E;
+    match e {
+        E::ReleaseNotFound => Some(Quiet::NoManifest),
+        E::TargetNotFound(_) | E::TargetsNotFound(_) => Some(Quiet::NoPlatform),
+        _ => None,
+    }
+}
+
+/// What one check found.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Checked {
+    found: Option<Info>,
+    quiet: Option<Quiet>,
+}
+
+/// APP-031: whether the installer the manifest names is missing from the release. Only a clear
+/// "not found" counts; any other trouble is left for the download to report.
+async fn installer_missing(url: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(10)).build() else { return false };
+    match client.head(url).send().await {
+        Ok(r) => matches!(r.status().as_u16(), 404 | 410),
+        Err(_) => false,
+    }
 }
 
 /// APP-028: one install attempt, kept in the store until the next launch reads it.
@@ -278,6 +330,7 @@ pub struct Status {
     tip_done: bool,
     ready: Option<Info>,
     last_launch: Option<LastLaunch>,
+    local: bool,
 }
 
 #[tauri::command]
@@ -297,6 +350,7 @@ pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: St
         .clone();
     Ok(Status {
         last_launch: last,
+        local: local_build(cfg!(debug_assertions), RELEASE_PUBKEY),
         enabled: feed.is_ok(),
         reason: feed.err(),
         current_version: app.package_info().version.to_string(),
@@ -324,8 +378,9 @@ fn now_ms() -> u64 {
 
 /// One check against the feed. `None` means this copy is up to date.
 #[tauri::command]
-pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
+pub async fn update_check(app: AppHandle) -> Result<Checked, String> {
     let feed = this_feed()?;
+    let me = app.state::<Updates>().checks.fetch_add(1, Ordering::SeqCst) + 1;
     let url = feed.endpoint.parse().map_err(|e| format!("bad update address: {e}"))?;
     let found = app
         .updater_builder()
@@ -340,15 +395,25 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
         .build()
         .map_err(|e| e.to_string())?
         .check()
-        .await
-        .map_err(|e| e.to_string())?;
+        .await;
+    // APP-031: a missing manifest or platform is no update, and a release whose installer is not
+    // uploaded yet is passed over until it is.
+    let (found, quiet) = match found {
+        Ok(Some(u)) if installer_missing(u.download_url.as_str()).await => (None, Some(Quiet::HalfPublished)),
+        Ok(found) => (found, None),
+        Err(e) => (None, Some(quiet_of(&e).ok_or_else(|| e.to_string())?)),
+    };
+    let checked = Checked { found: found.as_ref().map(info_of), quiet };
+    let updates = app.state::<Updates>();
+    // APP-031: a late answer from an earlier check never overwrites the current one.
+    if updates.checks.load(Ordering::SeqCst) != me {
+        return Ok(checked);
+    }
     if let Ok(store) = app.state::<Mutex<Store>>().lock() {
         let _ = store.set(KEY_LAST_CHECK, &now_ms().to_string());
     }
-    let updates = app.state::<Updates>();
-    let info = found.as_ref().map(info_of);
     *updates.pending.lock().map_err(|e| e.to_string())? = found;
-    Ok(info)
+    Ok(checked)
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -468,6 +533,23 @@ mod tests {
         match feed(false, true, &env) {
             Ok(f) => assert_eq!(f.endpoint, RELEASE_ENDPOINT, "a release build must never read the test feed"),
             Err(e) => assert!(e.contains("signing key"), "{e}"),
+        }
+    }
+
+    #[test]
+    fn app031_a_missing_manifest_or_platform_is_no_update_and_a_local_build_is_told_apart() {
+        use tauri_plugin_updater::Error as E;
+        assert_eq!(quiet_of(&E::ReleaseNotFound), Some(Quiet::NoManifest));
+        assert_eq!(quiet_of(&E::TargetNotFound("windows-x86_64".into())), Some(Quiet::NoPlatform));
+        assert_eq!(quiet_of(&E::TargetsNotFound(vec!["windows-x86_64".into()])), Some(Quiet::NoPlatform));
+        assert_eq!(quiet_of(&E::EmptyEndpoints), None);
+        assert_eq!(serde_json::to_string(&Quiet::HalfPublished).unwrap(), "\"halfPublished\"");
+        assert!(local_build(true, "key"));
+        assert!(local_build(false, " "));
+        assert!(!local_build(false, "key"));
+        if local_build(false, RELEASE_PUBKEY) {
+            let e = feed(false, false, |_| None).unwrap_err();
+            assert!(!e.contains("releases page"), "{e}");
         }
     }
 

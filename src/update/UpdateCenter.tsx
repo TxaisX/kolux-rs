@@ -5,7 +5,7 @@ import { useEffect, useReducer, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Close, Refresh, Spinner, CheckCircle } from "../chrome/icons";
-import { TICK_MS, UpdateSchedule, type Outcome } from "./schedule";
+import { Quietly, TICK_MS, UpdateSchedule, type Outcome, type Quiet } from "./schedule";
 import { cardReducer, initialCard, mainAction, tipVisible, RELEASES_PAGE, type LastLaunch, type UpdateInfo } from "./card";
 
 interface Status {
@@ -17,6 +17,8 @@ interface Status {
   tipDone: boolean;
   ready: UpdateInfo | null;
   lastLaunch: LastLaunch | null;
+  /** APP-031: built on this computer (a development copy or one without the release key). */
+  local: boolean;
 }
 
 const EVENT = "kolux-check-updates";
@@ -53,10 +55,10 @@ export default function UpdateCenter() {
 
   const onOutcome = (o: Outcome<UpdateInfo>, requested: boolean) => {
     if (o.ok) {
-      dispatch({ type: "checkDone", requested, found: o.found });
+      dispatch({ type: "checkDone", requested, found: o.found, quiet: o.quiet });
       if (o.found) download(o.found); // APP-024/025: the download starts by itself
     } else if (o.error !== "offline") {
-      dispatch({ type: "checkFailed", requested, message: o.error, offline: o.offline });
+      dispatch({ type: "checkFailed", requested, message: o.error, offline: o.offline, local: status.current?.local });
     }
   };
 
@@ -65,7 +67,7 @@ export default function UpdateCenter() {
     if (!st) return;
     dispatch({ type: "checkStart", requested: true });
     if (!st.enabled || !schedule.current) {
-      dispatch({ type: "checkFailed", requested: true, message: st.reason ?? "Updates are off in this copy.", offline: false, next: "Install Kolux RS from its releases page to get updates." });
+      dispatch({ type: "checkFailed", requested: true, message: st.reason ?? "Updates are off in this copy.", offline: false, next: st.local ? "Build it again from the source to get newer changes." : "Install Kolux RS from its releases page to get updates." });
       return;
     }
     void schedule.current.run(true);
@@ -80,7 +82,7 @@ export default function UpdateCenter() {
       // Start from what the store remembers.
       dispatch({ type: "hydrate", dismissed: st.dismissedVersion, tipDone: st.tipDone });
       if (st.ready) dispatch({ type: "ready", info: st.ready });
-      else if (st.lastLaunch) dispatch({ type: "lastLaunch", launch: st.lastLaunch });
+      else if (st.lastLaunch) dispatch({ type: "lastLaunch", launch: st.lastLaunch, local: st.local });
       if (!st.enabled) return;
       const sched = new UpdateSchedule<UpdateInfo>(
         {
@@ -88,9 +90,10 @@ export default function UpdateCenter() {
           setTimer: (fn, ms) => window.setTimeout(fn, ms),
           clearTimer: (h) => window.clearTimeout(h as number),
           online: () => navigator.onLine,
-          check: () => {
+          check: async () => {
             dispatch({ type: "checkStart", requested: false });
-            return invoke<UpdateInfo | null>("update_check");
+            const r = await invoke<{ found: UpdateInfo | null; quiet: Quiet | null }>("update_check");
+            return r.quiet ? new Quietly(r.quiet) : r.found;
           },
           onOutcome,
         },
@@ -175,7 +178,9 @@ export default function UpdateCenter() {
     p.kind === "checking"
       ? "Checking for updates…"
       : p.kind === "upToDate"
-        ? `Kolux RS is up to date`
+        ? p.note
+          ? "No update to install yet"
+          : `Kolux RS is up to date`
         : p.kind === "available"
           ? `Kolux RS ${version} is available`
           : p.kind === "downloading"
@@ -249,6 +254,7 @@ export default function UpdateCenter() {
                     <div style={{ width: `${pct ?? 0}%` }} />
                   </div>
                 )}
+                {p.kind === "upToDate" && p.note && <div className="upd-next">{p.note}</div>}
                 {p.kind === "updated" && <div className="upd-next">What is new in this version:</div>}
                 {s.notes.length > 0 && p.kind !== "checking" && p.kind !== "upToDate" && (
                   <ul className="upd-notes">
@@ -275,7 +281,8 @@ export default function UpdateCenter() {
           </div>
         </div>
       )}
-      {s.popup && !(s.shown && version === s.popup) && (
+      {/* The pop-up waits while the open card takes the same corner. */}
+      {s.popup && !(s.shown && p.kind !== "idle" && (version === s.popup || !s.collapsed)) && (
         <div className="upd-pop" role="status">
           <CheckCircle size={13} />
           <span>Kolux RS {s.popup} is ready</span>

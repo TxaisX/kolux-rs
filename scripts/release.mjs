@@ -234,8 +234,10 @@ export function buildOnce(o, env = process.env) {
     say(`published ${version} to the folder ${pub}`);
   } else {
     if (!onGitHub(repo, env)) throw new Error(`the source repository ${repo} is not on GitHub, so nothing is published; set KOLUX_RELEASE_PUBLISH_DIR to rehearse`);
-    const files = ["latest.json", installerName(version), installerName(version) + ".sig"].map((f) => path.join(out, f));
+    // APP-031: the manifest goes up last, so a release is never announced before its installer is there.
+    const files = [installerName(version), installerName(version) + ".sig"].map((f) => path.join(out, f));
     sh("gh", ["release", "create", `v${version}`, "--repo", FEED_REPO, "--title", `Kolux RS ${version}`, "--notes-file", path.join(out, "notes.md"), ...files]);
+    sh("gh", ["release", "upload", `v${version}`, "--repo", FEED_REPO, path.join(out, "latest.json")]);
     say(`published ${version} to ${FEED_REPO}`);
   }
   return { version, sha, notes, out, published: true };

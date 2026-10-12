@@ -100,6 +100,7 @@ describe("error wording", () => {
     expect(plainError("The update check got no answer within 45 seconds.")).toBe("Kolux RS could not reach the update server.");
     expect(plainError("signature verification failed")).toMatch(/signature did not match/);
     expect(plainError("something odd")).toBe("something odd");
+    expect(plainError("error decoding response body for url (http://127.0.0.1:9333/latest.json)")).toMatch(/could not read/);
   });
 });
 
@@ -190,5 +191,36 @@ describe("install outcome (APP-028, APP-029)", () => {
     expect(s.phase.message).toContain("permission");
     expect(s.phase.next).toContain("stays open");
     expect(mainAction(s.phase)).toBe("restart");
+  });
+});
+
+describe("feeds with nothing to install (APP-031)", () => {
+  it("a background check says nothing about a half-published or missing feed", () => {
+    for (const quiet of ["halfPublished", "noManifest", "noPlatform"] as const) {
+      const s = run(initialCard(null, true), { type: "checkStart", requested: false }, { type: "checkDone", requested: false, found: null, quiet });
+      expect(s.shown).toBe(false);
+      expect(s.phase.kind).not.toBe("error");
+    }
+  });
+
+  it("a check the user asked for explains it calmly instead of showing an error", () => {
+    const s = run(initialCard(null, true), { type: "checkStart", requested: true }, { type: "checkDone", requested: true, found: null, quiet: "halfPublished" });
+    expect(s.shown).toBe(true);
+    if (s.phase.kind !== "upToDate") throw new Error("not calm");
+    expect(s.phase.note).toMatch(/being published/);
+    const t = run(initialCard(null, true), { type: "checkStart", requested: true }, { type: "checkDone", requested: true, found: null, quiet: "noPlatform" });
+    expect(t.phase.kind === "upToDate" && t.phase.note).toMatch(/this computer/);
+    const r = run(initialCard(null, true), { type: "ready", info: info("0.2.0") }, { type: "checkStart", requested: true }, { type: "checkDone", requested: true, found: null, quiet: "noManifest" });
+    expect(r.phase.kind).toBe("ready");
+  });
+
+  it("errors on a local build never point at the download page", () => {
+    const s = run(initialCard(null, true), { type: "checkStart", requested: true }, { type: "checkFailed", requested: true, message: "error sending request", offline: false, local: true });
+    if (s.phase.kind !== "error") throw new Error("not an error");
+    expect(s.phase.next).not.toMatch(/releases page|download/i);
+    const t = run(initialCard(null, true), { type: "lastLaunch", launch: { kind: "failed", version: "0.2.0", from: "0.1.0" }, local: true });
+    if (t.phase.kind !== "error") throw new Error("not an error");
+    expect(t.phase.installer).toBe(false);
+    expect(t.phase.next).not.toMatch(/download/i);
   });
 });

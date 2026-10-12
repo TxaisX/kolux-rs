@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CHECK_TIMEOUT_MS, INTERVAL_MS, ONLINE_DELAY_MS, RETRY_MAX_MS, UpdateSchedule, retryDelay, type Outcome } from "./schedule";
+import { CHECK_TIMEOUT_MS, INTERVAL_MS, ONLINE_DELAY_MS, RECHECK_SOON_MS, RETRY_MAX_MS, Quietly, UpdateSchedule, retryDelay, type Outcome, type Quiet } from "./schedule";
 
 const MIN = 60_000;
 
 // A fake clock: timers fire in order as time is advanced.
-function harness(opts: { lastCheckAt: number | null; answers?: Array<"none" | "found" | "fail" | "hang"> }) {
+function harness(opts: { lastCheckAt: number | null; answers?: Array<"none" | "found" | "fail" | "hang" | Quiet> }) {
   let now = 1_000_000_000;
   let seq = 0;
   const timers = new Map<number, { at: number; fn: () => void }>();
@@ -27,6 +27,7 @@ function harness(opts: { lastCheckAt: number | null; answers?: Array<"none" | "f
         const a = answers.shift() ?? "none";
         if (a === "hang") return new Promise(() => {});
         if (a === "fail") return Promise.reject("network error");
+        if (a === "halfPublished" || a === "noManifest" || a === "noPlatform") return Promise.resolve(new Quietly(a));
         return Promise.resolve(a === "found" ? "0.2.0" : null);
       },
       onOutcome: (outcome, requested) => outcomes.push({ outcome, requested }),
@@ -188,5 +189,30 @@ describe("update timetable (APP-024)", () => {
     const out = await h.s.run(true);
     expect(h.calls.length).toBe(1);
     expect(out.ok === false && out.offline).toBe(true);
+  });
+});
+
+describe("feeds with nothing to install (APP-031)", () => {
+  it("a release still being uploaded is no failure and is looked at again soon", async () => {
+    const h = harness({ lastCheckAt: null, answers: ["halfPublished", "found"] });
+    h.s.start();
+    await h.flush();
+    expect(h.outcomes[0].outcome).toEqual({ ok: true, found: null, quiet: "halfPublished" });
+    expect(h.s.failureCount).toBe(0);
+    await h.advance(RECHECK_SOON_MS);
+    expect(h.calls.length).toBe(2);
+    expect(h.outcomes[1].outcome).toEqual({ ok: true, found: "0.2.0" });
+  });
+
+  it("a missing manifest or platform counts as no update and queues no rapid retry", async () => {
+    const h = harness({ lastCheckAt: null, answers: ["noManifest", "noPlatform"] });
+    h.s.start();
+    await h.flush();
+    expect(h.outcomes[0].outcome).toEqual({ ok: true, found: null, quiet: "noManifest" });
+    await h.advance(INTERVAL_MS - MIN);
+    expect(h.calls.length).toBe(1);
+    await h.advance(MIN);
+    expect(h.calls.length).toBe(2);
+    expect(h.s.failureCount).toBe(0);
   });
 });

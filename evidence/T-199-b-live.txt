@@ -1,0 +1,23 @@
+T-199-b (APP-031) live proof, 2026-10-12, lane release dev app (com.txaisxiong.kolux-rs.release, port 1422)
+Stub feed: node server on 127.0.0.1:9333 serving latest.json (0.2.0, signed with a throwaway minisign key);
+KOLUX_RS_UPDATE_ENDPOINT / KOLUX_RS_UPDATE_PUBKEY pointed the dev copy at it. Lane profile backed up first and
+restored after (settings.json, state.db, state.db-wal, state.db-shm: all "same").
+
+1. Half-published release (manifest up, installer 404):
+   18:44:05 GET /latest.json 200, HEAD /noop.exe 404   <- start-up check (background)
+   Card in the page: none (no error, nothing shown).
+   Check for updates (requested): 18:48:59 GET /latest.json 200, HEAD /noop.exe 404
+   Card: "No update to install yet / A new version is being published right now. Kolux RS will look again in a few minutes."
+   -> evidence/T-199-b-half-published.png
+2. Installer uploaded at 18:49:08 (stub 404 switched off). No click:
+   18:53:59 GET /latest.json 200, HEAD /noop.exe 200, GET /noop.exe 200   <- the short 5-minute recheck
+   Pop-up: "Kolux RS 0.2.0 is ready  Restart to update"  -> evidence/T-199-b-picked-up.png
+3. Manifest missing (latest.json 404), requested check: 18:54:54 GET /latest.json 404
+   Card: "No update to install yet / The update server has nothing newer to offer right now." (no error)
+   With 0.2.0 already downloaded the card keeps "Kolux RS 0.2.0 is ready / Restart to update" -> evidence/T-199-b-ready-kept.png
+4. Local build (dev copy) with an unreadable manifest (200, HTML body), requested check:
+   Card: "The update check failed / The update server sent an answer Kolux RS could not read. / Press Try again in a minute."
+   No mention of the releases page; the ready pop-up waits while the card is open -> evidence/T-199-b-local-error.png
+Not proven live: an HTTP/2 protocol error. Kolux RS builds reqwest without its http2 feature
+(cargo tree -e features -i reqwest: native-tls, json, stream, system-proxy), so every update request
+is HTTP/1.1 already; see DT-R43.

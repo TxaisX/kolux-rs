@@ -9,6 +9,9 @@
 // - Offline it stays silent and checks within a few seconds of the connection coming back.
 // - Waking from sleep (the minute tick finds a gap) checks if the last check is out of date.
 // - A check that never answers is dropped after a timeout and counts as a failure.
+// - APP-031: a feed with nothing to install is no failure. A release whose installer is not
+//   uploaded yet is looked at again after a few minutes; a missing manifest or a release with no
+//   download for this computer waits for the normal interval.
 
 export const INTERVAL_MS = 30 * 60_000;
 export const RETRY_BASE_MS = 60 * 60_000;
@@ -17,15 +20,23 @@ export const ONLINE_DELAY_MS = 5_000;
 export const TICK_MS = 60_000;
 export const WAKE_GAP_MS = 3 * 60_000;
 export const CHECK_TIMEOUT_MS = 45_000;
+export const RECHECK_SOON_MS = 5 * 60_000;
 
-export type Outcome<T> = { ok: true; found: T | null } | { ok: false; error: string; offline: boolean };
+/** APP-031: why a check that reached the feed has nothing to offer. */
+export type Quiet = "halfPublished" | "noManifest" | "noPlatform";
+/** What a check returns when the feed answered but has nothing to install. */
+export class Quietly {
+  constructor(readonly reason: Quiet) {}
+}
+
+export type Outcome<T> = { ok: true; found: T | null; quiet?: Quiet } | { ok: false; error: string; offline: boolean };
 
 export interface ScheduleDeps<T> {
   now(): number;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
   online(): boolean;
-  check(): Promise<T | null>;
+  check(): Promise<T | null | Quietly>;
   /** Called after every finished check, quiet or requested. */
   onOutcome?(outcome: Outcome<T>, requested: boolean): void;
 }
@@ -98,7 +109,7 @@ export class UpdateSchedule<T> {
         this.failures = 0;
         this.missedOffline = false;
         this.lastCheckAt = this.deps.now();
-        this.schedule(INTERVAL_MS);
+        this.schedule(outcome.quiet === "halfPublished" ? RECHECK_SOON_MS : INTERVAL_MS);
       } else {
         this.failures += 1;
         if (outcome.offline) this.missedOffline = true;
@@ -124,7 +135,7 @@ export class UpdateSchedule<T> {
           if (settled) return;
           settled = true;
           this.deps.clearTimer(timeout);
-          resolve({ ok: true, found });
+          resolve(found instanceof Quietly ? { ok: true, found: null, quiet: found.reason } : { ok: true, found });
         },
         (e) => {
           if (settled) return;
