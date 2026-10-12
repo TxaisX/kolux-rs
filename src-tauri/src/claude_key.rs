@@ -445,7 +445,13 @@ pub fn claude_key_connect(app: AppHandle, setup: tauri::State<'_, KeySetup>) -> 
 }
 
 #[tauri::command]
-pub fn claude_key_cancel(setup: tauri::State<'_, KeySetup>) {
+pub fn claude_key_cancel(app: AppHandle, setup: tauri::State<'_, KeySetup>) {
+    // ACCT-002: with nothing running, Cancel wipes a leftover needs-attention state.
+    if !setup.running.load(Ordering::SeqCst) {
+        setup.set_attention(None);
+        let _ = app.emit(EVENT, ());
+        return;
+    }
     if let Ok(c) = setup.cancel.lock() {
         if let Some(flag) = c.as_ref() {
             flag.store(true, Ordering::SeqCst);

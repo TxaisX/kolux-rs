@@ -664,3 +664,14 @@ input { font: inherit; }
 .ac-images figure { margin: 0; display: flex; flex-direction: column; gap: 4px; }
 .ac-images figcaption { color: var(--fg-muted); font-size: 11px; }
 .ac-images img { max-width: none; image-rendering: auto; background: var(--chip-bg); }
+/* ACCT-002: "Other ways to connect" sits next to Connect and opens a short list under it. */
+.btn-row:has(.conn-more) { flex-wrap: wrap; align-items: flex-start; }
+.conn-more { display: inline-block; }
+.conn-more > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; }
+.conn-more > summary::-webkit-details-marker { display: none; }
+.conn-more > summary::after { content: "▾"; margin-left: 4px; text-decoration: none; }
+.conn-more[open] > summary::after { content: "▴"; }
+.conn-more-list { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 6px; }
+.ask .field { width: 100%; box-sizing: border-box; margin: 0 0 12px; }
+.ask-backdrop[hidden] { display: none; }
+.ask input[type="password"]::-ms-reveal { display: none; } /* ACCT-008: the key never shows on screen */

@@ -357,9 +357,17 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
 }
 
 #[tauri::command]
-pub fn codex_account_cancel(sign_ins: tauri::State<'_, SignIns>) {
-    if let Some(flag) = sign_ins.cancel.lock().ok().and_then(|c| c.clone()) {
-        flag.store(true, Ordering::SeqCst);
+pub fn codex_account_cancel(app: AppHandle, sign_ins: tauri::State<'_, SignIns>) {
+    // ACCT-002: with nothing running, Cancel wipes a leftover needs-attention state.
+    let running = sign_ins.running.lock().map(|r| r.is_some()).unwrap_or(false);
+    match sign_ins.cancel.lock().ok().and_then(|c| c.clone()) {
+        Some(flag) if running => flag.store(true, Ordering::SeqCst),
+        _ => {
+            if let Ok(mut g) = sign_ins.attention.lock() {
+                *g = None;
+            }
+            let _ = app.emit(EVENT, ());
+        }
     }
 }
 

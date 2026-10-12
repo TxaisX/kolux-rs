@@ -1,14 +1,16 @@
 // The Codex card on Settings > AI connections (ACCT-007): Connect signs a ChatGPT account in
 // through the browser, "Sign in with a code" shows a link and a one-time code to enter on any
 // device. Each account Kolux adds runs in a private Codex home; the user's own Codex folder is
-// never touched. Without a managed account the card reports Codex's own login as it is. The full
-// Connect-card states and the accounts list are T-092 and T-138.
+// never touched. Without a managed account the card reports Codex's own login as it is. The card
+// is in one state at a time (ACCT-002); the accounts list moving under Manage accounts is T-138,
+// Manage and Disconnect on this card T-202.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
-import { taglineOf } from "./ConnectGrid";
+import { OtherWays, taglineOf } from "./ConnectGrid";
+import { settleWithin } from "./pending";
 
 export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean };
 export type CodexView = {
@@ -48,16 +50,24 @@ export function codexHeadline(v: CodexView): string {
   return "Connect with your ChatGPT plan";
 }
 
-export function CodexCardView({ view, error, onAction }: { view: CodexView | null; error?: string | null; onAction: (a: CodexAction) => void }) {
+export type CodexState = "connecting" | "connected" | "attention" | "disconnected";
+export function codexState(v: CodexView): CodexState {
+  if (v.signingIn !== null) return "connecting";
+  if (v.active !== null || v.systemDefault !== "signed-out") return "connected";
+  return v.attention ? "attention" : "disconnected";
+}
+const codexChip: Record<CodexState, string> = { connecting: "Connecting", connected: "Connected", attention: "Needs attention", disconnected: "Not connected" };
+
+export function CodexCardView({ view, error, pending = false, onAction }: { view: CodexView | null; error?: string | null; pending?: boolean; onAction: (a: CodexAction) => void }) {
   if (!view) return null;
-  const busy = view.signingIn !== null;
-  const connected = view.active !== null || view.systemDefault !== "signed-out";
+  const state = codexState(view);
+  const busy = state === "connecting";
   return (
-    <section className="conn-card" aria-label="Codex" data-state={busy ? "connecting" : connected ? "connected" : "disconnected"}>
+    <section className="conn-card" aria-label="Codex" data-state={state}>
       <header className="conn-head">
         <VendorMark agent="codex" size={18} />
         <span className="conn-name">Codex</span>
-        <span className={`conn-chip ${busy ? "connecting" : connected ? "connected" : "disconnected"}`}>{busy ? "Connecting" : connected ? "Connected" : "Not connected"}</span>
+        <span className={`conn-chip ${state}`}>{codexChip[state]}</span>
       </header>
       <p className="conn-detail conn-tagline">{taglineOf("codex")}</p>
       <div className="conn-headline">{codexHeadline(view)}</div>
@@ -98,28 +108,28 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
         </div>
       )}
       {!busy && view.accounts.length === 0 && view.systemDefault !== "signed-out" && <p className="conn-detail">Connect adds a ChatGPT account in a Codex home of Kolux's own; your Codex folder stays as it is.</p>}
-      <AttentionNote attention={view.attention} route="codex" onFix={(f) => onAction(f === "Open install page" ? { kind: "install" } : { kind: "connect" })} />
+      <AttentionNote attention={view.attention} route="codex" busy={pending} onFix={(f) => onAction(f === "Open install page" ? { kind: "install" } : { kind: "connect" })} />
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}
         </p>
       )}
       <div className="btn-row">
-        {busy ? (
+        {/* Cancel ends a sign-in, or with nothing running wipes a leftover needs-attention state */}
+        {(busy || view.attention) && (
           <button className="btn" onClick={() => onAction({ kind: "cancel" })}>
             Cancel
           </button>
-        ) : (
+        )}
+        {!busy && (
           <>
             {/* a fix shown above takes Connect's place (ACCT-013: one button that fixes it) */}
             {!fixFor(view.attention, "codex") && (
-              <button className="btn primary" onClick={() => onAction({ kind: "connect" })}>
+              <button className="btn primary" disabled={pending} onClick={() => onAction({ kind: "connect" })}>
                 {view.accounts.length > 0 ? "Add account" : "Connect"}
               </button>
             )}
-            <button className="btn link" onClick={() => onAction({ kind: "code" })}>
-              Sign in with a code
-            </button>
+            <OtherWays ways={[{ label: "Sign in with a code", onPick: () => onAction({ kind: "code" }), disabled: pending }]} />
           </>
         )}
       </div>
@@ -130,6 +140,7 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
 export default function CodexCard() {
   const [view, setView] = useState<CodexView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
   const read = useCallback(() => {
     invoke<CodexView>("codex_accounts")
       .then(setView)
@@ -153,7 +164,13 @@ export default function CodexCard() {
           : a.kind === "install"
             ? openInstallPage("codex")
             : invoke("codex_account_sign_in", { device: a.kind === "code", again: a.kind === "again" ? a.id : null });
-    call.catch((e) => setError(String(e))).finally(read);
+    if (a.kind !== "cancel") setPending(true);
+    call.catch((e) => setError(String(e)));
+    // ACCT-002: a choice comes back after 30 seconds even if no answer arrives.
+    void settleWithin(call).then(() => {
+      setPending(false);
+      read();
+    });
   };
-  return <CodexCardView view={view} error={error} onAction={act} />;
+  return <CodexCardView view={view} error={error} pending={pending} onAction={act} />;
 }

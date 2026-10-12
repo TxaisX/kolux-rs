@@ -9,7 +9,8 @@ import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
-import { ConnectGrid, taglineOf } from "./ConnectGrid";
+import { ConnectGrid, OtherWays, taglineOf } from "./ConnectGrid";
+import { settleWithin } from "./pending";
 import GrokCard from "./GrokCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
@@ -51,11 +52,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
             {actionLabel[a]}
           </button>
         ))}
-        {onUseAccount && (card.state === "disconnected" || card.state === "attention") && (
-          <button className="btn link" disabled={busy} onClick={onUseAccount}>
-            Use my Claude account instead
-          </button>
-        )}
+        {onUseAccount && (card.state === "disconnected" || card.state === "attention") && <OtherWays ways={[{ label: "Use my Claude account instead", onPick: onUseAccount, disabled: busy }]} />}
       </div>
       {onResume && (
         <label className="conn-switch">
@@ -111,12 +108,13 @@ function ClaudeCard() {
     setError(null);
     const command = a === "cancel" ? "claude_key_cancel" : a === "disconnect" ? "claude_key_disconnect" : "claude_key_connect";
     setBusy(a !== "cancel");
-    invoke(command)
-      .catch((e) => setError(String(e)))
-      .finally(() => {
-        setBusy(false);
-        read();
-      });
+    const call = invoke(command);
+    call.catch((e) => setError(String(e)));
+    // ACCT-002: the buttons come back after 30 seconds even if no answer arrives.
+    void settleWithin(call).then(() => {
+      setBusy(false);
+      read();
+    });
   };
   const useAccount = () => {
     setError(null);

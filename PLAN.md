@@ -167,7 +167,7 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P0 · theme 6 · Business-user frame (4 cards)
 
 - [x] T-092-a · ACCT-001 The AI connections page shows a Connect card for each agent · ACCT-003 A missing agent tool installs from its Connect card (T-092 split; the per-provider Codex accounts list moves under the advanced area with T-138)
-- [ ] T-092-b · ACCT-002 [compat] A Connect card walks from not installed to connected through clear states · ACCT-008 [compat] Grok connects by its CLI login, a device code or a pasted xAI key · also from T-092-a: the installed Grok card is a plain "Not connected" card until this task gives it its three ways in
+- [x] T-092-b · ACCT-002 [compat] A Connect card walks from not installed to connected through clear states · ACCT-008 [compat] Grok connects by its CLI login, a device code or a pasted xAI key · also from T-092-a: the installed Grok card is a plain "Not connected" card until this task gives it its three ways in
 
 ### P0 · theme none · No theme (13 cards)
 
@@ -333,7 +333,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [ ] T-200 · PROJ-002 The Add Project dialog opens on cloning, with browse and create one step away
 - [ ] T-201 · SESS-017 Featured agent cards show what is missing and how to set it up · SESS-019 The older launch dialog with starter kits and a folded Advanced section
-- [ ] T-202 · ACCT-015 Disconnect removes only what Kolux made
+- [ ] T-202 · ACCT-015 Disconnect removes only what Kolux made · also from T-092-b: a connected Codex or Grok card shows "Manage" and "Disconnect" beside its account label, as the Claude key card already does; Grok's Disconnect clears only the xAI key Kolux saved and leaves the Grok CLI's own sign-in alone
 - [ ] T-203 · GIT-061 Turn a plain folder into a Git repository
 - [ ] T-204 · SKILL-001 Six ready-made starter kits for common business jobs · SKILL-002 Starter kit gallery and its entry points · SKILL-003 Kit roles go to the AIs the user has connected · SKILL-004 Kit setup dialog gathers inputs and stops bad files · SKILL-005 Try a kit on bundled sample data, and recall past inputs
 - [ ] T-205 · SKILL-006 Starting a kit opens one titled session per role · SKILL-007 [compat] Every kit seat works under the same plain rules · SKILL-008 A waiting kit role starts once the role it depends on is done · SKILL-009 Kit results strip above the session grid · SKILL-010 Each kit role row says what its AI is up to

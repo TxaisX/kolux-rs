@@ -18,8 +18,8 @@ export type Reason =
   | "unknown";
 export type Attention = { reason: Reason; message: string; resetsAt: number | null };
 export type Fix = "Renew" | "Check again" | "Try installing again" | "Open install page" | "Try again" | "Use a 1-year key instead";
-/** Where the card is: the Claude key card, the Claude accounts card, or Codex. */
-export type Route = "claude-key" | "claude-account" | "codex" | "install";
+/** Where the card is: the Claude key card, the Claude accounts card, Codex, Grok or an install. */
+export type Route = "claude-key" | "claude-account" | "codex" | "grok" | "install";
 
 const fixes: Record<Reason, Fix | null> = {
   "browser-blocked": "Try again",

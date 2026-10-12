@@ -2,8 +2,8 @@
 // one-line tagline. Until detection answers, a card is a loading placeholder and never claims an
 // agent is missing. A missing agent gets Install (WinGet, with progress and Cancel) or, where Kolux
 // cannot install it, "Open install page"; once it is in, the card moves on to its own sign-in with
-// no restart. Grok's sign-in routes (ACCT-008) and the full one-state machine (ACCT-002) are
-// T-092-b.
+// no restart. Each card's sign-in then walks one state at a time (ACCT-002); OtherWays is the
+// "Other ways to connect" menu every card shares.
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -18,6 +18,24 @@ export const CONNECT: { id: ConnectId; name: string; tagline: string }[] = [
   { id: "grok", name: "Grok", tagline: "xAI's coding agent, on your Grok sign-in or an xAI key." },
 ];
 export const taglineOf = (id: ConnectId): string => CONNECT.find((c) => c.id === id)!.tagline;
+export type Way = { label: string; onPick: () => void; disabled?: boolean };
+
+/** ACCT-002: an agent's other sign-in methods, behind one small menu next to Connect. */
+export function OtherWays({ ways }: { ways: Way[] }) {
+  if (ways.length === 0) return null;
+  return (
+    <details className="conn-more">
+      <summary className="btn link">Other ways to connect</summary>
+      <div className="conn-more-list" role="menu">
+        {ways.map((w) => (
+          <button key={w.label} role="menuitem" className="btn" disabled={w.disabled} onClick={w.onPick}>
+            {w.label}
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
 export type InstallView = { running: boolean; progress: number | null; attention: Attention | null };
 export type Stage = "loading" | "not-installed" | "installing" | "installed";
 
