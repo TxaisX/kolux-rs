@@ -49,7 +49,7 @@ type Props = {
   /** Bump to reload the list after something outside the sidebar made a workspace. */
   refresh: number;
   /** Hands the window the project list and which project owns each workspace folder. */
-  onIndex: (projects: Project[], owner: Record<string, string>) => void;
+  onIndex: (projects: Project[], owner: Record<string, string>, names: Record<string, string>) => void;
   /** Bumped by Mod+N (workspace.create): opens the name field for the project in front. */
   createRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
@@ -122,9 +122,14 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     }
     setWorktrees(next);
     const owner: Record<string, string> = {};
-    for (const p of list) for (const w of next[p.id] ?? []) owner[w.path] = p.id;
-    const key = JSON.stringify([list, owner]);
-    if (key !== indexed.current) index.current(list, owner);
+    const names: Record<string, string> = {};
+    for (const p of list)
+      for (const w of next[p.id] ?? []) {
+        owner[w.path] = p.id;
+        if (w.name) names[w.path] = w.name;
+      }
+    const key = JSON.stringify([list, owner, names]);
+    if (key !== indexed.current) index.current(list, owner, names);
     indexed.current = key;
   }, []);
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.

@@ -97,6 +97,8 @@ Acceptance:
         unchanged.
   - [ ] Create a name made only of characters Git rejects → refused with a message.
 Compat: —
+  (Kolux RS, T-013-fix-b: emoji outside the short-word table become their Unicode name in words,
+  DT-C9; the pane header shows the typed name, `evidence/T-013-fix-b-header.png`.)
 Source: D-01-021
 
 ### PROJ-025 · Choose where workspace folders live

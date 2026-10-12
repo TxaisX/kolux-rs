@@ -1,7 +1,7 @@
 // PROJ-066: each workspace keeps its own panes; switching shows one set and hides the rest;
 // removing a workspace drops every pane inside it.
 import { expect, test } from "vitest";
-import { activeAfterRemove, focusIn, panesIn, sameDir, underDir, withoutDir } from "./workspaces";
+import { activeAfterRemove, focusIn, nameOf, panesIn, sameDir, underDir, withoutDir } from "./workspaces";
 
 const panes = [
   { key: 1, cwd: null },
@@ -45,4 +45,11 @@ test("removing a workspace drops every pane in it and nothing else; the view fal
   expect(activeAfterRemove("C:/repo/ws/alpha", "C:\\repo\\ws\\alpha")).toBeNull();
   expect(activeAfterRemove("C:\\repo\\ws\\beta", "C:\\repo\\ws\\alpha")).toBe("C:\\repo\\ws\\beta");
   expect(activeAfterRemove(null, "C:\\repo\\ws\\alpha")).toBeNull();
+});
+
+test("a pane's header takes the typed workspace name of its folder, whatever the slash or case (T-013-fix-b)", () => {
+  const names = { "C:\\ws\\app\\ship-it": "Ship it \u{1F9D1}\u{200D}\u{1F4BB}" };
+  expect(nameOf(names, "c:/ws/app/ship-it/")).toBe("Ship it \u{1F9D1}\u{200D}\u{1F4BB}");
+  expect(nameOf(names, "C:\\ws\\app\\other")).toBeUndefined();
+  expect(nameOf(names, null)).toBeUndefined();
 });

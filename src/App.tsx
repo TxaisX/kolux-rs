@@ -43,7 +43,7 @@ import { LANES, chipOf } from "./board/chip";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
-import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
+import { activeAfterRemove, focusIn, nameOf, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { matchEvent } from "./keys/keymap";
 
@@ -147,6 +147,7 @@ function Window() {
   const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
   const [projects, setProjects] = useState<Project[]>([]);
   const [owner, setOwner] = useState<Record<string, string>>({});
+  const [names, setNames] = useState<Record<string, string>>({}); // workspace folder -> the name typed for it (PROJ-021)
   const [refresh, setRefresh] = useState(0);
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
   const [stacked, setStacked] = useState<Record<string, boolean>>({}); // TERM-006: a single pane split down makes a stacked pair
@@ -715,9 +716,10 @@ function Window() {
             refresh={refresh}
             createRequest={createRequest}
             onStartIn={startIn}
-            onIndex={(list, dirs) => {
+            onIndex={(list, dirs, typed) => {
               setProjects(list);
               setOwner(dirs);
+              setNames(typed);
             }}
           />
         )}
@@ -848,7 +850,7 @@ function Window() {
                     unread={unreadPanes.has(p.key)}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
-                    title={p.title}
+                    title={p.title || nameOf(names, p.cwd)}
                     typed={p.typed}
                     number={p.key}
                     onClose={() => closePane(p.key)}

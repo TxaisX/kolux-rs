@@ -1,7 +1,7 @@
 //! Workspace names become safe branch and folder names (PROJ-021). The shown name stays exactly
 //! what the user typed; this is only the cleaned-up form used for the branch and the folder.
 
-/// Emoji the cleaner knows by word. Anything else outside letters and digits is dropped.
+/// Emoji the cleaner knows by their short word. Any other symbol gets its Unicode name.
 const EMOJI_WORDS: &[(char, &str)] = &[
     ('\u{1F525}', "fire"),
     ('\u{1F680}', "rocket"),
@@ -22,7 +22,8 @@ const EMOJI_WORDS: &[(char, &str)] = &[
 /// Turns a typed name into a name Git and the file system both accept, or `None` when nothing
 /// usable is left. Rules: spaces, slashes and punctuation become hyphens, repeated separators
 /// merge, characters Git refuses are dropped, runs of dots shrink to one, letters outside ASCII
-/// stay, known emoji become their word, and the result never starts or ends with a separator.
+/// stay, known emoji become their word, any other symbol its Unicode name in words (a joined
+/// emoji names each of its parts), and the result never starts or ends with a separator.
 pub fn safe_name(input: &str) -> Option<String> {
     let mut out = String::new();
     for ch in input.chars() {
@@ -40,8 +41,14 @@ pub fn safe_name(input: &str) -> Option<String> {
             // `~ ^ : ? * [ ] < > | " @ { }` are refused by Git or Windows; every one of them, and
             // every other mark, acts as a separator rather than surviving into the name.
             push_sep(&mut out);
+        } else if !silent(ch) {
+            if let Some(name) = unicode_names2::name(ch) {
+                push_sep(&mut out);
+                out.push_str(&name.to_string().to_lowercase().replace(' ', "-"));
+                push_sep(&mut out);
+            }
         }
-        // control characters, variation selectors, unknown emoji: dropped
+        // control characters, joiners, selectors, modifiers and marks: dropped
     }
     // collapse "-.-" style runs: a dot next to a hyphen keeps only the dot
     let mut cleaned = String::new();
@@ -65,6 +72,18 @@ pub fn safe_name(input: &str) -> Option<String> {
     } else {
         Some(trimmed)
     }
+}
+
+/// Characters that shape a neighbour rather than say anything of their own: controls, zero-width
+/// joiners, variation selectors, emoji tags and skin tones, combining marks.
+fn silent(ch: char) -> bool {
+    ch.is_control()
+        || matches!(ch as u32,
+            0x200B..=0x200D | 0x2060 | 0xFEFF
+            | 0xFE00..=0xFE0F | 0xE0100..=0xE01EF
+            | 0xE0000..=0xE007F
+            | 0x1F3FB..=0x1F3FF
+            | 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F)
 }
 
 fn push_sep(out: &mut String) {
@@ -106,7 +125,17 @@ mod tests {
     fn unicode_letters_stay_and_unknown_symbols_go() {
         assert_eq!(safe_name("Caf\u{e9} r\u{e9}sum\u{e9}").as_deref(), Some("caf\u{e9}-r\u{e9}sum\u{e9}"));
         assert_eq!(safe_name("\u{65E5}\u{672C}\u{8A9E} test").as_deref(), Some("\u{65E5}\u{672C}\u{8A9E}-test"));
-        assert_eq!(safe_name("ship it \u{1F9D1}\u{200D}\u{1F4BB}").as_deref(), Some("ship-it"));
+    }
+
+    #[test]
+    fn unknown_emoji_fall_back_to_their_unicode_names_and_joiners_vanish() {
+        // A ZWJ sequence names each of its parts (T-013-fix-b); the joiner, skin tones,
+        // variation selectors and combining marks say nothing.
+        assert_eq!(safe_name("ship it \u{1F9D1}\u{200D}\u{1F4BB}").as_deref(), Some("ship-it-adult-personal-computer"));
+        assert_eq!(safe_name("ok \u{1F44D}\u{1F3FD}").as_deref(), Some("ok-thumbs-up-sign"));
+        assert_eq!(safe_name("warn \u{26A0}\u{FE0F}").as_deref(), Some("warn-warning-sign"));
+        assert_eq!(safe_name("e\u{301}").as_deref(), Some("e"));
+        assert_eq!(safe_name("\u{20AC}5").as_deref(), Some("euro-sign-5"));
     }
 
     #[test]

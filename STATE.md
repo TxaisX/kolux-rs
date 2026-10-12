@@ -1245,7 +1245,25 @@ recorded default until told otherwise; nothing here blocks a pass.
   before any project exists" as a door to adding the project, so no DECISIONS row. The two rules
   T-013 left out, the overtaken create and the stand-in tab, now have an owner, T-013-c.
 
+- 2026-10-12 · [core] T-013-fix-b: `safe_name()` no longer drops an emoji it has no word for.
+  The fourteen table emoji keep their short word; any other symbol becomes its Unicode name in
+  lowercase words (crate `unicode_names2` 4.0.0, MIT / Apache-2.0 and Unicode-DFS-2016, both on
+  the deny.toml allow list), so a joined emoji names each of its parts: "ship it 🧑‍💻" cleans
+  to ship-it-adult-personal-computer. Joiners, variation selectors, emoji tags, skin tones and
+  combining marks say nothing (`silent()`), so a thumbs-up with a skin tone is thumbs-up-sign
+  and a decomposed é keeps its e. That is a Unicode name, not a shortcode, for emoji outside the
+  table: DT-C9. The pane header now shows the name exactly as typed: `ProjectsPanel` hands the
+  window a folder-to-typed-name map beside the owner map, `nameOf()` in `src/workspaces.ts`
+  (tested) looks a pane's folder up by content, and `App.tsx` passes it as the pane's title when
+  no job title is set. Proved live: typing "Ship it 🧑‍💻" previewed branch
+  ship-it-adult-personal-computer (`evidence/T-013-fix-b-preview.png`), and the created
+  workspace's pane header, sidebar row and branch chip read "Ship it 🧑‍💻" over that branch
+  (`-header.png`). The tab strip keeps its program word (TERM-040). The projects test that
+  removes its temp folder no longer panics when Windows still holds the store file for a moment
+  (it flaked once in T-025-c and once here).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-013-fix-b · done: Unicode-name fallback in `names.rs` (+ tests, crate `unicode_names2`), `nameOf()` in `workspaces.ts` (+ test), typed names flow `ProjectsPanel` → `App` → pane header; `evidence/T-013-fix-b-preview.png`, `-header.png`
 - 2026-10-12 · [core] T-013-fix-a · done: `createOpens()` in `model.ts` (+ test), `ProjectsPanel.tsx` routes Mod+N and the header button through it, T-013-c added; `evidence/T-013-fix-a-no-project.png`
 - 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
 - 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
@@ -1256,6 +1274,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-028-a · done: `src/board/chip.ts` (+ test), Board lanes and chip rows in `App.tsx` / `TerminalPane.tsx` / `styles.css`, `agent_answer` and `Change.wrote` in `status.rs` / `hooks.rs`; `evidence/T-028-a-board.png`, `-approved.png`, `-deny-ask.png`, `-denied.png`
 - 2026-10-11 · [core] T-027 · deferred (0 passes): needs T-325 / T-326 / T-050; rules moved onto the T-326 line
 - 2026-10-11 · [core] T-026-c · done: `src/inbox/inbox.ts` (+ test), `InboxView.tsx`, the bell and `view.inbox` in `TopBar.tsx` / `App.tsx`, pane state stamps; `evidence/T-026-c-all-clear.png`, `-groups.png`, `-detail.png`, `-opened.png`
-- 2026-10-11 · [core] T-026-b · done: `VOCAB` + `stoppedLabel` + `headerOf` on it (`status.ts`, tests), `StatusGlyph` + synced `Spinner` (`icons.tsx`), `Tip.tsx`, `.spin` 12 fps + reduced motion (`styles.css`), header / badge / dot wired; `evidence/T-026-b-working.png`, `-needs-you.png`, `-done.png`, `-tab-badge.png`, `-sidebar-dot.png`, `-reduced-motion.png`
 
 
