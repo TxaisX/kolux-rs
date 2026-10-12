@@ -18,6 +18,8 @@ import { monoFont, terminalTheme } from "../theme";
 import { folderName } from "../projects/model";
 import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
+import Ring from "../usage/Ring";
+import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
@@ -81,6 +83,8 @@ type Props = {
     onAnswer?: (approve: boolean) => void;
     /** VIEW-023: the Board column (status lane) this card sits in. */
     column?: number;
+    /** USAGE-002: the compact session meter; null when there is nothing to measure. */
+    meter?: Meter | null;
   };
 };
 
@@ -285,11 +289,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           </span>
         )}
         <span className="right">
-          <span className="gauge" title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-              <circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--gauge-track)" strokeWidth="2" />
-              {context !== undefined && <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray={`${(Math.round(context) / 100) * 34.56} 34.56`} transform="rotate(-90 7 7)" />}
-            </svg>
+          <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
+            <Ring percent={context ?? 0} />
             {Math.round(context ?? 0)}%
           </span>
           <button className="ib" title="Pane menu (not built yet)">
@@ -369,6 +370,21 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
               </button>
             </span>
           )}
+        </div>
+      )}
+      {card?.meter && (
+        <div className="meter" title={meterText(card.meter)}>
+          {card.meter.context && (
+            <>
+              <span className="meter-bar">
+                <span className={`meter-fill ${toneOf(card.meter.context.percent)}`.trim()} style={{ width: `${card.meter.context.percent}%` }} />
+              </span>
+              <span className="meter-ctx">
+                {shortTokens(card.meter.context.tokens)} / {shortTokens(card.meter.context.window)}
+              </span>
+            </>
+          )}
+          {card.meter.plan && <span className="meter-plan">{meterText({ plan: card.meter.plan })}</span>}
         </div>
       )}
       <div ref={host} className="pane-body" />

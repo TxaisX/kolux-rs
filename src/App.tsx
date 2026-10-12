@@ -40,6 +40,9 @@ import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
 import { LANES, chipOf } from "./board/chip";
+import Ring from "./usage/Ring";
+import { contextFill, meterOf, meterText, type ContextReading } from "./usage/meter";
+import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -120,7 +123,8 @@ function Window() {
   const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo }>>({});
   // STAT-045: the terminal has printed nothing for the quiet window; cleared by the next event.
   const [stale, setStale] = useState<Record<number, boolean>>({});
-  const [context, setContext] = useState<Record<number, number>>({}); // STAT-040: each Claude pane's context fill
+  const [context, setContext] = useState<Record<number, ContextReading>>({}); // STAT-040: each Claude pane's last context reading
+  const plan = usePlan(); // USAGE-002: the plan figures the pills read
   const [crew, setCrew] = useState<Record<number, Crew>>({}); // STAT-026: each pane's sub-agents and teammates
   const hookRef = useRef(hook);
   hookRef.current = hook;
@@ -693,9 +697,9 @@ function Window() {
       }
     });
     // STAT-045: the quiet alert comes from the terminal's own silence, judged in Rust.
-    const offUsage = listen<{ paneKey: number; contextPercent: number | null }>("claude-usage", (e) => {
-      const { paneKey, contextPercent } = e.payload;
-      if (contextPercent !== null) setContext((c) => ({ ...c, [paneKey]: contextPercent }));
+    const offUsage = listen<{ paneKey: number; contextTokens: number | null; contextWindow: number | null }>("claude-usage", (e) => {
+      const { paneKey, contextTokens, contextWindow } = e.payload;
+      if (contextTokens !== null && contextWindow !== null) setContext((c) => ({ ...c, [paneKey]: { tokens: contextTokens, window: contextWindow } }));
     });
     const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
       const p = panesRef.current.find((x) => x.key === e.payload.paneKey);
@@ -817,6 +821,7 @@ function Window() {
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
                             {p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
+                            {context[p.key] && <Ring percent={contextFill(context[p.key])} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex) ?? {})} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
@@ -850,14 +855,14 @@ function Window() {
                   <TerminalPane
                     key={p.key}
                     hidden={!board && p.key !== active}
-                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok) } : undefined}
+                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex) } : undefined}
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}
                     program={p.program}
                     args={p.args}
                     stop={turn[p.key]?.stop}
-                    context={context[p.key]}
+                    context={context[p.key] && contextFill(context[p.key])}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {

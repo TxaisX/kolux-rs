@@ -42,6 +42,8 @@ export const classic = {
   "dot-idle": "#3c3c3c",
   gauge: "#8beeb0",
   "gauge-text": "#83e4a6",
+  /** Not measured (nothing in the capture was past 90%): the meter's red, USAGE-002. */
+  danger: "#e5484d",
 } as const;
 
 export type Theme = Record<keyof typeof classic, string>;

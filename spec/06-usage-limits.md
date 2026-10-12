@@ -29,10 +29,13 @@ Rules: the context bar shows up only after the session has reported its context,
   nothing but a weekly limit shows the weekly figure alone; with neither a context reading nor plan
   figures, the meter is left off the card instead of being drawn empty; the bar goes yellow at 70%
   and red past 90%, on the same scale as the pane header.
+  (Kolux RS, T-040-a: the meter sits under the card's chip row and reads `84k / 200k` then
+  `5-hour 38% · Weekly 63%` as used percentages; hovering gives the same words with the fill
+  percentage; the yellow is the attention colour and the red a new `danger` token.)
 Acceptance:
-  - [ ] A Claude card partway through a session → a context bar plus 5-hour and weekly percentages.
-  - [ ] A new card before its first turn → plan figures only; a card whose agent has no usage source
-        → no meter at all.
+  - [x] A Claude card partway through a session → a context bar plus 5-hour and weekly percentages. (T-040-a)
+  - [x] A new card before its first turn → plan figures only; a card whose agent has no usage source
+        → no meter at all. (T-040-a)
 Compat: —
 Source: D-06-002
 
@@ -44,10 +47,13 @@ User sees: a tiny ring on every agent tab that fills with that session's context
 Rules: when a tab holds several panes, the ring follows whichever pane reported last; the ring stays
   hidden until a context reading exists, even when plan figures are already known; the percentage
   lives only in the pane header, never on the tab.
+  (Kolux RS, T-040-a: a tab is one pane, so the ring is that pane's; the strip only shows when a
+  cell holds more than one tab, as before. The ring is `src/usage/Ring.tsx`, shared with the pane
+  header's gauge, and turns yellow and red on the card bar's scale.)
 Acceptance:
-  - [ ] Run Claude in a tab → a ring appears after the first reply and fills as the session goes on;
-        hovering shows the context and plan wording.
-  - [ ] A Codex tab that has plan figures but no context reading → no ring.
+  - [x] Run Claude in a tab → a ring appears after the first reply and fills as the session goes on;
+        hovering shows the context and plan wording. (T-040-a, by a posted report)
+  - [x] A Codex tab that has plan figures but no context reading → no ring. (T-040-a)
 Compat: —
 Source: D-06-003
 
@@ -83,11 +89,15 @@ Rules: context fill is measured against the effective window: 200k while the cap
   each rounded to a whole percent; a window of any other length is left out rather than shown under
   the wrong name; plan data that failed, is unavailable or is missing shows nothing at all, never an
   old or a zero figure; thousands are written with k and millions with M.
+  (Kolux RS, T-040-a: `src/usage/meter.ts`; the status line's `context_window` gives
+  `total_input_tokens`, else `current_usage.input_tokens` + `cache_creation_input_tokens` +
+  `cache_read_input_tokens`, else `used_percentage` of `context_window_size`; the cap is always on
+  until T-041 wires the switch through `contextFill`'s argument; millions keep one decimal, 1.3M.)
 Acceptance:
-  - [ ] Cap on, Claude session at 100k tokens on a model whose window is 1M → the meter reads 50%,
-        not 10%.
-  - [ ] Switch the cap off → the same session is measured against the model's full window.
-  - [ ] Make the plan read fail → the plan figures vanish from the meter instead of reading 0%.
+  - [x] Cap on, Claude session at 100k tokens on a model whose window is 1M → the meter reads 50%,
+        not 10%. (T-040-a, unit test)
+  - [ ] Switch the cap off → the same session is measured against the model's full window. (the switch is T-041)
+  - [x] Make the plan read fail → the plan figures vanish from the meter instead of reading 0%. (T-040-a, unit test)
 Compat: —
 Source: D-06-005
 

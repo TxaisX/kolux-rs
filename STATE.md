@@ -571,7 +571,10 @@ plan figures. The pill reads "Codex 100% left" (weekly figure); hovering lists t
 weekly figures each with its own reset time, the limit-reset credits and the plan. A sign-in
 Codex no longer accepts turns it into a yellow "Codex · sign in again" with no figures. The
 Claude half reads "Claude N% left" from Claude Code's own status-line reports once a Claude
-pane has produced one (T-039-b, [core]); until then it reads "unknown".
+pane has produced one (T-039-b, [core]); until then it reads "unknown". Board cards carry a
+compact meter (context bar in tokens plus the agent's 5-hour and weekly plan percentages), agent
+tabs a tiny context ring, and the pane header's gauge fills and turns yellow at 70% and red past
+90% (T-040-a, [core]).
 
 [accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
 the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
@@ -1379,7 +1382,28 @@ recorded default until told otherwise; nothing here blocks a pass.
   a real Claude Code session driving the command (the pane's Claude Code read the real user
   settings, not the scratch ones, as in T-025-a), and the chained previous status line.
 
+- 2026-10-12 · [core] T-040-a: the usage meters. The status-line route now keeps the context
+  reading in tokens (`Usage.contextTokens`/`contextWindow`: the stated total, else input plus
+  cache writes plus cache reads from `current_usage`, else the stated percentage applied to the
+  window) and `src/usage/meter.ts` works the figures out: `contextFill` against the 200k cap
+  (always on until T-041 wires the USAGE-006 switch through its argument), else the model's own
+  window, past full reads 100, a zero window 0; `shortTokens` (84k, 1.3M); `planOf` gives a
+  Claude pane the Claude account's 5-hour and weekly percentages and a Codex pane Codex's, nothing
+  for other agents or a failed read; `meterOf`/`meterText` build the card meter and its hover
+  text. The two top-bar pills publish what they read into `src/usage/plan.ts` (a tiny external
+  store) so the Board needs no second read. `src/usage/Ring.tsx` is the ring: track and arc, no
+  number, coloured `warn` at 70% and `danger` past 90% (new theme token `danger` #e5484d, not
+  measured); the pane header's gauge uses it with the figure, and agent tabs show it at 10 px with
+  the meter words as its title. On the Board a card gets `.meter` under the chip row: the bar
+  (width = fill, same colours), `84k / 200k`, and `5-hour 38% · Weekly 63%`; the bar only after a
+  reading, plan figures without one, no meter with neither (shells and browser tabs never get
+  one). Live: posted two reports (84k of 200k with both windows; 190k of 1M through
+  `current_usage`) → tab rings plain and red with hover text, header gauges 42% and 95% red, Board
+  cards with bars, token counts and plan lines, the shell card bare (`evidence/T-040-a-meter.png`).
+  Not built here: the Agents view rings, footer and usage line (T-040-b, needs T-050 and T-263).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-040-a · done: Board card meter (context bar in tokens + plan %), tab ring, header gauge colours, USAGE-005 maths against the 200k cap; Agents view parts split to T-040-b; evidence/T-040-a-meter.png
 - 2026-10-12 · [core] T-039-b · done: statusLine slot taken with a chaining bash command, /claude-status route → kv claudeRateLimits + claudeUsageLimitResetsAt, pill 'Claude N% left', header gauge, limit stop carries the reset; evidence/T-039-b-usage.png
 - 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
 - 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
@@ -1390,6 +1414,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-013-fix-b · done: Unicode-name fallback in `names.rs` (+ tests, crate `unicode_names2`), `nameOf()` in `workspaces.ts` (+ test), typed names flow `ProjectsPanel` → `App` → pane header; `evidence/T-013-fix-b-preview.png`, `-header.png`
 - 2026-10-12 · [core] T-013-fix-a · done: `createOpens()` in `model.ts` (+ test), `ProjectsPanel.tsx` routes Mod+N and the header button through it, T-013-c added; `evidence/T-013-fix-a-no-project.png`
 - 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
-- 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
 
 

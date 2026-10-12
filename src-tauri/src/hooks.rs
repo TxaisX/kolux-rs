@@ -246,12 +246,14 @@ pub struct Limit {
     pub resets_at: Option<i64>,
 }
 
-/// What one status-line report says: the pane's context fill and the account's windows.
+/// What one status-line report says: the pane's context spent and window, in tokens, and the
+/// account's windows. The fill is worked out by the window side (USAGE-005: the 200k cap).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     pub pane_key: u32,
-    pub context_percent: Option<f64>,
+    pub context_tokens: Option<u64>,
+    pub context_window: Option<u64>,
     pub limits: Vec<Limit>,
 }
 
@@ -263,14 +265,19 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
     let (pane_key, _) = req.headers.get(IDENTITY_HEADER).and_then(|h| identity(h)).ok_or(400u16)?;
     let v: Value = serde_json::from_slice(&req.body).map_err(|_| 400u16)?;
     let cw = &v["context_window"];
-    let context_percent = cw
-        .get("used_percentage")
-        .and_then(Value::as_f64)
+    let context_window = cw.get("context_window_size").and_then(Value::as_u64);
+    // USAGE-005: the total it states, else input plus cache writes plus cache reads, else its
+    // percentage applied to the window.
+    let context_tokens = cw
+        .get("total_input_tokens")
+        .and_then(Value::as_u64)
         .or_else(|| {
-            let window = cw.get("context_window_size")?.as_f64().filter(|w| *w > 0.0)?;
-            Some((cw.get("total_input_tokens")?.as_f64()? / window * 100.0).round())
+            let c = cw.get("current_usage")?;
+            let n = |k: &str| c.get(k).and_then(Value::as_u64);
+            Some(n("input_tokens")? + n("cache_creation_input_tokens").unwrap_or(0) + n("cache_read_input_tokens").unwrap_or(0))
         })
-        .map(|p| p.clamp(0.0, 100.0));
+        .or_else(|| Some((cw.get("used_percentage")?.as_f64()? / 100.0 * context_window? as f64).round() as u64));
+    let context_window = context_tokens.and(context_window);
     let limits = v["rate_limits"]
         .as_array()
         .into_iter()
@@ -283,7 +290,7 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
             })
         })
         .collect();
-    Ok(Usage { pane_key, context_percent, limits })
+    Ok(Usage { pane_key, context_tokens, context_window, limits })
 }
 
 /// When the soonest window that is used up lifts, in ms; none when nothing is used up.
@@ -1010,7 +1017,7 @@ mod tests {
         let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
         let req = parse_request(&mut raw.as_bytes()).unwrap();
         let u = usage(&req, "tok").unwrap();
-        assert_eq!((u.pane_key, u.context_percent), (4, Some(25.0)));
+        assert_eq!((u.pane_key, u.context_tokens, u.context_window), (4, Some(50_000), Some(200_000)));
         assert_eq!(u.limits, vec![
             Limit { kind: "five_hour".into(), used_percent: 40.0, resets_at: Some(1_791_835_200_000) },
             Limit { kind: "seven_day".into(), used_percent: 100.0, resets_at: Some(1_791_828_000_500) },
@@ -1019,7 +1026,19 @@ mod tests {
         assert_eq!(usage(&req, "other"), Err(403));
         let only = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: 76\r\n\r\n{{\"context_window\":{{\"context_window_size\":200000,\"total_input_tokens\":30000}}}}");
         let u = usage(&parse_request(&mut only.as_bytes()).unwrap(), "tok").unwrap();
-        assert_eq!((u.context_percent, u.limits.len()), (Some(15.0), 0));
+        assert_eq!((u.context_tokens, u.context_window, u.limits.len()), (Some(30_000), Some(200_000), 0));
+        // USAGE-005: tokens are the stated total, else input plus cache writes plus cache reads,
+        // else the stated percentage applied to the window.
+        let read = |body: &str| {
+            let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+            usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap()
+        };
+        let u = read(r#"{"context_window":{"context_window_size":1000000,"current_usage":{"input_tokens":1000,"cache_creation_input_tokens":20000,"cache_read_input_tokens":79000}}}"#);
+        assert_eq!((u.context_tokens, u.context_window), (Some(100_000), Some(1_000_000)));
+        let u = read(r#"{"context_window":{"context_window_size":200000,"used_percentage":42}}"#);
+        assert_eq!((u.context_tokens, u.context_window), (Some(84_000), Some(200_000)));
+        let u = read(r#"{"context_window":{"used_percentage":42}}"#);
+        assert_eq!((u.context_tokens, u.context_window), (None, None), "a percentage with no window is no reading");
         assert_eq!(when_ms(&json!(1_700_000_000)), Some(1_700_000_000_000), "seconds become ms");
         assert_eq!(when_ms(&json!(1_700_000_000_000i64)), Some(1_700_000_000_000));
         assert_eq!(when_ms(&json!("2000-02-29T00:00:00Z")), Some(951_782_400_000));

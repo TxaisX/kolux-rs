@@ -81,6 +81,7 @@ strip, pane grid, status bar); **6 px** between panes.
 | `--button-border` | `#232323` | "New session" button outline |
 | `--seg-active` | `#404040` | Active segment: "Terminals" in the top bar, "4" in the layout control |
 | `--gauge-track` | `#1e1e1e` | Unfilled part of the context ring in pane headers |
+| `--danger` | `#e5484d` | (Kolux RS, T-040-a) the meter bar, ring and gauge past 90%; not measured, nothing in the capture was that full; the 70% yellow is `--working-icon` |
 
 ### Text
 

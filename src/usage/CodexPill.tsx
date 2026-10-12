@@ -1,9 +1,10 @@
 // The Codex half of the usage pill: real plan figures read in the background (USAGE-022), a
 // warn-coloured "sign in again" when the sign-in is no longer accepted.
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import VendorMark from "../chrome/VendorMark";
 import { pillDetail, pillText, type CodexUsage } from "./codex";
+import { publishCodex, usePlan } from "./plan";
 
 const EVERY_MS = 10 * 60 * 1000;
 
@@ -18,7 +19,8 @@ export function CodexPillView({ usage }: { usage: CodexUsage | null }) {
 }
 
 export default function CodexPill() {
-  const [usage, setUsage] = useState<CodexUsage | null>(null);
+  const { codex: usage } = usePlan();
+  const setUsage = publishCodex;
   useEffect(() => {
     let live = true;
     let retry = 0;
