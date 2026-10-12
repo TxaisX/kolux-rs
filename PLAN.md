@@ -85,6 +85,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-035 · EDIT-041 [compat] Open in Code and Answer in Code jump to the agent's pane
 - [x] T-036 · SET-027 [compat] Agents page: which agents, the default one, and how they start
 - [x] T-037 · APP-054 Resource Manager: memory per session, with a way to end one
+- [x] T-037-fix-look · fixes on card VIEW 003 (full-width top bar): the centred switcher no longer covers the search box at the default window size, and narrow windows keep the window controls on screen · and card SESS 007 (an empty pane asks what to run): Start stays in view below the choices in a small pane
 
 ### P0 · theme 4 · Accounts, sign-in and usage limits (20 cards)
 

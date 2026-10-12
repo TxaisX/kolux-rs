@@ -4,7 +4,8 @@
 // list with empty seats or shrinks it from the bottom. Native radios and a number field carry the
 // keyboard and screen-reader behaviour. The close button is absent when this is the grid's only
 // pane. A shape row (SESS-012) gives the seats roles, each shown on its seat, and one task box
-// holds the task every seat shares, so the whole lineup is in view before Start.
+// holds the task every seat shares, so the whole lineup is in view before Start. Start sits in a
+// footer below the scrolling choices, so in a small pane it stays in view after a pick.
 import { Close } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
@@ -188,12 +189,12 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
             </div>
           ))}
         </div>
-        <div className="btn-row">
-          <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : "Pick an AI and a model (or Terminal) for every seat first"}>
-            {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
-          </button>
-        </div>
       </div>
+      <footer className="chooser-foot btn-row">
+        <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : "Pick an AI and a model (or Terminal) for every seat first"}>
+          {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
+        </button>
+      </footer>
     </section>
   );
 }

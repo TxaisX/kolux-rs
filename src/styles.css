@@ -25,24 +25,29 @@ input { font: inherit; }
 .ib.dim { color: var(--fg-icon-dim); }
 
 /* ---- 4. top bar: 35 px fill + 1 px border = 36 px ---- */
-.topbar { position: relative; flex: none; height: 36px; background: var(--surface); border-bottom: 1px solid var(--line-strong); display: flex; align-items: center; }
-.topbar-left { display: flex; align-items: center; height: 100%; padding-left: 4px; }
+/* Three columns: the switcher stays centred while both sides fit, and moves aside rather than
+   cover the search box when the right-hand group is wider than its half. */
+.topbar { position: relative; flex: none; height: 36px; background: var(--surface); border-bottom: 1px solid var(--line-strong); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; }
+.topbar-left { grid-column: 1; display: flex; align-items: center; height: 100%; padding-left: 4px; }
 .topbar-left .mark { color: var(--mark); }
 .topbar-left .dots { margin-left: -1px; }
 .topbar-left .panel { margin-left: 11px; }
 .topbar-left .back { margin-left: 11px; }
 .topbar-left .fwd { margin-left: -2px; }
 
-.switcher { position: absolute; left: 50%; top: 3px; transform: translateX(-50%); height: 30px; width: 210px; display: flex; align-items: center; gap: 2px; padding: 0 3px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; }
+.switcher { grid-column: 2; margin: 0 8px; height: 30px; width: 210px; display: flex; align-items: center; gap: 2px; padding: 0 3px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; }
 .switcher button { height: 24px; padding: 0 12px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--fg-muted); white-space: nowrap; }
 .switcher button:hover { color: var(--fg); }
 .switcher button[aria-pressed="true"] { background: var(--seg-active); color: var(--fg); font-weight: 600; }
 
-.topbar-right { margin-left: auto; display: flex; align-items: center; height: 100%; }
+.topbar-right { grid-column: 3; justify-self: end; display: flex; align-items: center; height: 100%; }
 .topbar-right .panel { margin-right: 12px; }
 .searchbox { display: flex; align-items: center; gap: 6px; width: 190px; height: 28px; padding: 0 6px 0 9px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; color: var(--fg-muted); font-size: 12.5px; margin-right: 8px; }
 .searchbox:hover { border-color: var(--line-focus); }
 .searchbox .ph { flex: 1; text-align: left; }
+/* Narrow windows (down to the 900 px minimum): the search box keeps only its icon, so the window
+   controls stay on screen beside the switcher. */
+@media (max-width: 1100px) { .searchbox { width: auto; } .searchbox > :not(svg) { display: none; } }
 .kbd { display: inline-flex; align-items: center; height: 17px; padding: 0 4px; background: var(--kbd-bg); border: 1px solid var(--kbd-border); border-radius: 4px; font-size: 11px; font-weight: 500; line-height: 1; }
 .kbd-plus { font-size: 10px; margin: 0 -2px; }
 .kbd-part { display: inline-flex; align-items: center; gap: 6px; }
@@ -257,6 +262,7 @@ input { font: inherit; }
 .pane-body { flex: 1; min-height: 0; padding: 4px; }
 .chooser-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; overflow: auto; font-size: 12px; }
 .chooser-body .label { color: var(--fg-muted); margin-right: 4px; }
+.chooser-foot { flex: none; padding: 8px 14px; border-top: 1px solid var(--line-subtle); }
 .count-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .count-row .btn { min-width: 30px; padding: 0 8px; }
 .btn[aria-pressed="true"] { background: var(--row-selected); border-color: var(--line-focus); color: var(--fg); }
