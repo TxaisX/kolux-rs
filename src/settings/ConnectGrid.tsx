@@ -21,11 +21,12 @@ export const taglineOf = (id: ConnectId): string => CONNECT.find((c) => c.id ===
 export type Way = { label: string; onPick: () => void; disabled?: boolean };
 
 /** ACCT-002: an agent's other sign-in methods, behind one small menu next to Connect. */
-export function OtherWays({ ways }: { ways: Way[] }) {
+/** A small menu of choices; a connected card's Manage uses the same menu (ACCT-015). */
+export function OtherWays({ ways, label = "Other ways to connect" }: { ways: Way[]; label?: string }) {
   if (ways.length === 0) return null;
   return (
     <details className="conn-more">
-      <summary className="btn link">Other ways to connect</summary>
+      <summary className="btn link">{label}</summary>
       <div className="conn-more-list" role="menu">
         {ways.map((w) => (
           <button key={w.label} role="menuitem" className="btn" disabled={w.disabled} onClick={w.onPick}>

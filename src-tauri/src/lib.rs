@@ -208,6 +208,7 @@ pub fn run() {
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
             codex_accounts::codex_account_activate,
+            codex_accounts::codex_account_remove,
             files::file_read,
             files::file_write,
             files::md_list,
@@ -240,6 +241,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // ACCT-015: no sign-in or install keeps running after Kolux quits.
+                claude_key::cancel_all(std::time::Duration::from_secs(2));
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
                     let _ = std::fs::remove_file(dir.join(cli::FILE));

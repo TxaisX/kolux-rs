@@ -11,6 +11,7 @@ import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
 import { ConnectGrid, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
+import CloseAsk from "../terminal/CloseAsk";
 import GrokCard from "./GrokCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
@@ -67,12 +68,20 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
   );
 }
 
+/** ACCT-015: the one question before the 1-year key is erased. */
+export const claudeDisconnect = {
+  title: "Disconnect Claude?",
+  body: "Kolux erases the 1-year key it saved for Claude. A Claude sign-in you made yourself, and any managed Claude accounts, stay as they are.",
+  confirm: "Disconnect",
+};
+
 function ClaudeCard() {
   const [status, setStatus] = useState<KeyStatus | null>(null);
   const [own, setOwn] = useState<OwnSignIn | null>(null);
   const [resume, setResume] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
   const read = useCallback(() => {
     invoke<KeyStatus>("claude_key_status")
       .then(setStatus)
@@ -104,8 +113,9 @@ function ClaudeCard() {
     const t = window.setInterval(read, 1000);
     return () => window.clearInterval(t);
   }, [status?.settingUp, read]);
-  const act = (a: KeyAction) => {
+  const act = (a: KeyAction, sure = false) => {
     setError(null);
+    if (a === "disconnect" && !sure) return setAsking(true);
     const command = a === "cancel" ? "claude_key_cancel" : a === "disconnect" ? "claude_key_disconnect" : "claude_key_connect";
     setBusy(a !== "cancel");
     const call = invoke(command);
@@ -120,7 +130,21 @@ function ClaudeCard() {
     setError(null);
     addClaudeAccount().catch((e) => setError(String(e)));
   };
-  return <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />;
+  return (
+    <>
+      <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />
+      {asking && (
+        <CloseAsk
+          {...claudeDisconnect}
+          onCancel={() => setAsking(false)}
+          onConfirm={() => {
+            setAsking(false);
+            act("disconnect", true);
+          }}
+        />
+      )}
+    </>
+  );
 }
 
 const later = <p className="conn-detail">Nothing to set here yet.</p>;

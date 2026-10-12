@@ -267,7 +267,45 @@ pub enum Ended {
 /// ends, `stop` accepts what it printed so far, it runs past `limit` or it is cancelled.
 /// `on_browser` fires once when a browser step shows. Returns the output with colours removed.
 /// Shared by the key setup (ACCT-004) and the managed-account sign-ins (ACCT-005).
+/// ACCT-015: the cancel flag of every hidden sign-in, key setup and install still running, so
+/// quitting Kolux can stop them all.
+static LIVE: Mutex<Vec<Arc<AtomicBool>>> = Mutex::new(Vec::new());
+
+/// Keeps a run listed in [`LIVE`] until it has stopped its program.
+struct Live(Arc<AtomicBool>);
+impl Drop for Live {
+    fn drop(&mut self) {
+        if let Ok(mut l) = LIVE.lock() {
+            l.retain(|f| !Arc::ptr_eq(f, &self.0));
+        }
+    }
+}
+
+fn live_runs() -> usize {
+    LIVE.lock().map(|l| l.len()).unwrap_or(0)
+}
+
+/// ACCT-015, on quit: cancels every connect flow and install that is running and waits up to
+/// `wait` for their programs to be stopped. False when one was still running at the deadline.
+pub fn cancel_all(wait: Duration) -> bool {
+    if let Ok(l) = LIVE.lock() {
+        l.iter().for_each(|f| f.store(true, Ordering::SeqCst));
+    }
+    let deadline = Instant::now() + wait;
+    while live_runs() > 0 {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
 pub fn run_hidden(cmd: CommandBuilder, limit: Duration, cancel: Arc<AtomicBool>, on_browser: impl Fn() + Send + 'static, stop: impl Fn(&str) -> bool) -> (String, Ended) {
+    if let Ok(mut l) = LIVE.lock() {
+        l.push(cancel.clone());
+    }
+    let _live = Live(cancel.clone());
     let output = Arc::new(Mutex::new(String::new()));
     let sink = output.clone();
     let (tx, rx) = mpsc::channel::<Option<u32>>();
@@ -581,5 +619,16 @@ mod tests {
         assert_eq!(out, Outcome::TimedOut);
         let cancel = Arc::new(AtomicBool::new(true));
         assert_eq!(run_setup(ps("Start-Sleep 30"), Duration::from_secs(10), cancel, || {}), Outcome::Cancelled);
+        // ACCT-015, on quit: every running flow is cancelled and its program stopped.
+        assert_eq!(live_runs(), 0);
+        let running = std::thread::spawn(|| run_setup(ps("Start-Sleep 30"), Duration::from_secs(25), Arc::new(AtomicBool::new(false)), || {}));
+        while live_runs() == 0 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let asked = Instant::now();
+        assert!(cancel_all(Duration::from_secs(5)), "the run stopped before the deadline");
+        assert!(asked.elapsed() < Duration::from_secs(3));
+        assert_eq!(running.join().unwrap(), Outcome::Cancelled);
+        assert!(cancel_all(Duration::from_millis(10)), "nothing left to stop");
     }
 }

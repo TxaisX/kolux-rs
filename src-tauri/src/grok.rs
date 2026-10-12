@@ -93,6 +93,8 @@ pub struct GrokSignIn {
 pub struct GrokView {
     /// "cli", "key" or "none".
     connection: &'static str,
+    /// An xAI key Kolux saved, the one thing Disconnect erases (ACCT-015).
+    key_saved: bool,
     signing_in: Option<String>,
     in_browser: bool,
     device_link: Option<String>,
@@ -116,6 +118,7 @@ pub fn grok_status(store: tauri::State<'_, Mutex<Store>>, s: tauri::State<'_, Gr
     let device = s.device.lock().ok().and_then(|d| d.clone());
     Ok(GrokView {
         connection: connection(cli_signed_in(), key_saved),
+        key_saved,
         signing_in: s.running.lock().ok().and_then(|r| r.clone()),
         in_browser: s.in_browser.load(Ordering::SeqCst),
         device_link: device.as_ref().map(|d| d.0.clone()),

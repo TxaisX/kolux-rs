@@ -2,8 +2,9 @@
 // through the browser, "Sign in with a code" shows a link and a one-time code to enter on any
 // device. Each account Kolux adds runs in a private Codex home; the user's own Codex folder is
 // never touched. Without a managed account the card reports Codex's own login as it is. The card
-// is in one state at a time (ACCT-002); the accounts list moving under Manage accounts is T-138,
-// Manage and Disconnect on this card T-202.
+// is in one state at a time (ACCT-002); the accounts list moving under Manage accounts is T-138.
+// Once connected the card shows Manage and Disconnect (ACCT-015): Disconnect removes only an
+// account Kolux made, and for Codex's own login only explains how to sign out in Codex.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attention";
@@ -11,6 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
+import CloseAsk, { type Ask } from "../terminal/CloseAsk";
 
 export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean };
 export type CodexView = {
@@ -25,7 +27,7 @@ export type CodexView = {
   /** Accounts whose home's config.toml no longer agrees with what Kolux wrote (SET-030). */
   drifted: string[];
 };
-export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string } | { kind: "again"; id: string } | { kind: "install" };
+export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string } | { kind: "again"; id: string } | { kind: "install" } | { kind: "disconnect" } | { kind: "remove"; id: string };
 
 const systemLabel: Record<CodexView["systemDefault"], string> = {
   chatgpt: "a ChatGPT sign-in",
@@ -48,6 +50,18 @@ export function codexHeadline(v: CodexView): string {
   if (active) return `Connected · ${active.email ?? "ChatGPT account"}`;
   if (v.systemDefault !== "signed-out") return `Connected · Codex's own login (${systemLabel[v.systemDefault]})`;
   return "Connect with your ChatGPT plan";
+}
+
+/** ACCT-015: what Disconnect asks. Only the active account Kolux made is removed. */
+export function codexDisconnect(v: CodexView): Ask {
+  const active = v.accounts.find((a) => a.id === v.active);
+  if (active)
+    return {
+      title: `Disconnect ${active.email ?? "this ChatGPT account"}?`,
+      body: "Kolux removes this account and deletes the Codex home and saved sign-in it made for it. Your own Codex folder and its login stay as they are.",
+      confirm: "Disconnect",
+    };
+  return { title: "Codex's own login stays", body: "Kolux did not make this sign-in, so Disconnect deletes nothing. To sign out of Codex itself, run codex logout in a terminal.", confirm: null };
 }
 
 export type CodexState = "connecting" | "connected" | "attention" | "disconnected";
@@ -121,7 +135,21 @@ export function CodexCardView({ view, error, pending = false, onAction }: { view
             Cancel
           </button>
         )}
-        {!busy && (
+        {state === "connected" && (
+          <>
+            <OtherWays
+              label="Manage"
+              ways={[
+                { label: "Add account", onPick: () => onAction({ kind: "connect" }), disabled: pending },
+                { label: "Sign in with a code", onPick: () => onAction({ kind: "code" }), disabled: pending },
+              ]}
+            />
+            <button className="btn danger" disabled={pending} onClick={() => onAction({ kind: "disconnect" })}>
+              Disconnect
+            </button>
+          </>
+        )}
+        {!busy && state !== "connected" && (
           <>
             {/* a fix shown above takes Connect's place (ACCT-013: one button that fixes it) */}
             {!fixFor(view.attention, "codex") && (
@@ -154,12 +182,16 @@ export default function CodexCard() {
       .catch(() => {});
     return () => stop();
   }, [read]);
+  const [ask, setAsk] = useState<Ask | null>(null);
   const act = (a: CodexAction) => {
     setError(null);
+    if (a.kind === "disconnect") return view && setAsk(codexDisconnect(view));
     const call =
       a.kind === "cancel"
         ? invoke("codex_account_cancel")
-        : a.kind === "activate"
+        : a.kind === "remove"
+          ? invoke("codex_account_remove", { id: a.id })
+          : a.kind === "activate"
           ? invoke("codex_account_activate", { id: a.id })
           : a.kind === "install"
             ? openInstallPage("codex")
@@ -172,5 +204,19 @@ export default function CodexCard() {
       read();
     });
   };
-  return <CodexCardView view={view} error={error} pending={pending} onAction={act} />;
+  return (
+    <>
+      <CodexCardView view={view} error={error} pending={pending} onAction={act} />
+      {ask && (
+        <CloseAsk
+          {...ask}
+          onCancel={() => setAsk(null)}
+          onConfirm={() => {
+            setAsk(null);
+            if (view?.active) act({ kind: "remove", id: view.active });
+          }}
+        />
+      )}
+    </>
+  );
 }

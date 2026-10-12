@@ -382,6 +382,36 @@ pub fn codex_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Stor
     Ok(())
 }
 
+/// ACCT-015: Disconnect takes a managed account out of Kolux: its listing, the Codex home Kolux
+/// made for it and its sealed copy. Only a home inside Kolux's own accounts folder is deleted;
+/// the user's own Codex folder is never touched.
+pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    let mut list = load(store);
+    let at = list.iter().position(|a| a.id == id).ok_or("That Codex account is no longer listed.")?;
+    let account = list.remove(at);
+    let ours = profile.join(FOLDER).join(id);
+    let plain_id = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if plain_id && Path::new(&account.home) == ours && ours.is_dir() {
+        fs::remove_dir_all(&ours).map_err(|e| format!("Kolux could not delete this account's Codex home: {e}"))?;
+    }
+    if plain_id {
+        let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
+    }
+    store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
+        store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn codex_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: String) -> Result<(), String> {
+    let profile = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    remove(&*store.lock().map_err(|e| e.to_string())?, &profile, &id)?;
+    let _ = app.emit(EVENT, ());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +480,38 @@ mod tests {
         assert_eq!(system_default(None, Some(&user)), "chatgpt");
         let env = temp("default-env");
         assert_eq!(system_default(env.to_str(), Some(&user)), "signed-out", "CODEX_HOME wins over ~/.codex");
+    }
+
+    #[test]
+    fn disconnect_deletes_only_what_kolux_made_for_the_account() {
+        let profile = temp("remove");
+        let own = temp("remove-own").join(".codex");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("auth.json"), token("me@example.com")).unwrap();
+        let before = fs::read(own.join("auth.json")).unwrap();
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        for (id, who) in [("c1", "kim@example.com"), ("c2", "lee@example.com")] {
+            sign_in(&store, &profile, id, 7, |home| {
+                fs::write(home.join("auth.json"), token(who)).unwrap();
+                ("Successfully logged in".into(), Ended::Exited(Some(0)), None)
+            })
+            .unwrap();
+        }
+        let s = store.lock().unwrap();
+        // An entry that points at the user's own folder is unlisted, never deleted.
+        let mut list = load(&s);
+        list.push(Account { id: "mine".into(), email: None, home: own.parent().unwrap().to_string_lossy().into_owned(), last_sign_in: 1, sign_in_error: false });
+        s.set(LIST_KEY, &serde_json::to_string(&list).unwrap()).unwrap();
+        assert_eq!(active_account(&s).map(|a| a.id), Some("c2".into()));
+        remove(&s, &profile, "c2").unwrap();
+        assert!(!profile.join(FOLDER).join("c2").exists() && !profile.join("vault").join("codex-c2.json").exists());
+        assert_eq!(active_account(&s), None, "the removed account is no longer active");
+        assert!(profile.join(FOLDER).join("c1").is_dir() && profile.join("vault").join("codex-c1.json").is_file());
+        remove(&s, &profile, "mine").unwrap();
+        assert_eq!(load(&s).iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["c1"]);
+        assert_eq!(fs::read(own.join("auth.json")).unwrap(), before, "the user's own Codex login is untouched");
+        assert_eq!(system_default(None, own.parent()), "chatgpt");
+        assert!(remove(&s, &profile, "c2").is_err());
     }
 
     #[test]

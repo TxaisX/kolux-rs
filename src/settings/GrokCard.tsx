@@ -1,23 +1,40 @@
 // The Grok card (ACCT-008): Connect runs the Grok CLI's own browser login, "Sign in with a code"
 // shows a link and a one-time code, and "Use an xAI API key" takes a pay-per-use key once, in a
 // small dialog, and stores it sealed. A CLI sign-in wins over a saved key in what the card reports,
-// and a sign-in the user already made shows as connected. Manage and Disconnect are T-202.
+// and a sign-in the user already made shows as connected. Once connected the card shows Manage and
+// Disconnect (ACCT-015): Disconnect erases only the xAI key Kolux saved; the Grok CLI's own
+// sign-in is left alone and the card says how to sign out of Grok itself.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AttentionNote, fixFor, type Attention } from "./Attention";
 import { OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
+import CloseAsk, { type Ask } from "../terminal/CloseAsk";
 
 export type GrokView = {
   connection: "cli" | "key" | "none";
+  /** An xAI key Kolux saved: the one thing Disconnect erases. */
+  keySaved: boolean;
   signingIn: "browser" | "device" | null;
   inBrowser: boolean;
   deviceLink: string | null;
   deviceCode: string | null;
   attention: Attention | null;
 };
-export type GrokAction = "connect" | "code" | "key" | "cancel";
+export type GrokAction = "connect" | "code" | "key" | "cancel" | "disconnect";
+export const KEY_FIELD = "xaiApiKey";
+
+/** ACCT-015: what Disconnect asks. Only the saved xAI key is ever erased. */
+export function grokDisconnect(v: GrokView): Ask {
+  if (v.keySaved)
+    return {
+      title: "Disconnect the xAI key?",
+      body: v.connection === "cli" ? "Kolux erases the xAI API key it saved. Your Grok sign-in stays; to sign out of Grok itself, run grok logout in a terminal." : "Kolux erases the xAI API key it saved. Grok then needs a sign-in or a new key.",
+      confirm: "Disconnect",
+    };
+  return { title: "Grok's own sign-in stays", body: "Kolux did not make this sign-in, so Disconnect deletes nothing. To sign out of Grok itself, run grok logout in a terminal.", confirm: null };
+}
 export type GrokState = "connecting" | "connected" | "attention" | "disconnected";
 
 export function grokState(v: GrokView): GrokState {
@@ -70,6 +87,21 @@ export function GrokCardView({ view, pending, error, onAction }: { view: GrokVie
             Cancel
           </button>
         ) : null}
+        {state === "connected" && (
+          <>
+            <OtherWays
+              label="Manage"
+              ways={[
+                { label: view.connection === "cli" ? "Sign in again" : "Sign in with Grok", onPick: () => onAction("connect"), disabled: pending !== null },
+                { label: "Sign in with a code", onPick: () => onAction("code"), disabled: pending !== null },
+                { label: view.keySaved ? "Replace the xAI API key" : "Use an xAI API key (advanced, pay-per-use)", onPick: () => onAction("key"), disabled: pending !== null },
+              ]}
+            />
+            <button className="btn danger" disabled={pending !== null} onClick={() => onAction("disconnect")}>
+              Disconnect
+            </button>
+          </>
+        )}
         {state === "disconnected" || state === "attention" ? (
           <>
             {!fix && (
@@ -136,6 +168,7 @@ export default function GrokCard() {
   const [pending, setPending] = useState<GrokAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState(false);
+  const [ask, setAsk] = useState<Ask | null>(null);
   const read = useCallback(() => {
     invoke<GrokView>("grok_status")
       .then(setView)
@@ -160,6 +193,7 @@ export default function GrokCard() {
   };
   const act = (a: GrokAction) => {
     if (a === "key") return setDialog(true);
+    if (a === "disconnect") return view && setAsk(grokDisconnect(view));
     run(a, a === "cancel" ? invoke("grok_cancel") : invoke("grok_sign_in", { device: a === "code" }));
   };
   return (
@@ -173,6 +207,16 @@ export default function GrokCard() {
           run("key", invoke("grok_key_set", { key }));
         }}
       />
+      {ask && (
+        <CloseAsk
+          {...ask}
+          onCancel={() => setAsk(null)}
+          onConfirm={() => {
+            setAsk(null);
+            run("disconnect", invoke("secret_clear", { key: KEY_FIELD }));
+          }}
+        />
+      )}
     </>
   );
 }

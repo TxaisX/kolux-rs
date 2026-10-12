@@ -1,13 +1,14 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test, vi } from "vitest";
-import { GrokCardView, GrokKeyDialog, grokHeadline, grokState, type GrokView } from "./GrokCard";
-import { CodexCardView, codexState, type CodexView } from "./CodexCard";
-import { ClaudeCardView } from "./SettingsPage";
+import { GrokCardView, GrokKeyDialog, grokDisconnect, grokHeadline, grokState, type GrokView } from "./GrokCard";
+import CloseAsk from "../terminal/CloseAsk";
+import { CodexCardView, codexDisconnect, codexState, type CodexView } from "./CodexCard";
+import { ClaudeCardView, claudeDisconnect } from "./SettingsPage";
 import type { KeyStatus } from "./claudeKey";
 import { PENDING_MS, settleWithin } from "./pending";
 
-const off: GrokView = { connection: "none", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null };
+const off: GrokView = { connection: "none", keySaved: false, signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null };
 const html = (view: GrokView, pending: "connect" | null = null) => renderToString(createElement(GrokCardView, { view, pending, onAction: () => {} }));
 const refused = { reason: "sign-in-refused" as const, message: "Grok's sign-in ended without signing in: expired", resetsAt: null };
 
@@ -104,4 +105,39 @@ test("seven ways to connect exist across the three cards (ACCT-002 compat)", () 
   ];
   for (const [card, way] of ways) expect(card).toContain(way);
   for (const card of [claude, codex, grok]) expect(card).toContain("Other ways to connect");
+});
+
+test("a connected Codex or Grok card shows Manage and Disconnect, and Disconnect erases only what Kolux made (ACCT-015)", () => {
+  const kim = { id: "c1", email: "kim@example.com", home: "h1", lastSignIn: 1, signInError: false };
+  const cxOff: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [] };
+  const codex = (v: CodexView) => renderToString(createElement(CodexCardView, { view: v, onAction: () => {} }));
+  const managed = { ...cxOff, accounts: [kim], active: "c1" };
+  for (const b of [">Manage<", ">Disconnect<", "Add account", "Sign in with a code"]) expect(codex(managed)).toContain(b);
+  expect(codex(cxOff)).not.toContain(">Disconnect<");
+  expect(codexDisconnect(managed)).toMatchObject({ title: "Disconnect kim@example.com?", confirm: "Disconnect" });
+  const own = codexDisconnect({ ...cxOff, systemDefault: "chatgpt" });
+  expect(own.confirm).toBeNull();
+  expect(own.body).toContain("deletes nothing");
+  expect(own.body).toContain("codex logout");
+
+  for (const b of [">Manage<", ">Disconnect<", "Sign in again"]) expect(html({ ...off, connection: "cli" })).toContain(b);
+  expect(html(off)).not.toContain(">Disconnect<");
+  expect(html({ ...off, connection: "key", keySaved: true })).toContain("Replace the xAI API key");
+  const cliOnly = grokDisconnect({ ...off, connection: "cli" });
+  expect(cliOnly.confirm).toBeNull();
+  expect(cliOnly.body).toContain("grok logout");
+  const both = grokDisconnect({ ...off, connection: "cli", keySaved: true });
+  expect(both.confirm).toBe("Disconnect");
+  expect(both.body).toContain("Grok sign-in stays");
+  expect(grokDisconnect({ ...off, connection: "key", keySaved: true }).confirm).toBe("Disconnect");
+  expect(claudeDisconnect.body).toContain("1-year key");
+});
+
+test("the Disconnect question asks with Cancel, or only explains with a single OK", () => {
+  const ask = (confirm: string | null) => renderToString(createElement(CloseAsk, { title: "t", body: "b", confirm, onConfirm: () => {}, onCancel: () => {} }));
+  expect(ask("Disconnect")).toContain(">Cancel<");
+  expect(ask("Disconnect")).toContain(">Disconnect<");
+  expect(ask(null)).toContain(">OK<");
+  expect(ask(null)).not.toContain(">Cancel<");
+  expect(renderToString(createElement(CloseAsk, { title: "t", body: "b", onConfirm: () => {}, onCancel: () => {} }))).toContain(">Close tab<");
 });

@@ -334,7 +334,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [ ] T-200 · PROJ-002 The Add Project dialog opens on cloning, with browse and create one step away
 - [ ] T-201 · SESS-017 Featured agent cards show what is missing and how to set it up · SESS-019 The older launch dialog with starter kits and a folded Advanced section
-- [ ] T-202 · ACCT-015 Disconnect removes only what Kolux made · also from T-092-b: a connected Codex or Grok card shows "Manage" and "Disconnect" beside its account label, as the Claude key card already does; Grok's Disconnect clears only the xAI key Kolux saved and leaves the Grok CLI's own sign-in alone
+- [x] T-202 · ACCT-015 Disconnect removes only what Kolux made · also from T-092-b: a connected Codex or Grok card shows "Manage" and "Disconnect" beside its account label, as the Claude key card already does; Grok's Disconnect clears only the xAI key Kolux saved and leaves the Grok CLI's own sign-in alone
 - [ ] T-203 · GIT-061 Turn a plain folder into a Git repository
 - [ ] T-204 · SKILL-001 Six ready-made starter kits for common business jobs · SKILL-002 Starter kit gallery and its entry points · SKILL-003 Kit roles go to the AIs the user has connected · SKILL-004 Kit setup dialog gathers inputs and stops bad files · SKILL-005 Try a kit on bundled sample data, and recall past inputs
 - [ ] T-205 · SKILL-006 Starting a kit opens one titled session per role · SKILL-007 [compat] Every kit seat works under the same plain rules · SKILL-008 A waiting kit role starts once the role it depends on is done · SKILL-009 Kit results strip above the session grid · SKILL-010 Each kit role row says what its AI is up to
