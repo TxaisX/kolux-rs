@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EditorState, type Transaction } from "@codemirror/state";
-import { attach, detach, isDirty, keyOf, loadText, relay, replaceAll, sameText, save, subscribe, type View } from "./buffers";
+import { history, undo } from "@codemirror/commands";
+import { attach, detach, diskNews, isDirty, keepMine, keyOf, loadText, relay, replaceAll, sameText, save, subscribe, type View } from "./buffers";
 
 /** A stand-in for an editor view: a state that takes transactions and reports them to the buffer. */
 function fakeView(path: string, text: string, eol?: string): View & { type: (at: number, s: string) => void } {
@@ -112,5 +113,59 @@ describe("loading (EDIT-001)", () => {
     await expect(loadText(async () => (++n < 3 ? Promise.reject(new Error("busy")) : "ok"), 3, 1)).resolves.toBe("ok");
     n = 0;
     await expect(loadText(async () => Promise.reject(new Error(`no ${++n}`)), 3, 1)).rejects.toThrow("no 3");
+  });
+});
+
+describe("disk changes under an open file (EDIT-003)", () => {
+  it("a tab without edits takes the new disk copy; one with edits gets the banner", async () => {
+    const a = fakeView("/w/clean.ts", "one\n");
+    attach("/w/clean.ts", a, "one\n");
+    expect(diskNews("/w/clean.ts", "one\n")).toBe("same");
+    expect(diskNews("/w/clean.ts", "two\n")).toBe("take");
+    const b = fakeView("/w/edited.ts", "one\n");
+    attach("/w/edited.ts", b, "one\n");
+    b.type(0, "mine ");
+    expect(diskNews("/w/edited.ts", "agent\n")).toBe("conflict");
+    // Keep my edits: the new disk copy is known, so it raises nothing again, and the tab stays unsaved.
+    keepMine("/w/edited.ts", "agent\n");
+    expect(diskNews("/w/edited.ts", "agent\n")).toBe("same");
+    expect(isDirty("/w/edited.ts")).toBe(true);
+    detach("/w/clean.ts", a);
+    detach("/w/edited.ts", b);
+  });
+
+  it("Kolux's own save never raises the banner, even when the disk is read mid-save", async () => {
+    const v = fakeView("/w/own.ts", "one\n");
+    attach("/w/own.ts", v, "one\n");
+    v.type(0, "x");
+    let seen = "";
+    await save("/w/own.ts", async (text) => {
+      v.type(0, "y"); // typing goes on while the save is under way
+      seen = diskNews("/w/own.ts", text);
+    });
+    expect(seen).toBe("same");
+    expect(diskNews("/w/own.ts", "xone\n")).toBe("same");
+    detach("/w/own.ts", v);
+  });
+
+  it("Reload goes into the undo history, so undo brings the edits back", () => {
+    const path = "/w/undo.ts";
+    const v = {
+      state: EditorState.create({ doc: "one\n", extensions: [history()] }),
+      dispatch(spec: Parameters<View["dispatch"]>[0] | Transaction) {
+        const tr = "startState" in spec ? spec : v.state.update(spec);
+        v.state = tr.state;
+        relay(path, v, tr);
+      },
+    };
+    attach(path, v, "one\n");
+    v.dispatch(v.state.update({ changes: { from: 0, insert: "mine " } }));
+    replaceAll(path, "agent\n");
+    expect(v.state.sliceDoc()).toBe("agent\n");
+    expect(isDirty(path)).toBe(false);
+    undo({ state: v.state, dispatch: (tr) => v.dispatch(tr) });
+    expect(v.state.sliceDoc()).toBe("mine one\n");
+    expect(isDirty(path)).toBe(true);
+    detach(path, v);
   });
 });

@@ -5,16 +5,20 @@
 // three times, then the body says why and offers Retry; a failed save is a toast and the
 // marker stays. A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
 // Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
+// EDIT-003: a tab on show looks at its file every 1.5 s; a new disk copy is taken quietly when
+// there are no unsaved edits, and raises a banner (Reload, Keep my edits, Compare) when there are.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
+import { undo } from "@codemirror/commands";
+import { MergeView } from "@codemirror/merge";
 import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
-import { attach, baseName, detach, isDirty, loadText, relay, save, subscribe } from "./buffers";
+import { attach, baseName, detach, diskNews, isDirty, keepMine, loadText, relay, replaceAll, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
@@ -56,6 +60,13 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
   const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
   const [richError, setRichError] = useState<string | null>(null);
   const [richTries, setRichTries] = useState(0);
+  // EDIT-003: the disk copy that moved under unsaved edits, the Compare view, the undo offer.
+  const [moved, setMoved] = useState<string | null>(null);
+  const [compare, setCompare] = useState<{ disk: string | null; error?: string } | null>(null);
+  const [undoOffer, setUndoOffer] = useState(false);
+  const stamp = useRef<string | null>(null);
+  const reads = useRef(0);
+  const compareHost = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -76,6 +87,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr)))],
         });
         view.current = made;
+        stamp.current = null;
         attach(path, made, text);
         setReady((n) => n + 1);
         // A newly opened file takes the keyboard at once.
@@ -90,6 +102,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     editors.set(id, async () => {
       try {
         await save(path, (text) => invoke("file_write", { path, text }));
+        setMoved(null); // saving over a moved disk copy is keeping the edits
       } catch (err) {
         report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
       }
@@ -111,7 +124,51 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     setMode(isMarkdown(path) ? "rich" : "source");
     setBigOk(false);
     setBanner(null);
+    setMoved(null);
+    setCompare(null);
+    setUndoOffer(false);
   }, [path]);
+
+  // EDIT-003: while the tab is on show its file's stamp is looked at every 1.5 s and the file is
+  // read only when the stamp moves; a background tab looks when it is next brought forward.
+  // ponytail: polling, not a file watcher; a watcher (notify crate) if many tabs make it costly.
+  useEffect(() => {
+    if (!ready || hidden) return;
+    let alive = true;
+    const peek = async () => {
+      const s = await invoke<string>("file_stamp", { path }).catch(() => null);
+      if (!alive || s === null || s === stamp.current) return;
+      stamp.current = s;
+      const seq = ++reads.current;
+      const text = await invoke<string>("file_read", { path }).catch(() => null);
+      // A read that finishes after a newer one started is thrown away.
+      if (!alive || text === null || seq !== reads.current) return;
+      const news = diskNews(path, text);
+      if (news === "take") replaceAll(path, text);
+      else if (news === "conflict") setMoved(text);
+    };
+    void peek();
+    const t = window.setInterval(() => void peek(), 1500);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, [ready, hidden, path]);
+
+  useEffect(() => {
+    if (!undoOffer) return;
+    const t = window.setTimeout(() => setUndoOffer(false), 8000);
+    return () => window.clearTimeout(t);
+  }, [undoOffer]);
+
+  // EDIT-003 Compare: the disk copy on the left, the buffer on the right.
+  useEffect(() => {
+    const cm = view.current;
+    if (!compare || compare.disk === null || !cm || !compareHost.current) return;
+    const ro = [basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), EditorState.readOnly.of(true), EditorView.editable.of(false)];
+    const m = new MergeView({ a: { doc: compare.disk, extensions: ro }, b: { doc: cm.state.sliceDoc(), extensions: ro }, parent: compareHost.current, gutter: true });
+    return () => m.destroy();
+  }, [compare]);
 
   // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
   useEffect(() => {
@@ -160,6 +217,32 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     if (rich.current) rich.current.editor.focus();
     else view.current?.focus();
   }, [focused, hidden]);
+
+  // Reload always reads the file afresh; the swap is one undo step, offered back in a notice.
+  const reload = async () => {
+    const seq = ++reads.current;
+    try {
+      const text = await invoke<string>("file_read", { path });
+      if (seq !== reads.current) return;
+      replaceAll(path, text);
+      setMoved(null);
+      setCompare(null);
+      setUndoOffer(true);
+    } catch (err) {
+      report.current.onToast?.(`${baseName(path)} could not be read: ${String(err)}`);
+    }
+  };
+  const keep = () => {
+    const disk = compare?.disk ?? moved;
+    if (disk !== null) keepMine(path, disk);
+    setMoved(null);
+    setCompare(null);
+  };
+  const openCompare = () =>
+    invoke<string>("file_read", { path }).then(
+      (disk) => setCompare({ disk }),
+      (err) => setCompare({ disk: null, error: String(err) }),
+    );
 
   const name = baseName(path);
   const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
@@ -221,6 +304,55 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           )}
         </div>
       )}
+      {moved !== null && !compare && (
+        <div className="notice disk-moved" role="alert">
+          {name} changed on disk while you have unsaved edits.
+          <button className="btn" onClick={() => void reload()}>
+            Reload
+          </button>
+          <button className="btn" onClick={keep}>
+            Keep my edits
+          </button>
+          <button className="btn" onClick={() => void openCompare()}>
+            Compare
+          </button>
+        </div>
+      )}
+      {undoOffer && (
+        <div className="notice disk-undo" role="status">
+          Reloaded {name} from disk.
+          <button
+            className="btn"
+            onClick={() => {
+              if (view.current) undo(view.current);
+              setUndoOffer(false);
+            }}
+          >
+            Undo
+          </button>
+        </div>
+      )}
+      {compare && (
+        <div className="disk-compare" role="dialog" aria-label={`Compare ${name}`}>
+          <div className="disk-compare-head">
+            <span>On disk</span>
+            <span>Your edits</span>
+            <button className="btn" onClick={() => void reload()}>
+              Reload
+            </button>
+            <button className="btn" onClick={keep}>
+              Keep my edits
+            </button>
+          </div>
+          {compare.disk === null ? (
+            <div className="notice load-failed" role="alert">
+              The disk copy could not be read: {compare.error}
+            </div>
+          ) : (
+            <div ref={compareHost} className="pane-body diff-body" />
+          )}
+        </div>
+      )}
       {shown === "error" && (
         <div className="notice load-failed" role="alert">
           The rich view did not start: {richError}
@@ -229,8 +361,8 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           </button>
         </div>
       )}
-      <div ref={host} className="pane-body" hidden={shown !== "source"} />
-      {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich"} aria-label={`${name}, rich view`} />}
+      <div ref={host} className="pane-body" hidden={shown !== "source" || !!compare} />
+      {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich" || !!compare} aria-label={`${name}, rich view`} />}
     </section>
   );
 }

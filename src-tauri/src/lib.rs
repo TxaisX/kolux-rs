@@ -288,6 +288,7 @@ pub fn run() {
             kits::kit_prepare,
             kits::kit_open_results,
             files::file_read,
+            files::file_stamp,
             files::file_write,
             files::md_list,
             artifacts::artifacts_list,

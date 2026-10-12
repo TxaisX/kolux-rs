@@ -3,12 +3,13 @@
 // buffer remembers what is on disk, so a tab is unsaved only while its text differs from that by
 // more than trailing whitespace; a save writes the file once and leaves every view clean.
 import { Annotation, type Transaction, type ChangeSet, type EditorState } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 
 /** Marks a change Kolux made itself (a copy from the twin view, a reload), not the user's typing. */
 export const synced = Annotation.define<boolean>();
 
 /** The part of an editor view a buffer needs; EditorView fits it, and the tests use plain states. */
-export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string }; annotations: Annotation<boolean> }) => void };
+export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string }; annotations: Annotation<boolean> | readonly Annotation<unknown>[] }) => void };
 
 /** Text equal to the disk copy except for whitespace at the ends of lines (and of the file). */
 export function sameText(a: string, b: string): boolean {
@@ -35,7 +36,8 @@ export const keyOf = (path: string) => (/^[a-z]:[\\/]/i.test(path) ? path.replac
 export const baseName = (path: string) => path.split(/[\\/]/).pop() || path;
 
 // sliceDoc, not doc.toString(): it joins lines with the file's own line end (CRLF stays CRLF).
-type Buffer = { disk: string; views: Set<View>; listeners: Set<() => void> };
+// `wrote` is the text of Kolux's latest save, so reading it back from disk is never news (EDIT-003).
+type Buffer = { disk: string; wrote?: string; views: Set<View>; listeners: Set<() => void> };
 const buffers = new Map<string, Buffer>();
 
 function buf(path: string): Buffer {
@@ -84,16 +86,34 @@ export async function save(path: string, write: (text: string) => Promise<void>)
   const v = [...b.views][0];
   if (!v) return;
   const text = v.state.sliceDoc();
+  b.wrote = text;
   await write(text);
   b.disk = text;
   tell(b);
 }
 
-/** Text Kolux puts in itself (a reload): every view shows it and none is unsaved. */
+/** Text Kolux puts in itself (a reload): every view shows it and none is unsaved. It is one step
+ *  of its own in each view's undo history, so undo brings back what was there (EDIT-003). */
 export function replaceAll(path: string, text: string): void {
   const b = buf(path);
   b.disk = text;
-  for (const v of b.views) if (v.state.sliceDoc() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, annotations: synced.of(true) });
+  for (const v of b.views) if (v.state.sliceDoc() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, annotations: [synced.of(true), isolateHistory.of("full")] });
+  tell(b);
+}
+
+/** EDIT-003: what a fresh read of the disk means for this file: nothing new (Kolux's own save, or
+ *  a copy already known), a new copy a tab without edits takes quietly, or one that conflicts with
+ *  unsaved edits and gets the banner. */
+export function diskNews(path: string, text: string): "same" | "take" | "conflict" {
+  const b = buffers.get(keyOf(path));
+  if (!b || text === b.disk || text === b.wrote) return "same";
+  return isDirty(path) ? "conflict" : "take";
+}
+
+/** EDIT-003 Keep my edits: the new disk copy is known (no banner for it again); the edits stay unsaved. */
+export function keepMine(path: string, disk: string): void {
+  const b = buf(path);
+  b.disk = disk;
   tell(b);
 }
 

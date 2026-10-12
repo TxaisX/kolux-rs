@@ -35,6 +35,19 @@ pub fn file_write(path: String, text: String) -> Result<(), String> {
     write_text(Path::new(&path), &text)
 }
 
+/// EDIT-003: a cheap fingerprint of the file on disk (modified time and size). Open tabs poll it
+/// and read the file only when it moves.
+pub fn stamp(path: &Path) -> Result<String, String> {
+    let m = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let at = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+    Ok(format!("{at}:{}", m.len()))
+}
+
+#[tauri::command]
+pub fn file_stamp(path: String) -> Result<String, String> {
+    stamp(Path::new(&path))
+}
+
 /// The worktree's markdown files for the Mod+Shift+O picker (EDIT-012), at most 2000 of them.
 #[derive(serde::Serialize)]
 pub struct Notes {
@@ -273,6 +286,19 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn edit003_the_stamp_moves_when_the_file_is_rewritten() {
+        let d = temp_dir("stamp");
+        let f = d.join("a.txt");
+        write_text(&f, "one").unwrap();
+        let first = stamp(&f).unwrap();
+        assert_eq!(stamp(&f).unwrap(), first);
+        write_text(&f, "one two").unwrap();
+        assert_ne!(stamp(&f).unwrap(), first, "a different size is a different stamp");
+        assert!(stamp(&d.join("gone.txt")).is_err());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -161,7 +161,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-070 · USAGE-023 Usage figures refresh on a timer and ride out errors
 - [ ] T-071 · ORCH-012 [compat] Changing a task's state, with guards that keep tasks and workers in step · ORCH-022 [compat] Stop a worker and keep its worktree
 - [ ] T-072 · AUTO-012 [compat] Every run ends with a truthful status
-- [ ] T-073 · EDIT-003 Banner when a file you have open is changed on disk by an agent
+- [x] T-073 · EDIT-003 Banner when a file you have open is changed on disk by an agent
 - [ ] T-074 · BROW-008 Pages that fail to load get a recovery overlay · BROW-009 Crashed pages recover by themselves
 - [ ] T-075 · APP-048 [compat] Everything the user set up is saved as they go and survives quits and updates · APP-050 Quitting writes one final save without freezing · APP-052 Terminals survive app restarts and a replaced terminal service · also from T-093-a: keep each worktree's open editor tabs so they come back after a restart · also from T-097: when only the background terminal service is running with no window, kolux open waits for it to show the desktop window, and fails with a clear reason when it cannot safely become the desktop app
 - [ ] T-076 · CLI-012 [compat] kolux status tells whether the app is up

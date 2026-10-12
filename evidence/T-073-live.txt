@@ -1,0 +1,27 @@
+T-073 (EDIT-003, an open file changed on disk) live proof, 2026-10-12, lane release, dev build on port 1422, CDP 9232.
+Throwaway project G:\Temp\release-T-073\repo (one file, notes.ts, 3 lines). Lane profile backed up first and
+restored afterwards (settings.json, state.db, state.db-wal, state.db-shm: cmp same).
+
+notes.ts opened from the Explorer in an editor tab; typed "// my unsaved edit" on line 2 without saving
+(unsaved dot on). The file was rewritten from a shell (b = 20, a new line d = 4) at 12:10:59.060;
+the banner was on screen at 12:10:59.538 (0.5 s):
+  "notes.ts changed on disk while you have unsaved edits. [Reload] [Keep my edits] [Compare]"
+  (T-073-banner.png)
+Compare: the editor body hidden, a side-by-side view (T-073-compare.png):
+  left  "On disk"    export const a = 1; / export const b = 20; // changed by an agent / export const c = 3; / export const d = 4;
+  right "Your edits" export const a = 1; / / my unsaved edit export const b = 2; / export const c = 3;
+  3 changed lines marked; the head carries Reload and Keep my edits.
+Reload (from Compare): the buffer became the disk copy, unsaved dot off, banner and Compare closed, and the
+  notice "Reloaded notes.ts from disk. [Undo]" showed (T-073-reloaded.png).
+Undo: the typed edits came back as unsaved edits, no banner, and none 3 s later (T-073-undone.png).
+A second outside write ("export const a = 100; // second agent write") raised the banner again within 2 s.
+Keep my edits: banner gone and not back 3.5 s later; the edits stayed unsaved; disk untouched.
+Ctrl+S from Kolux: unsaved dot off, no banner 3.5 s later (Kolux's own write is not news); the disk held the edits.
+An outside write while the tab had no edits was taken quietly within 2.5 s: the buffer showed
+  "export const quiet = true; ...", no banner, no unsaved dot (T-073-clean-taken.png).
+
+Not proven here (cards not built): autosave holding back while the banner is up (EDIT-002, T-177) and the
+restored-draft comparison after a restart (EDIT-004, T-177). DT-R45.
+Not exercised live: Compare when the disk copy cannot be read (the code shows the read error in place of the
+left side), and a background tab (it does not look at disk while hidden, and looks once it is brought forward).
+The undo offer is a notice inside the tab, not an app toast, because the app's toast carries no button (DT-R45).
