@@ -80,6 +80,18 @@ pub fn providers() -> Vec<Provider> {
     ]
 }
 
+/// ORCH-019: a model name Kolux knows for one provider is turned away for an agent of another, so a
+/// worker never changes provider; a name it does not know is left to the agent, and agents that
+/// cannot route (Cursor runs several makers' models) take any name.
+pub fn model_fits(agent: &str, model: &str) -> Result<(), String> {
+    let all = providers();
+    let Some(mine) = all.iter().find(|p| p.id == agent) else { return Ok(()) };
+    match all.iter().find(|p| p.models.iter().any(|m| m.id.eq_ignore_ascii_case(model.trim()))) {
+        Some(owner) if owner.id != agent => Err(format!("{} is a {} model, not a {} one", model.trim(), owner.name, mine.name)),
+        _ => Ok(()),
+    }
+}
+
 /// The model and effort a tier means for a provider: the user's pick when there is one, else the
 /// shipped ladder. An effort the chosen model does not take is dropped. `None` model means the
 /// provider's default. Errors name a provider that cannot route or a tier that does not exist.
@@ -145,5 +157,15 @@ mod tests {
         assert_eq!(r(&saved, "codex", "build"), (None, None));
         assert!(route(&saved, "gemini", "build").unwrap_err().contains("no model route"));
         assert!(route(&saved, "claude", "huge").unwrap_err().contains("no huge tier"));
+    }
+
+    #[test]
+    fn a_model_of_another_provider_is_turned_away() {
+        assert_eq!(model_fits("codex", "sonnet").unwrap_err(), "sonnet is a Claude Code model, not a Codex one");
+        assert!(model_fits("claude", "gpt-6-sol").unwrap_err().contains("Codex model"));
+        assert!(model_fits("claude", "Sonnet").is_ok());
+        assert!(model_fits("codex", "gpt-6-sol").is_ok());
+        assert!(model_fits("codex", "some-new-model").is_ok(), "an unknown name is left to the agent");
+        assert!(model_fits("cursor", "sonnet").is_ok(), "Cursor runs models of several makers");
     }
 }

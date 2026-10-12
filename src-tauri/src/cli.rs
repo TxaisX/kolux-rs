@@ -85,7 +85,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble"];
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
@@ -516,8 +516,11 @@ fn check_worker_start(flags: &Map<String, Value>) -> Result<(), Fail> {
         _ => {}
     }
     let (agent, terminal, tier) = (text("agent"), text("terminal"), text("tier"));
-    if agent.is_none() && terminal.is_none() && tier.is_none() {
-        return Err(Fail::args("say who runs it: --agent <id>, --tier major|deep|build|light, or --terminal <handle>"));
+    if text("effort").is_some() && text("model").is_none() {
+        return Err(Fail::args("--effort needs --model"));
+    }
+    if agent.is_none() && terminal.is_none() && tier.is_none() && text("model").is_none() {
+        return Err(Fail::args("say who runs it: --agent <id>, --model <name>, --tier major|deep|build|light, or --terminal <handle>"));
     }
     if let Some(t) = tier {
         if !TIERS.contains(&t) {
@@ -526,9 +529,6 @@ fn check_worker_start(flags: &Map<String, Value>) -> Result<(), Fail> {
         if text("model").is_some() || text("effort").is_some() {
             return Err(Fail::args("a tier picks the model and effort; drop --model and --effort, or drop the tier"));
         }
-    }
-    if text("effort").is_some() && text("model").is_none() {
-        return Err(Fail::args("--effort needs --model"));
     }
     if terminal.is_some() && (text("model").is_some() || text("effort").is_some() || tier.is_some()) {
         return Err(Fail::args("a reused terminal keeps its own model: --terminal cannot go with --model, --effort or --tier"));
@@ -727,18 +727,29 @@ fn text_of(command: &str, r: &Value) -> String {
 }
 
 /// One line per message, its body under it, and the command that answers it (ORCH-006).
+/// ORCH-009: each message as a banner: a HIGH or URGENT tag, its kind and id, the sender (agent
+/// name and handle), subject, body, payload and the reply command, then its own dividing line.
 fn mail_lines(msgs: &[Value], out: &mut Vec<String>) {
     for m in msgs {
         let g = |k: &str| m[k].as_str().unwrap_or_default();
-        let p = m["priority"].as_str().unwrap_or("normal");
-        let mark = if p == "normal" { String::new() } else { format!("[{}] ", p.to_uppercase()) };
-        out.push(format!("{mark}{} from {} ({}): {}", g("id"), g("from"), g("type"), g("subject")));
-        if !g("body").is_empty() {
-            out.push(format!("  {}", g("body")));
+        let tag = match g("priority") {
+            "high" => "[HIGH] ",
+            "urgent" => "[URGENT] ",
+            _ => "",
+        };
+        let from = match g("fromAgent") {
+            "" => g("from").to_string(),
+            name => format!("{name} ({})", g("from")),
+        };
+        out.push(format!("{tag}{} {} from {from}: {}", g("type"), g("id"), g("subject")));
+        out.extend(g("body").lines().map(|l| format!("  {l}")));
+        if !m["payload"].is_null() {
+            out.push(format!("  payload: {}", m["payload"]));
         }
         if !g("reply").is_empty() {
             out.push(format!("  reply: {}", g("reply")));
         }
+        out.push("-".repeat(60));
     }
 }
 
@@ -1457,7 +1468,8 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         SEND => {
             let p = need()?;
             let dispatches = load_list(&store, DISPATCHES_KEY);
-            m.once(retry, |m| m.send(&p, a, &dispatches, &|h| ctx.terminals.live(h), now_ms()))?
+            let peers = peers(ctx);
+            m.once(retry, |m| m.post(&p, a, &dispatches, &peers, now_ms()))?
         }
         CHECK => {
             let p = need()?;
@@ -1642,6 +1654,30 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
 
 /// ORCH-013: the agent Kolux started in pane `h`, once it is up; a shell, or a program Kolux does
 /// not know, is none.
+/// ORCH-004: every open terminal with the agent Kolux started in it (none for a shell; a pane title
+/// plays no part) and whether it has been quiet for `IDLE`.
+fn peers(ctx: &Ctx) -> Vec<crate::orchestration::Peer> {
+    let credited = |p: &str| match p.starts_with('"') {
+        true => crate::agents::credited_agent(p),
+        false => crate::agents::credited_agent(&format!("\"{p}\"")),
+    };
+    ctx.terminals
+        .sessions()
+        .into_iter()
+        .map(|(handle, dir, program)| {
+            let agent = program.as_deref().filter(|p| !p.trim().is_empty()).and_then(credited).map(str::to_string);
+            let idle = ctx.terminals.program_of(&handle, IDLE).is_some();
+            crate::orchestration::Peer { handle, agent, idle, dir }
+        })
+        .collect()
+}
+
+/// The agent Kolux started in the calling pane. Unlike `pane_agent` it does not wait for the pane
+/// to go quiet: the caller is busy echoing and running this very command.
+fn own_agent(ctx: &Ctx, h: &str) -> Option<String> {
+    peers(ctx).into_iter().find(|p| p.handle == h).and_then(|p| p.agent)
+}
+
 fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
     let p = ctx.terminals.program_of(h, SETTLE)?;
     let stem = Path::new(&p).file_stem()?.to_string_lossy().to_lowercase();
@@ -1674,6 +1710,9 @@ const DISPATCHES_KEY: &str = "orchestration.dispatches";
 /// ponytail: an idle detector comes with the status cards (STAT); first output is the honest
 /// floor until then.
 const SETTLE: Duration = Duration::from_millis(1000);
+/// ORCH-004: an agent that has written nothing for this long counts as idle for @idle.
+// ponytail: output quiet stands in for the idle detector of the STAT status cards.
+const IDLE: Duration = Duration::from_secs(3);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn load_list(store: &Store, key: &str) -> Vec<Value> {
@@ -1742,7 +1781,7 @@ fn reuse(ctx: &Ctx, req: &Request, to: &str) -> Result<Value, Fail> {
         return Err(Fail::new("wrong_worktree", format!("{to} is not running in {}", w.path)));
     }
     let theirs = pane_agent(ctx, to).ok_or_else(|| Fail::new("not_an_agent", format!("{to} is not running an agent Kolux recognises, or the agent has not finished starting")))?;
-    let mine = caller(ctx, req)?.and_then(|h| pane_agent(ctx, &h));
+    let mine = caller(ctx, req)?.and_then(|h| own_agent(ctx, &h));
     if let Some(other) = [text("agent"), mine].into_iter().flatten().find(|m| *m != theirs) {
         return Err(Fail::new("agent_mismatch", format!("{to} runs {theirs}; a worker runs the coordinator's own agent ({other})")));
     }
@@ -1801,9 +1840,13 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let tier = text("tier");
     // ORCH-018: a tier runs on the coordinator's own agent, when Kolux started one in its pane.
     let agent_id = match &tier {
-        Some(_) => crate::orchestration::tier_agent(text("agent").as_deref(), coordinator.as_deref().and_then(|h| pane_agent(ctx, h)).as_deref(), &default)?,
-        None => text("agent").unwrap_or(default),
+        Some(_) => crate::orchestration::tier_agent(text("agent").as_deref(), coordinator.as_deref().and_then(|h| own_agent(ctx, h)).as_deref(), &default)?,
+        // ORCH-019: with no tier the worker takes the coordinator's own agent unless one is named.
+        None => text("agent").or_else(|| coordinator.as_deref().and_then(|h| own_agent(ctx, h))).unwrap_or(default),
     };
+    if let (None, Some(m)) = (&tier, text("model")) {
+        crate::routing::model_fits(&agent_id, &m).map_err(Fail::args)?;
+    }
     let agent = installed_agent(&agent_id)?;
     // ORCH-018 / SET-028: a tier means the model and effort picked for it in model routing.
     let (model, effort) = match &tier {
@@ -2149,6 +2192,9 @@ mod tests {
         let p = p.unwrap().unwrap();
         assert_eq!(p.args["timeoutMs"], "5000");
         assert_eq!(p.args["taskTitle"], "T");
+        // ORCH-019: a model alone says who runs it, on the coordinator's own agent.
+        let (_, p) = parse(&words("orchestration worker-start --spec x --model opus --effort high"));
+        assert_eq!(p.unwrap().unwrap().args["model"], "opus");
         let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
         assert!(refused("orchestration worker-start --agent claude").contains("--spec"));
         assert!(refused("orchestration worker-start --task t --spec x --agent claude").contains("one of"));
@@ -2156,6 +2202,7 @@ mod tests {
         assert!(refused("orchestration worker-start --spec x --agent claude --worktree current --base-branch main").contains("--base-branch"));
         assert!(refused("orchestration worker-start --spec x --agent claude --worktree name:other --name n").contains("--name"));
         assert!(refused("orchestration worker-start --spec x --agent claude --effort high").contains("--model"));
+        assert!(refused("orchestration worker-start --spec x --effort high").contains("--effort needs --model"));
         assert!(refused("orchestration worker-start --spec x --tier deep --model opus").contains("tier"));
         assert!(refused("orchestration worker-start --spec x --tier huge").contains("major, deep, build or light"));
         assert!(refused("orchestration worker-start --spec x --terminal t1 --model opus").contains("--terminal"));
@@ -2560,5 +2607,19 @@ mod tests {
         assert_eq!(polled["scope"]["repos"][0]["scan"], "degraded");
         assert_eq!(polled["scope"]["repos"][0]["cached"], true, "the failure is remembered: {}", polled["scope"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mail_reads_as_a_banner() {
+        let msgs = vec![
+            json!({ "id": "msg-3", "from": "term-2", "fromAgent": "Claude Code", "type": "status", "priority": "urgent", "subject": "stop", "body": "halt now", "payload": { "n": 1 }, "reply": "kolux orchestration reply --id msg-3 --body x" }),
+            json!({ "id": "msg-4", "from": "term-5", "type": "question", "priority": "normal", "subject": "which?", "body": "", "reply": "kolux orchestration reply --id msg-4 --body y" }),
+        ];
+        let mut out = Vec::new();
+        mail_lines(&msgs, &mut out);
+        let text = out.join("\n");
+        assert!(text.contains("[URGENT]") && text.contains("Claude Code (term-2)") && text.contains("payload: {\"n\":1}"), "{text}");
+        assert!(text.contains("--id msg-3") && text.contains("from term-5") && !text.contains("[NORMAL]"), "{text}");
+        assert_eq!(out.iter().filter(|l| l.starts_with("----")).count(), 2, "each message ends with its own divider");
     }
 }

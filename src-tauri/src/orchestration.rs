@@ -10,6 +10,23 @@ use std::collections::BTreeMap;
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
 
+/// ORCH-004: an open terminal as a group send sees it: the agent Kolux detected in it (none for
+/// a shell or an agent of unknown kind), whether it is quiet, and the folder it runs in.
+#[derive(Clone, Debug)]
+pub struct Peer {
+    pub handle: String,
+    pub agent: Option<String>,
+    pub idle: bool,
+    pub dir: String,
+}
+
+/// Do two folder spellings name the same place (slashes, a trailing slash and letter case aside)?
+// ponytail: text compare, no disk lookup; links and short names count as different folders.
+fn same_path(a: &str, b: &str) -> bool {
+    let n = |s: &str| s.trim().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+    n(a) == n(b)
+}
+
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Mail {
@@ -352,8 +369,8 @@ impl Mail {
                 if kind == "worker_done" || kind == "heartbeat" {
                     return Err(args("done reports and heartbeats never go to a group; send them to run:<id>"));
                 }
-                // ponytail: group addresses (ORCH-004) fan out with T-190; refused until then.
-                return Err(Fail::new("unsupported", format!("group addresses such as {t} arrive later; name a run:, dispatch: or terminal handle")));
+                // ORCH-004: groups fan out in `post`, which hands each copy here with one handle.
+                return Err(Fail::new("unsupported", format!("{t} is a group address; send it through post")));
             }
             Some(t) if t.starts_with("run:") => {
                 let id = &t[4..];
@@ -392,7 +409,7 @@ impl Mail {
             }
         }
         let mut extras = Map::new();
-        for k in ["threadId", "taskId", "dispatchId", "outcome", "reportPath", "phase"] {
+        for k in ["threadId", "taskId", "dispatchId", "outcome", "reportPath", "phase", "fromAgent"] {
             if let Some(v) = text(k) {
                 extras.insert(k.into(), json!(v));
             }
@@ -407,6 +424,67 @@ impl Mail {
         let body = a["body"].as_str().unwrap_or_default().to_string();
         self.messages.push(Message { id: id.clone(), to: to.clone(), run: run.clone(), from: from.to_string(), subject, body, kind, priority, extras, at: now });
         Ok(json!({ "messageIds": [id], "to": to, "runId": run }))
+    }
+
+    /// ORCH-004: a group address (@all, @idle, @worktree:<id>, @claude, @codex, @cursor, @droid)
+    /// becomes one copy per matching agent terminal, never the sender's own, all on one thread, or
+    /// nothing at all; any other address is one ordinary send to the open terminals in `peers`.
+    pub fn post(&mut self, from: &str, a: &Value, dispatches: &[Value], peers: &[Peer], now: u64) -> Result<Value, Fail> {
+        let live = |h: &str| peers.iter().any(|p| p.handle == h);
+        let mut a = a.clone();
+        // ORCH-009: the sender's agent, as Kolux detected it, names it in the banner.
+        let sender = peers.iter().find(|p| p.handle == from).and_then(|p| p.agent.as_deref());
+        match sender.and_then(|id| crate::agents::CATALOGUE.iter().find(|e| e.0 == id)) {
+            Some(e) => a["fromAgent"] = json!(e.1),
+            None => {
+                if let Some(o) = a.as_object_mut() {
+                    o.remove("fromAgent");
+                }
+            }
+        }
+        let Some(group) = a["to"].as_str().map(str::trim).filter(|t| t.starts_with('@')).map(str::to_string) else {
+            return self.send(from, &a, dispatches, &live, now);
+        };
+        let kind = a["type"].as_str().map(str::trim).unwrap_or("status");
+        if kind == "worker_done" || kind == "heartbeat" {
+            return Err(args("done reports and heartbeats never go to a group; send them to run:<id>"));
+        }
+        if kind == "question" {
+            return Err(args(format!("a question goes to exactly one recipient, not to the group {group}")));
+        }
+        let name = group[1..].to_ascii_lowercase();
+        let agents = peers.iter().filter(|p| p.handle != from && p.agent.is_some());
+        let to: Vec<&Peer> = match name.as_str() {
+            "all" => agents.collect(),
+            "idle" => agents.filter(|p| p.idle).collect(),
+            "claude" | "codex" | "cursor" | "droid" => agents.filter(|p| p.agent.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&name))).collect(),
+            w if w.starts_with("worktree:") && w.len() > 9 => {
+                // A worktree id is "<project id>::<path>"; the bare path is taken too.
+                let id = &group[10..];
+                let path = id.rsplit_once("::").map_or(id, |(_, p)| p);
+                agents.filter(|p| same_path(&p.dir, path)).collect()
+            }
+            _ => return Err(args(format!("Kolux knows no group {group}; use @all, @idle, @worktree:<id>, @claude, @codex, @cursor or @droid"))),
+        };
+        if to.is_empty() {
+            return Err(Fail::new("not_found", format!("{group} matches no agent terminal right now")));
+        }
+        let thread = a["threadId"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| self.next("thread"));
+        a["threadId"] = json!(thread);
+        let keep = self.messages.len();
+        let mut made = Vec::new();
+        for p in to {
+            a["to"] = json!(p.handle);
+            match self.send(from, &a, dispatches, &live, now) {
+                Ok(r) => made.push(json!({ "id": r["messageIds"][0], "to": r["to"] })),
+                Err(e) => {
+                    self.messages.truncate(keep);
+                    return Err(e);
+                }
+            }
+        }
+        let ids: Vec<Value> = made.iter().map(|m| m["id"].clone()).collect();
+        Ok(json!({ "messageIds": ids, "messages": made, "threadId": thread, "to": group }))
     }
 
     fn acked(&self) -> std::collections::HashSet<String> {
@@ -796,7 +874,6 @@ mod tests {
         let refused = |m: &mut Mail, a: Value| m.send("term-2", &a, &[], &live, 2).unwrap_err();
         assert!(refused(&mut m, json!({ "to": format!("run:{run}"), "subject": "done", "type": "worker_done" })).message.contains("--outcome"));
         assert!(refused(&mut m, json!({ "to": "@all", "subject": "beat", "type": "heartbeat" })).message.contains("group"));
-        assert_eq!(refused(&mut m, json!({ "to": "@all", "subject": "hi" })).code, "unsupported");
         assert_eq!(refused(&mut m, json!({ "to": "run:run-9", "subject": "hi" })).code, "not_found");
         assert_eq!(refused(&mut m, json!({ "subject": "hi" })).code, "invalid_arguments");
         assert_eq!(refused(&mut m, json!({ "to": format!("run:{run}"), "subject": "hi", "type": "gossip" })).code, "invalid_arguments");
@@ -1061,5 +1138,50 @@ mod tests {
         assert_eq!((no.code, no.message.clone()), ("not_found", format!("no message {id}")));
         let boxes_a = m.boxes_of("term-1", &d);
         assert!(m.reply("term-1", &id, "x", None, &boxes_a, Some(&a), 4).is_ok());
+    }
+
+    fn peer(h: &str, agent: Option<&str>, idle: bool, dir: &str) -> Peer {
+        Peer { handle: h.into(), agent: agent.map(str::to_string), idle, dir: dir.into() }
+    }
+
+    #[test]
+    fn a_group_send_fans_out_on_one_thread() {
+        let mut m = Mail::default();
+        let peers = vec![
+            peer("term-1", Some("claude"), true, "G:/r"),
+            peer("term-2", Some("codex"), true, "G:/r/wt"),
+            peer("term-3", Some("claude"), false, "G:/r"),
+            peer("term-4", None, true, "G:/r"),
+        ];
+        let sent = |m: &mut Mail, to: &str| -> Vec<String> {
+            let r = m.post("term-1", &json!({ "to": to, "subject": "hi" }), &[], &peers, 2).unwrap();
+            assert!(r.get("deliveryId").is_none() && r.get("deliveries").is_none(), "a receipt carries no delivery bookkeeping");
+            let ids: Vec<String> = r["messageIds"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+            let thread = r["threadId"].as_str().unwrap();
+            let mut to: Vec<String> = m.messages.iter().filter(|x| ids.contains(&x.id)).inspect(|x| assert_eq!(x.extras["threadId"], thread)).map(|x| x.to.clone()).collect();
+            to.sort();
+            to
+        };
+        // The sender and the shell are never part of it; titles play no part, only the detected agent.
+        assert_eq!(sent(&mut m, "@all"), ["term:term-2", "term:term-3"]);
+        assert_eq!(sent(&mut m, "@idle"), ["term:term-2"], "the sender is idle but never gets its own copy");
+        assert_eq!(sent(&mut m, "@claude"), ["term:term-3"]);
+        assert_eq!(sent(&mut m, "@CODEX"), ["term:term-2"]);
+        assert_eq!(sent(&mut m, "@worktree:p-1::G:/r/wt"), ["term:term-2"]);
+        assert_eq!(sent(&mut m, "@worktree:G:/r/wt/"), ["term:term-2"]);
+        let given = m.post("term-1", &json!({ "to": "@all", "subject": "x", "threadId": "t-9" }), &[], &peers, 3).unwrap();
+        assert_eq!(given["threadId"], "t-9");
+        let no = |m: &mut Mail, a: Value| m.post("term-1", &a, &[], &peers, 4).unwrap_err();
+        let unknown = no(&mut m, json!({ "to": "@nobody", "subject": "x" }));
+        assert!(unknown.message.contains("@nobody"), "{}", unknown.message);
+        assert!(no(&mut m, json!({ "to": "@cursor", "subject": "x" })).message.contains("no agent"));
+        assert!(no(&mut m, json!({ "to": "@all", "subject": "x", "type": "question" })).message.contains("one recipient"));
+        assert!(no(&mut m, json!({ "to": "@all", "subject": "x", "type": "heartbeat" })).message.contains("group"));
+        let before = m.messages.len();
+        assert!(no(&mut m, json!({ "to": "@all", "subject": "x", "priority": "loud" })).message.contains("--priority"));
+        assert_eq!(m.messages.len(), before, "a refused group send leaves nothing behind");
+        // One-to-one sends still go through post.
+        assert!(m.post("term-1", &json!({ "to": "term-4", "subject": "x" }), &[], &peers, 5).is_ok());
+        assert_eq!(m.post("term-1", &json!({ "to": "term-7", "subject": "x" }), &[], &peers, 5).unwrap_err().code, "not_found");
     }
 }
