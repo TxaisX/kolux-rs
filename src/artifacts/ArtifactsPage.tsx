@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { locale } from "../language";
 
 export type Artifact = {
   id: string;
@@ -117,7 +118,7 @@ export default function ArtifactsPage({ onToast }: Props) {
                 {a.state === "unavailable" && <span className="preview-tag">Unavailable</span>}
               </div>
               <div className="art-meta">
-                {[a.project ?? (a.source === "hand" ? "Added by hand" : "Claude"), a.session && "session " + a.session.slice(0, 8), new Date(a.added).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }), sizeText(a.size)].filter(Boolean).join(" · ")}
+                {[a.project ?? (a.source === "hand" ? "Added by hand" : "Claude"), a.session && "session " + a.session.slice(0, 8), new Date(a.added).toLocaleString(locale(), { dateStyle: "medium", timeStyle: "short" }), sizeText(a.size)].filter(Boolean).join(" · ")}
               </div>
               <button
                 className="ib art-remove"

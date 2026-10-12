@@ -1,3 +1,4 @@
+import { locale } from "../language";
 // Codex plan figures as the usage pill shows them (USAGE-022). The Rust side reads them without
 // opening a session; this file only turns the reply into words.
 export type UsageWindow = { usedPercent: number; resetsAt: number | null; windowMins: number | null };
@@ -16,9 +17,9 @@ const left = (w: UsageWindow) => `${Math.max(0, Math.round(100 - w.usedPercent))
 export function resetWords(at: number | null, now: Date = new Date()): string {
   if (at == null) return "reset time unknown";
   const d = new Date(at * 1000);
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const time = d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
   const sameDay = d.toDateString() === now.toDateString();
-  return `resets ${sameDay ? "today" : d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  return `resets ${sameDay ? "today" : d.toLocaleDateString(locale(), { weekday: "short" })} ${time}`;
 }
 
 /** The pill text: the weekly figure (the pill is the weekly one, USAGE-008), else the 5-hour one. */

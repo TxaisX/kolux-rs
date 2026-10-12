@@ -2,8 +2,9 @@
 // panes use; managed rows offer re-authenticate and a Remove that asks first, inline, because the
 // webview has no confirm dialog. The System default row stands for the CLI's own login.
 import type { ReactNode } from "react";
+import { locale } from "../language";
 
-export const signedInAt = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+export const signedInAt = (ms: number) => new Date(ms).toLocaleString(locale(), { dateStyle: "medium", timeStyle: "short" });
 
 type Props = {
   title: string;

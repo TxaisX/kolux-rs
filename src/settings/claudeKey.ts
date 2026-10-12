@@ -3,6 +3,7 @@
 // window only ever sees these figures, never the key itself.
 import { fixFor, type Attention } from "./Attention";
 import { CONNECT } from "../glossary";
+import { locale } from "../language";
 
 export type KeyStatus = {
   connected: boolean;
@@ -29,7 +30,7 @@ export type KeyCard = {
 
 /** "October 2027": the month the key must be renewed in. */
 export function monthYear(ms: number): string {
-  return new Date(ms).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  return new Date(ms).toLocaleDateString(locale(), { month: "long", year: "numeric" });
 }
 
 export function keyCard(s: KeyStatus | null): KeyCard {

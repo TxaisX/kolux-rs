@@ -873,6 +873,12 @@ rather than a shell, and toasts say project folder rather than repository; hover
 label shows the exact Git term. A test reads every in-scope screen and fails the build when one
 of repo, clone, checkout, worktree, shell, CLI or PTY shows on it.
 
+[accounts] Interface language (T-210-a): Settings › Appearance › Interface has a Language
+choice (System, English, 简体中文, 한국어, 日本語, Español, Français). System follows Windows and
+falls back to English for anything else, Traditional Chinese included. Dates, relative times,
+weekday names and sorted lists follow the pick at once and on the next start; Kolux's own words
+stay in English until the language packs arrive (T-210-b).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1625,7 +1631,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-209-a · Plain words chosen: clone = Copy from a web address, repository = project, worktree = workspace, main checkout = main folder, shell = terminal, CLI = program, PTY = terminal; the sidebar's pointer to the Settings page Git & worktrees now reads the Git page in Settings (the Settings list is not a newcomer path, so its page name stays). The scan reads the source of each in-scope file (all states at once) instead of rendering one state.
 
+- [accounts] T-210-a · The saved value is a BCP-47 tag in settings field `language`: system, en, zh-CN, ko, ja, es or fr; anything else reads as system. English keeps Kolux's own short relative-time words (3h ago); other languages use the platform's relative-time wording. Mapping the old app's saved language names onto these tags (SET 017 Compat) is the settings importer's job.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-210-a · done: new `src/language.ts` (choices, System resolution, locale, apply on load) and `src/language.test.ts`; Language select in Appearance; every date, time and sort call reads `locale()` · evidence/T-210-a.txt, T-210-a-1..2 png
 - 2026-10-12 · [accounts] T-209-a · done: new `src/glossary.ts` (banned words, plain words with hover text, the Connect cards' lines) and `src/plainWords.test.ts` (TypeScript syntax scan of 13 in-scope files plus a hover check); Add Project, sidebar and toast wording changed · evidence/T-209-a.txt, T-209-a-1..2 png
 - 2026-10-12 · [accounts] T-208 · not built, left unticked · WAITS ON MERGE: ONB-006/007/008/010/012 are the leaving, progress, first-profile and grid-tour rules of the wizard T-207 builds, so it follows T-207 (which waits on the kit code from lane/release).
 - 2026-10-12 · [accounts] T-207 · not built, left unticked · WAITS ON MERGE: ONB-004 and ONB-005 are the sample-data and kit screens of the wizard, and ONB-001 hides the wizard behind the kit setup dialog; the kit code (T-204, T-205) is on main from lane/release but not in lane/accounts, and a wizard with two missing screens should not reach new profiles. Build with the kits (lane/release), or here once main reaches this lane.

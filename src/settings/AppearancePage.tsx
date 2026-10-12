@@ -11,6 +11,7 @@ import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
 import { Segmented } from "./GeneralPage";
+import { applyLanguage, LANGUAGE_FIELD, LANGUAGES, savedLanguage, systemLanguage, type LanguageChoice } from "../language";
 
 const MODE_LABEL: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
 
@@ -115,7 +116,28 @@ function FontField({ label, value, placeholder, onPick }: { label: string; value
 const firstFamily = (stack: string) => stack.split(",")[0].replace(/"/g, "").trim();
 
 /** `windowPart` and `windowSummary` fill the Window & Sidebar section (they live in other settings). */
-export function AppearanceView({ look, onChange, windowPart, windowSummary = "" }: { look: Appearance; onChange: (a: Appearance) => void; windowPart?: ReactNode; windowSummary?: string }) {
+/** SET-017: the interface language, each choice in its own language; System says what it resolves to. */
+export function LanguageView({ value, onPick, os = navigator.languages }: { value: LanguageChoice; onPick: (v: LanguageChoice) => void; os?: readonly string[] }) {
+  const sys = LANGUAGES.find((l) => l.id === systemLanguage(os))?.name;
+  return (
+    <section className="conn-card" data-section="language">
+      <h2 className="conn-name">Language</h2>
+      <label className="look-select">
+        <span>Language</span>
+        <select aria-label="Interface language" value={value} onChange={(e) => onPick(e.target.value as LanguageChoice)}>
+          {LANGUAGES.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.id === "system" ? `System (${sys})` : l.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="conn-detail">Dates, times and sorted lists follow the language. Kolux's own words stay in English until its language packs arrive.</p>
+    </section>
+  );
+}
+
+export function AppearanceView({ look, onChange, windowPart, windowSummary = "", languagePart }: { look: Appearance; onChange: (a: Appearance) => void; windowPart?: ReactNode; windowSummary?: string; languagePart?: ReactNode }) {
   const classic = look.theme === "classic";
   // All three sections open at first; a link into a folded one unfolds it (SettingsPage).
   const [open, setOpen] = useState({ interface: true, terminal: true, window: true });
@@ -132,6 +154,7 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "" 
         </div>
         {look.mode === "system" && <p className="conn-detail">Follows Windows, also while Kolux is running.</p>}
       </section>
+      {languagePart}
       <section className="conn-card" data-section="theme">
         <h2 className="conn-name">Colour theme</h2>
         <div className="look-row">
@@ -324,7 +347,7 @@ export default function AppearancePage() {
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
-      {look && <AppearanceView look={look} onChange={change} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
+      {look && <AppearanceView look={look} onChange={change} languagePart={status.settings && <LanguageView value={savedLanguage(status.settings[LANGUAGE_FIELD])} onPick={(v) => { applyLanguage(v); void status.save({ [LANGUAGE_FIELD]: v }); }} />} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
     </>
   );
 }

@@ -1,3 +1,4 @@
+import { locale } from "../language";
 // The Automations list (AUTO-016) as pure functions: rows, sorting, filters and search, so the
 // rules are tested without a window. The rows come from the back end (src-tauri/src/automations.rs).
 
@@ -43,9 +44,14 @@ export const PROMPT_SEARCH_CHARS = 2048;
 /** A query longer than this is refused rather than run. */
 export const MAX_QUERY = 200;
 
-const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
-/** Names sort the way people count: "Run 2" before "Run 10", case ignored. */
-export const naturalCompare = (a: string, b: string): number => collator.compare(a, b);
+let collator: [string, Intl.Collator] | null = null;
+/** Names sort the way people count: "Run 2" before "Run 10", case ignored, in the interface
+ * language's own order (SET-017). */
+export const naturalCompare = (a: string, b: string): number => {
+  const l = locale();
+  if (collator?.[0] !== l) collator = [l, new Intl.Collator(l, { numeric: true, sensitivity: "base" })];
+  return collator[1].compare(a, b);
+};
 
 /** The newest run of an automation, or none when it never ran. */
 export function lastRun(id: string, runs: Run[]): Run | undefined {
@@ -132,10 +138,15 @@ export function statusWord(r: Run): string {
 
 export function ago(at: number, now: number): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
-  if (s < 60) return "just now";
   const m = Math.round(s / 60);
-  if (m < 60) return `${m} min ago`;
   const h = Math.round(m / 60);
+  // SET-017: other languages say it their own way; English keeps its short words.
+  if (locale() !== "en") {
+    const r = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
+    return s < 60 ? r.format(0, "second") : m < 60 ? r.format(-m, "minute") : h < 48 ? r.format(-h, "hour") : r.format(-Math.round(h / 24), "day");
+  }
+  if (s < 60) return "just now";
+  if (m < 60) return `${m} min ago`;
   if (h < 48) return `${h} h ago`;
   return `${Math.round(h / 24)} days ago`;
 }

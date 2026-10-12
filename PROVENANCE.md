@@ -419,3 +419,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-201-a · rules from the SESS-017 card; no outside source and no old Kolux source read
 
 > 2026-10-12 · T-209-a · rules from the ONB-036 card; TypeScript's compiler API (already a dev dependency) parses the scanned files; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-210-a · rules from the SET-017 card; the browser's Intl APIs (Collator, RelativeTimeFormat, DateTimeFormat) and navigator.languages from public MDN docs; no outside source and no old Kolux source read
