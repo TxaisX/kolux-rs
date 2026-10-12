@@ -832,6 +832,12 @@ When two Codex accounts share one email and have no names yet, both rows say so,
 and a business workspace can be told apart. Kolux does not guess which is which: OpenAI does not
 publish where a sign-in says personal or business.
 
+[accounts] The right side of the Terminals screen is now one sidebar with two tabs, Explorer and
+Source Control (T-146-a). Ctrl+L or the top-bar panel button shows and hides it, Ctrl+Shift+E and
+Ctrl+Shift+G jump to a tab, and dragging its left edge makes it wider or narrower. After a
+restart it comes back open or closed, on the same tab and at the same width. It is open on
+Explorer the first time. Agents, Checks and Search tabs come with T-146-b.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1568,7 +1574,11 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-138-b · ACCT-019's personal/business label is a name the user gives (Name / Rename on the row, up to 40 characters, kept across Sign in again), not read from the sign-in: the workspace kind sits in token claims OpenAI does not document. Two unnamed rows on one email ask to be named. Confirm, or point at a public source for the claim.
 
+- [accounts] T-146-a · VIEW-056 says the right sidebar is open by default; that replaces DT-R17's "explorer closed at start" for a first run. With no workspace open it shows "Open a workspace to browse its files."
+- [accounts] T-146-a · the tabs are short words (Explorer, Source Control), not icons, until more tabs arrive with T-146-b; the width is at least 240 px and always leaves the workspace 400 px.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-146-a · done: new `src/chrome/RightSidebar.tsx` (frame, tab strip, drag edge, `readRight`, `clampWidth`), `App.tsx` keeps open/tab/width in settings (rightSidebarOpen/Tab/Width) and routes Ctrl+L, Ctrl+Shift+E/G and the top-bar button through it; fixed the Explorer and sidebar not hiding (their display:flex beat the hidden attribute); T-146 split into -a/-b/-c · evidence/T-146-a.txt, T-146-a-1-explorer-tab.png, T-146-a-2-scm-640.png, T-146-a-3-after-restart-explorer.png
 - 2026-10-12 · [accounts] T-138-b · done: `codex_accounts.rs` Account gains `label`, `set_label` (trim, 40 chars, blank clears, kept on re-sign-in) and the `codex_account_label` command; `CodexCard.tsx` Name/Rename with an inline field (Enter saves, Esc keeps), "Same email as another account" note, headline names the active account; `AccountRow.tsx` gains `onName`/`below`; 1 Rust test, 3 front-end tests; live with two seeded Codex accounts on one email · evidence/T-138-b.txt, evidence/T-138-b-1-same-email.png, evidence/T-138-b-2-named.png
 - 2026-10-12 · [accounts] T-116-a-fix · done: `src/settings/GitPage.tsx` gains the New branches card (prefix select, custom field saved on blur, sample and refused/only-slashes warning from `branch_prefix_check`, Default compare base); `ProjectsPanel.tsx` gear keeps a link to the page; DESIGN.md amended · evidence/T-116-a-fix.txt, evidence/t116a-fix-gear.png, evidence/t116a-fix-git-page.png
 - 2026-10-12 · [accounts] Git & worktrees gear move · not done: the sidebar gear's Git & worktrees part is T-116-a (b67005e), which is on main and lane/orchestration but not on lane/accounts, and this lane may not merge; move it into src/settings/GitPage.tsx (with the one-line DESIGN.md amendment) after main is merged into this lane, or in the merge itself

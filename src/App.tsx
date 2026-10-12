@@ -39,6 +39,7 @@ import ArtifactsPage from "./artifacts/ArtifactsPage";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
+import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
@@ -129,18 +130,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // the grid stays mounted (hidden) behind it.
   // SET-028: Model routing opens the same way until Settings > Agents exists.
   const [page, setPage] = useState<Page | null>(null);
-  const [scmOpen, setScmOpen] = useState(false);
   // GIT-004: a half-written commit message per worktree, kept through closing the panel.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  // EDIT-033: the explorer on the right; closed at start (DT-R17). A bump of explorerFocus moves focus into its tree.
-  const [explorerOpen, setExplorerOpen] = useState(false);
+  // EDIT-033: a bump of explorerFocus moves focus into the explorer's tree.
   const [explorerFocus, setExplorerFocus] = useState(0);
-  const toggleExplorer = () => {
-    if (explorerOpen && document.activeElement?.closest(".explorer")) return setExplorerOpen(false);
-    setScreen("terminals");
-    setExplorerOpen(true);
-    setExplorerFocus((n) => n + 1);
-  };
+  // VIEW-056: the right sidebar's width while its edge is being dragged; saved when let go.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -233,6 +228,25 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setSettings(next);
     invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
   };
+  // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
+  const right = readRight(settings);
+  const explorerOpen = right.open && right.tab === "explorer";
+  const scmOpen = right.open && right.tab === "scm";
+  const saveRight = (patch: Partial<Record<keyof typeof RIGHT_KEYS, unknown>>) => {
+    const next = { ...settings };
+    for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
+    setSettings(next);
+    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+  };
+  const showRight = (tab: RightTab) => {
+    setScreen("terminals");
+    saveRight({ open: true, tab });
+  };
+  const toggleExplorer = () => {
+    if (explorerOpen && document.activeElement?.closest(".explorer")) return saveRight({ open: false });
+    showRight("explorer");
+    setExplorerFocus((n) => n + 1);
+  };
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
   useEffect(() => {
@@ -310,10 +324,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           setSidebarOpen((o) => !o);
           break;
         case "sidebar.sourceControl.toggle":
+          if (terminals && scmOpen) saveRight({ open: false });
+          else showRight("scm");
+          break;
         case "sidebar.right.toggle":
-          // ponytail: the right sidebar holds only Source Control until VIEW-056/057 (T-146).
-          setScreen("terminals");
-          setScmOpen((o) => !o);
+          if (terminals && right.open) saveRight({ open: false });
+          else showRight(right.tab);
           break;
         case "workspace.delete":
           setScreen("terminals");
@@ -804,7 +820,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   });
   return (
     <div className="app">
-      <TopBar appName={chromeShown(settings, "titleBarAppName")} screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
+      <TopBar appName={chromeShown(settings, "titleBarAppName")} screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body">
         {asking && (
           <CloseAsk
@@ -1086,10 +1102,16 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             })}
           </div>
         </div>
-        {terminals && scmOpen && (
-          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
+        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? 297 : 0)} hidden={!terminals || !right.open} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
+          const used = clampWidth(w, window.innerWidth, sidebarOpen ? 297 : 0);
+          setDragWidth(done ? null : used);
+          if (done) saveRight({ width: used });
+        }}>
+        {scmOpen && (
+          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
-        {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
+        {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
+        </RightSidebar>
       </div>
       <UpdateCenter />
       {readStatusBar(settings).visible && (

@@ -733,3 +733,19 @@ input { font: inherit; }
 .status-tick input { accent-color: var(--done); }
 .status-tick.off { opacity: 0.5; cursor: default; }
 .topbar .app-name { margin: 0 6px 0 2px; color: var(--fg-muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+
+/* VIEW-056 / VIEW-057 (T-146-a): the right sidebar frame, its tab strip and drag edge; the Explorer
+   and Source Control cards fill it. */
+.rside { flex: none; position: relative; display: flex; flex-direction: column; min-width: 0; padding: 8px 8px 8px 0; }
+.rside-grip { position: absolute; left: -4px; top: 8px; bottom: 8px; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
+.rside-grip:hover { background: linear-gradient(to right, transparent 3px, var(--line-focus) 3px, var(--line-focus) 5px, transparent 5px); }
+.rside-tabs { flex: none; display: flex; gap: 2px; padding: 0 2px 6px; overflow: hidden; }
+.rside-tab { flex: none; height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.rside-tab:hover { color: var(--fg); }
+.rside-tab[aria-selected="true"] { color: var(--fg); background: var(--surface); border-color: var(--line-strong); }
+.rside-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rside-body > .explorer { width: auto; flex: 1; margin: 0; }
+.rside-body > .sidebar-wrap.right { flex: 1; min-height: 0; padding: 0; }
+.rside-body > .sidebar-wrap.right > .sidebar.scm { width: auto; flex: 1; }
+.rside-body > .sb-hint { padding: 12px; }
+.rside[hidden], .rside-body > .explorer[hidden] { display: none; }

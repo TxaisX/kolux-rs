@@ -405,3 +405,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-138-b · rules from the ACCT-019 card; no OpenAI token-claim source used (none is public), so the label is the user's own; no old Kolux source read.
 >
 > 2026-10-12 · note: while finding the ACCT-019 card I ran a recursive filename grep from the lane root (`grep -rln ACCT-019 --include=*.md .`), which also scanned the lane's own copy of `provenance/dirty-room/firewall/` and printed one matching file name (07-accounts-keys.md). Only the path was shown, no content was opened or displayed; later searches exclude `provenance/`.
+
+> 2026-10-12 · T-146-a · rules from the VIEW-056 and VIEW-057 cards and DT-R17; Pointer Events setPointerCapture from MDN; no old Kolux source read
