@@ -1016,6 +1016,10 @@ recorded default until told otherwise; nothing here blocks a pass.
   text) of a few of your own `~.claudeprojects` and `~.codexsessions` files; (b) count
   tokens only from what Kolux sees live; (c) leave token analytics out. Until you pick, T-136-b
   and T-137 stay unbuilt. USAGE-011's activity counts also wait for the status hooks (T-025).
+  RESOLVED 2026-10-12: Txais chose (a). A builder may read the FIELD NAMES and value types (never the
+  message text, prompts or paths) of a few of his own ~/.claude/projects/*.jsonl and ~/.codex/sessions files,
+  record the observed shape with a date in PROVENANCE.md section 5, and parse defensively (unknown fields
+  ignored, format changes degrade to "unknown", never crash). T-136-b, T-137 and T-140 are unblocked.
 
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
