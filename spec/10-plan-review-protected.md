@@ -590,6 +590,7 @@ Acceptance:
   - [ ] Read the settings file on disk → no secret appears in plain text.
 Compat: —
 Source: D-10-026
+Amended 2026-10-12 (DT-A8): off Windows the build still scrambles per ACCT-009 until a keyring backend is chosen; on Windows a save while the store is down fails and writes nothing.
 
 ### SAFE-027 · The floating workspace opens only in folders the user picked
 Tier: P2 · Pushed: 5 · State at 0.15.0: live-unverified
