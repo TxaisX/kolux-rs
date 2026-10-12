@@ -447,6 +447,7 @@ pub fn install_page(agent: &str) -> Option<&'static str> {
     match agent {
         "claude" => Some("https://code.claude.com/docs/en/setup"),
         "codex" => Some("https://developers.openai.com/codex/cli"),
+        "grok" => Some("https://x.ai/cli"),
         _ => None,
     }
 }

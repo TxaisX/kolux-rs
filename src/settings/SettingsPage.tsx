@@ -1,7 +1,7 @@
 // Settings, laid over the window body (the panes underneath stay mounted and untouched). Its first
 // page is AI connections (ACCT-004): the Claude card connects on the 1-year key by default. The
-// other Connect cards and their install steps come with T-092 (ACCT-001..003); the Claude account
-// route and the Codex sign-ins with T-043-b / T-043-c (both in).
+// Connect grid with install steps is ConnectGrid (ACCT-001, ACCT-003); the Claude account route and
+// the Codex sign-ins came with T-043-b / T-043-c.
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -9,6 +9,8 @@ import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
+import { ConnectGrid, taglineOf } from "./ConnectGrid";
+import GrokCard from "./GrokCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
@@ -33,6 +35,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
         <span className="conn-name">Claude</span>
         {chip && <span className={`conn-chip ${card.state}`}>{chip}</span>}
       </header>
+      <p className="conn-detail conn-tagline">{taglineOf("claude")}</p>
       <div className="conn-headline">{card.headline}</div>
       {card.detail && <p className={card.state === "warning" || card.state === "expired" || card.state === "attention" ? "conn-detail warn" : "conn-detail"}>{card.detail}</p>}
       {ownLine && <p className={ownLine.warn ? "conn-detail warn own-sign-in" : "conn-detail own-sign-in"}>{ownLine.text}</p>}
@@ -214,10 +217,12 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           )}
           {page === "accounts" && (
             <>
-              <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
-              <ClaudeCard />
-              <ClaudeAccounts />
-              <CodexCard />
+              <p className="settings-sub">Link Kolux to the AI services you already pay for. Kolux charges nothing and ships no models or keys of its own: each agent runs on your plan or key and talks straight to its provider, and Kolux neither relays nor records that traffic. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
+              <ConnectGrid cards={{ claude: <ClaudeCard />, codex: <CodexCard />, grok: <GrokCard /> }} />
+              <div className="conn-advanced" data-section="accounts-advanced">
+                <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
+                <ClaudeAccounts />
+              </div>
             </>
           )}
           {page === "shortcuts" && <ShortcutsPage />}

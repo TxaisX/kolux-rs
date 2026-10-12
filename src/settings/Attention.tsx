@@ -19,7 +19,7 @@ export type Reason =
 export type Attention = { reason: Reason; message: string; resetsAt: number | null };
 export type Fix = "Renew" | "Check again" | "Try installing again" | "Open install page" | "Try again" | "Use a 1-year key instead";
 /** Where the card is: the Claude key card, the Claude accounts card, or Codex. */
-export type Route = "claude-key" | "claude-account" | "codex";
+export type Route = "claude-key" | "claude-account" | "codex" | "install";
 
 const fixes: Record<Reason, Fix | null> = {
   "browser-blocked": "Try again",
@@ -43,7 +43,7 @@ export function fixFor(a: Attention | null, route: Route): Fix | null {
 }
 
 /** "Open install page" opens the agent's own page; every other fix starts the card's sign-in again. */
-export function openInstallPage(agent: "claude" | "codex"): Promise<void> {
+export function openInstallPage(agent: "claude" | "codex" | "grok"): Promise<void> {
   return invoke("open_install_page", { agent });
 }
 

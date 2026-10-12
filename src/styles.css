@@ -411,6 +411,19 @@ input { font: inherit; }
 .conn-headline { font-size: 13px; color: var(--fg-row); }
 .conn-detail { margin: 0; font-size: 12px; color: var(--fg-muted); }
 .conn-detail.warn { color: #fdc030; }
+/* ACCT-001 Connect grid, ACCT-003 install progress */
+.conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-items: stretch; max-width: 1100px; }
+.conn-grid .conn-card { max-width: none; height: 100%; box-sizing: border-box; }
+.conn-tagline { margin-top: -4px; }
+.conn-skeleton { height: 28px; border-radius: 6px; background: linear-gradient(90deg, var(--chip-bg) 0%, var(--line-strong) 50%, var(--chip-bg) 100%); background-size: 200% 100%; animation: conn-shimmer 1.4s linear infinite; }
+@keyframes conn-shimmer { from { background-position: 200% 0; } to { background-position: 0 0; } }
+.conn-progress { height: 6px; border-radius: 999px; background: var(--chip-bg); overflow: hidden; }
+.conn-progress-bar { height: 100%; background: var(--working); border-radius: inherit; transition: width 0.3s; }
+.conn-progress-bar[data-known="false"] { width: 30%; animation: conn-sweep 1.2s ease-in-out infinite alternate; }
+@keyframes conn-sweep { from { margin-left: 0; } to { margin-left: 70%; } }
+@media (prefers-reduced-motion: reduce) { .conn-skeleton, .conn-progress-bar[data-known="false"] { animation: none; } }
+.conn-advanced { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line-strong); max-width: 1100px; }
+.conn-advanced-head { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--fg); }
 
 /* Claude accounts (T-043-b) */
 .settings-main .conn-card + .conn-card { margin-top: 12px; }

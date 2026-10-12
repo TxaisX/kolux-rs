@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
+import { taglineOf } from "./ConnectGrid";
 
 export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean };
 export type CodexView = {
@@ -58,6 +59,7 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
         <span className="conn-name">Codex</span>
         <span className={`conn-chip ${busy ? "connecting" : connected ? "connected" : "disconnected"}`}>{busy ? "Connecting" : connected ? "Connected" : "Not connected"}</span>
       </header>
+      <p className="conn-detail conn-tagline">{taglineOf("codex")}</p>
       <div className="conn-headline">{codexHeadline(view)}</div>
       {view.signingIn === "device" && view.deviceLink && view.deviceCode && (
         <div className="device-code" role="status">

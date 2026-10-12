@@ -166,7 +166,8 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 6 · Business-user frame (4 cards)
 
-- [ ] T-092 · ACCT-001 The AI connections page shows a Connect card for each agent · ACCT-002 [compat] A Connect card walks from not installed to connected through clear states · ACCT-003 A missing agent tool installs from its Connect card · ACCT-008 [compat] Grok connects by its CLI login, a device code or a pasted xAI key
+- [x] T-092-a · ACCT-001 The AI connections page shows a Connect card for each agent · ACCT-003 A missing agent tool installs from its Connect card (T-092 split; the per-provider Codex accounts list moves under the advanced area with T-138)
+- [ ] T-092-b · ACCT-002 [compat] A Connect card walks from not installed to connected through clear states · ACCT-008 [compat] Grok connects by its CLI login, a device code or a pasted xAI key · also from T-092-a: the installed Grok card is a plain "Not connected" card until this task gives it its three ways in
 
 ### P0 · theme none · No theme (13 cards)
 
@@ -250,7 +251,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-135 · SESS-022 Warning before launching close to a usage limit
 - [ ] T-136 · USAGE-009 [compat] Alerts at 80% and 95% of a usage window · USAGE-010 Launch dialogs warn when an account is nearly spent · USAGE-011 [compat] Stats & Usage page with Kolux activity counts · USAGE-012 Usage analytics opens on a combined overview · USAGE-013 Token tracking is opt-in for each provider
 - [ ] T-137 · USAGE-014 Claude and Codex token analytics panels · USAGE-015 Estimated cost from each model's published prices · USAGE-018 Grok credits panel
-- [ ] T-138 · ACCT-016 The Claude accounts list: system default and managed accounts · ACCT-017 Changing the active Claude account is safe with sessions running · ACCT-018 The same Claude account cannot be added twice · ACCT-019 [compat] The Codex accounts list for fast switching · ACCT-020 Codex's system-default login is shown truthfully
+- [ ] T-138 · ACCT-016 The Claude accounts list: system default and managed accounts · ACCT-017 Changing the active Claude account is safe with sessions running · ACCT-018 The same Claude account cannot be added twice · ACCT-019 [compat] The Codex accounts list for fast switching · ACCT-020 Codex's system-default login is shown truthfully · also from T-092-a: the Connect page's advanced area holds the per-provider account sections, so the Codex accounts list moves out of the Codex card into Manage accounts (advanced) beside the Claude accounts
 - [ ] T-139 · ACCT-023 A resumed session keeps the account it began on · ACCT-027 The Grok section shows the CLI sign-in and credit use · ACCT-031 [compat] `kolux account add` and `kolux account list` · ACCT-032 Model choice per agent; the live per-account lookup exists but is off the main path · ACCT-064 Changing the Codex account offers to restart live Codex panes
 - [ ] T-140 · AUTO-014 Saved run output with token and cost figures
 - [ ] T-141 · CLI-014 [compat] kolux account add and account list

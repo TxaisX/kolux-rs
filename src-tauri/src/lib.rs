@@ -13,6 +13,7 @@ mod files;
 mod fsops;
 mod git;
 mod include;
+mod install;
 mod keybindings;
 mod names;
 mod orchestration;
@@ -93,6 +94,7 @@ pub fn run() {
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());
             app.manage(codex_accounts::SignIns::default());
+            app.manage(install::Installs::default());
             app.manage(artifacts::Library::new(dir.join("artifacts")));
             // Pages Claude sessions publish are kept in the library as they happen (SKILL-035).
             capture::start(app.handle().clone());
@@ -190,6 +192,11 @@ pub fn run() {
             claude_accounts::claude_account_check,
             claude_accounts::claude_own_sign_in,
             agents::open_install_page,
+            install::agent_installs,
+            install::agent_can_install,
+            install::agent_install,
+            install::agent_install_cancel,
+            install::agent_install_dismiss,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
