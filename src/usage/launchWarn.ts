@@ -39,6 +39,13 @@ function publish(provider: string, u: ProviderUsage | undefined) {
 export const publishCodex = (u: CodexUsage | null) => publish("codex", u?.state === "ok" ? { name: "Codex", fiveHour: u.fiveHour, weekly: u.weekly } : undefined);
 // Dev builds only: the live check sets figures a real account cannot be pushed to on demand.
 if (import.meta.env.DEV && typeof window !== "undefined") (window as unknown as Record<string, unknown>).__koluxUsage = publish;
+/** Calls `f` with every new set of figures; returns the unsubscribe. `onFigures.current()` reads them now. */
+export function onFigures(f: (all: Record<string, ProviderUsage | undefined>) => void): () => void {
+  const g = () => f(figures);
+  subs.add(g);
+  return () => void subs.delete(g);
+}
+onFigures.current = () => figures;
 export function useLaunchUsage(): Record<string, ProviderUsage | undefined> {
   const [, bump] = useState(0);
   useEffect(() => {

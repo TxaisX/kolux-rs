@@ -624,6 +624,12 @@ may stop early." One line per provider, the agent named for one seat and a count
 Start stays usable. Codex figures come from the top-bar pill's own reading; Claude has none
 until T-041 reads them, so no Claude line shows yet.
 
+[accounts] Usage alerts (T-136-a). When an account reaches 80 % of a usage window, and again at
+95 %, Windows shows a notification: "Codex · usage alert. Codex has used 82% of its 5-hour
+window (the 80% alert), resets today 11:03 PM." Each alert comes once per window and again only
+after that window resets, and a restart does not repeat it. Settings > Notifications has the
+switch (on by default). Codex figures drive it today; Claude's arrive with T-041.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1264,7 +1270,15 @@ recorded default until told otherwise; nothing here blocks a pass.
   `window.__koluxUsage(provider, figures)` so the live check can set 85 % and 90 %; release builds
   do not have it.
 
+- 2026-10-11 · [accounts] T-136-a · T-136 split: -a is the usage alerts (USAGE-009) and the launch
+  warning (USAGE-010, already built in T-135); -b keeps the Stats & Usage page, the analytics
+  overview and the token-tracking switches (USAGE-011..013). Alerts are sent from the Rust side
+  through the Tauri notification plugin (MIT/Apache-2.0). In dev builds Windows files them under
+  PowerShell's name; an installed build shows Kolux RS. The master notifications switch is T-026's
+  and the tray dot T-324's (noted on those lines).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [accounts] T-136-a · done: `src/usage/alerts.ts` (`dueAlerts` 80 % and 95 % once per window and reset time, both at once when first seen over 95 %, nothing without a reset time, window wording for 5-hour / weekly / monthly / n-day / n-hour / other; `useUsageAlerts` watches the shared figures, waits for settings and the saved record) + `alerts.test.ts` (6 tests); `src-tauri/src/usage_alerts.rs` (fired record in state.db, saved before the notification shows) + tauri-plugin-notification; Settings > Notifications usage-alerts switch; live: Codex 70 % gave nothing, 82 % one toast, 84 / 90 % and a reload nothing more, 97 % the 95 % toast, a new reset time at 30 % then 81 % the 80 % toast again, Claude first seen at 97 % two toasts, no reset time none, switch off none, switch on again the one due; all read back from Windows' notification history; build / clippy / 132 Rust + 174 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-136-a.txt, evidence/T-136-a-*.png
 - 2026-10-11 · [accounts] T-135 · done: `src/usage/launchWarn.ts` (`launchWarnings` one line per provider at 80 % or more of its shortest window with a figure, seat count or the one agent named, reset time when known; the shared figures store the Codex pill now publishes to) + `launchWarn.test.ts` (4 tests: three Claude seats at 85 %, a second provider, 80 % exactly, 40 %, no figures, no usage source, the shortest-window rule); `ChooserPane.tsx` shows the lines above Start (1 more test); live: three Claude seats with 85 % set gave one line counting 3 sessions with its reset time and Start enabled, 40 % gave none, a real Codex seat (0 % used) gave none, Codex at 90 % added its own line; build / clippy / 132 Rust + 168 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-135.txt, evidence/T-135-*.png
 - 2026-10-11 · [accounts] T-037-fix-look · done: `styles.css` top bar is a three-column grid (`1fr auto 1fr`) instead of an absolutely centred switcher, a 1100 px rule that leaves the search box its icon, `.chooser-foot`; `ChooserPane.tsx` Start moved out of the scrolling body into a footer; a new test in `ChooserPane.test.ts` (Start sits in a footer after the scrolling body; failed before the move) and `scripts/evidence/overlap.mjs` (live check, exit 1 on overlap; before: switcher 595-805 over search box 771-961 at 1400 px, after: 517-727 against 771-961, and at 884 px 160-370 against 414-445 with the close button inside the window); live: Start reachable and starting a PowerShell session from a 6-pane chooser; seen, not fixed (core lane's tabs): a chooser that gets a tab beside it is named "Terminal N" on its tab · evidence/T-037-fix-look.txt, evidence/T-037-fix-look-*.png
 - 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.

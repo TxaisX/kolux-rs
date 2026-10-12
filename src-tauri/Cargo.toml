@@ -29,6 +29,8 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 portable-pty = "0.9"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
+# USAGE-009: usage alerts are system notifications, sent from the Rust side.
+tauri-plugin-notification = "2"
 # AUTO-001: timetables are worked out in the IANA zone saved with an automation (already in the tree via tauri).
 jiff = "0.2"
 

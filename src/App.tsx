@@ -47,6 +47,7 @@ import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { matchEvent } from "./keys/keymap";
+import { useUsageAlerts } from "./usage/alerts";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -142,6 +143,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
+  const [settingsRead, setSettingsRead] = useState(false); // USAGE-009: no alert before this is true
+  useUsageAlerts(settingsRead ? settings : null);
   const classic = readLook(settings) === "classic";
   // SET-027: everywhere but Settings, only agents that are switched on are offered.
   const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
@@ -178,6 +181,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       void invoke<Record<string, unknown>>("get_settings")
         .then((s) => {
           setSettings(s);
+          setSettingsRead(true);
           applyAppearance(readAppearance(s));
         })
         .catch(() => setSettings({}));

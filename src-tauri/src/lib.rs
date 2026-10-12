@@ -24,6 +24,7 @@ mod state;
 mod sysmem;
 mod terminal;
 mod trust;
+mod usage_alerts;
 
 use state::Store;
 use std::sync::Mutex;
@@ -67,6 +68,7 @@ fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, v
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
@@ -168,7 +170,9 @@ pub fn run() {
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
-            codex_accounts::codex_account_activate
+            codex_accounts::codex_account_activate,
+            usage_alerts::usage_alerts_fired,
+            usage_alerts::usage_alert_send
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
