@@ -399,6 +399,7 @@ Acceptance:
   - [ ] Bind add, press it → a new session pane appears.
 Compat: keybinding ids sessions.add, sessions.remove
 Source: D-05-036
+Amended 2026-10-12 (DT-R40): SESS-008 wins: an empty chooser closes without asking; a running session asks first unless Ask before closing is switched off.
 
 ### VIEW-097 · Keep the computer awake while agents run
 Tier: P1 · Pushed: 1 · State at 0.15.0: live-unverified
