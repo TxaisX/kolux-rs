@@ -609,6 +609,10 @@ impl Mail {
             Some(o) => parse_deps(&o).ok_or_else(|| args("--options takes a JSON list of strings, like [\"yes\",\"no\"]"))?,
             None => Vec::new(),
         };
+        // CLI-037: a gate is the coordinator's, so it needs the Run this terminal is attached to.
+        if run.is_none() {
+            return Err(Fail::new("no_run", "no Run is attached to this terminal, so there is no coordinator to hold the gate: attach one with orchestration run-create --objective <text> or run-use --id <run>, or name it with --run"));
+        }
         let i = task_in(tasks, &task, run)?;
         if let Some(d) = dispatches.iter().find(|d| d["taskId"] == task.as_str() && !finished(d)) {
             let id = d["id"].as_str().unwrap_or_default();
@@ -1316,6 +1320,7 @@ mod tests {
             json!({ "id": "task-1", "status": "ready", "runId": "run-1", "deps": [] }),
             json!({ "id": "task-2", "status": "dispatched", "runId": "run-1", "deps": [] }),
             json!({ "id": "task-3", "status": "ready", "runId": "run-2", "deps": [] }),
+            json!({ "id": "task-4", "status": "ready", "deps": [] }),
         ];
         let d = vec![json!({ "id": "dispatch-1", "taskId": "task-2", "status": "ready", "runId": "run-1" })];
         let g = m.gate_create(Some("run-1"), &mut tasks, &d, &json!({ "task": "task-1", "question": "ship it?", "options": r#"["yes","no"]"# }), 1).unwrap();
@@ -1340,6 +1345,10 @@ mod tests {
         assert!(no(&mut m, &mut tasks, json!({ "task": "task-2", "question": "q" })).message.contains("worker"));
         assert_eq!(no(&mut m, &mut tasks, json!({ "task": "task-3", "question": "q" })).code, "not_found");
         assert!(no(&mut m, &mut tasks, json!({ "task": "task-1" })).message.contains("--question"));
+        // CLI-037: with no Run attached, even a task that has no Run of its own is not held.
+        let lone = m.gate_create(None, &mut tasks, &d, &json!({ "task": "task-4", "question": "q" }), 5).unwrap_err();
+        assert_eq!(lone.code, "no_run");
+        assert!(lone.message.contains("run-create"), "{}", lone.message);
         assert_eq!((m.gates.len(), tasks.clone()), before);
     }
 
