@@ -640,6 +640,14 @@ recorded default until told otherwise; nothing here blocks a pass.
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
   should ask for it to be revoked. Live checks still use stand-in programs and fake keys.
 
+- [accounts] 2026-10-11 · Token analytics (T-136-b's USAGE-012 / 013, T-137) read the Claude Code
+  and Codex logs on this PC. Claude Code's public docs say its transcript format "is internal
+  ... and changes between versions", and Codex documents none, so a clean-room build has nothing
+  public to parse against. Options: (a) let a builder read the shape (field names only, never the
+  text) of a few of your own `~.claudeprojects` and `~.codexsessions` files; (b) count
+  tokens only from what Kolux sees live; (c) leave token analytics out. Until you pick, T-136-b
+  and T-137 stay unbuilt. USAGE-011's activity counts also wait for the status hooks (T-025).
+
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
 | OD-01 | Does Kolux call the AI provider's sign-in and usage services itself? | No: browser sign-in only, Claude renewal switched off, usage read from running sessions |
@@ -1278,6 +1286,8 @@ recorded default until told otherwise; nothing here blocks a pass.
   and the tray dot T-324's (noted on those lines).
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [accounts] T-136-b · BLOCKED, not started: USAGE-011 counts agent turns from the status hooks (T-025 unbuilt; the window only knows a program is running); USAGE-012 / 013 read Claude Code and Codex log files whose format has no public description (Needs Txais, token analytics)
+- 2026-10-11 · [accounts] T-137 · BLOCKED, not started: the Claude / Codex token panels and cost figures parse the same unpublished log formats (Needs Txais, token analytics); the Grok credits panel waits for a Grok usage source
 - 2026-10-11 · [accounts] T-136-a · done: `src/usage/alerts.ts` (`dueAlerts` 80 % and 95 % once per window and reset time, both at once when first seen over 95 %, nothing without a reset time, window wording for 5-hour / weekly / monthly / n-day / n-hour / other; `useUsageAlerts` watches the shared figures, waits for settings and the saved record) + `alerts.test.ts` (6 tests); `src-tauri/src/usage_alerts.rs` (fired record in state.db, saved before the notification shows) + tauri-plugin-notification; Settings > Notifications usage-alerts switch; live: Codex 70 % gave nothing, 82 % one toast, 84 / 90 % and a reload nothing more, 97 % the 95 % toast, a new reset time at 30 % then 81 % the 80 % toast again, Claude first seen at 97 % two toasts, no reset time none, switch off none, switch on again the one due; all read back from Windows' notification history; build / clippy / 132 Rust + 174 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-136-a.txt, evidence/T-136-a-*.png
 - 2026-10-11 · [accounts] T-135 · done: `src/usage/launchWarn.ts` (`launchWarnings` one line per provider at 80 % or more of its shortest window with a figure, seat count or the one agent named, reset time when known; the shared figures store the Codex pill now publishes to) + `launchWarn.test.ts` (4 tests: three Claude seats at 85 %, a second provider, 80 % exactly, 40 %, no figures, no usage source, the shortest-window rule); `ChooserPane.tsx` shows the lines above Start (1 more test); live: three Claude seats with 85 % set gave one line counting 3 sessions with its reset time and Start enabled, 40 % gave none, a real Codex seat (0 % used) gave none, Codex at 90 % added its own line; build / clippy / 132 Rust + 168 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-135.txt, evidence/T-135-*.png
 - 2026-10-11 · [accounts] T-037-fix-look · done: `styles.css` top bar is a three-column grid (`1fr auto 1fr`) instead of an absolutely centred switcher, a 1100 px rule that leaves the search box its icon, `.chooser-foot`; `ChooserPane.tsx` Start moved out of the scrolling body into a footer; a new test in `ChooserPane.test.ts` (Start sits in a footer after the scrolling body; failed before the move) and `scripts/evidence/overlap.mjs` (live check, exit 1 on overlap; before: switcher 595-805 over search box 771-961 at 1400 px, after: 517-727 against 771-961, and at 884 px 160-370 against 414-445 with the close button inside the window); live: Start reachable and starting a PowerShell session from a 6-pane chooser; seen, not fixed (core lane's tabs): a chooser that gets a tab beside it is named "Terminal N" on its tab · evidence/T-037-fix-look.txt, evidence/T-037-fix-look-*.png
