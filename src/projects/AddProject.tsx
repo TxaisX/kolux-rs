@@ -5,6 +5,7 @@
 // say so and lead back.
 import { useEffect, useRef, useState } from "react";
 import { FolderPlus, Plus } from "../chrome/icons";
+import { GLOSSARY } from "../glossary";
 
 export type Step = "choose" | "clone" | "new";
 const CHOICES = 3;
@@ -29,7 +30,7 @@ export function AddProjectView({ step, onStep, onBrowse, onClose }: ViewProps) {
   }, [step]);
   const later = (what: string) => (
     <p className="ask-body">
-      {what} is not built yet in this version. Open a folder works today for a repository already on this computer.
+      {what} is not built yet in this version. Open a folder works today for a project already on this computer.
     </p>
   );
   return (
@@ -58,12 +59,12 @@ export function AddProjectView({ step, onStep, onBrowse, onClose }: ViewProps) {
           }
         }}
       >
-        <h2 className="ask-title">{step === "clone" ? "Clone from a URL" : step === "new" ? "New project" : "Add project"}</h2>
+        <h2 className="ask-title">{step === "clone" ? GLOSSARY.clone.plain : step === "new" ? "New project" : "Add project"}</h2>
         {step === "choose" && (
           <>
-            <button ref={(b) => { choices.current[0] = b; }} className="add-choice primary" onClick={() => onStep("clone")}>
-              <span className="add-choice-name">Clone from a URL</span>
-              <span className="add-choice-hint">Copy a repository from GitHub or another Git host</span>
+            <button ref={(b) => { choices.current[0] = b; }} className="add-choice primary" title={GLOSSARY.clone.hover} onClick={() => onStep("clone")}>
+              <span className="add-choice-name">{GLOSSARY.clone.plain}</span>
+              <span className="add-choice-hint">Copy a project from GitHub or another Git host</span>
             </button>
             <div className="add-more">
               <button ref={(b) => { choices.current[1] = b; }} className="add-choice" onClick={onBrowse}>
@@ -79,8 +80,8 @@ export function AddProjectView({ step, onStep, onBrowse, onClose }: ViewProps) {
         )}
         {step === "clone" && (
           <>
-            <input aria-label="repository URL" className="field" placeholder="https://github.com/owner/repo.git" value={url} onChange={(e) => setUrl(e.target.value)} autoFocus />
-            {later("Cloning")}
+            <input aria-label="web address of the project" title="The Git repository URL" className="field" placeholder="https://github.com/owner/project.git" value={url} onChange={(e) => setUrl(e.target.value)} autoFocus />
+            {later("Copying from a web address")}
           </>
         )}
         {step === "new" && later("Starting a new project")}
@@ -93,8 +94,8 @@ export function AddProjectView({ step, onStep, onBrowse, onClose }: ViewProps) {
               Open a folder…
             </button>
             {step === "clone" && (
-              <button className="btn primary" disabled>
-                Clone
+              <button className="btn primary" disabled title={GLOSSARY.clone.hover}>
+                Copy
               </button>
             )}
           </div>

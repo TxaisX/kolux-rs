@@ -19,7 +19,7 @@ test("arrow keys move between the three choices and wrap; other keys leave focus
 test("cloning is the main choice, with Browse then New project beside it", () => {
   const html = renderToString(createElement(AddProjectView, { step: "choose", onStep: noop, onBrowse: noop, onClose: noop }));
   expect(html).toContain('role="dialog"');
-  const clone = html.indexOf("Clone from a URL");
+  const clone = html.indexOf(">Copy from a web address<");
   const browse = html.indexOf("Open a folder");
   const fresh = html.indexOf("New project");
   expect(clone).toBeGreaterThan(-1);
@@ -37,6 +37,6 @@ test("the clone and new steps say plainly what works today and lead back", () =>
     expect(html).toContain("Open a folder");
   }
   const clone = renderToString(createElement(AddProjectView, { step: "clone", onStep: noop, onBrowse: noop, onClose: noop }));
-  expect(clone).toContain('aria-label="repository URL"');
-  expect(clone).toMatch(/<button[^>]*disabled[^>]*>Clone<\/button>/);
+  expect(clone).toContain('aria-label="web address of the project"');
+  expect(clone).toMatch(/<button[^>]*disabled[^>]*>Copy<\/button>/);
 });

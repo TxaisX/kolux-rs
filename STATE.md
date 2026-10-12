@@ -867,6 +867,12 @@ link that opens Settings › Accounts & keys, Claude Code and Codex carry a Docs
 installed agents fold under More agents (n), and while the app is still looking for AI programs
 the seat says so instead of calling anything not installed.
 
+[accounts] Newcomer screens use everyday words (T-209-a): Add project offers Copy from a web
+address instead of Clone, the sidebar says workspaces rather than worktrees and a terminal
+rather than a shell, and toasts say project folder rather than repository; hovering the plain
+label shows the exact Git term. A test reads every in-scope screen and fails the build when one
+of repo, clone, checkout, worktree, shell, CLI or PTY shows on it.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1617,7 +1623,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-201-a · SESS-017's "AI connections" is the Settings › Accounts & keys page; the AI choice stays one native radio group (one tab stop), with Set up, Docs and More agents as their own links beside it; docs links for agents other than Claude Code and Codex wait for T-201-b.
 
+- [accounts] T-209-a · Plain words chosen: clone = Copy from a web address, repository = project, worktree = workspace, main checkout = main folder, shell = terminal, CLI = program, PTY = terminal; the sidebar's pointer to the Settings page Git & worktrees now reads the Git page in Settings (the Settings list is not a newcomer path, so its page name stays). The scan reads the source of each in-scope file (all states at once) instead of rendering one state.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-209-a · done: new `src/glossary.ts` (banned words, plain words with hover text, the Connect cards' lines) and `src/plainWords.test.ts` (TypeScript syntax scan of 13 in-scope files plus a hover check); Add Project, sidebar and toast wording changed · evidence/T-209-a.txt, T-209-a-1..2 png
 - 2026-10-12 · [accounts] T-208 · not built, left unticked · WAITS ON MERGE: ONB-006/007/008/010/012 are the leaving, progress, first-profile and grid-tour rules of the wizard T-207 builds, so it follows T-207 (which waits on the kit code from lane/release).
 - 2026-10-12 · [accounts] T-207 · not built, left unticked · WAITS ON MERGE: ONB-004 and ONB-005 are the sample-data and kit screens of the wizard, and ONB-001 hides the wizard behind the kit setup dialog; the kit code (T-204, T-205) is on main from lane/release but not in lane/accounts, and a wizard with two missing screens should not reach new profiles. Build with the kits (lane/release), or here once main reaches this lane.
 - 2026-10-12 · [accounts] T-206 · not built, left unticked · WAITS ON MERGE: SKILL-011..015 rescue, preview, collect and record runs of starter kits, and the kit code they act on (T-204 gallery and setup, T-205 kit runs and the results strip) is on main from lane/release (c03bab6, 55a1abf) but not in lane/accounts; building it here would mean a second copy of the kit system. Build in lane/release, or here once main reaches this lane.

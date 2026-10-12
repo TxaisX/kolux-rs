@@ -356,7 +356,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-206 · SKILL-011 Rescue a stuck kit role: move it, sign in, or restart · SKILL-012 Preview or open a kit's result files · SKILL-013 [compat] Collect a kit's results into one dated folder with a summary page · SKILL-014 [compat] Kit run record and recent kit runs · SKILL-015 Kits run only in local projects or the samples folder
 - [ ] T-207 · ONB-001 Guided first run is a four-screen card floating over the app · ONB-002 Welcome screen: three AIs at work side by side · ONB-003 Connect an AI screen keeps Continue locked until one AI is connected · ONB-004 Your work screen: choose a folder or use sample data · ONB-005 Choose a kit screen starts a kit or one plain session
 - [ ] T-208 · ONB-006 Leaving the wizard asks first and says how to return · ONB-007 [compat] Wizard progress and outcome are kept, and a failed save can be retried · ONB-008 [compat] Only new profiles get the wizard; older progress carries forward · ONB-010 The first folder added after onboarding starts the default agent · ONB-012 Grid tour runs once when the first run ends
-- [ ] T-209 · ONB-036 Plain words on newcomer paths, guarded against jargon
+- [x] T-209-a · ONB-036 Plain words on newcomer paths, guarded against jargon (glossary in `src/glossary.ts`; `src/plainWords.test.ts` scans Add Project, the launcher, the sidebar, the Connect cards and the toasts, and fails the build on a banned word)
+- [ ] T-209-b · ONB 036 rest: add the onboarding wizard (T-207) and the folder-without-Git dialog (T-203, on main from lane/release) to the plain-words scan once they reach this lane, and reword what it finds
 - [ ] T-210 · SET-017 [compat] Interface language, falling back to English
 - [ ] T-211 · APP-023 The landing screen warns about missing or signed-out tools
 

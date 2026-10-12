@@ -577,7 +577,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
       const pid = projectOf(chooser.cwd) ?? projectFor(null);
       const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
-        if (!pid) throw new Error("Add a project first: an agent needs a repository to work in.");
+        if (!pid) throw new Error("Add a project first: an agent needs a project folder to work in.");
         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
         return { cwd: wt.path, branch: wt.branch };
       };
@@ -726,7 +726,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const launch = async (agent: AgentInfo, projectId: string | null) => {
     const pid = projectFor(projectId);
     if (!pid) {
-      setNotice("Add a project first: an agent needs a repository to work in.");
+      setNotice("Add a project first: an agent needs a project folder to work in.");
       return;
     }
     setLaunching(true);

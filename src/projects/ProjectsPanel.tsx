@@ -30,6 +30,7 @@ import { openSettings as openSettingsPage } from "../settings/pages";
 import { chromeShown } from "../chrome/chromeItems";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
+import { GLOSSARY } from "../glossary";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing";
@@ -183,7 +184,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       } catch (err) {
         // ACCT-056: a failed scan removes nothing; the worktrees already known stay listed.
         next[p.id] = afterScan(scanned.current[p.id], null);
-        say("warn", `Could not list the worktrees of ${p.name}, so the last known list stays: ${String(err)}`);
+        say("warn", `Could not list the workspaces of ${p.name}, so the last known list stays: ${String(err)}`);
       }
     }
     scanned.current = next;
@@ -386,7 +387,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(activeDir, x.path));
       if (w) return void ask(p.id, w.path, worktreeLabel(w));
     }
-    say("warn", "The workspace shown is not one Kolux can delete (a main checkout, or no workspace).");
+    say("warn", "The workspace shown is not one Kolux can delete (a project's main folder, or no workspace).");
   }, [deleteRequest]);
   // SESS-035: Recent (projects the composer made workspaces in), then the rest by match, then Add project.
   const projectItems = (q: string): PickItem[] => {
@@ -442,7 +443,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       </div>
       {p && <Picker key={`parent-${p.id}`} name="Parent" value={parentLabel(p)} items={parentItems(p)} onPick={(k) => setParentDraft(k || null)} onEmptyEnter={() => setParentDraft(null)} />}
       <select aria-label="agent" className="field" value={agentDraft} onChange={(e) => setAgentDraft(e.target.value)}>
-        <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a shell"}</option>
+        <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a terminal"}</option>
         {installed.map((a) => (
           <option key={a.id} value={a.id}>
             {a.name}
@@ -593,7 +594,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const showWord = (b: boolean) => (b ? "Shown" : "Hidden");
   const globalVis = () => (
     <div data-visibility-defaults>
-      <label>Worktrees Kolux did not make, by default</label>
+      <label title={GLOSSARY.worktree.hover}>Workspaces Kolux did not make, by default</label>
       {visGlobal.map((s) => (
         <div key={s.key}>
           <div className="preview" title={s.root ?? s.label}>
@@ -615,7 +616,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       <input
         aria-label="extra root folder"
         className="field"
-        placeholder="another folder that holds worktrees (starts hidden)"
+        placeholder="another folder that holds workspaces (starts hidden)"
         value={rootPath}
         onChange={(e) => {
           setRootPath(e.target.value);
@@ -633,7 +634,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   );
   const ownVis = (p: Project) => (
     <>
-      <label>Worktrees Kolux did not make, in {p.name}</label>
+      <label title={GLOSSARY.worktree.hover}>Workspaces Kolux did not make, in {p.name}</label>
       {visOwn.map((s) => (
         <div key={s.key}>
           <div className="preview" title={s.root ?? s.label}>
@@ -672,7 +673,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const at = Math.min(hiddenPage, pages - 1);
     return (
       <>
-        <label>Hidden worktrees ({all.length})</label>
+        <label title={GLOSSARY.worktree.hover}>Hidden workspaces ({all.length})</label>
         {all.length === 0 && <div className="preview">None hidden.</div>}
         {all.slice(at * PAGE, at * PAGE + PAGE).map((w) => (
           <div className="vis-row" key={w.path}>
@@ -915,7 +916,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                 setShowAdd(false);
                 openSettingsPage("git");
               }}>
-                Branch prefix and compare base: Settings › Git &amp; worktrees
+                Branch prefix and compare base: the Git page in Settings
               </button>
               <label className="check">
                 <input type="checkbox" checked={nest} onChange={(e) => onNest(e.target.checked)} />
@@ -947,7 +948,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </div>
           )}
           {creating === "" && nameField(null)}
-          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add one that holds a Git repository.</div>}
+          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a project folder that uses Git.</div>}
 
           {groupBy === "project" &&
             projects.map((p) => {
@@ -996,12 +997,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   )}
                   {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
                     <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
-                      {fresh[p.id].length} new worktree{fresh[p.id].length === 1 ? "" : "s"}
+                      {fresh[p.id].length} new workspace{fresh[p.id].length === 1 ? "" : "s"}
                     </button>
                   )}
                   {review === p.id && (
                     <div className="sb-form" data-review={p.id}>
-                      <label>New worktrees in {p.name}</label>
+                      <label title={GLOSSARY.worktree.hover}>New workspaces in {p.name}</label>
                       {(fresh[p.id] ?? []).map((w) => (
                         <div className="vis-row" key={w.path}>
                           <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>

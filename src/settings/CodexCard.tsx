@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
+import { CONNECT } from "../glossary";
 
 export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean; label?: string };
 const NAME_MAX = 40;
@@ -141,7 +142,7 @@ export function CodexCardView({ view, error, confirming = null, naming = null, o
           )}
         </div>
       )}
-      {!busy && view.accounts.length === 0 && view.systemDefault !== "signed-out" && <p className="conn-detail">Connect adds a ChatGPT account in a Codex home of Kolux's own; your Codex folder stays as it is.</p>}
+      {!busy && view.accounts.length === 0 && view.systemDefault !== "signed-out" && <p className="conn-detail">{CONNECT.codex}</p>}
       <AttentionNote attention={view.attention} route="codex" onFix={(f) => onAction(f === "Open install page" ? { kind: "install" } : { kind: "connect" })} />
       {error && (
         <p className="conn-detail warn" role="alert">
