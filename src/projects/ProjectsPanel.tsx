@@ -24,6 +24,7 @@ import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, s
 import { nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
+import { openSettings as openSettingsPage } from "../settings/pages";
 import { chromeShown } from "../chrome/chromeItems";
 import { KeyText } from "../keys/KeymapContext";
 
@@ -54,6 +55,8 @@ type Props = {
   defaultId: string;
   onSetDefault: (id: string) => void;
   onChoose: () => void;
+  /** SESS-009: the dropdown's blank-terminal row (a plain shell tab). */
+  onTerminal?: () => void;
   /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
   /** Which page (Automations, Model routing) is open over the content column, if any. */
   page: Page | null;
@@ -73,7 +76,7 @@ type Props = {
   onNest: (on: boolean) => void;
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -697,6 +700,17 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             busy={launching}
             style={{ left: 16, bottom: 56 }}
             onClose={() => setPlusOpen(false)}
+            onTerminal={
+              onTerminal &&
+              (() => {
+                setPlusOpen(false);
+                onTerminal();
+              })
+            }
+            onManage={() => {
+              setPlusOpen(false);
+              openSettingsPage("agents");
+            }}
             onPick={(a) => {
               setPlusOpen(false);
               onLaunch(a, projects.length === 1 ? projects[0].id : null);

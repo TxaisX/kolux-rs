@@ -243,7 +243,7 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P1 · theme 7 · Redesign and the new look (18 cards)
 
 - [ ] T-142 · PROJ-085 [compat] Workspace board: lanes by status · also passes: VIEW-027 Large workspace boards stay smooth
-- [ ] T-143 · SESS-009 Agent dropdown leads with three featured agents and searches the rest
+- [x] T-143 · SESS-009 Agent dropdown leads with three featured agents and searches the rest
 - [ ] T-144 · TERM-010 Resize panes by dragging dividers · TERM-024 Narrow panes drop header items in a set order · TERM-035 Pane right-click menu · TERM-078 [compat] Zoom the terminal font · TERM-097 Terminal font settings
 - [x] T-145-a · TERM-098 Terminal colour themes: Kolux dark by default and a Tango-style light scheme in light mode; programs that ask the terminal for its colours or for light/dark mode, or subscribe to mode changes, are answered by the pane (custom themes are in T-148)
 - [ ] T-145-b · TERM 098 rules that need the PTY: on Windows the system console layer swallows the colour and light/dark questions (OSC 4, 10, 11 with "?", CSI ? 996 n, CSI ? 2031 h) before they reach the pane, so programs get no answer; needs a pass-through console or answering in the Rust output reader; also check no stray replies at startup (output that arrives before the pane knows its terminal id is dropped today)

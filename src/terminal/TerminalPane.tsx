@@ -17,6 +17,7 @@ import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
+import { openSettings } from "../settings/pages";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
@@ -335,6 +336,17 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             })
           }
           onClose={() => setPlusAt(null)}
+          onTerminal={
+            onSplit &&
+            (() => {
+              setPlusAt(null);
+              onSplit();
+            })
+          }
+          onManage={() => {
+            setPlusAt(null);
+            openSettings("agents");
+          }}
           onPick={(a) => {
             setPlusAt(null);
             onLaunch?.(a);

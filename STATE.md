@@ -669,6 +669,11 @@ between panes (2 to 12 px), a divider colour for dark mode and one for light mod
 not in focus fade. Moving focus fades the pane left behind over about 140 ms. Defaults keep the
 measured look: 6 px, no colour, no dim (DT-A7).
 
+[accounts] Agent dropdown (T-143): the New session menu, from the sidebar or a pane's plus, leads
+with Claude Code, Codex and Grok; other installed agents fold behind "Show more agents", folded
+again each time it opens. A search box reaches any installed agent (aid finds Aider), typing shell
+or terminal offers a blank terminal, Enter takes the top row, and "Manage agents" opens Settings > Agents.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1351,7 +1356,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-148-d · DT-A7: the divider starts at 6 px with no colour and panes not in focus start undimmed; SET-023's card says 3 px and dimmed. Confirm or flip.
 
+- [accounts] T-143: a default agent outside Claude Code, Codex and Grok also leads the dropdown (SESS-004 keeps the default first), so up to four rows show before the fold; the search box shows only when more than three agents are installed; Grok and the rest draw the plain shell glyph until T-335 brings vendor marks.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-143 · done: `agentRows`, `searchAgents` (name, word start, alias, initials, command; over 40 characters ignored) and `wantsTerminal` in src/launch/agents.ts; PlusMenu search box, Show more toggle, Blank terminal row and Manage agents; sidebar row opens a shell tab, pane row splits a shell; tests in src/launch/dropdown.test.ts · evidence/T-143.txt, evidence/T-143-1-folded.png .. T-143-5-manage.png
 - 2026-10-12 · [accounts] T-148-d · done: Appearance fields `paneDividerWidth`, `paneDividerDark`, `paneDividerLight`, `paneDim` (clamped, colours #rrggbb only) as CSS vars `--divider-width`, `--divider`, `--pane-dim`; the grid gap and ground follow them, unfocused pane content fades over 140 ms; Panes card under Terminal; DT-A7 + SET-023 amendment · evidence/T-148-d.txt, evidence/T-148-d-1.png .. T-148-d-3.png
 - 2026-10-12 · [accounts] T-148-c · done: new `src/chrome/chromeItems.ts` (`titleBarAppName`, `tasksButton`, `automationsButton` with DT-A6 defaults, folded summary), Window & Sidebar switches and status bar item ticks in Settings > Appearance, TopBar app name, ProjectsPanel Tasks row and Automations button follow the switches; DT-A6 + SET-020 amendment; View-menu submenu on T-248, used/left usage on T-041 · evidence/T-148-c.txt, evidence/T-148-c-1-defaults.png .. T-148-c-5-automations-hidden.png
 - 2026-10-12 · [accounts] T-148-b · done: Appearance page in three `<details>` sections with folded summaries (SET-016), links unfold their section (SettingsPage), App font / Editor font fields with installed-font suggestions (new `src-tauri/src/fonts.rs` `list_fonts`, `src/settings/fonts.ts`), fonts kept in `appFont` / `editorFont` and cached for the first frame; icon chooser, search unfolding, terminal font and editor noted on T-300, T-246, T-247, T-323 · evidence/T-148-b.txt, evidence/T-148-b-1-sections.png .. T-148-b-7-link-unfolds-window.png

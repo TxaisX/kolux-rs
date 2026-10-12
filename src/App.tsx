@@ -705,6 +705,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             launching={launching}
             onLaunch={launch}
             onChoose={addChooser}
+            onTerminal={() => void newTab(null)}
             page={page}
             onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}

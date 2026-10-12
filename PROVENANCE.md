@@ -377,3 +377,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-148-c · rules from the SET-020 and VIEW-096 cards and DESIGN.md section 11; no outside source needed; no old Kolux source read
 
 > 2026-10-12 · T-148-d · rules from the SET-023 card and DESIGN.md section 1; no outside source needed; no old Kolux source read
+
+> 2026-10-12 · T-143 · rules from the SESS-009, SESS-001 and SESS-004 cards; no outside source needed; no old Kolux source read
