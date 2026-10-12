@@ -693,6 +693,19 @@ impl Mail {
         })
     }
 
+    /// ORCH-031: clears one scope. "tasks" drops the gates (the caller drops tasks and workers),
+    /// "messages" the mail but not the delivery positions, so nothing is handed out again; "all"
+    /// everything. Ids keep counting up, so nothing cleared is ever named again.
+    pub fn reset(&mut self, scope: &str) -> Result<(), Fail> {
+        match scope {
+            "tasks" => self.gates.clear(),
+            "messages" => self.messages.clear(),
+            "all" => *self = Mail { seq: self.seq, ..Mail::default() },
+            _ => return Err(args("give exactly one of --all, --tasks or --messages")),
+        }
+        Ok(())
+    }
+
     /// ORCH-006: the newest mail in `boxes`, newest first, bodies cut unless `full`; it only reads.
     pub fn inbox(&self, reader: &str, boxes: &[String], limit: usize, full: bool) -> Value {
         let shown: Vec<Value> = self
@@ -1352,5 +1365,29 @@ mod tests {
         assert!(m.ask("term-2", &json!({ "question": "x", "resume": id }), &[], &peers, 6).unwrap_err().message.contains("not both"));
         assert!(m.ask("term-2", &json!({ "resume": id, "options": "a,b" }), &[], &peers, 6).unwrap_err().message.contains("--options"));
         assert_eq!(m.ask("term-1", &json!({ "resume": id }), &[], &peers, 6).unwrap_err().code, "not_found", "only the asker resumes its question");
+    }
+
+    #[test]
+    fn a_reset_clears_only_its_scope() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let peers = vec![peer("term-1", Some("claude"), true, "G:/r")];
+        let mut tasks = vec![json!({ "id": "task-1", "status": "ready", "runId": run, "deps": [] })];
+        m.gate_create(Some(&run), &mut tasks, &[], &json!({ "task": "task-1", "question": "q" }), 2).unwrap();
+        m.post("term-1", &json!({ "subject": "hi", "to": format!("run:{run}") }), &[], &peers, 3).unwrap();
+        let boxes = m.boxes_of("term-1", &[]);
+        let first = m.check("term-1", "term-1", &boxes, Mode::Next, None, None, None).unwrap();
+        assert_eq!(first["messages"].as_array().unwrap().len(), 1);
+        m.reset("tasks").unwrap();
+        assert!(m.gates.is_empty());
+        assert_eq!((m.runs.len(), m.messages.len()), (1, 1), "the tasks scope keeps Runs and mail");
+        m.reset("messages").unwrap();
+        assert!(m.messages.is_empty());
+        assert_eq!((m.runs.len(), m.deliveries.len()), (1, 1), "the messages scope keeps Runs and delivery positions");
+        let seq = m.seq;
+        m.reset("all").unwrap();
+        assert_eq!((m.runs.len(), m.deliveries.len(), m.bindings.len()), (0, 0, 0));
+        assert_eq!(m.seq, seq, "ids keep counting up, so nothing cleared is named again");
+        assert!(m.reset("everything").is_err());
     }
 }
