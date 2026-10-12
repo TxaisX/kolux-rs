@@ -2,6 +2,7 @@
 import { screens } from "../chrome/TopBar";
 import { useSettings } from "./useSettings";
 import { FIRST_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
+import { REVIEW_FIELD, reviewOn } from "../editor/notes";
 
 /** A row of buttons that behaves as one radio group. */
 export function Segmented<T extends string>({ label, options, value, onPick, off = [] }: { label: string; options: Array<{ id: T; label: string }>; value: T; onPick: (v: T) => void; off?: T[] }) {
@@ -32,6 +33,10 @@ export function GeneralView({ settings, onSave }: { settings: Record<string, unk
         <Segmented label="Opens first" options={screens} value={classic ? "terminals" : savedFirst(settings)} off={classic ? ["agents", "board"] : []} onPick={(v) => onSave({ [FIRST_FIELD]: v })} />
       </div>
       {classic && <p className="conn-detail">Switch the look to New to open on Agents or Board.</p>}
+      <label className="conn-switch">
+        <input type="checkbox" aria-label="Markdown review notes" checked={reviewOn(settings)} onChange={(e) => onSave({ [REVIEW_FIELD]: e.target.checked })} />
+        <span>Markdown review notes: select text in a Markdown file and press Ctrl+Shift+A to add a note for an agent.</span>
+      </label>
     </section>
   );
 }

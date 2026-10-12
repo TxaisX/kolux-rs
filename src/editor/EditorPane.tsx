@@ -16,6 +16,7 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, loadText, relay, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
+import { domPick, noteDraft, selections } from "./notes";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
@@ -163,6 +164,20 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
 
   const name = baseName(path);
   const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
+  // GIT-042: the add-note shortcut reads this tab's selection (Markdown files only).
+  useEffect(() => {
+    if (!md) return;
+    selections.set(id, () => {
+      const cm = view.current;
+      if (!cm) return null;
+      if (shown === "rich") return domPick(richHost.current, path, cm.state.doc.toString());
+      const { from, to } = cm.state.selection.main;
+      const draft = noteDraft(path, "", cm.state.sliceDoc(from, to), cm.state.doc.lineAt(from).number);
+      const at = cm.coordsAtPos(to);
+      return draft && { draft, x: at?.left ?? 200, y: at?.bottom ?? 200 };
+    });
+    return () => void selections.delete(id);
+  }, [md, id, path, shown]);
   return (
     <section className={`pane editor${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} data-kind="editor" data-key={id}>
       <header className="pane-head">

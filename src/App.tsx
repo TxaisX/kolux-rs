@@ -34,6 +34,8 @@ import BrowserPane from "./browser/BrowserPane";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
+import ReviewNotes from "./editor/ReviewNotes";
+import { reviewOn, selections, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import DiffPane, { diffNav } from "./editor/DiffPane";
@@ -197,6 +199,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [notice, setNotice] = useState<string | null>(null);
   // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
   const [toast, setToastText] = useState<string | null>(null);
+  // GIT-042: review notes on Markdown, kept until copied or cleared.
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [picked, setPicked] = useState<Picked | null>(null);
   const toastTimer = useRef<number | null>(null);
   const setToast = (text: string) => {
     setToastText(text);
@@ -275,7 +280,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       // the ones Kolux has no action for yet are left to CodeMirror.
       const hit =
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
+        // GIT-042: a preview tab takes the one editor shortcut that applies to it.
+        (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
@@ -334,6 +341,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "tab.newBrowser":
           void newTab("browser");
           break;
+        case "editor.addReviewNote": {
+          // With nothing selected, or the review tools off, the shortcut does nothing.
+          const got = reviewOn(settings) ? selections.get(focused)?.() : null;
+          if (!got) return;
+          setPicked(got);
+          break;
+        }
         case "editor.nextChange":
         case "editor.previousChange": {
           const step = diffNav.get(focused);
@@ -1128,6 +1142,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
       </div>
       <UpdateCenter />
+      {reviewOn(settings) && (
+        <ReviewNotes
+          picked={picked}
+          notes={notes}
+          onAdd={(n) => {
+            setNotes((ns) => [...ns, n]);
+            setPicked(null);
+          }}
+          onCancel={() => setPicked(null)}
+          onRemove={(i) => setNotes((ns) => ns.filter((_, k) => k !== i))}
+          onClear={() => setNotes([])}
+        />
+      )}
       {readStatusBar(settings).visible && (
       <StatusBar
         hidden={readStatusBar(settings).hidden}
