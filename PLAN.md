@@ -226,7 +226,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-103-a · VIEW-108 [compat] Terminals keep their scroll position across view switches
 - [x] T-103-b · VIEW-036 [compat] Add or remove sessions by shortcut (the commands exist; the live check needs keys assigned, and writing ~/.kolux/keybindings.json was refused; this card says remove always asks, while the session-remove card drops an empty chooser without asking)
 - [x] T-104-a · ACCT-046 Windows terminals choose the best shell on the machine · ACCT-048 Terminals begin with a clean environment · ACCT-049 Terminals refuse start folders that are unsafe or out of reach
-- [ ] T-104-b · ACCT-047 Startup commands run once, after the shell is ready · ACCT-065 macOS and Linux terminals fall back to a shell that works (the ready signal needs shell wrappers and prompt markers, which nothing reads yet; the macOS and Linux fallback can only be proven on those systems)
+- [x] T-104-b · ACCT-065 macOS and Linux terminals fall back to a shell that works (unit-tested; the live check needs macOS or Linux)
+- [ ] T-104-c · ACCT-047 Startup commands run once, after the shell is ready (needs shell wrappers that report ready and prompt markers read from the PTY)
 - [x] T-105 · CLI-023 [compat] kolux terminal list and show · CLI-026 [compat] kolux terminal create, split, rename and switch (also focus)
 
 ### P1 · theme 2 · Isolation: one worktree per agent (36 cards)

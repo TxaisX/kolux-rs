@@ -13,17 +13,36 @@ use std::time::Duration;
 /// ACCT-046: the shells an automatic pick tries, best first. On Windows: PowerShell 7 (passed over
 /// when the copy found is a Microsoft Store alias), then Windows PowerShell, then the command
 /// prompt, which is always last, found through the system's ComSpec setting when that is set, and
-/// started in UTF-8. Elsewhere the login shell, else sh.
+/// started in UTF-8. Elsewhere the login shell with the ACCT-065 fallbacks (`unix_shells`).
 // ponytail: PowerShell gets no prompt markers yet; nothing in Kolux reads them (DT-R36).
 pub fn auto_shells(find: impl Fn(&str) -> Option<PathBuf>, comspec: Option<PathBuf>) -> Vec<(PathBuf, Vec<&'static str>)> {
     if !cfg!(windows) {
-        return vec![(std::env::var_os("SHELL").map(PathBuf::from).unwrap_or_else(|| "sh".into()), Vec::new())];
+        return unix_shells(std::env::var("SHELL").ok().as_deref(), find).into_iter().map(|p| (p, Vec::new())).collect();
     }
     let mut out = Vec::new();
     out.extend(find("pwsh.exe").filter(|p| !store_alias(p)).map(|p| (p, vec!["-NoLogo"])));
     out.extend(find("powershell.exe").map(|p| (p, vec!["-NoLogo"])));
     let cmd = comspec.filter(|p| p.is_file()).or_else(|| find("cmd.exe")).unwrap_or_else(|| "cmd.exe".into());
     out.push((cmd, CMD_ARGS.to_vec()));
+    out
+}
+
+/// ACCT-065: the shells a macOS or Linux pane tries. A shell given by name alone is passed through
+/// untouched, found on the search path, with no fallback. A full path (or none at all) is followed
+/// by zsh, bash and sh, so a deleted or unrunnable login shell still opens a pane; `spawn_first`
+/// keeps the first that starts and, when none does, names each one it tried.
+pub fn unix_shells(chosen: Option<&str>, find: impl Fn(&str) -> Option<PathBuf>) -> Vec<PathBuf> {
+    let chosen = chosen.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(name) = chosen.filter(|s| !s.contains('/')) {
+        return vec![PathBuf::from(name)];
+    }
+    let mut out: Vec<PathBuf> = chosen.map(PathBuf::from).into_iter().collect();
+    for name in ["zsh", "bash", "sh"] {
+        let p = find(name).unwrap_or_else(|| PathBuf::from(name));
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
     out
 }
 
@@ -518,6 +537,18 @@ mod tests {
         let none = PtySession::spawn_first(vec![program_command("kolux-rs-no-such-a", &[], None), program_command("kolux-rs-no-such-b", &[], None)], 80, 24, |_| {}, |_| {});
         let err = none.err().expect("nothing starts");
         assert!(err.contains("kolux-rs-no-such-a") && err.contains("kolux-rs-no-such-b"), "{err}");
+    }
+
+    /// ACCT-065: a bare name passes through with no fallback; a full path that is gone, or no
+    /// shell set, falls back to zsh, then bash, then sh, each once.
+    #[test]
+    fn acct065_a_missing_login_shell_falls_back_to_zsh_then_bash_then_sh() {
+        let find = |n: &str| (n != "zsh").then(|| PathBuf::from(format!("/usr/bin/{n}")));
+        assert_eq!(unix_shells(Some("bash"), find), vec![PathBuf::from("bash")]);
+        assert_eq!(unix_shells(Some("/opt/gone/fish"), find), ["/opt/gone/fish", "zsh", "/usr/bin/bash", "/usr/bin/sh"].map(PathBuf::from).to_vec());
+        assert_eq!(unix_shells(Some("/usr/bin/bash"), find), ["/usr/bin/bash", "zsh", "/usr/bin/sh"].map(PathBuf::from).to_vec());
+        assert_eq!(unix_shells(None, find), ["zsh", "/usr/bin/bash", "/usr/bin/sh"].map(PathBuf::from).to_vec());
+        assert_eq!(unix_shells(Some("  "), |_| None), ["zsh", "bash", "sh"].map(PathBuf::from).to_vec());
     }
 
     /// ACCT-049: a folder that is gone or on a drive that is not there gets a message, and an

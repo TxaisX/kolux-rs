@@ -1,0 +1,21 @@
+T-104-b proof, 2026-10-12, lane release (Windows 11 PC)
+
+ACCT-065 macOS and Linux terminals fall back to a shell that works.
+- Built: pty.rs unix_shells(chosen, find), used by auto_shells on macOS and Linux with the login
+  shell ($SHELL; Kolux has no shell setting yet, so the login shell is the chosen one).
+  A bare name (bash) is passed through alone and found on the search path, no fallback.
+  A full path (absent, or one that will not run) is tried first, then zsh, then bash, then sh,
+  each once; spawn_first keeps the first that starts.
+- Unit tests (cargo test, run on this PC):
+  pty::tests::acct065_a_missing_login_shell_falls_back_to_zsh_then_bash_then_sh ... ok
+    (bare bash passes through alone; /opt/gone/fish is followed by zsh, bash, sh; a login shell
+    that is itself on the list is not repeated; no shell set, or blank, gives zsh, bash, sh)
+  pty::tests::acct046_a_shell_that_will_not_start_gives_way_to_the_next ... ok
+    (the next command is used when one will not start; when none starts the error names each
+    one tried: "No shell would start. Kolux tried a (...), b (...)")
+- Not checked live: opening a pane with a deleted login shell needs macOS or Linux, and this lane
+  runs on Windows only (DT-R41). The Windows shell order (pwsh, Windows PowerShell, cmd) is unchanged.
+
+ACCT-047 Startup commands run once, after the shell is ready: not built, moved to T-104-c
+(HAND TO FABLE: it needs shell wrappers that report ready, prompt markers read from the PTY
+output and held-back input, which is PTY and shell-integration work).
