@@ -274,7 +274,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-157 · SAFE-026 Stored secrets stay sealed by the system keyring, with no plain-text fallback
 - [ ] T-158 · BROW-015 Popups open in a small window that shows only the origin · BROW-024 Trust a self-signed certificate on a local dev server · BROW-029 Importing cookies never brings Google sign-ins · BROW-031 Passkey account chooser · BROW-036 Grabbed page details are scrubbed of secrets
 - [ ] T-159 · BROW-040 Document previews are fenced to their folder
-- [ ] T-160 · CLI-003 Typos are caught before the app is contacted, with safe suggestions · CLI-020 [compat] kolux worktree rm, also reachable as remove and delete · CLI-039 [compat] Who is calling: caller identity for orchestration
+- [x] T-160 · CLI-003 Typos are caught before the app is contacted, with safe suggestions · CLI-020 [compat] kolux worktree rm, also reachable as remove and delete · CLI-039 [compat] Who is calling: caller identity for orchestration
 
 ### P1 · theme 9 · Reliability and no lost work (93 cards)
 
