@@ -35,6 +35,9 @@ pub const VAULT: &str = "vault";
 pub const PASS_DONE: &str = "secretsSealingPassDone";
 /// State key: which protection sealed values last time, so the log notes a change once.
 const BACKEND_KEY: &str = "secretsBackend";
+/// State key: the secret fields dropped because they could not be opened (ACCT-010), as a JSON
+/// list, kept until the user dismisses the note or stores that secret again.
+const DROPPED_KEY: &str = "secretsDropped";
 
 /// Which protection this computer gives secrets.
 pub fn backend() -> &'static str {
@@ -152,7 +155,68 @@ pub fn write_setting(store: &Store, key: &str, plain: &str) -> Result<(), String
         settings = serde_json::json!({});
     }
     settings[key] = Value::String(sealed);
-    store.save_settings(&settings).map_err(|e| e.to_string())
+    store.save_settings(&settings).map_err(|e| e.to_string())?;
+    // ACCT-010: a key stored again is no longer one to reconnect.
+    let left: Vec<String> = dropped(store).into_iter().filter(|k| k != key).collect();
+    let _ = store.set(DROPPED_KEY, &Value::from(left).to_string());
+    Ok(())
+}
+
+/// ACCT-010: drops each secret settings field that is sealed but can no longer be opened (a new
+/// Windows profile, a restored backup) and leaves every other setting as it was. The dropped
+/// names are added to the reconnect note; returns the ones dropped now. Runs before the window
+/// loads, so the connection already shows as not connected.
+pub fn drop_unreadable(store: &Store, dir: &Path) -> Vec<String> {
+    let mut settings = store.settings();
+    let Some(obj) = settings.as_object_mut() else { return Vec::new() };
+    let gone: Vec<String> = SECRET_SETTINGS
+        .iter()
+        .filter(|k| matches!(obj.get(**k), Some(Value::String(s)) if !s.is_empty() && unseal(s).is_err()))
+        .map(|k| k.to_string())
+        .collect();
+    if gone.is_empty() {
+        return gone;
+    }
+    for k in &gone {
+        obj.remove(k);
+    }
+    if let Err(e) = store.save_settings(&settings) {
+        log(dir, &format!("secrets: could not clear a key that cannot be opened ({e})"));
+        return Vec::new();
+    }
+    let mut all = dropped(store);
+    for k in &gone {
+        log(dir, &format!("secrets: {k} could not be opened on this computer; cleared, reconnect it"));
+        if !all.contains(k) {
+            all.push(k.clone());
+        }
+    }
+    let _ = store.set(DROPPED_KEY, &Value::from(all).to_string());
+    gone
+}
+
+/// ACCT-010: the secret fields waiting for a reconnect, for the note in the main window.
+pub fn dropped(store: &Store) -> Vec<String> {
+    store.get(DROPPED_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn dismiss_dropped(store: &Store) {
+    let _ = store.set(DROPPED_KEY, "[]");
+}
+
+/// ACCT-011: every Claude key in `line` (`sk-ant-` and the URL-safe characters after it)
+/// becomes `sk-ant-[masked]`.
+pub fn mask(line: &str) -> String {
+    const KEY: &str = "sk-ant-";
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(i) = rest.find(KEY) {
+        out.push_str(&rest[..i]);
+        out.push_str("sk-ant-[masked]");
+        rest = rest[i + KEY.len()..].trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Writes a vault file sealed, whole or not at all.
@@ -203,7 +267,8 @@ fn move_aside(path: &Path) -> Result<PathBuf, String> {
     Ok(aside)
 }
 
-/// One line in `<profile>/logs/kolux.log`. Never carries a secret. Failures are ignored.
+/// One line in `<profile>/logs/kolux.log`. Never carries a secret: a Claude key in it is masked
+/// (ACCT-011). Failures are ignored.
 pub fn log(dir: &Path, line: &str) {
     let logs = dir.join("logs");
     if fs::create_dir_all(&logs).is_err() {
@@ -211,7 +276,7 @@ pub fn log(dir: &Path, line: &str) {
     }
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(logs.join("kolux.log")) {
-        let _ = writeln!(f, "{secs} {line}");
+        let _ = writeln!(f, "{secs} {}", mask(line));
     }
 }
 
@@ -358,6 +423,18 @@ mod dpapi {
 }
 
 /// Whether a secret settings field is set (never its value).
+/// ACCT-010: the secret fields to reconnect, by name.
+#[tauri::command]
+pub fn secrets_dropped(store: tauri::State<'_, Mutex<Store>>) -> Result<Vec<String>, String> {
+    Ok(dropped(&*store.lock().map_err(|e| e.to_string())?))
+}
+
+#[tauri::command]
+pub fn secrets_dropped_dismiss(store: tauri::State<'_, Mutex<Store>>) -> Result<(), String> {
+    dismiss_dropped(&*store.lock().map_err(|e| e.to_string())?);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn secret_status(store: tauri::State<'_, Mutex<Store>>, key: String) -> Result<bool, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
@@ -394,6 +471,51 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_key_that_cannot_be_opened_is_dropped_alone_and_named_until_dismissed_or_set_again() {
+        let dir = temp_dir("drop");
+        let store = Store::open(&dir).unwrap();
+        write_setting(&store, "xaiApiKey", "xai-GOOD").unwrap();
+        let mut s = store.settings();
+        s["claudeOauthToken"] = Value::String(format!("{PREFIX}AAAA"));
+        s["claudeConnectionMode"] = "key".into();
+        s["theme"] = "classic".into();
+        store.save_settings(&s).unwrap();
+        assert_eq!(drop_unreadable(&store, &dir), ["claudeOauthToken"]);
+        let after = store.settings();
+        assert!(after.get("claudeOauthToken").is_none());
+        assert_eq!((after["theme"].as_str(), after["claudeConnectionMode"].as_str()), (Some("classic"), Some("key")));
+        assert_eq!(read_setting(&store, "xaiApiKey").unwrap().as_deref(), Some("xai-GOOD"));
+        assert_eq!(dropped(&store), ["claudeOauthToken"]);
+        assert!(drop_unreadable(&store, &dir).is_empty(), "nothing left to drop");
+        assert_eq!(dropped(&store), ["claudeOauthToken"], "the note stays until it is dealt with");
+        let log = fs::read_to_string(dir.join("logs").join("kolux.log")).unwrap();
+        assert!(log.contains("claudeOauthToken could not be opened"), "{log}");
+        // Connecting again clears the note; so does dismissing it.
+        write_setting(&store, "claudeOauthToken", "sk-ant-oat01-NEW").unwrap();
+        assert!(dropped(&store).is_empty());
+        let mut s = store.settings();
+        s["xaiApiKey"] = Value::String(format!("{PREFIX}BBBB"));
+        store.save_settings(&s).unwrap();
+        assert_eq!(drop_unreadable(&store, &dir), ["xaiApiKey"]);
+        dismiss_dropped(&store);
+        assert!(dropped(&store).is_empty());
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_log_masks_a_claude_key_wherever_it_appears() {
+        let dir = temp_dir("mask");
+        log(&dir, "claude-key: kept sk-ant-oat01-AbC_d-123 then sk-ant-oat01-ZZZ.");
+        let text = fs::read_to_string(dir.join("logs").join("kolux.log")).unwrap();
+        assert!(!text.contains("AbC_d-123") && !text.contains("ZZZ"), "{text}");
+        assert_eq!(text.matches("sk-ant-[masked]").count(), 2, "{text}");
+        assert!(text.ends_with(" then sk-ant-[masked].\n"), "{text}");
+        assert_eq!(mask("no key here"), "no key here");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

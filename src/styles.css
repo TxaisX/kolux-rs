@@ -444,6 +444,8 @@ input { font: inherit; }
 .signin-notice { color: var(--fg); border-color: #7a5a1e; }
 .signin-notice span { color: #f0c27a; }
 .signin-notice .btn { margin-left: auto; }
+.key-lost .btn { flex: none; white-space: nowrap; }
+.key-lost .btn + .btn { margin-left: 0; }
 .attn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .attn .conn-detail { flex: 1 1 240px; margin: 0; }
 .own-sign-in { margin-top: 2px; }

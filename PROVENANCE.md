@@ -409,3 +409,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-146-a · rules from the VIEW-056 and VIEW-057 cards and DT-R17; Pointer Events setPointerCapture from MDN; no old Kolux source read
 
 > 2026-10-12 · T-153-a · rules from the VIEW-067 and VIEW-116 cards; git restore and git clean behaviour from the public git documentation; no old Kolux source read
+
+> 2026-10-12 · T-154-a · rules from the ACCT-010 and ACCT-011 cards; no outside source and no old Kolux source read

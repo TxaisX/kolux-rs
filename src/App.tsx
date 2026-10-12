@@ -27,6 +27,7 @@ import Ask from "./chrome/Ask";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
+import KeyLostNotice from "./settings/KeyLostNotice";
 import { readLook, startScreen } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
@@ -876,6 +877,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         )}
         <div className="content">
           <SignInNotice />
+          <KeyLostNotice />
           {terminals && page === "automations" && (
             <AutomationsPage
               projects={projects}

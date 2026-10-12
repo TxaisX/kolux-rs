@@ -844,6 +844,11 @@ counts (deleted, restored, or losing its changes). Every confirmation prompt is 
 Cancel has focus when it opens, Escape backs out, and the don't-ask-again box only counts when
 you confirm. VIEW-054 waits for Txais's click-through (T-153-c).
 
+[accounts] If Windows can no longer open a stored key (a new Windows profile, a restored
+backup), Kolux now clears just that key at start, the Claude card shows Not connected, and a
+note at the top of the window says which key it was and offers Open Accounts & keys or
+Dismiss (T-154-a). Every other setting stays as it was. The app's log now masks any Claude key.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1586,7 +1591,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-153-a · closing a tab with a running program (TERM-045) used to open with Close tab focused; it now opens with Cancel focused, as VIEW-116 asks, and Enter closes the tab only after Tab moves focus to Close tab.
 - [accounts] T-153-c · VIEW-054 needs a click-through of the installed app (DT-37) that the clean-room rule bars the builder from; Txais does it, then T-153-c is built or marked SKIPPED.
 
+- [accounts] T-154-a · ACCT-010 says to reconnect on "Settings, then AI connections"; the page is titled Accounts & keys in this build, so the note says Settings › Accounts & keys. Only the unreadable key is cleared: the key mode and its date stay, so the card shows Not connected until a new key is made.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-154-a · done: `secrets.rs` `drop_unreadable` (run at start before the window), `dropped`/`dismiss_dropped` + `secrets_dropped`/`secrets_dropped_dismiss`, `mask` applied to every log line, a masked log line when the Claude key connects; new `src/settings/KeyLostNotice.tsx` in the main window; T-154 split into -a/-b · evidence/T-154-a.txt, T-154-a-1..3 png
 - 2026-10-12 · [accounts] T-153-a · done: new `src/chrome/Ask.tsx` (one confirmation dialog, `askKey`), replaces `src/terminal/CloseAsk.tsx` and the automation delete strip; `scm.rs` `discard` + `scm_discard` (staged back to HEAD, changes back to the index, untracked via git clean), Source Control discard buttons and `discardAsk` wording; T-153 split into -a/-b/-c · evidence/T-153-a.txt, T-153-a-1..6 png
 - 2026-10-12 · [accounts] T-146-a · done: new `src/chrome/RightSidebar.tsx` (frame, tab strip, drag edge, `readRight`, `clampWidth`), `App.tsx` keeps open/tab/width in settings (rightSidebarOpen/Tab/Width) and routes Ctrl+L, Ctrl+Shift+E/G and the top-bar button through it; fixed the Explorer and sidebar not hiding (their display:flex beat the hidden attribute); T-146 split into -a/-b/-c · evidence/T-146-a.txt, T-146-a-1-explorer-tab.png, T-146-a-2-scm-640.png, T-146-a-3-after-restart-explorer.png
 - 2026-10-12 · [accounts] T-138-b · done: `codex_accounts.rs` Account gains `label`, `set_label` (trim, 40 chars, blank clears, kept on re-sign-in) and the `codex_account_label` command; `CodexCard.tsx` Name/Rename with an inline field (Enter saves, Esc keeps), "Same email as another account" note, headline names the active account; `AccountRow.tsx` gains `onName`/`below`; 1 Rust test, 3 front-end tests; live with two seeded Codex accounts on one email · evidence/T-138-b.txt, evidence/T-138-b-1-same-email.png, evidence/T-138-b-2-named.png

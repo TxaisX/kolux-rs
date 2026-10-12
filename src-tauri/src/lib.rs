@@ -83,6 +83,8 @@ pub fn run() {
             let store = Store::open(&dir)?;
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
+            // ACCT-010: a key this computer can no longer open is cleared before the window asks.
+            secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
@@ -183,6 +185,8 @@ pub fn run() {
             automations::automation_save,
             routing::routing_catalog,
             secrets::secret_status,
+            secrets::secrets_dropped,
+            secrets::secrets_dropped_dismiss,
             secrets::secret_set,
             secrets::secret_clear,
             codex_usage::codex_usage,
