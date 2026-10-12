@@ -674,6 +674,13 @@ with Claude Code, Codex and Grok; other installed agents fold behind "Show more 
 again each time it opens. A search box reaches any installed agent (aid finds Aider), typing shell
 or terminal offers a blank terminal, Enter takes the top row, and "Manage agents" opens Settings > Agents.
 
+[accounts] Settings > Shortcuts now lists all 127 commands grouped by area (General, Tabs, Terminal,
+Browser, Editor, File explorer, Settings) with their keys and Modified, Unassigned, Disabled and
+Conflicts badges (T-096-a). Filters for all, modified, unassigned and conflicting sit beside a search
+box that finds titles, areas, ids, extra words (cls finds Clear active pane) and keys however they
+are written (Mod+K, Ctrl + K, Cmd+K). When two commands share a chord, both rows say so and name the
+other command; switched-off agents' new-tab commands never count. Recording keys is T-096-b.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1358,7 +1365,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-143: a default agent outside Claude Code, Codex and Grok also leads the dropdown (SESS-004 keeps the default first), so up to four rows show before the fold; the search box shows only when more than three agents are installed; Grok and the rest draw the plain shell glyph until T-335 brings vendor marks.
 
+- [accounts] T-096-a: the shortcut search matches keys as a substring of the written or drawn chord with spaces and plus signs removed, so Cmd+D also finds Cmd+Down; no command sits behind a feature flag yet, so SET-008's flag rule has nothing to leave out today.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-096-a · done: `resolve` records clashes and takes an ignore list (src/keys/keymap.ts); `shortcutRows`, `filterRows`, `MAX_QUERY` in src/settings/shortcutRows.ts; `keywords` on actions; KeymapProvider ignores disabled agents' new-tab commands; Shortcuts page rebuilt; tests in src/settings/shortcutRows.test.ts and src/keys/keymap.test.ts · evidence/T-096-a.txt, evidence/T-096-a-1.png .. -3.png
 - 2026-10-12 · [accounts] T-143 · done: `agentRows`, `searchAgents` (name, word start, alias, initials, command; over 40 characters ignored) and `wantsTerminal` in src/launch/agents.ts; PlusMenu search box, Show more toggle, Blank terminal row and Manage agents; sidebar row opens a shell tab, pane row splits a shell; tests in src/launch/dropdown.test.ts · evidence/T-143.txt, evidence/T-143-1-folded.png .. T-143-5-manage.png
 - 2026-10-12 · [accounts] T-148-d · done: Appearance fields `paneDividerWidth`, `paneDividerDark`, `paneDividerLight`, `paneDim` (clamped, colours #rrggbb only) as CSS vars `--divider-width`, `--divider`, `--pane-dim`; the grid gap and ground follow them, unfocused pane content fades over 140 ms; Panes card under Terminal; DT-A7 + SET-023 amendment · evidence/T-148-d.txt, evidence/T-148-d-1.png .. T-148-d-3.png
 - 2026-10-12 · [accounts] T-148-c · done: new `src/chrome/chromeItems.ts` (`titleBarAppName`, `tasksButton`, `automationsButton` with DT-A6 defaults, folded summary), Window & Sidebar switches and status bar item ticks in Settings > Appearance, TopBar app name, ProjectsPanel Tasks row and Automations button follow the switches; DT-A6 + SET-020 amendment; View-menu submenu on T-248, used/left usage on T-041 · evidence/T-148-c.txt, evidence/T-148-c-1-defaults.png .. T-148-c-5-automations-hidden.png

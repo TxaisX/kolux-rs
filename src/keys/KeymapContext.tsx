@@ -4,6 +4,8 @@
 // Without a provider (tests, server rendering) the context holds this platform's defaults.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { disabledAgents } from "../launch/agents";
 import { defaultsOnly, detectPlatform, labelOf, resolve, type Keymap } from "./keymap";
 
 export type KeybindingsFile = { path: string; value: unknown; created: boolean; error: string | null };
@@ -32,11 +34,19 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
       .catch((e) => setFailure(String(e)));
   }, []);
   useEffect(reload, [reload]);
+  // SET-010: the new-tab commands of agents switched off on the Agents page never clash.
+  const [ignore, setIgnore] = useState<string[]>([]);
+  useEffect(() => {
+    const read = () => void invoke<Record<string, unknown>>("get_settings").then((s) => setIgnore(disabledAgents(s).map((id) => `tab.newAgent.${id}`))).catch(() => {});
+    read();
+    const off = listen("settings-saved", read);
+    return () => void off.then((u) => u()).catch(() => {});
+  }, []);
   const value = useMemo<KeymapState>(() => {
-    const map = resolve(file?.value ?? null, platform);
+    const map = resolve(file?.value ?? null, platform, ignore);
     const errors = [...(file?.error ? [file.error] : []), ...(failure ? [`Could not read the shortcuts file: ${failure}`] : []), ...map.errors];
     return { ...map, errors, path: file?.path ?? null, reload };
-  }, [file, failure, reload]);
+  }, [file, failure, reload, ignore]);
   return <KeymapContext.Provider value={value}>{children}</KeymapContext.Provider>;
 }
 

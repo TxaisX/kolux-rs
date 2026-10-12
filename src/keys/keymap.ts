@@ -77,13 +77,18 @@ export type Keymap = {
   bindings: Map<string, Binding>;
   errors: string[];
   warnings: string[];
+  /** SET-010: each chord a custom shortcut tried to share inside one scope or conflict group, with
+   *  every command involved (in table order). The override was ignored; its default stays. */
+  clashes: Clash[];
 };
+export type Clash = { chord: string; ids: string[] };
 
 const PLATFORMS: Platform[] = ["win32", "linux", "darwin"];
 const RESERVED = new Set(["$schema", "version", "keybindings", "platforms"]);
 
-/** Builds the keymap from the file's JSON (null means "no file, defaults only"). */
-export function resolve(file: unknown, platform: Platform): Keymap {
+/** Builds the keymap from the file's JSON (null means "no file, defaults only"). `ignore`: commands
+ *  that never count in a clash (the new-tab commands of agents switched off, SET-010). */
+export function resolve(file: unknown, platform: Platform, ignore: readonly string[] = []): Keymap {
   const errors: string[] = [];
   const warnings: string[] = [];
   const bindings = new Map<string, Binding>(actions.map((x) => [x.id, { action: x, chords: defaultsFor(x, platform), custom: false }]));
@@ -118,8 +123,9 @@ export function resolve(file: unknown, platform: Platform): Keymap {
       }
     }
   }
-  dropConflicts(bindings, errors, platform);
-  return { platform, bindings, errors, warnings };
+  const clashes: Clash[] = [];
+  dropConflicts(bindings, errors, platform, new Set(ignore), clashes);
+  return { platform, bindings, errors, warnings, clashes };
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -164,19 +170,23 @@ function buckets(action: Action): string[] {
   return action.group ? [`scope:${action.scope}`, `group:${action.group}`] : [`scope:${action.scope}`];
 }
 
-function dropConflicts(bindings: Map<string, Binding>, errors: string[], platform: Platform) {
+function dropConflicts(bindings: Map<string, Binding>, errors: string[], platform: Platform, ignore: Set<string>, clashes: Clash[]) {
   for (let round = 0; round < 8; round++) {
     const seen = new Map<string, Binding[]>();
     for (const b of bindings.values()) {
+      if (ignore.has(b.action.id)) continue;
       for (const chord of b.chords) for (const bucket of buckets(b.action)) {
         const key = `${bucket}|${chord}`;
         seen.set(key, [...(seen.get(key) ?? []), b]);
       }
     }
     const dropped = new Set<Binding>();
-    for (const group of seen.values()) {
+    for (const [key, group] of seen) {
       if (group.length < 2 || !group.some((b) => b.custom)) continue;
       for (const b of group) if (b.custom) dropped.add(b);
+      const chord = key.slice(key.indexOf("|") + 1);
+      const ids = group.map((b) => b.action.id);
+      if (!clashes.some((c) => c.chord === chord && c.ids.join() === ids.join())) clashes.push({ chord, ids });
     }
     if (dropped.size === 0) return;
     const names = [...dropped].map((b) => b.action.title).sort();

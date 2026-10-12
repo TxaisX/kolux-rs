@@ -116,3 +116,15 @@ test("a custom chord that clashes inside its scope is dropped and the default st
   expect(chordsOf(grouped, "tab.rename")).toEqual([]);
   expect(grouped.errors[0]).toContain("Rename active tab");
 });
+
+test("SET-010: a clash names every command on the chord, scope by scope; agents switched off never count", () => {
+  const map = resolve({ keybindings: { "view.tasks": "Mod+P" } }, "win32");
+  expect(map.clashes).toEqual([{ chord: "Mod+P", ids: ["worktree.quickOpen", "view.tasks"] }]);
+  expect(chordsOf(map, "view.tasks"), "the override is ignored").toEqual([]);
+  expect(resolve({ keybindings: { "view.tasks": "Mod+K" } }, "win32").clashes, "terminal scope is apart").toEqual([]);
+  expect(resolve({ keybindings: { "view.tasks": null } }, "win32").clashes, "no chord never clashes").toEqual([]);
+  const agent = { keybindings: { "tab.newAgent.aider": "Mod+T" } };
+  expect(resolve(agent, "win32").clashes[0].ids).toEqual(["tab.newTerminal", "tab.newAgent.aider"]);
+  const off = resolve(agent, "win32", ["tab.newAgent.aider"]);
+  expect([off.clashes, off.errors, chordsOf(off, "tab.newAgent.aider")]).toEqual([[], [], ["Mod+T"]]);
+});

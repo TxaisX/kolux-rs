@@ -458,6 +458,16 @@ input { font: inherit; }
 .keys-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .keys-table td { padding: 4px 0; border-top: 1px solid var(--line-subtle); color: var(--fg-row); }
 .keys-table td:last-child { text-align: right; }
+.keys-table td:nth-child(2) { white-space: nowrap; padding-left: 12px; }
+.keys-table td.keys-badges { width: 1%; white-space: nowrap; padding-left: 8px; }
+.keys-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+.keys-bar .field { flex: 1 1 180px; width: auto; min-width: 0; }
+.keys-area { margin: 12px 0 4px; font-size: 11px; font-weight: 600; color: var(--fg-muted); }
+.keys-chord + .keys-chord::before { content: ", "; color: var(--fg-faint); }
+.keys-hint { margin: 2px 0 0; font-size: 11px; color: var(--fg-muted); white-space: normal; }
+.keys-badge + .keys-badge { margin-left: 4px; }
+.keys-badge.conflicts { color: #fdc030; }
+[data-mode="light"] .keys-badge.conflicts { color: #9a6200; }
 
 /* TERM-045: the question before a tab with a live program closes */
 .ask-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); }
