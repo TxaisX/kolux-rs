@@ -234,7 +234,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-128 · ACCT-050 Kolux recognises which agent runs in each pane
 - [x] T-129-a · ORCH-040 [compat] `kolux worktree ps` sums up orchestration across worktrees
 - [ ] T-129-b · ORCH-026 [compat] List workers by terminal state to see what can be cleaned up · ORCH-037 Coordinators see which workers need attention · ORCH-056 Open agent prompts are noticed even with no hook reporting them · ORCH-066 A worker's agent row is named after its task, not its brief (split from T-129: worker-list's terminal states need settled dispatches and release / retain from T-089-b; attention flags need the status hooks on T-025 and live worker state on T-030; prompt detection needs a scan of the terminal screen text; the task-named rows need the Agents view and Board rows)
-- [ ] T-130 · AUTO-015 Runs dashboard across every automation
+- [x] T-130 · AUTO-015 Runs dashboard across every automation
 - [ ] T-131 · SAFE-005 Unsent comments are kept when the sheet closes and reopens · SAFE-006 A very long plan is cut down in the sheet, with a pointer to the terminal · SAFE-007 The sheet turns read-only once Claude stops waiting on that plan
 - [ ] T-132 · EDIT-007 [compat] Copy a selection together with its path and line numbers · EDIT-020 [compat] Review notes on a file, sent to an agent
 - [ ] T-133 · SET-034 Notifications page: which alerts, which sounds
