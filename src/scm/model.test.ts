@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, emptyStatus, isCommitShortcut, nextStep, remoteItems, type Status } from "./model";
+import { bulk, canCommit, emptyStatus, isCommitShortcut, nextStep, remoteItems, rowOrder, select, type Status } from "./model";
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 
@@ -61,4 +61,29 @@ test("the remote menu carries counts and gives every disabled item its reason", 
   expect(by({ ...pushed, branch: null }).publish.reason).toBe("No branch checked out");
   expect(by({ ...pushed, branch: "main", upstream: "origin/main" }).rebase.reason).toBe("This is the base branch");
   expect(by(null).push.reason).toBe("Loading");
+});
+
+const row = (path: string) => ({ path, status: "M", from: null });
+
+test("GIT-002: a click selects one row, Ctrl toggles, Shift spans from the anchor in list order; rows that are gone drop out", () => {
+  const order = ["a", "b", "c", "d"];
+  expect(select([], order, "b", "one", null)).toEqual(["b"]);
+  expect(select(["b"], order, "b", "one", "b")).toEqual([]);
+  expect(select(["b"], order, "c", "one", "b")).toEqual(["c"]);
+  expect(select(["b"], order, "d", "toggle", "b")).toEqual(["b", "d"]);
+  expect(select(["b", "d"], order, "b", "toggle", "d")).toEqual(["d"]);
+  expect(select(["b"], order, "d", "span", "b")).toEqual(["b", "c", "d"]);
+  expect(select(["c"], order, "a", "span", "c")).toEqual(["a", "b", "c"]);
+  expect(select([], order, "c", "span", null)).toEqual(["c"]);
+  expect(select(["zz"], order, "a", "toggle", null)).toEqual(["a"]);
+});
+
+test("GIT-002: the bulk bar counts the selected rows each action covers, in display order, ignoring rows that are gone", () => {
+  const s: Status = { ...emptyStatus, staged: [row("s1"), row("s2")], changed: [row("c1")], untracked: [row("u1")], conflicts: [row("x1")] };
+  expect(rowOrder(s)).toEqual(["x1", "s1", "s2", "c1", "u1"]);
+  const b = bulk(s, ["s1", "c1", "u1", "x1", "gone"]);
+  expect(b.present).toEqual(["x1", "s1", "c1", "u1"]);
+  expect(b.stage).toEqual(["x1", "c1", "u1"]);
+  expect(b.unstage).toEqual(["s1"]);
+  expect(bulk(s, []).present).toEqual([]);
 });

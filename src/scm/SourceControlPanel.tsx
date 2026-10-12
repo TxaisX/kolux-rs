@@ -6,14 +6,15 @@
 // notice when an action fails or a hook refuses a commit, with a Fix with AI action. The draft
 // message is the window's, keyed by worktree, so it survives closing the panel and switching
 // workspaces. Every call names the worktree.
+// Rows select on click (Ctrl adds, Shift spans), and a bulk bar above the list says how many of
+// the selected rows Stage and Unstage will each cover (T-018-c); Escape clears the selection.
 // ponytail: the list refreshes after each action and every 4 s while the panel is open; the
-// watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033), the bulk
-// bar for several selected rows with T-018-c, and the pull-request step (create, merged, loading)
-// with GIT-021 (T-228).
+// watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033), and the
+// pull-request step (create, merged, loading) with GIT-021 (T-228).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
-import { canCommit, changeCount, isCommitShortcut, nextStep, remoteItems, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status } from "./model";
+import { bulk, canCommit, changeCount, isCommitShortcut, nextStep, remoteItems, rowOrder, select, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -34,6 +35,8 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<{ left: number; top: number } | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [anchor, setAnchor] = useState<string | null>(null);
   const remoteButton = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async () => {
@@ -53,6 +56,8 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     setFailure(null);
     setInfo(null);
     setMenu(null);
+    setSelected([]);
+    setAnchor(null);
     void load();
     const timer = window.setInterval(() => void load(), 4000);
     return () => window.clearInterval(timer);
@@ -117,6 +122,13 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     if (r) setMenu({ left: Math.max(8, r.right - 250), top: r.bottom + 4 });
   };
 
+  const pick = (path: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+    if (!status) return;
+    setSelected((prev) => select(prev, rowOrder(status), path, e.shiftKey ? "span" : e.ctrlKey || e.metaKey ? "toggle" : "one", anchor));
+    if (!e.shiftKey) setAnchor(path);
+  };
+  const chosen = status ? bulk(status, selected) : { present: [], stage: [], unstage: [] };
+
   const section = (name: string, rows: Change[], on: boolean) =>
     rows.length > 0 && (
       <div className="scm-sec-wrap" data-section={name}>
@@ -128,10 +140,18 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
           </button>
         </div>
         {rows.map((r) => (
-          <div key={r.path} className="scm-row" title={r.from ? `${r.from} → ${r.path}` : r.path}>
+          <div key={r.path} className="scm-row" aria-selected={selected.includes(r.path)} title={r.from ? `${r.from} → ${r.path}` : r.path} onClick={(e) => pick(r.path, e)}>
             <span className="letter">{r.status}</span>
             <span className="path">{r.from ? `${r.from} → ${r.path}` : r.path}</span>
-            <button className="ib" title={on ? "Stage" : "Unstage"} disabled={busy} onClick={() => void stage([r.path], on)}>
+            <button
+              className="ib"
+              title={on ? "Stage" : "Unstage"}
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                void stage([r.path], on);
+              }}
+            >
               {on ? <Plus /> : <Minus />}
             </button>
           </div>
@@ -143,6 +163,10 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     <aside
       className="sidebar-wrap right"
       onKeyDown={(e) => {
+        if (e.key === "Escape" && selected.length > 0) {
+          setSelected([]);
+          return;
+        }
         if (!isCommitShortcut(e.nativeEvent)) return;
         e.preventDefault();
         void commit();
@@ -218,6 +242,20 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               </div>
             )}
             {error && <div className="note error">{error}</div>}
+            {chosen.present.length > 0 && (
+              <div className="scm-bulk" role="toolbar" aria-label="Selected rows">
+                <span className="count">{chosen.present.length} selected</span>
+                <button className="btn" disabled={busy || chosen.stage.length === 0} title={`Stage the ${chosen.stage.length} selected unstaged rows`} onClick={() => void stage(chosen.stage, true)}>
+                  Stage {chosen.stage.length}
+                </button>
+                <button className="btn" disabled={busy || chosen.unstage.length === 0} title={`Unstage the ${chosen.unstage.length} selected staged rows`} onClick={() => void stage(chosen.unstage, false)}>
+                  Unstage {chosen.unstage.length}
+                </button>
+                <button className="ib" title="Clear selection (Esc)" onClick={() => setSelected([])}>
+                  <Close />
+                </button>
+              </div>
+            )}
             <div className="sb-list">
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}
               {status && section("Conflicts", status.conflicts, true)}

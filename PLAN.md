@@ -75,7 +75,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-017-c · done 2026-10-12, decision only (DT-C17): pre-trust for Cursor and Copilot is not built. Neither keeps its folder-trust decision in a documented place: Copilot's public reference lists `~/.copilot/config.json` only as internal state, and Cursor's CLI documents `--trust` for headless runs alone and says only that a trust decision is saved. `trust_folders` keeps answering 0 for both; the launch goes ahead and their own trust prompt, when one appears, is the user's to answer. Revisit when either documents its file or an interactive flag.
 - [x] T-018-a · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message
 - [x] T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
-- [ ] T-018-c · Source Control bulk bar: select several rows and stage or unstage them together (the rest of the stage card on T-018-a)
+- [x] T-018-c · done 2026-10-12: Source Control rows select on click (Ctrl adds or removes, Shift spans from the last clicked row in list order, Esc or the bar's close clears), and a bulk bar above the list reads N selected · Stage k · Unstage m, each button feeding its rows to one `scm_stage` call; a file with staged and unstaged parts is one selection counted on both sides; rows that leave the list leave the selection. The folder rows and the 2,000-file proof stay with the tree view and the card's acceptance boxes.
 - [x] T-019 · GIT-067 [compat] Git side of creating, moving and removing worktrees
 - [x] T-020 · SET-032 [compat] Pick the folder new worktrees go into
 - [x] T-021 · CLI-018 [compat] kolux worktree create, with an optional agent started inside

@@ -77,5 +77,33 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
   ];
 };
 
+/** GIT-002: every row's path in display order (conflicts, staged, changes, untracked), each once;
+ * a file with staged and unstaged parts sits in two sections and is one selection. */
+export const rowOrder = (s: Status): string[] => [...new Set([...s.conflicts, ...s.staged, ...s.changed, ...s.untracked].map((c) => c.path))];
+
+export type SelectMode = "one" | "toggle" | "span";
+
+/** GIT-002: the selection after a click on `path`. A plain click keeps that row alone (and clears
+ * it when it was the only one selected), Ctrl adds or removes it, Shift takes the span from the
+ * last clicked row in list order. Rows no longer listed drop out. */
+export const select = (selected: string[], order: string[], path: string, mode: SelectMode, anchor: string | null): string[] => {
+  const live = selected.filter((p) => order.includes(p));
+  if (mode === "toggle") return live.includes(path) ? live.filter((p) => p !== path) : [...live, path];
+  if (mode === "span" && anchor !== null && order.includes(anchor)) {
+    const [a, b] = [order.indexOf(anchor), order.indexOf(path)].sort((x, y) => x - y);
+    return order.slice(a, b + 1);
+  }
+  return live.length === 1 && live[0] === path ? [] : [path];
+};
+
+/** GIT-002: what the bulk bar covers: the selected rows still listed, the ones that can be staged
+ * (conflicts, changes, untracked) and the ones that can be unstaged (staged), in display order. */
+export const bulk = (s: Status, selected: string[]): { present: string[]; stage: string[]; unstage: string[] } => {
+  const present = rowOrder(s).filter((p) => selected.includes(p));
+  const stageable = new Set([...s.conflicts, ...s.changed, ...s.untracked].map((c) => c.path));
+  const staged = new Set(s.staged.map((c) => c.path));
+  return { present, stage: present.filter((p) => stageable.has(p)), unstage: present.filter((p) => staged.has(p)) };
+};
+
 /** What a remote action came to (GIT-007). */
 export type ActionOutcome = { ok: boolean; output: string };

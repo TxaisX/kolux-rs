@@ -267,8 +267,9 @@ and switching workspaces. Back end `scm.rs`: `scm_status` (porcelain v2, `--untr
 NUL-separated), `scm_stage` (one `git add` / `git restore --staged` fed NUL-separated paths on
 stdin with `--literal-pathspecs`, paths checked to stay inside the worktree, 2 000 files in one
 call), `scm_commit` (`-F -`). The list refreshes after each action and every 4 s while the card
-is open; the watcher is GIT-001's (T-033), the multi-row bulk bar is T-018-c and folder rows are
-T-033's tree view.
+is open; the watcher is GIT-001's (T-033) and folder rows are T-033's tree view. Rows select on
+click (Ctrl adds, Shift spans, Esc clears) and a bulk bar above the list reads N selected · Stage k
+· Unstage m, each button feeding the whole selection to one `scm_stage` call ([core], T-018-c).
 
 **Main button and remote menu (T-018-b, GIT-006 / GIT-007).** The large button under the commit
 box always names the next step: Stage all while edits wait with nothing staged; Commit once
@@ -830,8 +831,8 @@ recorded default until told otherwise; nothing here blocks a pass.
   commit-msg or pre-merge-commit hook file exists in the repo's hooks dir; anything else reads
   "failed". The right sidebar is a bare 320 px card holding only Source Control until
   VIEW-056/057 (T-146); Mod+L toggles it too. Ctrl+Enter also accepts Cmd. Section letters:
-  U untracked, X unmerged. The multi-row bulk bar went to T-018-c and the folder rows (stage
-  everything beneath) to T-033's tree view, both named in PLAN.md. Status is polled every 4 s
+  U untracked, X unmerged. The multi-row bulk bar is built (T-018-c, [core]); the folder rows
+  (stage everything beneath) went to T-033's tree view, named in PLAN.md. Status is polled every 4 s
   while the card is open until GIT-001's watcher. The draft lives in the window per worktree,
   not on disk. Evidence note: another lane's dev app was open during this pass, so `keys.ps1`
   (first window titled "Kolux RS") captured the wrong app once; the shots were retaken with a
@@ -1500,7 +1501,22 @@ recorded default until told otherwise; nothing here blocks a pass.
   proceeds, and the agent's own trust prompt, when it appears, is the user's to answer; a pasted
   starting prompt may then be swallowed, which is the card's stated risk. Gates re-run clean.
 
+- 2026-10-12 · [core] T-018-c: the Source Control bulk bar (the rest of GIT-002). `model.ts` gained
+  `rowOrder` (conflicts, staged, changes, untracked, each path once), `select` (plain click keeps
+  one row and clears it when it was the only one, Ctrl/Cmd toggles, Shift spans from the anchor in
+  list order, rows no longer listed drop out) and `bulk` (which of the selected rows Stage and
+  Unstage each cover); the panel marks rows `aria-selected`, shows the bar above the list while
+  anything is selected (`N selected`, `Stage k`, `Unstage m`, a close button; Esc clears), and
+  each button sends its rows to the existing `scm_stage` in one call. Six model tests first failed
+  (`select is not a function`), then passed; tsc 0. Live in the lane app on the proof worktree with
+  one staged and three untracked files: click + two Ctrl-clicks read "3 selected · Stage 2 ·
+  Unstage 1" (`evidence/T-018-c-bulk.png`); Stage 2 left `git status` with three `A` rows and the
+  bar at Stage 0 · Unstage 3; a Shift-click spanned all four rows; Esc emptied the bar; Unstage 3
+  put all four back to untracked. One fix during the proof: three clicks fired in the same tick
+  each read the stale selection, so the updater now takes the previous state. Proof files removed.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png
 - 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
 - 2026-10-12 · [core] T-043-d · done: sign-in upkeep switch, lapsed warnings follow it, check on switch-off; Kolux-side renewal dropped (DT-C16); keychain rules → T-043-e; evidence/T-043-d-upkeep.png
 - 2026-10-12 · [core] T-042-b · done, decision only: usage service and hidden /status screen dropped (DT-C15); background app-server read is the only Codex figures route
@@ -1510,6 +1526,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-039-b · done: statusLine slot taken with a chaining bash command, /claude-status route → kv claudeRateLimits + claudeUsageLimitResetsAt, pill 'Claude N% left', header gauge, limit stop carries the reset; evidence/T-039-b-usage.png
 - 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
 - 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
-- 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
 
 
