@@ -1,6 +1,7 @@
 // The Agents screen's rail (VIEW-015, VIEW-021) and the Board's card list (VIEW-024): which panes
 // are sessions, which saved agent each sits under, which one is shown first. Pure.
 import { folderName } from "../projects/model";
+import { VOCAB, type Vocab } from "../terminal/status";
 
 export type Session = { key: number; agentId?: string; program: string | null; cwd: string | null; kind?: string; seats?: { agent: string | null }[]; title?: string };
 export type Group<S extends Session> = { id: string; name: string; sessions: S[] };
@@ -36,3 +37,16 @@ export const sessionLabel = (p: Pick<Session, "key" | "title" | "cwd">): string 
 
 /** VIEW-024: the Board's cards, one per terminal pane in tab-group order; editor and browser tabs get none. */
 export const cardPanes = <P extends { key: number; kind?: string }>(panes: P[]): P[] => panes.filter((p) => !p.kind);
+
+/** VIEW-017: a rail row's status, one of the fixed status words with its tone and tip. */
+export type RowStatus = Pick<Vocab, "word" | "tone" | "explain">;
+const NOT_STARTED: RowStatus = { word: "Not started", tone: "", explain: "A preset that has not been launched yet." };
+
+/** VIEW-017: a never-launched preset reads Not started; a session reads the word the Board's chip
+ *  gives the same signal (Starting with no process yet, Stopped once it ended without a done
+ *  signal, No recent update for a stale working reading, never Working then); with no signal at
+ *  all it reads Idle. The cannot-reach word waits for a remote host to be unreachable. */
+export function rowStatus(p: Pick<Session, "seats">, chip: { word: string } | null): RowStatus {
+  if (p.seats) return NOT_STARTED;
+  return (chip && Object.values(VOCAB).find((v) => v.word === chip.word)) || VOCAB.idle;
+}

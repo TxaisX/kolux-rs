@@ -1,6 +1,7 @@
 // The Agents screen's rail (VIEW-015, VIEW-021) and the Board's card list (VIEW-024), pure so they run without a browser.
 import { expect, test } from "vitest";
-import { cardPanes, pickSession, railGroups, sessionLabel } from "./rail";
+import { chipOf } from "../board/chip";
+import { cardPanes, pickSession, railGroups, rowStatus, sessionLabel } from "./rail";
 
 const saved = [
   { id: "claude", name: "Claude Code" },
@@ -43,4 +44,21 @@ test("VIEW-015: a session reads as its task's name, else its folder, else its nu
 test("VIEW-024: the Board's cards are the terminal panes in order; editor and browser tabs get none", () => {
   const panes = [shell(1), ai(2, "claude", { kind: "editor" }), { key: 3, program: null, cwd: null, seats: [{ agent: null }] }, ai(4, "claude", { kind: "browser" }), ai(5, "codex")];
   expect(cardPanes(panes).map((p) => p.key)).toEqual([1, 3, 5]);
+});
+
+test("VIEW-017: a row's status word is one of the fixed set, from the same signal the Board reads", () => {
+  const sig = (over: Record<string, unknown>) => chipOf({ agent: "claude", running: true, stale: false, since: 0, ...over }, 1000);
+  // A preset that was never launched reads Not started; a pane with no process yet reads Starting.
+  expect(rowStatus({ seats: [{ agent: "claude" }] }, null).word).toBe("Not started");
+  expect(rowStatus({}, sig({ running: undefined })).word).toBe("Starting");
+  // A stale working reading is never shown as Working; a process that ended without a done signal reads Stopped.
+  expect(rowStatus({}, sig({ stale: true })).word).toBe("No recent update");
+  expect(rowStatus({}, sig({ running: false })).word).toBe("Stopped");
+  expect(rowStatus({}, sig({})).word).toBe("Working");
+  expect(rowStatus({}, sig({ state: "permission" }))).toMatchObject({ word: "Needs you", tone: "attention" });
+  expect(rowStatus({}, sig({ state: "done" })).word).toBe("Done");
+  expect(rowStatus({}, sig({ state: "idle" })).word).toBe("Idle");
+  // A session the Board has no signal for (a shell-marked program) reads Idle, never blank.
+  expect(rowStatus({}, null).word).toBe("Idle");
+  for (const r of [rowStatus({ seats: [] }, null), rowStatus({}, sig({ stale: true }))]) expect(r.explain.length).toBeGreaterThan(0);
 });

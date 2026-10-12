@@ -859,3 +859,8 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .rail-wrap.classic { padding: 0; }
 .rail .proj .ib { opacity: 1; }
 .grid.agents .tabs { display: none; }
+/* VIEW-017: the row's status word, one of the fixed set; what needs you is amber, working green, done teal. */
+.sess .status { flex: none; font-size: 11px; color: var(--fg-muted); }
+.sess .status.attention { color: var(--working-icon); }
+.sess .status.working { color: var(--dot-live); }
+.sess .status.done { color: var(--done-icon); }

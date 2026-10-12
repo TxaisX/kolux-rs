@@ -3,11 +3,11 @@
 import { Plus } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor } from "../launch/PlusMenu";
-import { OTHER, sessionLabel, type Group, type Session } from "./rail";
+import { OTHER, sessionLabel, type Group, type RowStatus, type Session } from "./rail";
 
-type Props<S extends Session> = { groups: Group<S>[]; selected: number | null; classic: boolean; onSelect: (key: number) => void; onAdd: (agentId: string) => void; onSettings: () => void };
+type Props<S extends Session> = { groups: Group<S>[]; selected: number | null; classic: boolean; statusOf: (p: S) => RowStatus; onSelect: (key: number) => void; onAdd: (agentId: string) => void; onSettings: () => void };
 
-export default function AgentsRail<S extends Session>({ groups, selected, classic, onSelect, onAdd, onSettings }: Props<S>) {
+export default function AgentsRail<S extends Session>({ groups, selected, classic, statusOf, onSelect, onAdd, onSettings }: Props<S>) {
   const look = classic ? " classic" : "";
   return (
     <div className={`sidebar-wrap rail-wrap${look}`}>
@@ -31,12 +31,18 @@ export default function AgentsRail<S extends Session>({ groups, selected, classi
                   </button>
                 )}
               </div>
-              {g.sessions.map((p) => (
+              {g.sessions.map((p) => {
+                const st = statusOf(p);
+                return (
                 <div key={p.key} className={`sess${p.key === selected ? " sel" : ""}${p.seats ? " pending" : ""}`} role="button" tabIndex={0} data-session={p.key} onClick={() => onSelect(p.key)} onKeyDown={(e) => e.key === "Enter" && onSelect(p.key)}>
                   <VendorMark agent={markFor(p.agentId ?? g.id)} size={13} />
                   <span className="name">{p.seats ? "New session" : sessionLabel(p)}</span>
+                  <span className={`status${st.tone ? ` ${st.tone}` : ""}`} data-tip={st.explain}>
+                    {st.word}
+                  </span>
                 </div>
-              ))}
+                );
+              })}
             </section>
           ))
         )}

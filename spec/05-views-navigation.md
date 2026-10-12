@@ -76,6 +76,10 @@ User sees: one of a frozen set of words: working, needs you, done, stopped, idle
 Rules: a stale working reading is never shown as working; an unreachable host shows a can't-reach
   word instead of the last known state; a pane with no process yet shows starting; a preset that was
   never launched shows not started.
+  (Kolux RS, T-028-b: the rail row's word is the status vocabulary's word for the same signal the
+  Board chip reads, so a stale working reading shows the vocabulary's stale word and a queued turn
+  its queued word, alongside the set above; a process that ends without a done signal reads stopped
+  at once; the cannot-reach word has no remote host to show yet, DT-C21.)
 Acceptance:
   - [ ] Kill the agent's process without a done signal → label leaves working within the staleness
         window.

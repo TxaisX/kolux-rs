@@ -45,7 +45,7 @@ import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, re
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
 import AgentsRail from "./agents/AgentsRail";
-import { cardPanes, pickSession, railGroups } from "./agents/rail";
+import { cardPanes, pickSession, railGroups, rowStatus } from "./agents/rail";
 import UpdateCenter from "./update/UpdateCenter";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
 import { chromeShown } from "./chrome/chromeItems";
@@ -1100,6 +1100,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             groups={groups}
             selected={selected}
             classic={classic}
+            statusOf={(p) => rowStatus(p, chipFor(p))}
             onSelect={(key) => {
               setAgentSel(key);
               setFocused(key);
