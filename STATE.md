@@ -9,29 +9,36 @@ How to read this: `PLAN.md` holds the 351 tasks in build order; each names the s
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
-What works today: the window has no Windows title bar; Kolux draws its own 36 px top bar with the
-six-spoke mark, a sidebar toggle, the centred Agents / Board / Terminals switcher (Terminals is the
-screen with content; the other two show their name and "nothing here yet"), a search box with the
-Ctrl+Shift+J chips, a bell, a usage pill with the Claude and Codex marks, and its own minimize,
-maximize and close. The sidebar is a floating rounded card; the pane sits in a rounded card with
-the header composition from the design (status icon, agent mark, folder name, `main` branch chip,
-"PowerShell", status word, gauge, menu, expand, split, close); a Layout 1/2/4/6 strip sits above
-it (only 1 works) and a 24 px status bar below shows On, the app's memory use (from a Tauri
-command), the shell count and the plug count. Colours, sizes and type come from design/DESIGN.md
-through CSS custom properties in src/theme.ts; evidence/T-003b-compare.png is the pixel
-comparison with the reference. The window opens with one terminal pane running Windows PowerShell. Typing
-reaches the shell, output comes back, the pane follows the window size, the status icon's tooltip
-says whether the GPU (WebGL) or the plain renderer is drawing, and Close ends the shell and shows "Ended".
-Closing the window kills every shell it started.
+What works today (2026-10-11; the paragraphs below this one are the task-by-task record): a
+Windows desktop app (Tauri 2, Rust + React) with its own 36 px top bar: the Kolux mark, a sidebar
+toggle, the Agents / Board / Terminals switcher, a search box showing the palette chord, a bell
+that opens the Inbox, a usage pill with live Claude and Codex figures (it opens Settings > AI
+connections), and the window controls. Terminals is a grid of 1 to 12 panes per workspace (the
+Layout 1 / 2 / 4 / 6 strip, split right / down, close, tabs per cell, browser tabs beside the
+terminals), each pane a PowerShell, Claude Code, Codex or other installed agent through a Rust
+PTY and xterm.js (WebGL when the GPU allows). Board shows the same panes as cards in lanes (Needs
+you, Working, Done, Stopped, Idle) with a chip saying what each agent is doing, Approve / Deny on
+a card that waits for permission, and the live terminal inside an expanded card. Agents still
+shows only its name (T-050). The Inbox lists what needs you, what is running and what finished
+today. Agents report their own state through hooks Kolux installs for Claude Code and Codex
+(permission, question, working, done, blocked, interrupted; subagents under their lead), with
+one status vocabulary for every dot, chip and label, desktop notifications on finish and
+permission, a quiet-terminal alert, tab and workspace unread marks, and a pane header with the
+agent mark, name, branch, program, status word and gauge.
 
-A sidebar on the left lists projects. Add one by typing or browsing to a folder that holds a Git
-repository (anything else is refused with a plain message; the same repository is never added
-twice). Each project lists its main checkout and its workspaces (Git worktrees). Type a name such
-as "Fix login" and the sidebar shows the branch and folder it will get (`fix-login`, under the
-workspaces folder, inside a folder named after the project); Create makes the branch and folder.
-Shell restarts the terminal pane inside that folder. Remove asks first, then deletes the folder and
-the branch, closing any pane still sitting in that folder. The workspaces folder can be changed and
-is remembered; projects are remembered across restarts.
+The sidebar lists projects (Git repositories, added by typing or browsing; nothing else is pulled
+in) with their main checkout and workspaces (worktrees), grouped by project, status or pull
+request and smart-sorted; each row carries the strongest live agent state. Mod+N or the plus
+opens the name field with a live preview of the branch and folder; Create makes the worktree and
+opens it with a shell; Remove asks first and deletes folder and branch. Clicking a row switches
+workspaces instantly, each keeping its panes as they were. The plus menu lists only agents that
+are really installed and starts one in a fresh pre-trusted worktree or as a tab; empty panes ask
+what to run. Where workspaces live, how a new one starts (nested or flat, base branch) and the
+shortcuts (`~\.kolux\keybindings.json`, 127 command ids) are the user's own and remembered. A
+Source Control panel stages, commits, pushes and pulls. `kolux-dev worktree create / rm` and
+`kolux-dev orchestration worker-start` (flag checking only) drive it from a terminal. Settings has
+AI connections: Claude keys and managed accounts, Codex sign-in, sealed secrets, lapsed sign-ins
+flagged in the main window. A 24 px status bar shows On, memory use, shell and plug counts.
 
 T-004 adds the first agent launch: "+ New session" in the sidebar and the "+" in any pane header open
 a menu listing Claude Code and Codex; an agent whose program is not on the PATH is greyed "not
@@ -1213,6 +1220,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   T-325). Ordering, not a contradiction; no DECISIONS row.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
 - 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
 - 2026-10-11 · [core] T-028-a · done: `src/board/chip.ts` (+ test), Board lanes and chip rows in `App.tsx` / `TerminalPane.tsx` / `styles.css`, `agent_answer` and `Change.wrote` in `status.rs` / `hooks.rs`; `evidence/T-028-a-board.png`, `-approved.png`, `-deny-ask.png`, `-denied.png`
 - 2026-10-11 · [core] T-027 · deferred (0 passes): needs T-325 / T-326 / T-050; rules moved onto the T-326 line
@@ -1222,6 +1230,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-09 · [core] T-025-c · done: `src-tauri/src/status.rs` (per-pane session: roster, pending tool, interrupted flag, background work, compact skip, reply, 20-state history; 5 tests), `hooks.rs` answers through it, `terminal.rs` marks Ctrl+C/Escape, pane header roster label (`status.ts` + test); `evidence/T-025-c-lead-working.png`, `-child-needs.png`, `-done.png`, `-interrupted.png`
 - 2026-10-09 · [core] T-025-b · done: `src-tauri/src/hooks.rs` (Codex event mapping, script, `hooks.json` installer after the user's groups, trust from Codex's own `hooks/list`, managed-home install at spawn) + 3 tests; `terminal.rs` spawn hook; `codex_usage.rs` and `trust.rs` helpers shared; `evidence/T-025-b-trust.txt`, `-needs.png`, `-done.png` (scratch Codex home; no real Codex session yet, T-025-e)
 - 2026-10-09 · [core] T-025-a · done: `src-tauri/src/hooks.rs` (loopback listener, Claude event mapping, hook script, settings installer, pane variables) + 5 tests; `terminal.rs` env list and pane key; `lib.rs` start and exit; `status.ts`, `tabs.ts`, `TerminalPane.tsx`, `App.tsx` hook-fed states + tests; `evidence/T-025-a-needs.png`, `-cycle.png`, `-done.png` (events sent through the real script to the lane app; no real Claude session yet, T-025-d)
-- 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.
 
 
