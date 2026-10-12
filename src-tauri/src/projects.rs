@@ -301,6 +301,100 @@ pub fn add_project(git: &Git, store: &Store, path: &Path) -> Result<Project, Str
     Ok(project)
 }
 
+/// GIT-061: one file of a plain folder's proposed first commit; a secret-looking one starts left out.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstFile {
+    pub path: String,
+    pub secret: bool,
+}
+
+/// GIT-061: a name that looks like a key, a token or an environment secrets file. Example and
+/// template env files are not secrets. ponytail: a name list, not a content scan.
+pub fn looks_secret(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_ascii_lowercase();
+    let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    let template = matches!(ext, "example" | "sample" | "template" | "dist");
+    if name == ".env" || name.ends_with(".env") || (name.starts_with(".env.") && !template) {
+        return true;
+    }
+    let keyish = matches!(ext, "pem" | "key" | "p12" | "pfx" | "jks" | "keystore" | "ppk" | "kdbx");
+    let known = matches!(
+        name.as_str(),
+        "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519" | ".netrc" | "_netrc" | ".npmrc" | ".pypirc" | ".git-credentials" | "credentials" | "credentials.json" | "service-account.json"
+    );
+    let data = matches!(ext, "json" | "txt" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "") || ext == name.trim_start_matches('.');
+    keyish || known || (data && !template && (name.contains("secret") || name.contains("token")))
+}
+
+/// GIT-061: only a full path to an existing folder that is not in a Git repository yet.
+fn plain_folder(folder: &Path) -> Result<(), String> {
+    if !folder.is_absolute() {
+        return Err(format!("{} is not a full path; choose the folder itself", folder.display()));
+    }
+    if !folder.is_dir() {
+        return Err(format!("{} is not an existing folder", folder.display()));
+    }
+    if crate::git::run(&["rev-parse", "--show-toplevel"], Some(folder)).is_ok() || folder.join(".git").exists() {
+        return Err(format!("{} is already a Git repository", folder.display()));
+    }
+    Ok(())
+}
+
+/// GIT-061: what a first commit of this plain folder would hold, honouring its .gitignore. It
+/// asks Git through a scratch repository elsewhere, so the folder itself is not touched.
+pub fn first_commit_preview(folder: &Path) -> Result<Vec<FirstFile>, String> {
+    plain_folder(folder)?;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let scratch = std::env::temp_dir().join(format!("kolux-rs-first-commit-{}-{nanos}", std::process::id()));
+    let listed = crate::git::run(&["init", "-q", &scratch.to_string_lossy()], None).and_then(|_| {
+        let git_dir = scratch.join(".git");
+        crate::git::output(&["--git-dir", &git_dir.to_string_lossy(), "--work-tree", &folder.to_string_lossy(), "ls-files", "--others", "--exclude-standard", "-z"], Some(folder))
+    });
+    let _ = std::fs::remove_dir_all(&scratch);
+    let text = String::from_utf8_lossy(&listed?).into_owned();
+    let mut files: Vec<FirstFile> = text.split('\0').filter(|f| !f.is_empty()).map(|f| FirstFile { path: f.to_string(), secret: looks_secret(f) }).collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// GIT-061: starts Git in a plain folder and commits exactly `files` as its first commit
+/// (`ident` is extra `-c` settings, for tests). If any step fails the new .git is removed, so the
+/// folder is left as it was.
+pub fn start_git(folder: &Path, files: &[String], ident: &[&str]) -> Result<(), String> {
+    plain_folder(folder)?;
+    crate::git::run(&["init", "-q"], Some(folder))?;
+    let commit = || -> Result<(), String> {
+        for chunk in files.chunks(100) {
+            let mut args = vec!["add", "--"];
+            args.extend(chunk.iter().map(String::as_str));
+            crate::git::run(&args, Some(folder))?;
+        }
+        let mut args = ident.to_vec();
+        args.extend(["commit", "-q", "--allow-empty", "-m", "First commit"]);
+        crate::git::run(&args, Some(folder)).map(|_| ())
+    };
+    let done = commit();
+    if done.is_err() {
+        let _ = std::fs::remove_dir_all(folder.join(".git"));
+    }
+    done
+}
+
+#[tauri::command]
+pub fn git_first_commit_preview(path: String) -> Result<Vec<FirstFile>, String> {
+    first_commit_preview(Path::new(path.trim()))
+}
+
+/// GIT-061: Start Git and commit, then the folder is added like any repository.
+#[tauri::command]
+pub fn git_start(git: State<'_, Git>, store: StoreState<'_>, path: String, files: Vec<String>) -> Result<Project, String> {
+    let folder = Path::new(path.trim());
+    start_git(folder, &files, &[])?;
+    let store = store.lock().map_err(|e| e.to_string())?;
+    add_project(&git, &store, folder)
+}
+
 /// The default workspaces root: `kolux-rs\workspaces` in the user's home folder. A different
 /// name from the old app's folders, so the two never mix.
 pub fn default_workspaces_dir() -> PathBuf {
@@ -986,6 +1080,62 @@ mod tests {
 
     fn nested(root: &Path) -> Place {
         Place { root: root.to_path_buf(), flat: false, prefix: String::new(), prefix_warning: None }
+    }
+
+    #[test]
+    fn secret_looking_names_are_spotted_and_templates_are_not() {
+        for s in [".env", ".env.local", "config/.env.production", "prod.env", "id_rsa", "server.key", "cert.PEM", "store.p12", ".npmrc", "credentials.json", "api-token.txt", "secrets.yaml", ".git-credentials"] {
+            assert!(looks_secret(s), "{s}");
+        }
+        for s in [".env.example", ".env.sample", "README.md", "src/tokens.ts", "id_rsa.pub", "package.json", "secret-santa.md"] {
+            assert!(!looks_secret(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn a_plain_folder_gets_git_and_a_first_commit_without_its_secrets() {
+        let git = Git::detect().unwrap();
+        let profile = temp("first-profile");
+        let store = Store::open(&profile).unwrap();
+        let dir = temp("first");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("README.md"), "hi").unwrap();
+        fs::write(dir.join("src").join("main.rs"), "fn main() {}").unwrap();
+        fs::write(dir.join(".env"), "API_KEY=not-real").unwrap();
+        fs::write(dir.join(".gitignore"), "build/\n").unwrap();
+        fs::create_dir_all(dir.join("build")).unwrap();
+        fs::write(dir.join("build").join("out.bin"), "x").unwrap();
+        let preview = first_commit_preview(&dir).unwrap();
+        let shown: Vec<(&str, bool)> = preview.iter().map(|f| (f.path.as_str(), f.secret)).collect();
+        assert_eq!(shown, [(".env", true), (".gitignore", false), ("README.md", false), ("src/main.rs", false)]);
+        assert!(!dir.join(".git").exists(), "the preview leaves the folder as it is");
+        let chosen: Vec<String> = preview.iter().filter(|f| !f.secret).map(|f| f.path.clone()).collect();
+        start_git(&dir, &chosen, &["-c", "user.name=t", "-c", "user.email=t@t"]).unwrap();
+        let count = crate::git::run(&["rev-list", "--count", "HEAD"], Some(&dir)).unwrap();
+        assert_eq!(count, "1");
+        let tracked = crate::git::run(&["ls-files"], Some(&dir)).unwrap();
+        assert_eq!(tracked.lines().collect::<Vec<_>>(), [".gitignore", "README.md", "src/main.rs"]);
+        let p = add_project(&git, &store, &dir).unwrap();
+        assert_eq!(load_projects(&store), [p]);
+        // Once Git is there, neither step runs again.
+        assert!(first_commit_preview(&dir).unwrap_err().contains("already a Git repository"));
+        assert!(start_git(&dir, &chosen, &[]).unwrap_err().contains("already a Git repository"));
+        drop(store);
+        for d in [profile, dir] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn starting_git_refuses_a_relative_or_missing_path_and_a_failed_commit_leaves_no_git() {
+        assert!(first_commit_preview(Path::new("some/where")).unwrap_err().contains("not a full path"));
+        let gone = std::env::temp_dir().join("kolux-rs-proj-no-such-folder-61");
+        assert!(start_git(&gone, &[], &[]).unwrap_err().contains("not an existing folder"));
+        let dir = temp("first-fail");
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        assert!(start_git(&dir, &["missing.txt".into()], &["-c", "user.name=t", "-c", "user.email=t@t"]).is_err());
+        assert!(!dir.join(".git").exists(), "a failed first commit removes the Git it started");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

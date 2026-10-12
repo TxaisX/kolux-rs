@@ -504,6 +504,13 @@ input { font: inherit; }
 .ask-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
 .ask-body { margin: 0 0 14px; font-size: 12px; color: var(--fg-muted); }
 .ask .btn-row { justify-content: flex-end; }
+/* GIT-061: the first-commit preview */
+.ask.start-git { width: min(520px, calc(100vw - 32px)); }
+.first-files { list-style: none; margin: 0 0 8px; padding: 6px; max-height: 18rem; overflow: auto; border: 1px solid var(--line-subtle); border-radius: 6px; font-size: 12px; }
+.first-files label { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; min-width: 0; }
+.first-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-row); }
+.first-secret { margin-left: auto; flex: none; color: var(--fg-muted); font-size: 11px; }
+.first-none { color: var(--fg-muted); }
 .agent-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--chip-bg); min-width: 0; }
 .agent-on { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .agent-name { font-size: 13px; color: var(--fg-row); }

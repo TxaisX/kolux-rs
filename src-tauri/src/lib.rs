@@ -209,6 +209,8 @@ pub fn run() {
             codex_accounts::codex_account_cancel,
             codex_accounts::codex_account_activate,
             codex_accounts::codex_account_remove,
+            projects::git_first_commit_preview,
+            projects::git_start,
             files::file_read,
             files::file_write,
             files::md_list,

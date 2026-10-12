@@ -25,6 +25,7 @@ import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
 import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
+import StartGit, { type FirstFile } from "./StartGit";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
@@ -143,6 +144,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
+  const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
   const indexed = useRef(""); // the last project list and owner map handed to the window
@@ -261,17 +263,36 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   }, [creating]);
 
   // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
+  const added = async (p: Project) => {
+    say("ok", `${p.name} is a project (${p.path})`);
+    setPathDraft("");
+    setShowAdd(false);
+    await reload();
+    const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
+    if (open) onSelect(open.path, open.branch);
+  };
   const addPath = async (path: string) => {
     if (!path.trim()) return;
     setBusy("adding");
     try {
-      const p = await invoke<Project>("project_add", { path });
-      say("ok", `${p.name} is a project (${p.path})`);
-      setPathDraft("");
-      setShowAdd(false);
-      await reload();
-      const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
-      if (open) onSelect(open.path, open.branch);
+      await added(await invoke<Project>("project_add", { path }));
+    } catch (err) {
+      // GIT-061: a plain folder is offered Git and a first commit; a relative or missing path is refused.
+      if (!String(err).includes("not inside a Git repository")) fail(err);
+      else
+        await invoke<FirstFile[]>("git_first_commit_preview", { path })
+          .then((files) => setStartGit({ folder: path.trim(), files }))
+          .catch(fail);
+    } finally {
+      setBusy("");
+    }
+  };
+  const startGitAndAdd = async (files: string[]) => {
+    if (!startGit) return;
+    setBusy("adding");
+    try {
+      await added(await invoke<Project>("git_start", { path: startGit.folder, files }));
+      setStartGit(null);
     } catch (err) {
       fail(err);
     } finally {
@@ -281,7 +302,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
 
   const browse = async () => {
     try {
-      const picked = await open({ directory: true, multiple: true, title: "Choose Git repository folders" });
+      const picked = await open({ directory: true, multiple: true, title: "Choose project folders" });
       const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
       for (const dir of list) await addPath(dir);
     } catch (err) {
@@ -872,7 +893,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             <button className={`ib${filterOpen ? " on" : ""}`} title="Group and sort the list" aria-pressed={filterOpen} onClick={() => setFilterOpen((o) => !o)}>
               <Sliders size={13} />
             </button>
-            <button className="ib" title="Add a project: choose folders that hold a Git repository" onClick={browse} disabled={busy !== ""}>
+            <button className="ib" title="Add a project: choose folders, with or without Git" onClick={browse} disabled={busy !== ""}>
               <FolderPlus size={13} />
             </button>
             <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => setCreating(creating === null ? projectInFront() : null)}>
@@ -897,7 +918,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           {showAdd && (
             <div className="sb-form">
               <label>Add project</label>
-              <input aria-label="project folder" className="field" placeholder="path to a folder with a .git" value={pathDraft} onChange={(e) => setPathDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPath(pathDraft)} />
+              <input aria-label="project folder" className="field" placeholder="path to a folder" value={pathDraft} onChange={(e) => setPathDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPath(pathDraft)} />
               <div className="btn-row">
                 <button className="btn" onClick={() => addPath(pathDraft)} disabled={busy !== "" || !pathDraft.trim()}>
                   Add
@@ -975,7 +996,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </div>
           )}
           {creating === "" && nameField(null)}
-          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add one that holds a Git repository.</div>}
+          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a folder; one without Git can start it here.</div>}
 
           {groupBy === "project" &&
             projects.map((p) => {
@@ -1143,6 +1164,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           </button>
         </div>
       </aside>
+      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onCancel={() => setStartGit(null)} />}
     </div>
   );
 }
