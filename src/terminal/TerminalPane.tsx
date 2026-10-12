@@ -133,6 +133,14 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
     let alive = true;
     let ended = false;
+    // Output can arrive before terminal_spawn hands back this pane's id (several panes starting at
+    // once); it is held and replayed, else the console's opening cursor query goes unanswered and
+    // the program never starts.
+    let early: { id: number; run: () => void }[] | null = [];
+    const mine = (id: number, run: () => void) => {
+      if (idRef.current === null) early?.push({ id, run });
+      else if (id === idRef.current) run();
+    };
     const unlisteners: UnlistenFn[] = [];
     const write = (data: string) => {
       const id = idRef.current;
@@ -173,17 +181,19 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
     (async () => {
       unlisteners.push(
-        await listen<OutputEvent>("terminal-output", (e) => {
-          if (e.payload.id !== idRef.current) return;
-          term.write(decodeOutput(e.payload.data));
-          sawOutput();
-        }),
-        await listen<ExitEvent>("terminal-exit", (e) => {
-          if (e.payload.id !== idRef.current) return;
-          ended = true;
+        await listen<OutputEvent>("terminal-output", (e) =>
+          mine(e.payload.id, () => {
+            term.write(decodeOutput(e.payload.data));
+            sawOutput();
+          }),
+        ),
+        await listen<ExitEvent>("terminal-exit", (e) =>
+          mine(e.payload.id, () => {
+            ended = true;
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
-          setStatus({ kind: "ended", code: e.payload.code });
-        }),
+            setStatus({ kind: "ended", code: e.payload.code });
+          }),
+        ),
       );
       if (!alive) return;
       try {
@@ -194,8 +204,12 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         }
         idRef.current = id;
         setStatus({ kind: "running", id });
+        const held = early ?? [];
+        early = null;
+        for (const h of held) if (h.id === id) h.run();
         term.focus();
       } catch (err) {
+        early = null;
         setStatus({ kind: "failed", error: String(err) });
         failed.current?.(String(err));
       }

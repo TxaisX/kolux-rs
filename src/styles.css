@@ -537,6 +537,20 @@ input { font: inherit; }
 .kit-opt { color: var(--fg-muted); font-weight: normal; }
 .kit-gap { flex: 1; }
 .kits .btn-row { flex-wrap: wrap; align-items: center; }
+/* SKILL-009 / SKILL-010: the kit strip above the session grid */
+.kit-strip { margin: 0 0 8px; padding: 6px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--pane-bg); font-size: 12px; }
+.kit-strip-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.kit-strip-title { font-weight: 600; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kit-strip-count { color: var(--fg-muted); }
+.kit-fold svg { transition: transform 0.15s; }
+.kit-fold.folded svg { transform: rotate(-90deg); }
+.kit-strip-rows { list-style: none; margin: 6px 0 0; padding: 0; }
+.kit-strip-row { display: flex; justify-content: space-between; gap: 8px; min-height: 24px; align-items: center; padding: 0 6px; border-radius: 4px; }
+.kit-strip-row.can { cursor: pointer; }
+.kit-strip-row.can:hover, .kit-strip-row.can:focus-visible { background: var(--row-selected); outline: none; }
+.kit-strip-state { color: var(--fg-muted); }
+.kit-strip-row.done .kit-strip-state { color: var(--fg); }
+.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state { color: var(--warn); }
 .first-none { color: var(--fg-muted); }
 .agent-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--chip-bg); min-width: 0; }
 .agent-on { display: flex; align-items: center; gap: 10px; cursor: pointer; }

@@ -5,8 +5,11 @@
 use crate::git::Git;
 use crate::projects::{add_project, start_git, Project};
 use crate::state::Store;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::Mutex;
 use tauri::State;
 
@@ -73,6 +76,160 @@ pub fn kit_samples_dir(kit: String) -> String {
     samples_root().join(kit).to_string_lossy().into_owned()
 }
 
+/// COMPAT: the results folder at the project root, one subfolder per role id.
+pub const RESULTS: &str = "kit-results";
+/// SKILL-006: the run record, hidden inside the results folder (its history is SKILL-014).
+const RECORD: &str = ".kit-run.json";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunRole {
+    pub id: String,
+    pub ai: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RunRecord {
+    pub kit: String,
+    pub title: String,
+    /// Milliseconds since 1970; a marker or result older than this is from an earlier run.
+    pub started: u64,
+    pub roles: Vec<RunRole>,
+}
+
+/// What the strip needs: the run, and every file in each role's folder with its change time.
+#[derive(Debug, Serialize)]
+pub struct RunCheck {
+    pub record: RunRecord,
+    pub files: BTreeMap<String, BTreeMap<String, u64>>,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Prepared {
+    pub started: u64,
+    /// The dated folder an earlier run's results were copied into.
+    pub earlier: Option<String>,
+    pub earlier_error: Option<String>,
+    pub record_error: Option<String>,
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn changed_ms(path: &Path) -> Option<u64> {
+    let t = fs::metadata(path).ok()?.modified().ok()?;
+    Some(t.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64)
+}
+
+pub fn read_record(dir: &Path) -> Option<RunRecord> {
+    serde_json::from_str(&fs::read_to_string(dir.join(RESULTS).join(RECORD)).ok()?).ok()
+}
+
+/// SKILL-009 / SKILL-010: the run in this folder, or None when it never ran a kit.
+pub fn check(dir: &Path) -> Option<RunCheck> {
+    let record = read_record(dir)?;
+    let mut files = BTreeMap::new();
+    for r in &record.roles {
+        let mut mine = BTreeMap::new();
+        for e in fs::read_dir(dir.join(RESULTS).join(&r.id)).into_iter().flatten().flatten() {
+            if e.path().is_file() {
+                if let Some(t) = changed_ms(&e.path()) {
+                    mine.insert(e.file_name().to_string_lossy().into_owned(), t);
+                }
+            }
+        }
+        files.insert(r.id.clone(), mine);
+    }
+    Some(RunCheck { record, files })
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<usize> {
+    let mut n = 0;
+    for e in fs::read_dir(from)?.flatten() {
+        let (src, dst) = (e.path(), to.join(e.file_name()));
+        if src.is_dir() {
+            n += copy_tree(&src, &dst)?;
+        } else {
+            fs::create_dir_all(to)?;
+            fs::copy(&src, &dst)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// SKILL-006: copies what an earlier run left into `results/<name>` (a fresh name, " (2)" and on
+/// when taken). The role folders are the earlier record's roles, or with no record every folder
+/// that is not itself a dated one (their names hold an en dash). Nothing is moved or deleted.
+pub fn gather_earlier(results: &Path, earlier: Option<&RunRecord>, name: &str) -> Result<Option<String>, String> {
+    let roles: Vec<String> = match earlier {
+        Some(r) => r.roles.iter().map(|r| r.id.clone()).collect(),
+        None => fs::read_dir(results)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.contains('\u{2013}'))
+            .collect(),
+    };
+    let full: Vec<String> = roles.into_iter().filter(|r| fs::read_dir(results.join(r)).map(|mut d| d.next().is_some()).unwrap_or(false)).collect();
+    if full.is_empty() {
+        return Ok(None);
+    }
+    let mut pick = name.to_string();
+    let mut n = 2;
+    while results.join(&pick).exists() {
+        pick = format!("{name} ({n})");
+        n += 1;
+    }
+    for r in &full {
+        copy_tree(&results.join(r), &results.join(&pick).join(r)).map_err(|e| format!("Kolux could not copy the earlier results of {r}: {e}"))?;
+    }
+    Ok(Some(pick))
+}
+
+/// SKILL-006: before a kit's seats open, keep the earlier run's results and write the new record.
+/// Either step may fail without stopping the launch; the caller tells the user.
+pub fn prepare(dir: &Path, record: RunRecord, earlier_name: &str) -> Prepared {
+    let results = dir.join(RESULTS);
+    let mut out = Prepared { started: record.started, ..Default::default() };
+    match gather_earlier(&results, read_record(dir).as_ref(), earlier_name) {
+        Ok(name) => out.earlier = name,
+        Err(e) => out.earlier_error = Some(e),
+    }
+    let text = serde_json::to_string_pretty(&record).unwrap_or_default();
+    if let Err(e) = fs::create_dir_all(&results).and_then(|_| fs::write(results.join(RECORD), text)) {
+        out.record_error = Some(e.to_string());
+    }
+    out
+}
+
+#[tauri::command]
+pub fn kit_check(dir: String) -> Option<RunCheck> {
+    check(Path::new(&dir))
+}
+
+#[tauri::command]
+pub fn kit_prepare(dir: String, kit: String, title: String, roles: Vec<RunRole>, earlier_name: String) -> Prepared {
+    prepare(Path::new(&dir), RunRecord { kit, title, started: now_ms(), roles }, &earlier_name)
+}
+
+/// SKILL-009 Open results: the results folder in the system file manager.
+#[tauri::command]
+pub fn kit_open_results(dir: String) -> Result<(), String> {
+    let path = Path::new(&dir).join(RESULTS);
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let opener = "explorer.exe";
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let opener = "xdg-open";
+    std::process::Command::new(opener).arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +269,43 @@ mod tests {
         assert_eq!(crate::git::run(&["rev-parse", "HEAD"], Some(&dir)).unwrap(), head);
         assert!(copy_samples(&root, "no-such-kit").unwrap_err().contains("no sample data"));
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn record(kit: &str, started: u64) -> RunRecord {
+        RunRecord { kit: kit.into(), title: "Fake kit".into(), started, roles: vec![RunRole { id: "a".into(), ai: "claude".into() }, RunRole { id: "b".into(), ai: "codex".into() }] }
+    }
+
+    #[test]
+    fn a_new_run_keeps_the_earlier_results_in_a_dated_copy_and_records_itself() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-kit-run-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let name = "Fake kit \u{2013} Oct 12 2026, 1.08 AM";
+        // No earlier run: nothing to gather, the record is written, and check sees no files yet.
+        let p = prepare(&dir, record("one", 1000), name);
+        assert_eq!((p.earlier.as_deref(), p.earlier_error.as_deref(), p.record_error.as_deref()), (None, None, None));
+        let c = check(&dir).unwrap();
+        assert_eq!(c.record, record("one", 1000));
+        assert!(c.files["a"].is_empty() && c.files["b"].is_empty());
+        // The earlier run left files: a second run copies them and leaves the originals.
+        fs::create_dir_all(dir.join(RESULTS).join("a")).unwrap();
+        fs::write(dir.join(RESULTS).join("a").join("findings.md"), "old").unwrap();
+        fs::write(dir.join(RESULTS).join("a").join("DONE"), "done").unwrap();
+        let c = check(&dir).unwrap();
+        assert_eq!(c.files["a"].keys().collect::<Vec<_>>(), ["DONE", "findings.md"]);
+        let p = prepare(&dir, record("one", 2000), name);
+        assert_eq!(p.earlier.as_deref(), Some(name));
+        assert_eq!(fs::read_to_string(dir.join(RESULTS).join(name).join("a").join("findings.md")).unwrap(), "old");
+        assert_eq!(fs::read_to_string(dir.join(RESULTS).join("a").join("findings.md")).unwrap(), "old");
+        assert_eq!(read_record(&dir).unwrap().started, 2000);
+        // The same minute again takes a fresh name; a dated folder is never gathered itself.
+        let p = prepare(&dir, record("one", 3000), name);
+        assert_eq!(p.earlier, Some(format!("{name} (2)")));
+        fs::remove_file(dir.join(RESULTS).join(RECORD)).unwrap();
+        let p = prepare(&dir, record("one", 4000), "Earlier run – Oct 12 2026, 1.09 AM");
+        assert_eq!(p.earlier.as_deref(), Some("Earlier run – Oct 12 2026, 1.09 AM"));
+        let kept: Vec<_> = fs::read_dir(dir.join(RESULTS).join("Earlier run – Oct 12 2026, 1.09 AM")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(kept, ["a"]);
+        assert!(check(&std::env::temp_dir().join("kolux-rs-no-such-kit-folder")).is_none());
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -87,6 +87,8 @@ export type SetupProps = {
   onSamples: () => void;
   samplesBusy: boolean;
   onStart: (values: Record<string, string>, assigned: (Vendor | null)[]) => void;
+  /** SKILL-006: the folder holds another kit's run; Start kit becomes Start anyway. */
+  conflict?: string | null;
   onBack: () => void;
   onClose: () => void;
 };
@@ -98,7 +100,7 @@ export function startValues(kit: Kit, dir: string | null, sampleDir: string | nu
   return fillEmpty(base, recalled(settings, dir, kit));
 }
 
-export function KitSetup({ kit, connected, dir, sampleDir, settings, onSamples, samplesBusy, onStart, onBack, onClose }: SetupProps) {
+export function KitSetup({ kit, connected, dir, sampleDir, settings, onSamples, samplesBusy, onStart, onBack, onClose, conflict = null }: SetupProps) {
   const [values, setValues] = useState<Record<string, string>>(() => startValues(kit, dir, sampleDir, settings));
   const [checks, setChecks] = useState<Record<string, Check>>({});
   const [touched, setTouched] = useState<Set<string>>(new Set());
@@ -223,6 +225,11 @@ export function KitSetup({ kit, connected, dir, sampleDir, settings, onSamples, 
           );
         })}
         <p className="kit-hint">{dir ? `Results go to ${dir.replace(/[\\/]+$/, "")}\\${RESULTS_FOLDER}, one folder per role.` : "Open a project first, or try the kit with sample data."}</p>
+        {conflict && (
+          <p className="kit-note warn" role="alert">
+            {conflict}
+          </p>
+        )}
         <div className="btn-row">
           <button className="btn link" onClick={onBack}>
             All kits
@@ -232,7 +239,7 @@ export function KitSetup({ kit, connected, dir, sampleDir, settings, onSamples, 
             {samplesBusy ? "Copying samples…" : "Try with sample data"}
           </button>
           <button className="btn primary" disabled={!ready} onClick={() => onStart(Object.fromEntries(Object.entries(values).map(([k, x]) => [k, x.trim()])), assigned)}>
-            Start kit
+            {conflict ? "Start anyway" : "Start kit"}
           </button>
         </div>
       </div>
