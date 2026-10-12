@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -130,4 +130,16 @@ test("SET-031: the prefix field shows the next branch name and says when the pre
   expect(prefixSample("custom", " /// ", { prefix: "", refused: false }).note).toBe("A prefix of only slashes is no prefix, so new branches get the bare name.");
   expect(prefixSample("user", "", { prefix: "txais-xiong/", refused: false })).toEqual({ sample: "txais-xiong/<name>", note: null });
   expect(prefixSample("none", "tx", null)).toEqual({ sample: "<name>", note: null });
+});
+
+test("PROJ-048: a new parent is never the workspace itself, its parent, its descendants or the main checkout", () => {
+  const w = (name: string, parent?: string): Worktree => ({ path: "C:/ws/" + name, branch: name, head: "c", isMain: false, parent: parent && "C:/ws/" + parent });
+  const all = [main, w("p"), w("a", "p"), w("kid", "a"), w("grand", "kid"), w("b"), w("loop1", "loop2"), w("loop2", "loop1")];
+  const names = (x: Worktree) => parentChoices(all, x).map((c) => c.branch);
+  expect(names(all[2])).toEqual(["b", "loop1", "loop2"]);
+  expect(names(all[5])).toEqual(["p", "a", "kid", "grand", "loop1", "loop2"]);
+  // a loop of parents does not hang the walk, and the other loop member is a descendant
+  expect(names(all[6])).toEqual(["p", "a", "kid", "grand", "b"]);
+  // a parent that is no longer listed is not "the current parent"
+  expect(names(w("lost", "gone"))).toEqual(["p", "a", "kid", "grand", "b", "loop1", "loop2"]);
 });

@@ -89,6 +89,19 @@ export function nestRows(others: Worktree[], nest: boolean, folded: ReadonlySet<
   return rows;
 }
 
+/**
+ * PROJ-048: the workspaces `w` may be moved under: never itself, the parent it has now, anything
+ * nested under it (that would make a loop) or the main checkout.
+ */
+export function parentChoices(all: Worktree[], w: Worktree): Worktree[] {
+  const under = new Set([norm(w.path)]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const x of all) if (x.parent && under.has(norm(x.parent)) && !under.has(norm(x.path))) grew = !!under.add(norm(x.path));
+  }
+  return all.filter((x) => !x.isMain && !under.has(norm(x.path)) && !(w.parent && norm(w.parent) === norm(x.path)));
+}
+
 const norm = (p: string) => p.replace(/[\\/]+/g, "/").replace(/\/$/, "").toLowerCase();
 /** PROJ-006 / PROJ-007: after adding a project, the worktree at the folder that became the project, else the main checkout. */
 export function openedWorktree(list: Worktree[], path: string): Worktree | undefined {

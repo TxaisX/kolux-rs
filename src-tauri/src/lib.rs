@@ -128,6 +128,7 @@ pub fn run() {
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,
+            projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,
             projects::workspace_unseen,

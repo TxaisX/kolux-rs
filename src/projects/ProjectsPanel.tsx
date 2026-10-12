@@ -22,8 +22,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
-import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
-import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
+import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
@@ -94,6 +94,7 @@ const noteRecent = (id: string) => {
 };
 
 export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest }: Props) {
+  const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -543,6 +544,28 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   };
 
   // PROJ-042: hide or show one worktree; the poll shows the change, this just does not wait for it.
+  // PROJ-048: the parents a workspace can move under, and the move itself. The picker closes
+  // first, so a refusal shows once it is gone.
+  const moveItems = (p: Project, w: Worktree) => (q: string): PickItem[] => {
+    const all = worktrees[p.id] ?? [];
+    const top = w.parent && all.some((x) => !x.isMain && same(x.path, w.parent as string)) && !q.trim() ? [{ key: "", label: "No parent", hint: "top level" }] : [];
+    return [
+      ...top,
+      ...parentChoices(all, w).flatMap((x) => {
+        const hits = q.trim() ? matchLetters(q.trim(), worktreeLabel(x)) : [];
+        return hits ? [{ key: x.path, label: worktreeLabel(x), hits, title: x.path }] : [];
+      }),
+    ];
+  };
+  const move = async (p: Project, w: Worktree, parent: string) => {
+    setMoving(null);
+    try {
+      await invoke("workspace_set_parent", { projectId: p.id, path: w.path, parent: parent || null });
+      await refreshWorktrees(projects);
+    } catch (err) {
+      say("warn", `${worktreeLabel(w)} was not moved: ${String(err)}`);
+    }
+  };
   const hide = async (w: Worktree, hidden: boolean) => {
     try {
       await invoke("workspace_hide", { path: w.path, hidden });
@@ -730,6 +753,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const info = infoOf(w);
     const un = isUnread(w);
     const shut = shutKids.has(w.path);
+    const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
         <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
@@ -769,6 +793,19 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           {!asking && !w.isMain && (
             <button
               className="ib"
+              title="Change parent: move this workspace under another one, or back to the top level"
+              aria-expanded={moving === w.path}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMoving(moving === w.path ? null : w.path);
+              }}
+            >
+              <ArrowRight size={11} />
+            </button>
+          )}
+          {!asking && !w.isMain && (
+            <button
+              className="ib"
               title="Hide this worktree from the sidebar (project settings list it to show again)"
               onClick={(e) => {
                 e.stopPropagation();
@@ -792,6 +829,16 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </button>
           )}
         </div>
+        {moving === w.path && !asking && (
+          <div className="sb-form" data-moving={worktreeLabel(w)}>
+            <Picker key={`move-${w.path}`} name="Move under" value={up ? worktreeLabel(up) : "No parent"} startOpen items={moveItems(p, w)} onPick={(k) => void move(p, w, k)} />
+            <div className="btn-row">
+              <button className="btn" onClick={() => setMoving(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {asking && (
           <div className="sb-form warn">
             <span>
