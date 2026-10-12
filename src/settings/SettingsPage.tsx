@@ -53,7 +53,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
           <input type="checkbox" role="switch" checked={resume} onChange={(e) => onResume(e.target.checked)} />
           <span>
             Carry on by itself once a usage limit resets
-            <small>Off unless you turn it on. Kolux saves the choice now; the resume itself is not built yet.</small>
+            <small>Off unless you turn it on. A Claude pane stopped by a usage limit gets "The usage limit has reset. Please continue where you left off." typed in about a minute after the limit resets, as long as Claude is still the program in front and nothing else was typed there since.</small>
           </span>
         </label>
       )}
