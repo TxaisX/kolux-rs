@@ -1,5 +1,6 @@
 mod agents;
 mod browser;
+mod cap;
 pub mod cli;
 mod claude_accounts;
 mod claude_key;

@@ -9,6 +9,8 @@ import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, Pan
 import { Kbd } from "../keys/KeymapContext";
 import CodexPill from "../usage/CodexPill";
 import ClaudePill from "../usage/ClaudePill";
+import { weeklyOf } from "../usage/claude";
+import { usePlan } from "../usage/plan";
 
 /** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
 export type Screen = "agents" | "board" | "terminals" | "inbox";
@@ -18,10 +20,17 @@ export const screens: Array<{ id: Screen; label: string }> = [
   { id: "terminals", label: "Terminals" },
 ];
 
-type Props = { screen: Screen; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
+type Props = { screen: Screen; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; installed?: string[] };
 
-export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
+export default function TopBar({ screen, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, installed = [] }: Props) {
   const [maximized, setMaximized] = useState(false);
+  // USAGE-008 / VIEW-008: a pill per provider, only with a weekly figure (or Codex's refused
+  // sign-in) and an installed CLI; with neither, nothing is drawn. It is read-only: Settings
+  // opens with Ctrl+, (app.settings).
+  const plan = usePlan();
+  const claudeOn = installed.includes("claude");
+  const codexOn = installed.includes("codex");
+  const anyPill = (claudeOn && !!weeklyOf(plan.claude)) || (codexOn && !!(plan.codex?.weekly || plan.codex?.state === "sign-in-again"));
   useEffect(() => {
     const win = getCurrentWindow();
     let stop = () => {};
@@ -76,10 +85,10 @@ export default function TopBar({ screen, onScreen, onSettings, sidebarOpen, onTo
         <button className="ib bell" aria-label="Notifications" title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
           <Bell />
         </button>
-        <button className="usage" title="Usage. Click for AI connections." onClick={onSettings}>
-          <ClaudePill />
-          <CodexPill />
-        </button>
+        <span className="usage" hidden={!anyPill}>
+          <ClaudePill installed={claudeOn} />
+          <CodexPill installed={codexOn} />
+        </span>
         <div className="wc">
           <button title="Minimize" onClick={() => win().minimize()}>
             <Minimize size={16} />

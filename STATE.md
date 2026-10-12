@@ -574,7 +574,9 @@ Claude half reads "Claude N% left" from Claude Code's own status-line reports on
 pane has produced one (T-039-b, [core]); until then it reads "unknown". Board cards carry a
 compact meter (context bar in tokens plus the agent's 5-hour and weekly plan percentages), agent
 tabs a tiny context ring, and the pane header's gauge fills and turns yellow at 70% and red past
-90% (T-040-a, [core]).
+90% (T-040-a, [core]). Claude and Codex panes start held to a 200k context window unless
+Settings > Agents switches the cap off, and the top-right pill is a read-only weekly figure per
+provider, tinted by use, hidden until a weekly figure is known (T-041-a, [core]).
 
 [accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
 the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
@@ -1402,7 +1404,37 @@ recorded default until told otherwise; nothing here blocks a pass.
   cards with bars, token counts and plan lines, the shell card bare (`evidence/T-040-a-meter.png`).
   Not built here: the Agents view rings, footer and usage line (T-040-b, needs T-050 and T-263).
 
+- 2026-10-12 · [core] T-041-a: the 200k cap, the weekly pill, and safer Claude figures. `cap.rs`
+  holds the setting (`contextCap200k`, never saved = on, switch on the new Settings > Agents page)
+  and `apply`, run by `terminal_spawn` on the start line and environment it hands the PTY, so the
+  pane's saved start line never carries the cap and a rerun adds it exactly once: a program
+  credited as Claude gets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` unless Kolux's own environment
+  already names it (any case) or `--autocompact` is on the line; one credited as Codex gets
+  `-c model_context_window=200000 -c model_auto_compact_token_limit=180000` ahead of any `--`
+  unless its arguments already name either key, `--profile`/`-p` or `--oss`; everything else is
+  untouched and no agent's file is written. The meters (`contextFill`, `meterOf`) now take the
+  switch from settings. The top-right pill follows USAGE-008/VIEW-008: a `<span>` (the click that
+  opened Settings is gone; Ctrl+, does that), one part per provider with the weekly window alone,
+  only while that CLI is installed and a weekly figure is known (Codex's refused sign-in still
+  shows), tinted on the 70/90 scale of used, hovering `Weekly limit: N% left, resets in 2d 4h` or
+  `reset time unknown` (a past reset time reads `resets now`); with nothing to show the pill is
+  hidden. USAGE-021's status-line part: the status script sends `X-Kolux-Config:
+  %CLAUDE_CONFIG_DIR%`, a report from a folder other than the active account's (or from a managed
+  folder while the default sign-in is active) is dropped, and a report carrying one window is
+  merged over the stored windows so the other stays. Live in the lane app: a Codex pane opened with
+  the cap on runs `codex.cmd --dangerously-bypass-approvals-and-sandbox -c
+  model_context_window=200000 -c model_auto_compact_token_limit=180000` (Win32_Process command
+  line, parent the app), one opened after switching the cap off on Settings > Agents runs without
+  the overrides, and the switch writes `contextCap200k` to settings.json both ways; Claude's
+  variable is covered by the unit test only (a process's environment is not readable from outside).
+  Posted status-line reports: weekly 85% used → pill `Claude 15% left` yellow, hover `Weekly
+  limit: 15% left, resets in 2d 4h`; a five-hour-only report leaves it; one with
+  `X-Kolux-Config: C:/somewhere/else` is dropped; 95% → red (`evidence/T-041-a-cap.png`). Not
+  built: the provider's usage service and the hidden-terminal usage screen (DT-C14), the
+  status-bar usage item switch (item list is T-148), the resume after a limit (T-041-b).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-041-a · done: 200k cap (env for Claude, -c overrides for Codex, Settings > Agents switch), weekly-only read-only pill with tint and countdown, config-folder guard and one-window merge on status-line reports; DT-C14 drops the usage service; evidence/T-041-a-cap.png
 - 2026-10-12 · [core] T-040-a · done: Board card meter (context bar in tokens + plan %), tab ring, header gauge colours, USAGE-005 maths against the 200k cap; Agents view parts split to T-040-b; evidence/T-040-a-meter.png
 - 2026-10-12 · [core] T-039-b · done: statusLine slot taken with a chaining bash command, /claude-status route → kv claudeRateLimits + claudeUsageLimitResetsAt, pill 'Claude N% left', header gauge, limit stop carries the reset; evidence/T-039-b-usage.png
 - 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
@@ -1412,7 +1444,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
 - 2026-10-12 · [core] T-003b-fix-b · done: DESIGN.md sections 6 and 7, globe tab glyph in `App.tsx`, web view inset in `styles.css`, projects test temp-folder collision fixed; `evidence/T-003b-fix-b-browser.png`
 - 2026-10-12 · [core] T-013-fix-b · done: Unicode-name fallback in `names.rs` (+ tests, crate `unicode_names2`), `nameOf()` in `workspaces.ts` (+ test), typed names flow `ProjectsPanel` → `App` → pane header; `evidence/T-013-fix-b-preview.png`, `-header.png`
-- 2026-10-12 · [core] T-013-fix-a · done: `createOpens()` in `model.ts` (+ test), `ProjectsPanel.tsx` routes Mod+N and the header button through it, T-013-c added; `evidence/T-013-fix-a-no-project.png`
-- 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
 
 

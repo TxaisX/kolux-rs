@@ -19,6 +19,8 @@ use tauri::{AppHandle, Emitter, Manager};
 pub const EVENT: &str = "agent-status";
 pub const TOKEN_HEADER: &str = "x-kolux-token";
 pub const IDENTITY_HEADER: &str = "x-kolux-pane";
+/// USAGE-021: the Claude config folder a status-line report's session runs under, if any.
+pub const CONFIG_HEADER: &str = "x-kolux-config";
 /// Kolux RS's own script folder under the home folder. DT-C1: not COMPAT's `~/.kolux/agent-hooks`
 /// while the old app is installed beside this one, so neither overwrites the other's scripts.
 pub const SCRIPT_DIR: &str = ".kolux-rs/agent-hooks";
@@ -255,6 +257,9 @@ pub struct Usage {
     pub context_tokens: Option<u64>,
     pub context_window: Option<u64>,
     pub limits: Vec<Limit>,
+    /// The config folder the report came from (USAGE-021); none for the default sign-in.
+    #[serde(skip)]
+    pub config_dir: Option<String>,
 }
 
 /// A status-line report: token-checked like a hook, then the figures. `Err` is the status code.
@@ -290,7 +295,26 @@ pub fn usage(req: &Request, token: &str) -> Result<Usage, u16> {
             })
         })
         .collect();
-    Ok(Usage { pane_key, context_tokens, context_window, limits })
+    let config_dir = req.headers.get(CONFIG_HEADER).map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
+    Ok(Usage { pane_key, context_tokens, context_window, limits, config_dir })
+}
+
+/// USAGE-021: a report counts only when it comes from the folder the active account runs under;
+/// none on both sides is the computer's default sign-in. Case and slash direction do not matter.
+pub fn same_folder(active: Option<&str>, reported: Option<&str>) -> bool {
+    let norm = |p: &str| p.trim().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+    active.map(norm) == reported.map(norm)
+}
+
+/// USAGE-021: an update that carries one window leaves the other as it was.
+pub fn merge_limits(mut old: Vec<Limit>, new: &[Limit]) -> Vec<Limit> {
+    for l in new {
+        match old.iter_mut().find(|o| o.kind == l.kind) {
+            Some(o) => *o = l.clone(),
+            None => old.push(l.clone()),
+        }
+    }
+    old
 }
 
 /// When the soonest window that is used up lifts, in ms; none when nothing is used up.
@@ -342,22 +366,32 @@ fn iso_ms(s: &str) -> Option<i64> {
 /// rate-limit figures alone; a window that is used up writes when it lifts for the Claude card
 /// (`claudeUsageLimitResetsAt`) and for the next limit stop.
 fn record_usage(app: &AppHandle, u: &Usage) {
+    let mut u = u.clone();
     if !u.limits.is_empty() {
-        let lifts = exhausted(&u.limits);
         if let Some(store) = app.try_state::<Mutex<crate::state::Store>>() {
             if let Ok(store) = store.lock() {
+                let old = store.get(LIMITS_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+                u.limits = merge_limits(old, &u.limits);
                 let _ = store.set(LIMITS_KEY, &json!(u.limits).to_string());
-                if let Some(at) = lifts {
+                if let Some(at) = exhausted(&u.limits) {
                     let _ = store.set(crate::claude_key::LIMIT_KEY, &at.to_string());
                 }
             }
         }
+        let lifts = exhausted(&u.limits);
         crate::status::LIMIT_RESETS_AT.store(lifts.unwrap_or(0), Ordering::Relaxed);
         if lifts.is_some() {
             let _ = app.emit(crate::claude_key::EVENT, ());
         }
     }
-    let _ = app.emit(USAGE_EVENT, u);
+    let _ = app.emit(USAGE_EVENT, &u);
+}
+
+/// The config folder the active Claude account runs under; none for the default sign-in.
+fn active_config_dir(app: &AppHandle) -> Option<String> {
+    let store = app.try_state::<Mutex<crate::state::Store>>()?;
+    let store = store.lock().ok()?;
+    crate::claude_accounts::active_dir(&store)
 }
 
 /// The rate-limit windows the last status-line report carried, for the usage pill at start.
@@ -372,10 +406,12 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     let mut reader = BufReader::new(&stream);
     let code = match parse_request(&mut reader) {
         Some(req) if req.path == "/claude-status" => match usage(&req, token) {
-            Ok(u) => {
+            // USAGE-021: a report from another config folder than the active account's is dropped.
+            Ok(u) if same_folder(active_config_dir(app).as_deref(), u.config_dir.as_deref()) => {
                 record_usage(app, &u);
                 200
             }
+            Ok(_) => 200,
             Err(code) => code,
         },
         Some(req) => {
@@ -449,7 +485,7 @@ pub fn status_command(script: &str, prev: &str) -> String {
 
 fn script(agent: &str, route: &str) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
-    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" --data-binary @- -o NUL \"http://127.0.0.1:%KP%/{route}\" >NUL 2>&1");
+    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\" --data-binary @- -o NUL \"http://127.0.0.1:%KP%/{route}\" >NUL 2>&1");
     [
         "@echo off",
         head.as_str(),
@@ -985,7 +1021,8 @@ mod tests {
         assert!(body.starts_with("@echo off\r\n") && body.contains("curl.exe -s -m 1.5") && body.ends_with("exit /b 0\r\n"));
         let status = write_status_script(&dir).unwrap();
         assert!(status.ends_with(".kolux-rs/agent-hooks/claude-status.cmd"));
-        assert!(std::fs::read_to_string(&status).unwrap().contains("%KP%/claude-status\""));
+        let text = std::fs::read_to_string(&status).unwrap();
+        assert!(text.contains("%KP%/claude-status\"") && text.contains("-H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\""), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1023,7 +1060,23 @@ mod tests {
             Limit { kind: "seven_day".into(), used_percent: 100.0, resets_at: Some(1_791_828_000_500) },
         ]);
         assert_eq!(exhausted(&u.limits), Some(1_791_828_000_500));
+        assert_eq!(u.config_dir, None, "no config header: the computer's default sign-in");
         assert_eq!(usage(&req, "other"), Err(403));
+        // USAGE-021: the report names the config folder its session runs under; a report from a
+        // different folder than the active account's is dropped, a one-window update keeps the
+        // other window as it was.
+        let raw = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nX-Kolux-Config: C:\\u\\.kolux-rs\\claude-accounts\\a\\\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        let u = usage(&parse_request(&mut raw.as_bytes()).unwrap(), "tok").unwrap();
+        assert_eq!(u.config_dir.as_deref(), Some("C:\\u\\.kolux-rs\\claude-accounts\\a\\"));
+        assert!(same_folder(Some("c:/u/.kolux-rs/claude-accounts/a"), u.config_dir.as_deref()));
+        assert!(same_folder(None, None));
+        assert!(!same_folder(None, u.config_dir.as_deref()), "a managed-account report while the default sign-in is active");
+        assert!(!same_folder(Some("C:/u/.kolux-rs/claude-accounts/b"), u.config_dir.as_deref()));
+        let old = vec![Limit { kind: "five_hour".into(), used_percent: 10.0, resets_at: None }, Limit { kind: "seven_day".into(), used_percent: 20.0, resets_at: Some(5) }];
+        let merged = merge_limits(old.clone(), &[Limit { kind: "five_hour".into(), used_percent: 50.0, resets_at: Some(9) }]);
+        assert_eq!(merged, vec![Limit { kind: "five_hour".into(), used_percent: 50.0, resets_at: Some(9) }, old[1].clone()]);
+        assert_eq!(merge_limits(vec![], &old), old);
+        assert_eq!(merge_limits(old.clone(), &[]), old);
         let only = format!("POST /claude-status HTTP/1.1\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\nContent-Length: 76\r\n\r\n{{\"context_window\":{{\"context_window_size\":200000,\"total_input_tokens\":30000}}}}");
         let u = usage(&parse_request(&mut only.as_bytes()).unwrap(), "tok").unwrap();
         assert_eq!((u.context_tokens, u.context_window, u.limits.len()), (Some(30_000), Some(200_000), 0));

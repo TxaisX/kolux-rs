@@ -55,6 +55,8 @@ input { font: inherit; }
 /* the Codex half of the pill (USAGE-022); warn yellow from DESIGN.md section 3 */
 .usage-part { display: inline-flex; align-items: center; gap: 6px; }
 .usage-part.warn { color: #fdc030; }
+.usage-part.danger { color: var(--danger); }
+.usage[hidden] { display: none; }
 .usage { display: inline-flex; align-items: center; gap: 6px; height: 23px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--fg-muted); font-size: 12px; margin-right: 14px; white-space: nowrap; }
 
 .wc { display: flex; height: 100%; }

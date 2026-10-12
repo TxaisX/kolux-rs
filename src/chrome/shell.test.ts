@@ -19,8 +19,10 @@ test("the top bar carries the screen switcher, search hint, usage pill and windo
   expect(html).toMatch(/aria-pressed="true"[^>]*>Terminals<\/button>/);
   expect(html).toContain('class="searchbox"');
   expect(html).toContain("Ctrl");
-  expect(html).toContain('class="usage"');
-  expect(html).toContain("Claude · unknown");
+  // USAGE-008: no usage data yet → the pill is not drawn, and it is not a button (nothing to click).
+  expect(html).toContain('class="usage" hidden=""');
+  expect(html).not.toContain("Claude");
+  expect(html).not.toContain('<button class="usage"');
   for (const control of ["Minimize", "Maximize", "Close"]) expect(html).toContain(`title="${control}"`);
 });
 

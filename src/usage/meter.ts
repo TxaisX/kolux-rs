@@ -9,6 +9,9 @@ export type Meter = { context?: ContextReading & { percent: number }; plan?: Pla
 
 /** USAGE-006: the window every session is held to while the cap is on. */
 export const CAP = 200_000;
+/** USAGE-006: the cap setting; never saved means on. */
+export const CAP_FIELD = "contextCap200k";
+export const capOn = (settings: Record<string, unknown>): boolean => settings[CAP_FIELD] !== false;
 
 /** Context fill, 0 to 100, against the effective window: the cap while it is on, else the model's own. */
 // ponytail: the cap is always on until T-041 wires the USAGE-006 switch through this argument.

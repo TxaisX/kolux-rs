@@ -41,7 +41,7 @@ import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
-import { contextFill, meterOf, meterText, type ContextReading } from "./usage/meter";
+import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./usage/meter";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
@@ -723,7 +723,7 @@ function Window() {
   return (
     <div className="app">
       <Tip />
-      <TopBar screen={screen} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
+      <TopBar screen={screen} onScreen={setScreen} installed={installedIds} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
       <div className="body">
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}
         {terminals && sidebarOpen && (
@@ -821,7 +821,7 @@ function Window() {
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
                             {p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
-                            {context[p.key] && <Ring percent={contextFill(context[p.key])} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex) ?? {})} />}
+                            {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
@@ -855,14 +855,14 @@ function Window() {
                   <TerminalPane
                     key={p.key}
                     hidden={!board && p.key !== active}
-                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex) } : undefined}
+                    card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
                     cwd={p.cwd}
                     branch={p.branch}
                     agent={p.agent}
                     program={p.program}
                     args={p.args}
                     stop={turn[p.key]?.stop}
-                    context={context[p.key] && contextFill(context[p.key])}
+                    context={context[p.key] && contextFill(context[p.key], capOn(settings))}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {

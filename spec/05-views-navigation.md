@@ -155,9 +155,11 @@ Rules: only the weekly window counts; the 5-hour window is ignored; providers th
   ever gets one; a provider shows only while its usage item is ticked in the status-bar item list
   and its agent CLI is installed; hovering a pill shows a countdown to the weekly reset, or says the
   reset time is unknown.
+  (Kolux RS, T-041-a: `src/chrome/TopBar.tsx` hides the pill's container when no provider has a
+  part to show; the installed list comes from the agent scan; the status-bar item list is T-148.)
 Acceptance:
-  - [ ] Signed-in Claude with weekly data → a pill with a remaining percentage.
-  - [ ] No provider data → no pill and no empty placeholder.
+  - [x] Signed-in Claude with weekly data → a pill with a remaining percentage. (T-041-a, by a posted report)
+  - [x] No provider data → no pill and no empty placeholder. (T-041-a)
 Compat: —
 Source: D-05-008
 

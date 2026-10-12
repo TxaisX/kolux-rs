@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { contextFill, meterOf, meterText, planOf, shortTokens, tone } from "./meter";
+import { capOn, contextFill, meterOf, meterText, planOf, shortTokens, tone } from "./meter";
 import Ring from "./Ring";
 import type { ClaudeLimit } from "./claude";
 import type { CodexUsage } from "./codex";
@@ -17,6 +17,8 @@ test("context fill is measured against the 200k cap, else the model's own window
   expect(contextFill({ tokens: 100_000, window: 1_000_000 }, false)).toBe(10);
   expect(contextFill({ tokens: 250_000, window: 200_000 })).toBe(100);
   expect(contextFill({ tokens: 5, window: 0 }, false)).toBe(0);
+  // USAGE-006: the cap is on until the setting says off; a setting never saved counts as on.
+  expect([capOn({}), capOn({ contextCap200k: true }), capOn({ contextCap200k: false })]).toEqual([true, true, false]);
   expect(shortTokens(84_000)).toBe("84k");
   expect(shortTokens(1_250_000)).toBe("1.3M");
   expect(shortTokens(950)).toBe("950");

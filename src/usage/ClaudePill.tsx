@@ -4,19 +4,23 @@ import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
-import { pillDetail, pillText, type ClaudeLimit } from "./claude";
+import { pillDetail, pillText, weeklyOf, type ClaudeLimit } from "./claude";
+import { tone } from "./meter";
 import { publishClaude, usePlan } from "./plan";
 
-export function ClaudePillView({ limits }: { limits: ClaudeLimit[] }) {
+/** USAGE-008: drawn only for an installed Claude with a known weekly window, tinted by its use. */
+export function ClaudePillView({ limits, installed = true }: { limits: ClaudeLimit[]; installed?: boolean }) {
+  const w = weeklyOf(limits);
+  if (!installed || !w) return null;
   return (
-    <span className="usage-part" title={pillDetail(limits)} data-claude-state={limits.length ? "ok" : "unknown"}>
+    <span className={`usage-part ${tone(w.usedPercent)}`.trim()} title={pillDetail(limits)} data-claude-state="ok">
       <VendorMark agent="claude" size={13} />
       <span>{pillText(limits)}</span>
     </span>
   );
 }
 
-export default function ClaudePill() {
+export default function ClaudePill({ installed }: { installed?: boolean }) {
   const { claude: limits } = usePlan();
   useEffect(() => {
     invoke<ClaudeLimit[]>("claude_usage").then(publishClaude).catch(() => {});
@@ -25,5 +29,5 @@ export default function ClaudePill() {
     });
     return () => void off.then((u) => u()).catch(() => {});
   }, []);
-  return <ClaudePillView limits={limits} />;
+  return <ClaudePillView limits={limits} installed={installed} />;
 }

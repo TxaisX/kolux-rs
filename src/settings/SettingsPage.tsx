@@ -11,6 +11,9 @@ import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 import Notifications from "./Notifications";
+import AgentsPage from "./AgentsPage";
+
+const TITLES = { connections: "AI connections", agents: "Agents", notifications: "Notifications" } as const;
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
@@ -114,7 +117,7 @@ function ClaudeCard() {
 }
 
 export default function SettingsPage({ onClose }: { onClose: () => void }) {
-  const [page, setPage] = useState<"connections" | "notifications">("connections");
+  const [page, setPage] = useState<keyof typeof TITLES>("connections");
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -126,16 +129,15 @@ export default function SettingsPage({ onClose }: { onClose: () => void }) {
     <div className="settings" role="dialog" aria-label="Settings">
       <nav className="settings-nav" aria-label="Settings pages">
         <div className="settings-title">Settings</div>
-        <button className="settings-link" aria-current={page === "connections" ? "page" : undefined} onClick={() => setPage("connections")}>
-          AI connections
-        </button>
-        <button className="settings-link" aria-current={page === "notifications" ? "page" : undefined} onClick={() => setPage("notifications")}>
-          Notifications
-        </button>
+        {(Object.keys(TITLES) as Array<keyof typeof TITLES>).map((id) => (
+          <button key={id} className="settings-link" aria-current={page === id ? "page" : undefined} onClick={() => setPage(id)}>
+            {TITLES[id]}
+          </button>
+        ))}
       </nav>
       <main className="settings-main">
         <header className="settings-head">
-          <h1>{page === "connections" ? "AI connections" : "Notifications"}</h1>
+          <h1>{TITLES[page]}</h1>
           <button className="ib" title="Close Settings (Esc)" aria-label="Close Settings" onClick={onClose}>
             ×
           </button>
@@ -146,6 +148,11 @@ export default function SettingsPage({ onClose }: { onClose: () => void }) {
             <ClaudeCard />
             <ClaudeAccounts />
             <CodexCard />
+          </>
+        ) : page === "agents" ? (
+          <>
+            <p className="settings-sub">How Kolux starts the agents it runs for you.</p>
+            <AgentsPage />
           </>
         ) : (
           <>

@@ -188,24 +188,31 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
-    let env: Vec<(String, String)> = {
+    let (env, cap): (Vec<(String, String)>, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
-        crate::claude_key::pane_env(program.as_deref(), &settings, token)
+        let env: Vec<(String, String)> = crate::claude_key::pane_env(program.as_deref(), &settings, token)
             .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
-            .collect()
+            .collect();
+        (env, crate::cap::on(&settings))
     };
+    // USAGE-006: the 200k cap, added at start so the pane's saved start line stays free of it.
+    let mut env = env;
+    let mut args = args.unwrap_or_default();
+    if cap {
+        crate::cap::apply(program.as_deref(), &mut args, &mut env, crate::cap::env_set());
+    }
     // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it.
     if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
         crate::hooks::install_codex_home(std::path::Path::new(home));
     }
-    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env, pane_key)
+    terminals.spawn(app, cols, rows, cwd, program, args, env, pane_key)
 }
 
 #[tauri::command]

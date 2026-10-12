@@ -96,7 +96,7 @@ Rules: context fill is measured against the effective window: 200k while the cap
 Acceptance:
   - [x] Cap on, Claude session at 100k tokens on a model whose window is 1M → the meter reads 50%,
         not 10%. (T-040-a, unit test)
-  - [ ] Switch the cap off → the same session is measured against the model's full window. (the switch is T-041)
+  - [x] Switch the cap off → the same session is measured against the model's full window. (T-041-a)
   - [x] Make the plan read fail → the plan figures vanish from the meter instead of reading 0%. (T-040-a, unit test)
 Compat: —
 Source: D-06-005
@@ -120,11 +120,15 @@ Rules: on out of the box, and a setting that was never saved counts as on; switc
   stays free of the cap; the cap is put back exactly once when a saved command runs again, when a
   session resumes, and for draft launches; adding the cap a second time has the same effect as
   adding it once.
+  (Kolux RS, T-041-a: setting key `contextCap200k`; the cap is added in Rust as the pane starts,
+  on the arguments and environment handed to the PTY, never on the start line Kolux keeps, which
+  is how a rerun gets it exactly once. The switch lives on Settings > Agents. Claude Agent Teams
+  is a skipped agent in Kolux RS, so only Claude Code and Codex are capped.)
 Acceptance:
-  - [ ] Launch Claude with default settings → its process environment holds a 200k auto-compact
-        window.
-  - [ ] Launch Codex with its own profile option → no cap overrides are added.
-  - [ ] Switch the cap off and relaunch → neither Claude nor Codex is capped; Grok never is.
+  - [x] Launch Claude with default settings → its process environment holds a 200k auto-compact
+        window. (T-041-a, unit test on the environment handed to the PTY)
+  - [x] Launch Codex with its own profile option → no cap overrides are added. (T-041-a, unit test)
+  - [x] Switch the cap off and relaunch → neither Claude nor Codex is capped; Grok never is. (T-041-a, Codex live, Claude by unit test)
 Compat: Claude and Agent Teams get Claude Code's auto-compact window environment variable set to
   200,000; Codex gets per-run config overrides for its model context window (200,000) and its
   auto-compact token limit (180,000); the switch is on unless the user turned it off.
@@ -177,11 +181,14 @@ Rules: only the weekly window ever appears here, never the 5-hour one; a provide
   its tint follows the same 70/90 scale of percentage used as the session meters; with no known
   reset time the hover says so instead of counting down; the pill is for reading only and does
   nothing when clicked.
+  (Kolux RS, T-041-a: the hover reads `Weekly limit: N% left, resets in 2d 4h`; Codex's refused
+  sign-in keeps its yellow "sign in again" part, as its own card asks; the status-bar item list
+  is not built yet, so every installed provider counts as switched on until it is.)
 Acceptance:
-  - [ ] Claude and Codex both signed in → both listed with percent left; Claude at 85% used shows
-        15% left in yellow.
-  - [ ] Switch off the Codex usage item → Codex drops out of the pill.
-  - [ ] Hover → the weekly limit and a countdown to its reset.
+  - [x] Claude and Codex both signed in → both listed with percent left; Claude at 85% used shows
+        15% left in yellow. (T-041-a, Claude by a posted report, Codex by unit test)
+  - [ ] Switch off the Codex usage item → Codex drops out of the pill. (the item list is T-148)
+  - [x] Hover → the weekly limit and a countdown to its reset. (T-041-a)
 Compat: —
 Source: D-06-008
 
@@ -215,11 +222,17 @@ Rules: while a Claude session runs, the updates its statusline sends drive the f
   figure, only that missing figure is taken from Claude's usage screen and the service's own figures
   are kept.
 Acceptance:
-  - [ ] Run a Claude session → the figures change within a turn without any background check.
-  - [ ] Set the Claude account to use a token → no usage request goes out and the figures read
-        unavailable.
+  (Kolux RS, T-041-a: the status line is the only source; no usage request ever goes out, and the
+  hidden-terminal usage screen is not read (DT-C14). The status script sends the session's config
+  folder as `X-Kolux-Config`; a report from a folder other than the active account's, or from a
+  managed folder while the computer's default sign-in is active, is dropped; a report with one
+  window is merged over the stored windows.)
+Acceptance:
+  - [x] Run a Claude session → the figures change within a turn without any background check. (T-041-a, by a posted report)
+  - [x] Set the Claude account to use a token → no usage request goes out and the figures read
+        unavailable. (T-041-a: nothing is requested in any mode)
   - [ ] Make the service answer with a slow-down and a retry time → Kolux waits until then unless
-        the user presses refresh.
+        the user presses refresh. (no service is asked, DT-C14)
 Compat: Reads the status updates that Claude Code's statusline sends through the script Kolux
   installs for it: the plan windows with their reset times, the context window, and the config
   folder the session runs under.
