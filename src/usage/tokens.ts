@@ -1,7 +1,8 @@
 // USAGE-012 / USAGE-013: the token figures the Usage page draws, from the rows the backend scans out
 // of Claude Code's and Codex's own logs (src-tauri/src/token_usage.rs). Cached input is its own
 // count in every row, so adding providers never counts it twice; reasoning sits inside output.
-import { estimate } from "./pricing";
+import { costOf, estimate } from "./pricing";
+import { underDir } from "../workspaces";
 
 export type Provider = "claude" | "codex";
 export const PROVIDERS: Provider[] = ["claude", "codex"];
@@ -91,3 +92,80 @@ export function panelState(u: Usage, pick: Pick): "off" | "empty" | "figures" {
 }
 
 export { rowsOf };
+
+// USAGE-014: the Claude and Codex panels' range and scope.
+export type Range = "7" | "30" | "90" | "all";
+export type Scope = "kolux" | "all";
+/** `roots` are the folders that count as Kolux: registered projects and the workspaces folders. */
+export type Filters = { range: Range; scope: Scope; roots: string[] };
+
+const shift = (d: Date, days: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + days);
+
+/** The first local day a range keeps, or "" for all time. */
+export const rangeStart = (range: Range, today: Date) => (range === "all" ? "" : localDay(shift(today, 1 - Number(range))));
+
+export function filterRows(rows: Row[], f: Filters & { today: Date }): Row[] {
+  const from = rangeStart(f.range, f.today);
+  return rows.filter((r) => r.day >= from && (f.scope === "all" || f.roots.some((root) => underDir(r.cwd || null, root))));
+}
+
+export type Bar = { day: string; tokens: number };
+
+/** One bar per local day of the range; longer spans than a year are drawn as weekly bars (from their Sunday). */
+export function daily(rows: Row[], range: Range, today: Date): Bar[] {
+  const first = range === "all" ? rows.reduce((m, r) => (r.day < m ? r.day : m), localDay(today)) : rangeStart(range, today);
+  const [y, m, d] = first.split("-").map(Number);
+  const start = new Date(y, m - 1, d);
+  const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const span = Math.round((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  const weekly = span > 366;
+  const key = (day: string) => {
+    if (!weekly) return day;
+    const [a, b, c] = day.split("-").map(Number);
+    const t = new Date(a, b - 1, c);
+    return localDay(shift(t, -t.getDay()));
+  };
+  const bars = new Map<string, number>();
+  for (let i = 0; i < span; i++) bars.set(key(localDay(shift(start, i))), 0);
+  for (const r of rows) {
+    const k = key(r.day);
+    if (bars.has(k)) bars.set(k, bars.get(k)! + tokensOf(r));
+  }
+  return [...bars].map(([day, tokens]) => ({ day, tokens }));
+}
+
+export type ModelLine = { model: string; tokens: number; sessions: number; usd: number; price: "known" | "inferred" | "none" };
+
+/** Tokens and cost by model; a session is counted once under each model it really used. */
+export function byModel(p: Provider, rows: Row[]): ModelLine[] {
+  const out = new Map<string, ModelLine & { ids: Set<string> }>();
+  for (const r of rows) {
+    const c = costOf(p, r);
+    const m = out.get(r.model) ?? { model: r.model, tokens: 0, sessions: 0, usd: 0, price: c.priced ? (c.inferred ? "inferred" : "known") : "none", ids: new Set<string>() };
+    m.tokens += tokensOf(r);
+    m.usd += c.usd;
+    m.ids.add(r.session);
+    m.sessions = m.ids.size;
+    out.set(r.model, m);
+  }
+  return [...out.values()].map(({ ids: _ids, ...m }) => m).sort((a, b) => b.tokens - a.tokens);
+}
+
+export type SessionLine = { session: string; last: number; day: string; tokens: number; usd: number; models: string[]; partial: boolean };
+
+/** The most recent sessions first. */
+export function recentSessions(p: Provider, rows: Row[], limit = 10): SessionLine[] {
+  const out = new Map<string, SessionLine>();
+  for (const r of rows) {
+    const c = costOf(p, r);
+    const s = out.get(r.session) ?? { session: r.session, last: 0, day: r.day, tokens: 0, usd: 0, models: [], partial: false };
+    s.tokens += tokensOf(r);
+    s.usd += c.usd;
+    s.partial ||= !c.priced;
+    if (!s.models.includes(r.model)) s.models.push(r.model);
+    s.last = Math.max(s.last, r.last);
+    if (r.day > s.day) s.day = r.day;
+    out.set(r.session, s);
+  }
+  return [...out.values()].sort((a, b) => b.day.localeCompare(a.day) || b.last - a.last).slice(0, limit);
+}

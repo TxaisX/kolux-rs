@@ -1,14 +1,15 @@
 // USAGE-012 / USAGE-013: usage analytics on Settings > Usage. A provider picker (Overview, Claude,
 // Codex); only the panel picked is drawn and scanned. Saved figures show at once, a rescan follows
 // for the tracked providers shown, and tracking is opt-in for each provider.
-// ponytail: range, scope, cost by model, the daily chart and recent sessions are T-137-a; Grok's
-// credits panel is T-137-b; the activity counts above the analytics are T-136-c.
+// USAGE-014: the Claude and Codex panels add a range (7 / 30 / 90 days or all time) and a scope
+// (Kolux worktrees, or every local use), a chart by day, a breakdown by model and recent sessions.
+// ponytail: Grok's credits panel is T-137-b; the activity counts above the analytics are T-136-c.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Segmented } from "../settings/GeneralPage";
 import { locale } from "../language";
 import { estimate } from "./pricing";
-import { grid, NAMES, overview, panelState, rowsOf, shownProviders, type Pick, type Provider, type Saved, type Usage } from "./tokens";
+import { byModel, daily, filterRows, grid, NAMES, overview, panelState, recentSessions, rowsOf, shownProviders, type Filters, type Pick, type Provider, type Range, type Row, type Saved, type Scope, type Usage } from "./tokens";
 
 const PICKS: Array<{ id: Pick; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -17,6 +18,17 @@ const PICKS: Array<{ id: Pick; label: string }> = [
 ];
 const LOGS: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
 const WEEKS = 26;
+const RANGES: Array<{ id: Range; label: string }> = [
+  { id: "7", label: "Last 7 days" },
+  { id: "30", label: "Last 30 days" },
+  { id: "90", label: "Last 90 days" },
+  { id: "all", label: "All time" },
+];
+const SCOPES: Array<{ id: Scope; label: string }> = [
+  { id: "kolux", label: "Kolux worktrees" },
+  { id: "all", label: "Every local use" },
+];
+export const DEFAULT_FILTERS: Filters = { range: "30", scope: "kolux", roots: [] };
 
 const count = (n: number) => new Intl.NumberFormat(locale(), { notation: "compact", maximumFractionDigits: 1 }).format(n);
 const money = (usd: number, partial: boolean) => (partial && usd === 0 ? "n/a" : new Intl.NumberFormat(locale(), { style: "currency", currency: "USD" }).format(usd));
@@ -31,6 +43,8 @@ type ViewProps = {
   onPick: (p: Pick) => void;
   onTrack: (p: Provider, on: boolean) => void;
   onRefresh: () => void;
+  filters: Filters;
+  onFilters: (f: Partial<Filters>) => void;
 };
 
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
@@ -136,12 +150,57 @@ function OverviewPanel({ usage, today, onTrack }: { usage: Usage; today: Date; o
   );
 }
 
-function ProviderPanel({ usage, p, onTrack }: { usage: Usage; p: Provider; onTrack: ViewProps["onTrack"] }) {
-  const on = usage.tracking[p];
-  const state = panelState(usage, p);
-  const rows = rowsOf(usage, p);
+const timeText = (ms: number) => (ms ? new Date(ms).toLocaleTimeString(locale(), { timeStyle: "short" }) : "");
+
+function Figures({ p, rows, filters, today }: { p: Provider; rows: Row[]; filters: Filters; today: Date }) {
   const sum = (k: "input" | "output" | "cacheRead" | "cacheWrite") => rows.reduce((t, r) => t + r[k], 0);
   const cost = estimate(p, rows);
+  const bars = daily(rows, filters.range, today);
+  const top = Math.max(1, ...bars.map((b) => b.tokens));
+  return (
+    <>
+      <div className="ta-stats">
+        <Stat label="Input" value={count(sum("input"))} />
+        <Stat label="Output" value={count(sum("output"))} />
+        <Stat label="Cache reads" value={count(sum("cacheRead"))} />
+        <Stat label="Cache writes" value={count(sum("cacheWrite"))} />
+        <Stat label="Estimated cost" value={money(cost.usd, cost.unpriced.length > 0)} note={cost.unpriced.length ? "partial: some models have no known price" : undefined} />
+      </div>
+      <div className="ta-chart" data-day-chart role="img" aria-label="Tokens by day">
+        {bars.map((b) => (
+          <span key={b.day} className={`ta-bar${b.tokens ? "" : " none"}`} style={{ height: `${(b.tokens / top) * 100}%` }} title={`${dayText(b.day)}: ${count(b.tokens)} tokens`} />
+        ))}
+      </div>
+      <h3 className="ta-sub">By model</h3>
+      <ul className="ta-list">
+        {byModel(p, rows).map((m) => (
+          <li key={m.model}>
+            <span className="ta-model">{m.model}</span>
+            <span>{`${count(m.tokens)} tokens`}</span>
+            <span>{m.sessions === 1 ? "1 session" : `${m.sessions} sessions`}</span>
+            <span>{m.price === "none" ? "n/a" : m.price === "inferred" ? `${money(m.usd, false)} (inferred)` : money(m.usd, false)}</span>
+          </li>
+        ))}
+      </ul>
+      <h3 className="ta-sub">Recent sessions</h3>
+      <ul className="ta-list sessions">
+        {recentSessions(p, rows).map((s) => (
+          <li key={s.session}>
+            <span>{`${dayText(s.day)} ${timeText(s.last)}`}</span>
+            <span className="ta-model">{s.models.join(", ")}</span>
+            <span>{`${count(s.tokens)} tokens`}</span>
+            <span>{s.partial && s.usd === 0 ? "n/a" : s.partial ? `${money(s.usd, false)} (partial)` : money(s.usd, false)}</span>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function ProviderPanel({ usage, p, today, filters, onTrack, onFilters }: { usage: Usage; p: Provider; today: Date; filters: Filters; onTrack: ViewProps["onTrack"]; onFilters: ViewProps["onFilters"] }) {
+  const on = usage.tracking[p];
+  const state = panelState(usage, p);
+  const rows = filterRows(rowsOf(usage, p), { ...filters, today });
   return (
     <section className="conn-card ta-card" data-panel={p}>
       <header className="conn-head">
@@ -155,13 +214,17 @@ function ProviderPanel({ usage, p, onTrack }: { usage: Usage; p: Provider; onTra
       {state === "empty" && <p className="conn-detail">No {LOGS[p]} logs on this computer yet. Figures arrive after the next {NAMES[p]} session.</p>}
       {state === "figures" && (
         <>
-          <div className="ta-stats">
-            <Stat label="Input" value={count(sum("input"))} />
-            <Stat label="Output" value={count(sum("output"))} />
-            <Stat label="Cache reads" value={count(sum("cacheRead"))} />
-            <Stat label="Cache writes" value={count(sum("cacheWrite"))} />
-            <Stat label="Estimated cost" value={money(cost.usd, cost.unpriced.length > 0)} note={cost.unpriced.length ? "partial: some models have no known price" : undefined} />
+          <div className="ta-filters">
+            <Segmented label="Range" options={RANGES} value={filters.range} onPick={(range) => onFilters({ range })} />
+            <Segmented label="Scope" options={SCOPES} value={filters.scope} onPick={(scope) => onFilters({ scope })} />
           </div>
+          {rows.length > 0 ? (
+            <Figures p={p} rows={rows} filters={filters} today={today} />
+          ) : (
+            <p className="conn-detail">
+              {filters.scope === "kolux" ? `No use inside Kolux in this range. Pick Every local use to see ${NAMES[p]} sessions run outside Kolux.` : "No use in this range."}
+            </p>
+          )}
           <Failed usage={usage} providers={[p]} />
         </>
       )}
@@ -169,7 +232,7 @@ function ProviderPanel({ usage, p, onTrack }: { usage: Usage; p: Provider; onTra
   );
 }
 
-export function TokenAnalyticsView({ usage, pick, scanning, today, onPick, onTrack, onRefresh }: ViewProps) {
+export function TokenAnalyticsView({ usage, pick, scanning, today, onPick, onTrack, onRefresh, filters, onFilters }: ViewProps) {
   const shown = shownProviders(usage, pick);
   const busy = shown.some((p) => scanning.includes(p));
   return (
@@ -180,7 +243,7 @@ export function TokenAnalyticsView({ usage, pick, scanning, today, onPick, onTra
           {busy ? "Refreshing…" : "Refresh"}
         </button>
       </div>
-      {pick === "overview" ? <OverviewPanel usage={usage} today={today} onTrack={onTrack} /> : <ProviderPanel usage={usage} p={pick} onTrack={onTrack} />}
+      {pick === "overview" ? <OverviewPanel usage={usage} today={today} onTrack={onTrack} /> : <ProviderPanel usage={usage} p={pick} today={today} filters={filters} onTrack={onTrack} onFilters={onFilters} />}
     </div>
   );
 }
@@ -190,6 +253,7 @@ export default function TokenAnalytics() {
   const [pick, setPick] = useState<Pick>("overview");
   const [scanning, setScanning] = useState<Provider[]>([]);
   const scanned = useRef(new Set<Provider>());
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
 
   const scan = useCallback((ps: Provider[]) => {
     for (const p of ps) {
@@ -204,6 +268,10 @@ export default function TokenAnalytics() {
 
   useEffect(() => {
     invoke<Usage>("token_usage").then(setUsage, () => {});
+    // Kolux scope: the registered projects, their own workspaces folders and the global one.
+    Promise.all([invoke<Array<{ path: string; workspacesDir?: string | null }>>("project_list"), invoke<{ dir: string }>("workspaces_place_get")])
+      .then(([projects, place]) => setFilters((f) => ({ ...f, roots: [...projects.flatMap((p) => [p.path, p.workspacesDir ?? ""]), place.dir].filter(Boolean) })))
+      .catch(() => {});
   }, []);
   // Saved figures are drawn first; each tracked provider the picked panel shows is rescanned once.
   useEffect(() => {
@@ -220,5 +288,5 @@ export default function TokenAnalytics() {
   };
 
   if (!usage) return null;
-  return <TokenAnalyticsView usage={usage} pick={pick} scanning={scanning} today={new Date()} onPick={setPick} onTrack={track} onRefresh={() => scan(shownProviders(usage, pick).filter((p) => !scanning.includes(p)))} />;
+  return <TokenAnalyticsView usage={usage} pick={pick} scanning={scanning} today={new Date()} onPick={setPick} onTrack={track} onRefresh={() => scan(shownProviders(usage, pick).filter((p) => !scanning.includes(p)))} filters={filters} onFilters={(f) => setFilters((x) => ({ ...x, ...f }))} />;
 }

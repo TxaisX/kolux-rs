@@ -794,3 +794,13 @@ input { font: inherit; }
 .cache.ta-mix-part, .ta-swatch.cache { background: #2ea043; }
 .output.ta-mix-part, .ta-swatch.output { background: #d29922; }
 .reasoning.ta-mix-part, .ta-swatch.reasoning { background: #a371f7; }
+.ta-filters { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.ta-chart { display: flex; align-items: flex-end; gap: 1px; height: 96px; padding-top: 4px; border-bottom: 1px solid var(--line-subtle); }
+.ta-bar { flex: 1 1 0; min-width: 1px; background: #2ea043; border-radius: 2px 2px 0 0; }
+.ta-sub { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--fg-muted); }
+.ta-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.ta-list li { display: grid; grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr)); gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line-subtle); color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.ta-list li > :first-child { color: var(--fg); }
+.ta-model { min-width: 0; overflow-wrap: anywhere; }
+.ta-bar.none { min-height: 2px; background: var(--line-subtle); }
+.ta-list.sessions li { grid-template-columns: minmax(0, 1.2fr) minmax(0, 2.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr); }

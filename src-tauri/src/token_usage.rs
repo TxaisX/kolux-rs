@@ -85,7 +85,8 @@ fn bucket(turns: impl IntoIterator<Item = Turn>, tz: &jiff::tz::TimeZone) -> Vec
         }
         let Some(day) = i64::try_from(t.at).ok().and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok()).map(|ts| ts.to_zoned(tz.clone()).date().to_string()) else { continue };
         let prompt = t.input + t.cache_read + t.cache_write;
-        let band = if prompt > 200_000 { 2 } else if prompt > 100_000 { 1 } else { 0 };
+        // Bands match the published price steps: 100k (Haiku 5.5), 200k, 272k (OpenAI long context).
+        let band = if prompt > 272_000 { 3 } else if prompt > 200_000 { 2 } else if prompt > 100_000 { 1 } else { 0 };
         let r = rows.entry((day.clone(), t.session.clone(), t.model.clone(), t.cwd.clone(), band)).or_insert_with(|| Row { day, session: t.session, model: t.model, cwd: t.cwd, band, ..Row::default() });
         r.input += t.input;
         r.output += t.output;
@@ -399,10 +400,11 @@ mod tests {
     fn prompt_size_bands_feed_long_context_prices() {
         let big = json!({ "input_tokens": 50_000, "output_tokens": 1, "cache_read_input_tokens": 160_000 });
         let mid = json!({ "input_tokens": 150_000, "output_tokens": 1 });
-        let rows = claude_rows(&[file("s.jsonl", &[reply("a", "2026-03-01T01:00:00Z", big), reply("b", "2026-03-01T02:00:00Z", mid)])], &TimeZone::UTC);
+        let huge = json!({ "input_tokens": 2_000, "output_tokens": 1, "cache_read_input_tokens": 280_000 });
+        let rows = claude_rows(&[file("s.jsonl", &[reply("a", "2026-03-01T01:00:00Z", big), reply("b", "2026-03-01T02:00:00Z", mid), reply("c", "2026-03-01T03:00:00Z", huge)])], &TimeZone::UTC);
         let mut bands: Vec<_> = rows.iter().map(|r| r.band).collect();
         bands.sort();
-        assert_eq!(bands, [1, 2]);
+        assert_eq!(bands, [1, 2, 3]);
     }
 
     fn event(at: &str, total: Value, last: Value) -> Value {

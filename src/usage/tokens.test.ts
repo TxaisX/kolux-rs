@@ -49,7 +49,7 @@ test("USAGE-012 / 013: off, empty and figures states, and only the tracked provi
 });
 
 const view = (u: Usage, pick: "overview" | "claude" | "codex", scanning: string[] = []) =>
-  renderToString(createElement(TokenAnalyticsView, { usage: u, pick, scanning, onPick: () => {}, onTrack: () => {}, onRefresh: () => {}, today: new Date(2026, 2, 4) }));
+  renderToString(createElement(TokenAnalyticsView, { usage: u, pick, scanning, onPick: () => {}, onTrack: () => {}, onRefresh: () => {}, today: new Date(2026, 2, 4), filters: { range: "all", scope: "all", roots: [] }, onFilters: () => {} }));
 
 test("USAGE-012: tracking off for both → the overview offers the two enable buttons", () => {
   const html = view({ tracking: { claude: false, codex: false }, claude: null, codex: null }, "overview");
