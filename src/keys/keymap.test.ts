@@ -128,3 +128,14 @@ test("SET-010: a clash names every command on the chord, scope by scope; agents 
   const off = resolve(agent, "win32", ["tab.newAgent.aider"]);
   expect([off.clashes, off.errors, chordsOf(off, "tab.newAgent.aider")]).toEqual([[], [], ["Mod+T"]]);
 });
+
+test("TERM-002: the session shortcuts ship with no key, and once assigned they fire", () => {
+  const none = resolve(null, "win32");
+  expect(chordsOf(none, "sessions.add")).toEqual([]);
+  expect(chordsOf(none, "sessions.remove")).toEqual([]);
+  expect(matchEvent(none, key({ key: "=", code: "Equal", ctrlKey: true, altKey: true }), ["global"])).toBeNull();
+  const set = resolve({ version: 1, keybindings: { "sessions.add": "Mod+Alt+Equal", "sessions.remove": "Mod+Alt+Minus" } }, "win32");
+  expect(set.errors).toEqual([]);
+  expect(matchEvent(set, key({ key: "=", code: "Equal", ctrlKey: true, altKey: true }), ["global"])).toEqual({ id: "sessions.add" });
+  expect(matchEvent(set, key({ key: "-", code: "Minus", ctrlKey: true, altKey: true }), ["global"])).toEqual({ id: "sessions.remove" });
+});

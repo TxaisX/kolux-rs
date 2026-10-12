@@ -411,6 +411,7 @@ Acceptance:
       on screen.
 Compat: keybinding ids sessions.add, sessions.remove.
 Source: D-03-002
+Amended 2026-10-12 (DT-R39): the remove-session default is the Ask before closing switch (ask or stop); sleep joins when sessions can sleep (T-217).
 
 ### TERM-005 · Default pane count for a new workspace
 Tier: P1 · Pushed: 1 · State at 0.15.0: live-unverified

@@ -1,0 +1,17 @@
+T-101-b live proof, 2026-10-12, lane dev app (com.txaisxiong.kolux-rs.release, port 1422)
+
+TERM-002 Add and remove session shortcuts.
+- No keys assigned (the shipped state): the grid shows no minus or plus session control; the
+  pane header's plus is New tab, the strip at the top is the layout picker (T-101-b-no-stepper.png).
+- With keys assigned: not checked live. Assigning keys writes ~/.kolux/keybindings.json, which
+  was refused for this lane; it was not retried (DT-R39). Unit tests stand in:
+  keymap.test.ts "TERM-002: the session shortcuts ship with no key, and once assigned they fire"
+  (no chord by default, an unassigned chord matches nothing, Mod+Alt+Equal and Mod+Alt+Minus from
+  a keybindings file fire sessions.add and sessions.remove), and seats.test.ts "TERM-002: add then
+  remove returns the grid to its previous pane count; a started session is the one asked about".
+- The App.tsx handlers for sessions.add and sessions.remove (addChooser, removeSession) were built
+  in T-101-a and T-103-a; a started session is closed through closeTab, which asks first while
+  Settings > Terminal & sessions > "Ask before closing a tab that is running a program" is on.
+
+TERM-009 Equalize pane sizes: moved to T-101-c (panes are not resizable yet, so there is nothing to
+equalize; resizable panes are a grid change).

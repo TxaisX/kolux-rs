@@ -437,6 +437,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
 
+> 2026-10-12 · T-101-b · the TERM-002 and TERM-009 spec cards and the T-101-b plan line. Nothing from the old app.
 > 2026-10-12 · T-100-b · the SESS-029 card and the T-100-b plan line. The listing commands, the line format and the Grok effort flag were written from the card; no outside documentation was reachable this pass. Nothing from the old app.
 > 2026-10-12 · T-105 · the CLI-023, CLI-026 and CLI-027 spec cards and the T-105 and T-185-b plan lines; the Tauri command type files in the cargo registry. The command shapes, messages and the layout report were written from the cards. Nothing from the old app.
 > 2026-10-12 · T-104 · the ACCT-046, ACCT-047, ACCT-048, ACCT-049 and ACCT-065 spec cards and the T-104 plan line; the portable-pty CommandBuilder type files in the cargo registry; the public Windows documentation for ComSpec, chcp, subst and icacls. The shell order, the variable list and the folder messages were written from the cards. Nothing from the old app.

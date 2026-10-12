@@ -201,3 +201,12 @@ test("SESS-029: Cursor's discovered models join after its built-in ones, each on
   setDiscovered("cursor", [{ id: "auto", label: "Auto" }, { id: "composer-2", label: "Composer 2" }]);
   expect(modelsFor("cursor").map((m) => m.id)).toEqual(["auto", "sonnet-4.5", "gpt-5", "composer-2", "default"]);
 });
+
+test("TERM-002: add then remove returns the grid to its previous pane count; a started session is the one asked about", () => {
+  const before = [{ key: 1 }, { key: 2 }];
+  const added = [...before, { key: 3, seats: [emptySeat()] }];
+  const t = removeTarget(added, 1);
+  expect(t).toEqual({ key: 3, chooser: true });
+  expect(added.filter((p) => p.key !== t?.key)).toEqual(before);
+  expect(removeTarget(before, 2)).toEqual({ key: 2, chooser: false });
+});
