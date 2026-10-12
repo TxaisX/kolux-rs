@@ -578,7 +578,9 @@ tabs a tiny context ring, and the pane header's gauge fills and turns yellow at 
 Settings > Agents switches the cap off, and the top-right pill is a read-only weekly figure per
 provider, tinted by use, hidden until a weekly figure is known (T-041-a, [core]). With the
 Claude card's resume switch on, a Claude pane stopped on a usage limit gets a continue prompt
-typed in a minute after the limit resets (T-041-b, [core]).
+typed in a minute after the limit resets (T-041-b, [core]). Codex's figures come from the
+background app-server read only; the usage service and the hidden `/status` screen are not
+built (DT-C15, T-042-b, [core]).
 
 [accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
 the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
@@ -1456,7 +1458,19 @@ recorded default until told otherwise; nothing here blocks a pass.
   reset with the pane closed → the wait dropped at its due time (`evidence/T-041-b-resume.png`). The rest of T-045's card (panels list only the view's
   accounts) is moot: one active Claude account per window.
 
+- 2026-10-12 · [core] T-042-b: decision only, no code. The rest of the Codex-figures card
+  (USAGE-022) named three routes; two are dropped in DECISIONS §7 DT-C15: Codex's own usage
+  service (address, request and reply are not public documentation; the clean-room rule forbids
+  learning them from the old app) and the status screen in a hidden terminal (Codex's interactive
+  `/status` card: it needs a session open, which the card's own title rules out, its layout is
+  undocumented and would have to be scraped, and it is drawn from the same rate-limit snapshots the
+  app-server `account/rateLimits/read` call returns). The two rules that take the 5-hour figure or
+  the reset-credit count "from the service" are therefore moot: `codex_usage.rs` already reads both
+  windows and `rateLimitResetCredits.availableCount` from the background process. Card amended;
+  its acceptance boxes stay as T-042-a left them. Gates re-run clean.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-042-b · done, decision only: usage service and hidden /status screen dropped (DT-C15); background app-server read is the only Codex figures route
 - 2026-10-12 · [core] T-041-b · done: resume after a limit (resume.rs, timer, foreground check, cancel on typing, persisted waits); evidence/T-041-b-resume.png
 - 2026-10-12 · [core] T-041-a · done: 200k cap (env for Claude, -c overrides for Codex, Settings > Agents switch), weekly-only read-only pill with tint and countdown, config-folder guard and one-window merge on status-line reports; DT-C14 drops the usage service; evidence/T-041-a-cap.png
 - 2026-10-12 · [core] T-040-a · done: Board card meter (context bar in tokens + plan %), tab ring, header gauge colours, USAGE-005 maths against the 200k cap; Agents view parts split to T-040-b; evidence/T-040-a-meter.png
@@ -1466,6 +1480,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
 - 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
 - 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
-- 2026-10-12 · [core] T-003b-fix-b · done: DESIGN.md sections 6 and 7, globe tab glyph in `App.tsx`, web view inset in `styles.css`, projects test temp-folder collision fixed; `evidence/T-003b-fix-b-browser.png`
 
 

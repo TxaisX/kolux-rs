@@ -260,6 +260,11 @@ Rules: Kolux tries Codex's own usage service first, then a background Codex proc
   still knows the 5-hour one, the 5-hour figure is taken from the service; whether the user is
   signed in is checked first in the account's own Codex home, then in the folder named by Codex's
   home environment variable, then in the default Codex folder under the user's home.
+  (Kolux RS, T-042-b, DT-C15: only the background process route is built. Codex's usage service
+  is not public documentation, and the hidden-terminal status screen is Codex's interactive
+  `/status` card, which needs a session open and has no documented layout; it shows the same
+  figures the background read returns, reset credits included, so nothing is ever taken "from
+  the service".)
 Acceptance:
   - [ ] Signed in on a weekly-only plan → only the weekly figure shows, with its reset time.
   - [ ] Revoke the Codex sign-in → the figures go, a sign-in-again warning shows, and no Codex
