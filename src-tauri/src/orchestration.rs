@@ -37,6 +37,20 @@ pub struct Mail {
     pub answers: BTreeMap<String, Value>,
     pub seq: u64,
     pub gates: Vec<Gate>,
+    /// ORCH-030: when each receipt in `answers` was written, so old ones can be pruned.
+    pub stamps: BTreeMap<String, u64>,
+    /// ORCH-030: requests that take a while (a worker start) and have not finished, with when they
+    /// began and the process that runs them.
+    pub pending: BTreeMap<String, Value>,
+}
+
+/// ORCH-030: how long a finished request's receipt is kept for a retry to find.
+pub const RECEIPT_TTL_MS: u64 = 7 * 24 * 3_600_000;
+/// ORCH-030: unfinished requests the ledger tracks before it turns new changes away.
+pub const MAX_PENDING: usize = 32;
+
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// ORCH-028: a decision the coordinator still has to make, holding one task blocked meanwhile.
@@ -256,16 +270,69 @@ impl Mail {
         b.epoch += 1;
     }
 
-    /// A retry request id makes a change safe to repeat: the same id hands back the first answer.
+    /// A retry request id makes a change safe to repeat: the same id hands back the first answer
+    /// (ORCH-030). A change that fails leaves no receipt, so the same id later runs fresh.
     pub fn once(&mut self, key: Option<String>, f: impl FnOnce(&mut Mail) -> Result<Value, Fail>) -> Result<Value, Fail> {
         if let Some(v) = key.as_ref().and_then(|k| self.answers.get(k)) {
             return Ok(v.clone());
         }
+        if key.is_some() {
+            self.room()?;
+        }
         let v = f(self)?;
         if let Some(k) = key {
-            self.answers.insert(k, v.clone());
+            self.finish(&k, Some(v.clone()));
         }
         Ok(v)
+    }
+
+    fn room(&self) -> Result<(), Fail> {
+        if self.pending.len() >= MAX_PENDING {
+            return Err(Fail::new("busy", format!("{MAX_PENDING} earlier requests have not finished yet, so Kolux takes no new change until one does; ask about one with request-show")));
+        }
+        Ok(())
+    }
+
+    /// ORCH-030: a long request is under way; a retry with its id waits for it.
+    pub fn begin(&mut self, key: &str, runtime: u64) -> Result<(), Fail> {
+        self.room()?;
+        self.pending.insert(key.to_string(), json!({ "at": wall_ms(), "runtime": runtime }));
+        Ok(())
+    }
+
+    /// ORCH-030: the request is over: its receipt is kept (`Some`) or it left none, and finished
+    /// receipts older than `RECEIPT_TTL_MS` are dropped.
+    pub fn finish(&mut self, key: &str, answer: Option<Value>) {
+        let now = wall_ms();
+        self.pending.remove(key);
+        if let Some(v) = answer {
+            self.answers.insert(key.to_string(), v);
+            self.stamps.insert(key.to_string(), now);
+        }
+        for k in self.answers.keys() {
+            self.stamps.entry(k.clone()).or_insert(now);
+        }
+        let old: Vec<String> = self.stamps.iter().filter(|(_, at)| now.saturating_sub(**at) > RECEIPT_TTL_MS).map(|(k, _)| k.clone()).collect();
+        for k in old {
+            self.answers.remove(&k);
+            self.stamps.remove(&k);
+        }
+    }
+
+    /// ORCH-030: what became of the request this terminal sent with `--retry-request <id>`:
+    /// completed (with its result), pending, or absent. It changes nothing. A pending request left
+    /// by an earlier start of Kolux (`runtime` is this one's process id) is marked interrupted.
+    pub fn request_show(&self, pane: &str, id: &str, runtime: u64) -> Value {
+        let tail = format!("|{pane}|{id}");
+        let command = |k: &str| k.strip_suffix(&tail).unwrap_or_default().to_string();
+        if let Some((k, v)) = self.answers.iter().find(|(k, _)| k.ends_with(&tail)) {
+            return json!({ "request": id, "state": "completed", "command": command(k), "result": v });
+        }
+        if let Some((k, p)) = self.pending.iter().find(|(k, _)| k.ends_with(&tail)) {
+            let interrupted = p["runtime"].as_u64() != Some(runtime);
+            return json!({ "request": id, "state": "pending", "command": command(k), "since": p["at"], "interrupted": interrupted });
+        }
+        json!({ "request": id, "state": "absent" })
     }
 
     fn run_view(&self, id: &str) -> Value {
@@ -936,6 +1003,48 @@ mod tests {
         assert_eq!(m.run_current("term-1")["runId"], id);
         assert_eq!(m.run_current("term-2")["runId"], Value::Null);
         assert_eq!(first["binding"]["terminal"], "term-1");
+    }
+
+    #[test]
+    fn receipts_answer_retries_say_how_a_request_went_and_expire() {
+        let mut m = Mail::default();
+        let key = |c: &str, id: &str| Some(format!("{c}|term-1|{id}"));
+        let first = m.once(key("orchestration.run-create", "r1"), |m| Ok(m.run_create("term-1", "ship it", 5))).unwrap();
+        let shown = m.request_show("term-1", "r1", 7);
+        assert_eq!((shown["state"].as_str(), shown["command"].as_str()), (Some("completed"), Some("orchestration.run-create")));
+        assert_eq!(shown["result"], first);
+        assert_eq!(m.request_show("term-1", "nope", 7)["state"], "absent");
+        assert_eq!(m.request_show("term-2", "r1", 7)["state"], "absent", "another terminal's request is not this one's");
+
+        // Turned away before it took effect: no receipt, so the same id runs fresh.
+        assert!(m.once(key("orchestration.send", "r2"), |_| Err(args("no such task"))).is_err());
+        assert_eq!(m.request_show("term-1", "r2", 7)["state"], "absent");
+        assert!(m.once(key("orchestration.send", "r2"), |_| Ok(json!({ "ok": true }))).is_ok());
+
+        // A long request is pending until it finishes; one left by an earlier start says so.
+        let w = key("orchestration.worker-start", "w1").unwrap();
+        m.begin(&w, 7).unwrap();
+        assert_eq!(m.request_show("term-1", "w1", 7)["state"], "pending");
+        assert_eq!(m.request_show("term-1", "w1", 8)["interrupted"], true);
+        m.finish(&w, Some(json!({ "dispatchId": "dispatch-1" })));
+        assert_eq!(m.request_show("term-1", "w1", 7)["result"]["dispatchId"], "dispatch-1");
+
+        // A full ledger of unfinished requests turns new changes away rather than losing track.
+        for n in 0..MAX_PENDING {
+            m.begin(&format!("orchestration.worker-start|term-1|p{n}"), 7).unwrap();
+        }
+        assert_eq!(m.once(key("orchestration.send", "r3"), |_| Ok(json!({}))).unwrap_err().code, "busy");
+        assert_eq!(m.begin("orchestration.worker-start|term-1|one-more", 7).unwrap_err().code, "busy");
+        assert_eq!(m.request_show("term-1", "r3", 7)["state"], "absent");
+        for n in 0..MAX_PENDING {
+            m.finish(&format!("orchestration.worker-start|term-1|p{n}"), None);
+        }
+
+        // Old finished receipts are pruned when the next one is written.
+        m.stamps.insert(key("orchestration.run-create", "r1").unwrap(), 1);
+        m.once(key("orchestration.send", "r4"), |_| Ok(json!({}))).unwrap();
+        assert_eq!(m.request_show("term-1", "r1", 7)["state"], "absent");
+        assert_eq!(m.request_show("term-1", "r4", 7)["state"], "completed");
     }
 
     #[test]

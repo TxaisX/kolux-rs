@@ -40,6 +40,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("orchestration run-current", "Show the Run this terminal is attached to."),
     ("orchestration run-list", "List the Runs."),
     ("orchestration run-show", "Show one Run."),
+    ("orchestration request-show", "Say whether a change sent with a retry request id completed, is pending, or never arrived."),
     ("orchestration send", "Send a message to a terminal, a Run or a dispatch."),
     ("orchestration check", "Read new mail, or wait for it."),
     ("orchestration reply", "Answer a message in its thread."),

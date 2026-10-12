@@ -91,7 +91,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration request-show --request <id> [--json]\n      (completed, pending or absent: what became of a change sent with --retry-request <id>)\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
       [--missed-run-grace-minutes 0|30|60|180|720|1440|2880]\n      [--precheck <command>] [--precheck-timeout 60|120|300|600] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "enabled", "disabled", "references"];
@@ -103,6 +103,8 @@ const MAIL: &[(&str, &str, &[&str])] = &[
     ("orchestration run-current", "orchestration.run-current", &["from"]),
     ("orchestration run-list", "orchestration.run-list", &["limit", "cursor"]),
     ("orchestration run-show", "orchestration.run-show", &["id"]),
+    // ORCH-030: what became of a request sent with --retry-request.
+    ("orchestration request-show", "orchestration.request-show", &["request", "from"]),
     ("orchestration send", SEND, &["to", "run", "from", "subject", "body", "type", "priority", "thread-id", "payload", "task-id", "dispatch-id", "dispatch-capability", "retry-request", "outcome", "files-modified", "report-path", "phase"]),
     ("orchestration check", CHECK, &["terminal", "run", "ack", "unread", "peek", "all", "types", "format", "wait", "timeout-ms", "retry-request"]),
     ("orchestration reply", "orchestration.reply", &["id", "body", "run", "from", "retry-request"]),
@@ -472,6 +474,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             match command {
                 "orchestration.run-create" => need("objective", ": say what the Run is for")?,
                 "orchestration.run-use" | "orchestration.run-show" => need("id", "")?,
+                "orchestration.request-show" => need("request", "")?,
                 SEND => {
                     need("subject", "")?;
                     // CLI-031: refused here, before the sender is worked out.
@@ -778,6 +781,12 @@ fn text_of(command: &str, r: &Value) -> String {
             out.join("\n")
         }
         "orchestration.run-show" => format!("Run {}: {}\nhome terminal {}; tied terminals {}\nmessages {} ({} not acknowledged)", s("id"), s("objective"), s("home"), r["terminals"], r["messages"], r["unacknowledged"]),
+        "orchestration.request-show" => match s("state").as_str() {
+            "completed" => format!("request {} completed ({}); a retry with it hands back the same result", s("request"), s("command")),
+            "pending" if r["interrupted"] == true => format!("request {} ({}) was cut short when Kolux stopped; its outcome is unknown, so check before trying again", s("request"), s("command")),
+            "pending" => format!("request {} ({}) is still under way", s("request"), s("command")),
+            _ => format!("request {} is absent: Kolux has no record of it, so a retry runs it fresh", s("request")),
+        },
         "orchestration.reply" => format!("sent {} to {} on thread {}", r["messageIds"][0].as_str().unwrap_or_default(), s("to"), s("threadId")),
         ASK => match s("status").as_str() {
             "answered" => format!("answer from {} (to {}): {}", s("answeredBy"), s("messageId"), s("answer")),
@@ -1288,7 +1297,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             (ctx.front)()?;
             Ok(json!({ "ready": true, "started": false, "pid": std::process::id() }))
         }
-        WORKER_START => worker_start(ctx, req),
+        WORKER_START => worker_start_once(ctx, req),
         c if QUERY.iter().any(|(_, w, _)| *w == c) => query(ctx, req),
         c if c.starts_with("orchestration.") => mail(ctx, req),
         c if c.starts_with("account.") => cli_accounts::dispatch(ctx, req),
@@ -1713,6 +1722,7 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "orchestration.run-current" => m.run_current(&need()?),
         "orchestration.run-list" => m.run_list(text("limit").and_then(|l| l.parse().ok()).unwrap_or(20).min(100), text("cursor").as_deref())?,
         "orchestration.run-show" => m.run_show(&text("id").ok_or_else(|| Fail::args("--id is required"))?)?,
+        "orchestration.request-show" => m.request_show(&pane.clone().unwrap_or_default(), &text("request").ok_or_else(|| Fail::args("--request is required"))?, u64::from(std::process::id())),
         SEND => {
             let p = need()?;
             let dispatches = load_list(&store, DISPATCHES_KEY);
@@ -2115,6 +2125,49 @@ fn reuse(ctx: &Ctx, req: &Request, to: &str) -> Result<Value, Fail> {
         "agent": theirs, "runId": plan["runId"], "worktree": { "path": w.path, "branch": w.branch, "name": w.name },
         "terminals": [{ "id": tid, "role": "worker" }],
     }))
+}
+
+/// ORCH-030: a worker start with `--retry-request` is entered in the ledger while it runs, so a
+/// repeat with the same id waits for the first and hands back its receipt instead of starting a
+/// second worker. A start turned away leaves no receipt; one that timed out keeps its outcome. A
+/// start left pending by an earlier run of Kolux is over (its terminals went with it): it runs fresh.
+fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    let Some(id) = req.args["retryRequest"].as_str().map(str::trim).filter(|s| !s.is_empty()) else { return worker_start(ctx, req) };
+    let key = format!("{}|{}|{id}", req.command, caller(ctx, req)?.unwrap_or_default());
+    let me = u64::from(std::process::id());
+    let until = Instant::now() + Duration::from_secs(300);
+    loop {
+        let store = ctx.store.lock().map_err(|e| e.to_string())?;
+        let mut m = crate::orchestration::Mail::load(&store);
+        if let Some(v) = m.answers.get(&key) {
+            return match v.get("timedOut") {
+                Some(f) => Err(Fail { code: "timeout", message: f["message"].as_str().unwrap_or_default().to_string(), data: f["data"].clone() }),
+                None => Ok(v.clone()),
+            };
+        }
+        if m.pending.get(&key).is_some_and(|p| p["runtime"].as_u64() == Some(me)) {
+            drop(store);
+            if Instant::now() > until {
+                return Err(Fail::new("pending", format!("the start with request {id} is still under way; ask with {} orchestration request-show --request {id}", crate::orchestration::CLI)));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+        m.begin(&key, me)?;
+        m.save(&store)?;
+        break;
+    }
+    let out = worker_start(ctx, req);
+    let store = ctx.store.lock().map_err(|e| e.to_string())?;
+    let mut m = crate::orchestration::Mail::load(&store);
+    let kept = match &out {
+        Ok(v) => Some(v.clone()),
+        Err(f) if f.code == "timeout" => Some(json!({ "timedOut": { "message": f.message, "data": f.data } })),
+        Err(_) => None,
+    };
+    m.finish(&key, kept);
+    m.save(&store)?;
+    out
 }
 
 fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
@@ -3064,6 +3117,45 @@ mod tests {
         assert!(esc[1].subject.contains("task-2"), "{}", esc[1].subject);
         let after = load_list(&store, DISPATCHES_KEY);
         assert!(after[0]["exitedAt"].is_u64() && after[3]["exitedAt"].is_null(), "an earlier start's dispatch on the same number is left alone");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn request_show_reads_the_ledger_and_a_worker_start_retry_never_starts_twice() {
+        let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
+        assert!(refused("orchestration request-show").contains("--request"));
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli173-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None };
+        let show = |id: &str| dispatch(&ctx, &req("orchestration.request-show", json!({ "request": id }))).unwrap();
+        assert_eq!(show("never-sent")["state"], "absent");
+        {
+            let s = store.lock().unwrap();
+            let mut m = crate::orchestration::Mail::load(&s);
+            m.finish("orchestration.worker-start||w1", Some(json!({ "dispatchId": "dispatch-7", "status": "ready" })));
+            m.finish("orchestration.worker-start||w2", Some(json!({ "timedOut": { "message": "the worker did not come up", "data": { "dispatchId": "dispatch-8" } } })));
+            m.begin("orchestration.worker-start||w3", u64::from(std::process::id()) + 1).unwrap();
+            m.save(&s).unwrap();
+        }
+        assert_eq!((show("w1")["state"].as_str(), show("w1")["command"].as_str()), (Some("completed"), Some(WORKER_START)));
+        assert_eq!(show("w3")["interrupted"], true);
+        // The same id hands back the first start's receipt, or its timeout, and starts nothing.
+        let again = dispatch(&ctx, &req(WORKER_START, json!({ "spec": "x", "agent": "no-such-agent", "retryRequest": "w1" }))).unwrap();
+        assert_eq!(again["dispatchId"], "dispatch-7");
+        let late = dispatch(&ctx, &req(WORKER_START, json!({ "spec": "x", "agent": "no-such-agent", "retryRequest": "w2" }))).unwrap_err();
+        assert_eq!((late.code, late.data["dispatchId"].as_str()), ("timeout", Some("dispatch-8")));
+        // A start left pending by an earlier run of Kolux runs fresh; turned away, it leaves no receipt.
+        let fresh = dispatch(&ctx, &req(WORKER_START, json!({ "spec": "x", "agent": "no-such-agent", "retryRequest": "w3" }))).unwrap_err();
+        assert!(fresh.message.contains("no-such-agent"), "{}", fresh.message);
+        assert_eq!(show("w3")["state"], "absent");
+        drop(ctx);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
