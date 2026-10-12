@@ -49,6 +49,7 @@ mod links;
 mod lifecycle;
 mod menu;
 mod bulk;
+mod models;
 mod names;
 mod newproject;
 mod notifications;
@@ -633,6 +634,7 @@ pub fn run() {
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
+            models::agent_models,
             agents::agent_start_line,
             agents::agent_prompt_send,
             agents::open_install_page,
