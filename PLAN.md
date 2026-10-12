@@ -98,7 +98,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-043-a · ACCT-004 [compat] Claude connects once with a key that lasts a year · this part: the hidden key setup, the sealed key with its date and mode, the twelve-month clock with the 30-day Renew warning, the key handed to every Claude pane in key mode, and the first Settings page (AI connections) with the Claude card
 - [x] T-043-b · ACCT-005 [compat] Sign a Claude account in through the browser and keep it as a managed account · ACCT-006 [compat] Claude sign-ins are renewed by default, with an opt-out · this part: Add Account and Sign in again through Claude Code's own browser sign-in into a private folder per account, the sealed vault copy, email and organisation read from Claude Code, Cancel and failed re-auth keeping the earlier sign-in, Make active for new Claude panes (the 1-year key still wins), and renewal left to Claude Code (the default)
 - [x] T-043-c · ACCT-007 Codex connects with a ChatGPT sign-in or a device code
-- [ ] T-043-d · the rest of T-043-b's cards: the renewal opt-out toggle and Kolux-side renewal when it is off (renew in the last 5 minutes and on Make active, never while a Claude pane is open on that account, a refused renewal marks the account Needs re-auth, network failures are retried, managed accounts only), and the macOS keychain rules for a managed sign-in record
+- [ ] T-043-d · the rest of T-043-b's cards: the renewal opt-out toggle and Kolux-side renewal when it is off (renew in the last 5 minutes and on Make active, never while a Claude pane is open on that account, a refused renewal marks the account Needs re-auth, network failures are retried, managed accounts only), and the macOS keychain rules for a managed sign-in record, plus CLI 014's restore of the earlier macOS Keychain entry when a `kolux account add` is interrupted
 - [x] T-044 · ACCT-012 A lapsed sign-in is flagged outside Settings with Sign in again · ACCT-013 A needs-attention card states the reason and offers the one fix that fits
 - [x] T-045 · SET-030 Accounts & keys flags sign-in trouble
 
@@ -238,7 +238,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-139-b · ACCT-023 A resumed session keeps the account it began on · ACCT-064 Changing the Codex account offers to restart live Codex panes (needs per-pane account memory, the foreground-program check and an in-pane restart prompt: HAND TO FABLE)
 - [ ] T-139-c · ACCT-027 The Grok section shows the CLI sign-in and credit use (needs a public source for the Grok CLI's session file and credit figures first)
 - [ ] T-140 · AUTO-014 Saved run output with token and cost figures
-- [ ] T-141 · CLI-014 [compat] kolux account add and account list · ACCT-031 [compat] `kolux account add` and `kolux account list` (the same two commands, moved here from T-139)
+- [x] T-141 · CLI-014 [compat] kolux account add and account list · ACCT-031 [compat] `kolux account add` and `kolux account list` (the same two commands, moved here from T-139)
 
 ### P1 · theme 7 · Redesign and the new look (18 cards)
 

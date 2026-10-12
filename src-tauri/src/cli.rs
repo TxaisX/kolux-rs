@@ -4,6 +4,7 @@
 //! prints the reply as text, or as the JSON envelope with `--json`. Exit status: 0 worked, 1
 //! any error.
 
+use crate::cli_accounts;
 use crate::git::{Git, Worktree};
 use crate::projects::{self, Project};
 use crate::state::Store;
@@ -84,7 +85,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble"];
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
@@ -191,6 +192,8 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             "worktree create" => ("worktree.create", CREATE_FLAGS),
             "worktree rm" | "worktree remove" | "worktree delete" => ("worktree.rm", RM_FLAGS),
             "orchestration worker-start" => (WORKER_START, WORKER_FLAGS),
+            "account add" => (cli_accounts::ADD, &["agent"] as &[&str]),
+            "account list" => (cli_accounts::LIST, &[] as &[&str]),
             other if MAIL.iter().any(|(w, _, _)| *w == other) => MAIL.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
             _ => return Err(Fail::args(format!("unknown command `{joined}`; run kolux-dev --help"))),
         };
@@ -198,6 +201,10 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             return Err(Fail::args("--parent-workspace was retired; use --parent-worktree <selector>"));
         }
         if let Some(k) = flags.keys().find(|k| !allowed.contains(&k.as_str())) {
+            if command.starts_with("account.") && k != "agent" {
+                // ACCT-031 / CLI-014: environments, pairing codes and remote targets are refused.
+                return Err(Fail::args(format!("account commands always run on this machine; --{k} is not taken")));
+            }
             return Err(Fail::args(format!("unknown flag --{k} for {joined}")));
         }
         let text = |k: &str| flags.get(k).and_then(Value::as_str);
@@ -258,6 +265,16 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             }
             args.entry("setup").or_insert_with(|| Value::String("inherit".into()));
             args.entry("worktree").or_insert_with(|| Value::String(NEW_TOP.into()));
+        } else if command == cli_accounts::ADD {
+            let agent = text("agent").unwrap_or("claude").trim().to_lowercase();
+            if agent.is_empty() {
+                return Err(Fail::args("--agent cannot be empty; name claude or codex, or leave it out for Claude"));
+            }
+            if !cli_accounts::AGENTS.contains(&agent.as_str()) {
+                return Err(Fail::args(format!("account add signs in claude or codex, not {agent}")));
+            }
+            args.insert("agent".into(), Value::String(agent));
+        } else if command == cli_accounts::LIST {
         } else if command.starts_with("orchestration.") {
             for (k, v) in &flags {
                 if v.as_str().is_some_and(|s| s.trim().is_empty()) && !["body", "from"].contains(&k.as_str()) {
@@ -432,6 +449,7 @@ fn request_id() -> String {
 fn text_of(command: &str, r: &Value) -> String {
     let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
     match command {
+        c if c.starts_with("account.") => cli_accounts::text(c, r),
         "worktree.create" => {
             let mut line = format!("created {} at {} (from {})", if s("name").is_empty() { s("branch") } else { s("name") }, s("path"), s("base"));
             if let Some(n) = r["note"].as_str() {
@@ -633,6 +651,20 @@ pub fn main(words: Vec<String>) -> i32 {
             _ => None,
         };
         let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(parsed.args.clone()), pane };
+        if parsed.command == cli_accounts::ADD {
+            let ask = |command: &str, args: Value| -> Result<Value, Fail> {
+                let r = Request { id: request_id(), token: req.token.clone(), command: command.into(), cwd: req.cwd.clone(), args, pane: None };
+                let env = call(port, &r)?;
+                if env["success"] == Value::Bool(true) {
+                    return Ok(env["result"].clone());
+                }
+                Err(Fail::new("failed", env["error"]["message"].as_str().unwrap_or("the app refused the sign-in")))
+            };
+            let agent = parsed.args["agent"].as_str().unwrap_or("claude").to_string();
+            cli_accounts::installed(&agent)?;
+            let out = cli_accounts::add(&agent, ask, |temp| cli_accounts::run_login(&agent, temp));
+            return Ok((parsed.command.clone(), envelope(&id, "", out)));
+        }
         if parsed.command == CHECK && parsed.args.contains_key("wait") {
             return Ok((parsed.command.clone(), wait_for_mail(port, req)?));
         }
@@ -807,6 +839,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         }
         WORKER_START => worker_start(ctx, req),
         c if c.starts_with("orchestration.") => mail(ctx, req),
+        c if c.starts_with("account.") => cli_accounts::dispatch(ctx, req),
         other => Err(Fail::args(format!("unknown command {other}"))),
     }
 }
@@ -1313,7 +1346,12 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
             let git = app.state::<Git>();
             let terminals = app.state::<Terminals>();
             let notify = |v: Value| {
-                let _ = app.emit(EVENT, v);
+                if v["kind"] == "accounts" {
+                    let _ = app.emit(crate::claude_accounts::EVENT, ());
+                    let _ = app.emit(crate::codex_accounts::EVENT, ());
+                } else {
+                    let _ = app.emit(EVENT, v);
+                }
             };
             dispatch(&Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify }, req)
         });
@@ -1359,6 +1397,25 @@ mod tests {
         assert!(refused("worktree frobnicate").contains("unknown command"));
         assert!(parse(&words("--help")).1.unwrap().is_none());
         assert!(parse(&words("help worktree")).1.unwrap().is_none());
+    }
+
+    #[test]
+    fn account_commands_assume_claude_and_refuse_what_they_cannot_honour() {
+        let ok = |s: &str| parse(&words(s)).1.unwrap().unwrap();
+        let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
+        let p = ok("account add");
+        assert_eq!((p.command.as_str(), p.args["agent"].as_str()), ("account.add", Some("claude")), "Claude when --agent is left out");
+        assert_eq!(ok("account add --agent codex").args["agent"], "codex");
+        assert_eq!(ok("account add --agent Codex").args["agent"], "codex");
+        assert_eq!(ok("account list").command, "account.list");
+        assert!(parse(&words("account list --json")).0);
+        assert!(refused("account add --agent=").contains("empty"), "an empty --agent is refused, not Claude");
+        assert!(refused("account add --agent grok").contains("claude or codex"));
+        for flag in ["--environment work", "--pairing-code 1234", "--remote box", "--target box"] {
+            assert!(refused(&format!("account add {flag}")).contains("this machine"), "{flag}");
+            assert!(refused(&format!("account list {flag}")).contains("this machine"), "{flag}");
+        }
+        assert!(refused("account list --agent claude").contains("--agent"));
     }
 
     #[test]

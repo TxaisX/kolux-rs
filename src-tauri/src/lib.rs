@@ -2,6 +2,7 @@ mod agents;
 mod automations;
 mod browser;
 pub mod cli;
+mod cli_accounts;
 mod claude_accounts;
 mod claude_key;
 mod codex_accounts;

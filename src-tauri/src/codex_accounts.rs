@@ -33,7 +33,7 @@ pub const FOLDER: &str = "codex-accounts";
 pub const EVENT: &str = "codex-accounts";
 pub const LOGIN_LIMIT: Duration = Duration::from_secs(900);
 /// Keeps the sign-in in the home's own `auth.json` rather than the system keyring.
-const HOME_CONFIG: &str = "cli_auth_credentials_store = \"file\"\n";
+pub const HOME_CONFIG: &str = "cli_auth_credentials_store = \"file\"\n";
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]

@@ -497,6 +497,7 @@ Acceptance:
         `kolux account list`.
   - [ ] Pressing Ctrl+C part-way through sign-in leaves no stray credentials behind.
 Compat: account add with `--agent` (claude, codex or another supported provider) and account list.
+Amended 2026-10-11 (DT-A4): remote-target flags are refused like environment and pairing flags, not ignored.
 Source: D-20-014
 
 ### CLI-003 · Typos are caught before the app is contacted, with safe suggestions
