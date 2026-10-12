@@ -647,6 +647,12 @@ Resource Manager, Terminals running and Agents running, or to hide the whole bar
 across restarts, and Settings > Appearance > Show status bar brings a hidden bar back. A right-click
 inside the Resource Manager popover stays with the popover.
 
+[accounts] Terminal colour schemes (T-148-a): Settings > Appearance > Terminal colours now has a
+search box and two scheme lists, one for dark mode and one for light mode, each row showing the
+scheme's ground and four colours. Eleven well-known schemes ship (Tango, Campbell, Solarized,
+Dracula, Nord, Gruvbox, One Half), and a scheme copied out of Windows Terminal can be pasted in;
+a bad paste says why. Removing a scheme that is in use falls back to the default.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1319,7 +1325,11 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-147 · with no menu bar yet, a status bar hidden from its right-click menu comes back from Settings > Appearance > Show status bar; the View menu item waits for the menu bar (T-248).
 - [accounts] T-147 · DT-A5: the bar has no agent items left to hide when an agent CLI is missing (the usage chips were retired), and its copy stays English until language packs; saved item lists drop ids this version does not have.
 
+- [accounts] T-148-a · catalogue palettes are the schemes' own published values, unchanged; Solarized Light's bright white equals its background, so some PowerShell input colours read faint there, as they do in other terminals.
+- [accounts] T-148-a · pasted schemes must be one Windows Terminal scheme object with a name and hex colours (purple/brightPurple/cursorColor accepted); a name already in the list is refused rather than replaced.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-148-a · done: new `src/terminal/schemes.ts` (catalogue, search, Windows Terminal import, tidy on load), `src/settings/SchemePicker.tsx` (scheme lists), theme.ts dark/light picks (`terminalScheme`, `terminalSchemeLight`, `terminalCustomSchemes`), Appearance page Terminal colours rebuilt · evidence/T-148-a.txt, evidence/T-148-a-1-pickers.png .. T-148-a-5-custom-terminal.png
 - 2026-10-11 · [accounts] T-147 · done: new `src/chrome/statusItems.ts` (items, `readStatusBar` with old-list clean-up, `toggleItem`), `StatusBar.tsx` (right-click menu, popover guard, hidden items), App wiring (`statusBarVisible`, `statusBarHidden`), Settings > Appearance status bar switch; DT-A5 + VIEW-096 amendment; menu-bar item added to T-248 · evidence/T-147.txt, evidence/T-147-1-menu.png .. T-147-5-appearance-switch.png
 - 2026-10-11 · [accounts] T-145-a · done: `src/theme.ts` (Tango light scheme, `currentDark`), new `src/terminal/colourMode.ts` (DEC 2031 subscribe, CSI ? 996 n query, CSI ? 997 ; 1|2 n reports), `TerminalPane.tsx` wires it to theme changes; T-145-b split off and HAND TO FABLE: Windows ConPTY swallows OSC 4/10/11 "?" and CSI ? 996 n / ? 2031 h before xterm sees them (proved live: a cursor-position query came back, the colour and mode queries did not); custom themes moved to T-148 · evidence/T-145-a.txt, evidence/T-145-1-light-tango.png, evidence/T-145-2-dark-kolux.png
 - 2026-10-11 · [accounts] T-145-b · HAND TO FABLE: the colour and light/dark questions programs ask are swallowed by Windows ConPTY (system conhost via portable-pty) before xterm sees them; fixing it is PTY work (a pass-through console or answering in the Rust reader)

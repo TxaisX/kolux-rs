@@ -3,6 +3,7 @@
 // and feed the terminal theme, so every colour has one home. The 16 hued themes come with SET-001.
 
 import type { ITheme } from "@xterm/xterm";
+import { CATALOGUE, tidySchemes, type CustomScheme } from "./terminal/schemes";
 
 export const classic = {
   // surfaces and lines
@@ -87,15 +88,16 @@ export const themeLabel = (t: ThemeName) => t[0].toUpperCase() + t.slice(1);
 /** The swatch colour shown for a theme in the picker. */
 export const swatch = (t: ThemeName) => (t === "classic" ? classic["seg-active"] : t === "graphite" ? "#6b6b6b" : hsl(HUE[t], 0.55, 0.52));
 
-/** SET-003: "default" is Kolux's own dark terminal scheme, "match" follows the app hue. */
-export type TerminalScheme = "default" | "match";
+/** SET-003: "default" is Kolux's own dark terminal scheme, "match" follows the app hue; SET-023:
+ *  a catalogue id, or "custom:<name>" for one of the user's own schemes. */
+export type TerminalScheme = string;
 /** SET-005: System follows the operating system, also while running. */
 export type Mode = "system" | "light" | "dark";
 export const MODES: Mode[] = ["system", "light", "dark"];
-/** `lightTerminal`: in light mode terminals use the light scheme; off keeps one scheme for both. */
-export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean };
+/** `lightTerminal`: in light mode terminals use `lightScheme`; off keeps `terminal` for both. */
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[] };
 /** The settings fields the appearance lives in. */
-export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme" } as const;
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes" } as const;
 export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0] } as const;
 
 /** Out of span is pulled to the nearest end; anything not a number falls back to the default. */
@@ -104,16 +106,28 @@ function clampNum(v: unknown, [lo, hi, dflt]: readonly [number, number, number])
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
 }
 
+/** A saved scheme name this version can draw; anything else is `fallback`. */
+function knownScheme(v: unknown, custom: CustomScheme[], fallback: string): string {
+  if (typeof v !== "string") return fallback;
+  if (v === "default" || v === "match" || CATALOGUE.some((c) => c.id === v)) return v;
+  return v.startsWith("custom:") && custom.some((c) => c.name === v.slice(7)) ? v : fallback;
+}
+
 export function readAppearance(s: Record<string, unknown>): Appearance {
   const t = s[FIELD.theme];
+  const custom = tidySchemes(s[FIELD.custom]);
+  const terminal = knownScheme(s[FIELD.terminal], custom, "default");
   return {
     theme: typeof t === "string" && (THEMES as readonly string[]).includes(t.toLowerCase()) ? (t.toLowerCase() as ThemeName) : "classic",
     tint: clampNum(s[FIELD.tint], SPAN.tint),
     saturation: clampNum(s[FIELD.saturation], SPAN.saturation),
     depth: clampNum(s[FIELD.depth], SPAN.depth),
-    terminal: s[FIELD.terminal] === "match" ? "match" : "default",
+    terminal,
     mode: s[FIELD.mode] === "light" || s[FIELD.mode] === "dark" ? (s[FIELD.mode] as Mode) : "system",
     lightTerminal: s[FIELD.lightTerminal] !== false,
+    // Match keeps following the app in light mode until a light scheme is picked.
+    lightScheme: knownScheme(s[FIELD.lightScheme], custom, terminal === "match" ? "match" : "tango-light"),
+    custom,
   };
 }
 
@@ -183,23 +197,22 @@ function mix(a: string, b: string, t: number): string {
   return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("");
 }
 
-/** TERM-098: the light scheme for "Kolux dark" in light mode, the Tango Desktop Project palette
- *  (public domain) on white. */
-const TANGO_LIGHT = {
-  background: "#ffffff", foreground: "#2e3436", cursor: "#2e3436", cursorAccent: "#ffffff",
-  black: "#2e3436", red: "#cc0000", green: "#4e9a06", yellow: "#c4a000", blue: "#3465a4", magenta: "#75507b", cyan: "#06989a", white: "#d3d7cf",
-  brightBlack: "#555753", brightRed: "#ef2929", brightGreen: "#8ae234", brightYellow: "#fce94f", brightBlue: "#729fcf", brightMagenta: "#ad7fa8", brightCyan: "#34e2e2", brightWhite: "#eeeeec",
-};
-
 const ANSI = { red: 0, green: 135, yellow: 45, blue: 215, magenta: 300, cyan: 185 } as const;
 
 /** SET-003: the terminal colours for an appearance. "match" works background, text and the 16-colour
- *  palette out of the app hue; "default" is Kolux's own dark scheme whatever the app hue. SET-005: in
- *  light mode, with the light scheme on, either one becomes its light form. */
+ *  palette out of the app hue; "default" is Kolux's own dark scheme whatever the app hue. SET-023: in
+ *  light mode, with the separate light scheme on, the light pick is drawn instead (Tango Light by
+ *  default); a catalogue or custom scheme is drawn as it is. */
 export function terminalFor(a: Appearance, dark = isDark(a)): ITheme {
   const light = !dark && a.lightTerminal;
-  if (a.terminal !== "match") return light ? { ...TANGO_LIGHT } : terminalTheme(classic);
-  const base: Appearance = a.terminal === "match" ? a : { ...a, theme: "classic" };
+  const name = light ? a.lightScheme : a.terminal;
+  const fixed = CATALOGUE.find((c) => c.id === name)?.colours ?? a.custom.find((c) => "custom:" + c.name === name);
+  if (fixed) {
+    const { name: _, ...colours } = fixed as CustomScheme;
+    return colours;
+  }
+  if (name !== "match") return terminalTheme(classic);
+  const base = a;
   const t = buildTheme(base, !light);
   const hue = themeHue(base);
   const pull = (h: number, l: number) => (hue === null || base.theme === "graphite" ? hsl(h, 0.6, l) : mix(hsl(h, 0.6, l), hsl(hue, 0.6, l), 0.2));

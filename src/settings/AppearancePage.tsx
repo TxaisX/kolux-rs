@@ -3,7 +3,9 @@
 // once on the whole window; the save follows a moment later so a slider drag is one write.
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, writeAppearance, type Appearance, type Mode, type TerminalScheme } from "../theme";
+import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, writeAppearance, type Appearance, type Mode } from "../theme";
+import { importScheme } from "../terminal/schemes";
+import { schemeOptions, SchemeList } from "./SchemePicker";
 import { useSettings } from "./useSettings";
 import { FIELDS as STATUS_FIELDS, readStatusBar } from "../chrome/statusItems";
 import { Segmented } from "./GeneralPage";
@@ -73,22 +75,57 @@ export function AppearanceView({ look, onChange }: { look: Appearance; onChange:
       </section>
       <section className="conn-card" data-section="terminal-colours">
         <h2 className="conn-name">Terminal colours</h2>
-        <label className="look-select">
-          <span>Colour scheme</span>
-          <select value={look.terminal} onChange={(e) => onChange({ ...look, terminal: e.target.value as TerminalScheme })}>
-            <option value="default">Kolux</option>
-            <option value="match">Match app theme</option>
-          </select>
-        </label>
-        <p className="conn-detail">Match app theme works the terminal background, text and colours out of the app's colour, and follows it as it changes.</p>
-        <label className="conn-switch">
-          <input type="checkbox" role="switch" checked={look.lightTerminal} onChange={(e) => onChange({ ...look, lightTerminal: e.target.checked })} />
-          <span>
-            Light scheme in light mode
-            <small>Terminals turn light with the app. Off keeps the same scheme in both modes.</small>
-          </span>
-        </label>
+        <TerminalColours look={look} onChange={onChange} />
       </section>
+    </>
+  );
+}
+
+/** SET-023: a scheme for dark mode and one for light mode, a search box over both, and schemes
+ *  pasted in Windows Terminal's JSON format. Removing a scheme in use falls back to the default. */
+function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: Appearance) => void }) {
+  const [query, setQuery] = useState("");
+  const [paste, setPaste] = useState("");
+  const [problem, setProblem] = useState("");
+  const add = () => {
+    try {
+      const s = importScheme(paste);
+      if (look.custom.some((c) => c.name.toLowerCase() === s.name.toLowerCase())) throw new Error(`You already have a scheme called ${s.name}.`);
+      onChange({ ...look, custom: [...look.custom, s] });
+      setPaste("");
+      setProblem("");
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const remove = (id: string) => {
+    const custom = look.custom.filter((c) => "custom:" + c.name !== id);
+    const tidy = readAppearance(writeAppearance({}, { ...look, custom }));
+    onChange(tidy);
+  };
+  return (
+    <>
+      <input className="scheme-search" type="search" maxLength={80} placeholder="Search schemes" aria-label="Search schemes" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <div className="scheme-cols">
+        <SchemeList label="Dark mode" options={schemeOptions(look, true)} query={query} value={look.terminal} onPick={(terminal) => onChange({ ...look, terminal })} onRemove={remove} />
+        <SchemeList label="Light mode" options={schemeOptions(look, false)} query={query} value={look.lightScheme} disabled={!look.lightTerminal} onPick={(lightScheme) => onChange({ ...look, lightScheme })} onRemove={remove} />
+      </div>
+      <p className="conn-detail">Match app theme works the terminal background, text and colours out of the app's colour, and follows it as it changes.</p>
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={look.lightTerminal} onChange={(e) => onChange({ ...look, lightTerminal: e.target.checked })} />
+        <span>
+          Light scheme in light mode
+          <small>Terminals turn light with the app. Off keeps the dark mode scheme in both modes.</small>
+        </span>
+      </label>
+      <label className="scheme-add">
+        <span>Add a scheme</span>
+        <textarea rows={3} placeholder='Paste a Windows Terminal scheme, e.g. { "name": "Mine", "background": "#101010", ... }' value={paste} onChange={(e) => setPaste(e.target.value)} />
+      </label>
+      <button type="button" className="menu-item scheme-add-btn" disabled={!paste.trim()} onClick={add}>
+        Add scheme
+      </button>
+      {problem && <p className="conn-detail warn">{problem}</p>}
     </>
   );
 }

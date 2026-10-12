@@ -114,3 +114,19 @@ test("TERM-098: Kolux dark by default, a Tango-style light scheme in light mode"
   const match = terminalFor(look({ appearanceMode: "light", terminalScheme: "match", appTheme: "sky" }), false);
   expect(match.red, "Match app theme keeps following the app colours").not.toBe("#cc0000");
 });
+
+test("SET-023: one scheme for dark and one for light; flipping the mode swaps them", () => {
+  const a = look({ terminalScheme: "dracula", terminalSchemeLight: "solarized-light" });
+  expect(terminalFor(a, true).background).toBe("#282a36");
+  expect(terminalFor(a, false).background).toBe("#fdf6e3");
+  expect(terminalFor({ ...a, lightTerminal: false }, false).background, "separate light scheme off: one scheme").toBe("#282a36");
+  expect(look({ terminalScheme: "nope", terminalSchemeLight: "nope" })).toMatchObject({ terminal: "default", lightScheme: "tango-light" });
+});
+
+test("SET-023: a custom scheme can be picked for either mode; a removed one falls back", () => {
+  const custom = [{ name: "Mine", background: "#123456", foreground: "#fedcba" }];
+  const a = look({ terminalScheme: "custom:Mine", terminalCustomSchemes: custom });
+  expect(terminalFor(a, true)).toMatchObject({ background: "#123456", foreground: "#fedcba" });
+  expect(look({ terminalScheme: "custom:Mine" }).terminal, "not in the saved list").toBe("default");
+  expect(writeAppearance({}, a)).toMatchObject({ terminalScheme: "custom:Mine", terminalSchemeLight: "tango-light", terminalCustomSchemes: custom });
+});

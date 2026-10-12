@@ -476,3 +476,23 @@ input { font: inherit; }
 .res-group { margin-top: 6px; }
 .res-label { padding: 4px 8px 2px; font-size: 11px; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .res-ask { display: flex; flex-direction: column; gap: 8px; padding: 8px; margin: 2px 0; border: 1px solid var(--line-focus); border-radius: 8px; }
+
+/* SET-023: terminal scheme lists */
+.scheme-search { width: 100%; margin-top: 10px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); color: var(--fg); font: inherit; box-sizing: border-box; }
+.scheme-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 10px; }
+.scheme-list { min-width: 0; }
+.scheme-list.off { opacity: 0.5; }
+.scheme-label { display: block; margin-bottom: 4px; color: var(--fg-muted); font-size: 12px; }
+.scheme-list [role="listbox"] { max-height: 220px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+.scheme-row { display: flex; align-items: center; gap: 4px; }
+.scheme-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 4px 6px; border: 0; border-radius: 4px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.scheme-pick:hover:not(:disabled) { background: var(--row-selected); }
+.scheme-pick.sel { outline: 1px solid var(--done); background: var(--row-selected); }
+.scheme-pick .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scheme-swatch { display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px; border-radius: 3px; font-size: 11px; font-family: monospace; border: 1px solid var(--line); }
+.scheme-swatch i { display: inline-block; width: 6px; height: 10px; border-radius: 1px; }
+.scheme-remove { border: 0; background: none; color: var(--fg-muted); cursor: pointer; font-size: 14px; padding: 0 6px; }
+.scheme-add { display: block; margin-top: 12px; }
+.scheme-add span { display: block; margin-bottom: 4px; color: var(--fg-muted); font-size: 12px; }
+.scheme-add textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); color: var(--fg); font: 12px monospace; resize: vertical; }
+.scheme-add-btn { margin-top: 6px; }
