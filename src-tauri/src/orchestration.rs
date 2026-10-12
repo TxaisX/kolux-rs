@@ -102,6 +102,68 @@ fn terminal_of(d: &Value) -> Option<String> {
     d["terminal"].as_u64().map(|t| crate::terminal::handle_of(t as u32))
 }
 
+/// The open dispatch whose worker runs in `pane`, if any.
+fn own_dispatch<'a>(pane: &str, dispatches: &'a [Value]) -> Option<&'a Value> {
+    dispatches.iter().rev().find(|d| !finished(d) && terminal_of(d).as_deref() == Some(pane))
+}
+
+/// ORCH-032: the nesting cap when nothing raises it: the coordinator plus one level of workers.
+pub const DEFAULT_MAX_DEPTH: u32 = 1;
+
+/// ORCH-032: the depth and cap a worker started from `pane` gets, or the refusal that tells the
+/// caller to do the work itself. A coordinator (no dispatch of its own) takes the cap asked for
+/// (`--max-depth`), else the configured one, else 1. A worker keeps the cap its coordinator gave it
+/// and can only lower it. A dispatch stored before depth was recorded counts as one level down.
+pub fn nest(pane: Option<&str>, dispatches: &[Value], asked: Option<u32>, configured: Option<u32>) -> Result<(u32, u32), Fail> {
+    let own = pane.and_then(|p| own_dispatch(p, dispatches));
+    let depth = own.map(|d| d["depth"].as_u64().unwrap_or(1) as u32).unwrap_or(0);
+    let cap = match own {
+        Some(d) => {
+            let given = d["maxDepth"].as_u64().map(|c| c as u32).unwrap_or(DEFAULT_MAX_DEPTH);
+            asked.map_or(given, |a| a.min(given))
+        }
+        None => asked.or(configured).unwrap_or(DEFAULT_MAX_DEPTH),
+    };
+    if depth + 1 > cap {
+        return Err(Fail {
+            code: "nesting_limit",
+            message: format!("you are a worker {depth} level{} down and the nesting cap is {cap} level{} of workers: do this task yourself instead of starting another worker", if depth == 1 { "" } else { "s" }, if cap == 1 { "" } else { "s" }),
+            data: json!({ "depth": depth, "maxDepth": cap }),
+        });
+    }
+    Ok((depth + 1, cap))
+}
+
+/// ORCH-033: task `id` as Run `run` sees it. A task of another Run reads exactly as a missing one,
+/// so Runs cannot be mapped from outside.
+pub fn task_in(tasks: &[Value], id: &str, run: Option<&str>) -> Result<usize, Fail> {
+    tasks.iter().position(|t| t["id"] == id && t["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no task {id}")))
+}
+
+/// ORCH-023: fences dispatch `id` off. Its worker can no longer report on it, and its task can be
+/// handed on again; no process is stopped, no pane closes and nothing on disk changes. A dispatch
+/// of another Run reads as missing. Abandoning twice answers the same.
+pub fn abandon(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option<&str>, now: u64) -> Result<Value, Fail> {
+    let d = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    let was = d["status"].as_str().unwrap_or_default().to_string();
+    if was != "abandoned" {
+        if finished(d) {
+            return Err(Fail::new("dispatch_finished", format!("{id} is already {was}; there is nothing to abandon")));
+        }
+        d["status"] = json!("abandoned");
+        d["abandonedAt"] = json!(now);
+    }
+    let task = d["taskId"].as_str().unwrap_or_default().to_string();
+    if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task.as_str() && t["dispatchId"] == id && status(t) == "dispatched") {
+        t["status"] = json!("ready");
+        if let Some(o) = t.as_object_mut() {
+            o.remove("dispatchId");
+        }
+    }
+    let task_status = tasks.iter().find(|t| t["id"] == task.as_str()).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+    Ok(json!({ "dispatchId": id, "taskId": task, "status": "abandoned", "terminal": terminal_of(d), "terminalKept": true, "taskStatus": task_status, "mode": d["mode"] }))
+}
+
 /// ORCH-040: the open dispatches tied to one worktree, by the folder they were started in or by a
 /// live terminal that sits there.
 pub fn workers_in(dispatches: &[Value], here: &dyn Fn(&str) -> bool, homed: &dyn Fn(&str) -> bool) -> Vec<Value> {
@@ -133,6 +195,12 @@ impl Mail {
 
     pub fn bound(&self, pane: &str) -> Option<&str> {
         self.bindings.get(pane).and_then(|b| b.run.as_deref())
+    }
+
+    /// ORCH-033: the Run a pane acts in: the one it is tied to, else the Run of the dispatch its
+    /// worker is on. A worker that makes a Run of its own acts in that one from then on.
+    pub fn run_of(&self, pane: &str, dispatches: &[Value]) -> Option<String> {
+        self.bound(pane).map(str::to_string).or_else(|| own_dispatch(pane, dispatches).and_then(|d| d["runId"].as_str().map(str::to_string)))
     }
 
     /// Goes up every time the pane is tied to a Run, so a check that started waiting before can
@@ -167,7 +235,7 @@ impl Mail {
     }
 
     /// ORCH-001: a Run is a namespace with a home mailbox; making one schedules nothing.
-    // ponytail: nesting depth (ORCH-032) is T-155; a new Run leaves it alone because there is none.
+    // ORCH-032: a worker's depth comes from its dispatch, so a Run made here leaves it as it was.
     pub fn run_create(&mut self, pane: &str, objective: &str, now: u64) -> Value {
         let id = self.next("run");
         self.runs.push(Run { id: id.clone(), objective: objective.to_string(), home: pane.to_string(), created: now });
@@ -245,6 +313,13 @@ impl Mail {
         }
         if kind == "worker_done" && outcome.is_none() {
             return Err(args("a done report must say how it ended: --outcome succeeded or failed"));
+        }
+        // ORCH-023: a dispatch that was abandoned (or has otherwise finished) takes no more reports.
+        if kind == "worker_done" || kind == "heartbeat" {
+            if let Some(d) = text("dispatchId").and_then(|id| dispatches.iter().find(|d| d["id"] == id.as_str())).filter(|d| finished(d)) {
+                let id = d["id"].as_str().unwrap_or_default();
+                return Err(Fail::new("dispatch_finished", format!("{id} was {}: Kolux takes no more reports on it", d["status"].as_str().unwrap_or_default())));
+            }
         }
         let payload = text("payload").map(|p| serde_json::from_str::<Value>(&p)).transpose().map_err(|_| args("--payload takes JSON"))?;
         let named = text("run");
@@ -391,8 +466,12 @@ fn cut(s: &str, n: usize) -> String {
 
 impl Mail {
     /// ORCH-006: the answer goes to whoever sent `id`, on the thread of the message it answers.
-    pub fn reply(&mut self, from: &str, id: &str, body: &str, run: Option<&str>, now: u64) -> Result<Value, Fail> {
-        let m = self.messages.iter().find(|m| m.id == id).cloned().ok_or_else(|| Fail::new("not_found", format!("no message {id}")))?;
+    /// ORCH-033: only a message the caller could read (in its mailboxes, its Run, or its own) can be
+    /// answered; any other reads as missing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reply(&mut self, from: &str, id: &str, body: &str, run: Option<&str>, boxes: &[String], mine: Option<&str>, now: u64) -> Result<Value, Fail> {
+        let seen = |m: &Message| boxes.contains(&m.to) || m.from == from || (m.run.is_some() && m.run.as_deref() == mine);
+        let m = self.messages.iter().find(|m| m.id == id && seen(m)).cloned().ok_or_else(|| Fail::new("not_found", format!("no message {id}")))?;
         if let Some(n) = run.filter(|n| m.run.as_deref() != Some(*n)) {
             return Err(Fail::new("run_mismatch", format!("{id} does not belong to the Run named with --run ({n})")));
         }
@@ -507,17 +586,18 @@ pub fn task_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, a: &V
 
 /// ORCH-013: may `task` go to the agent in terminal `to`? Gives the task index and the agent.
 /// The codes and messages are fixed so scripts can match on them.
-// ponytail: a context-only dispatch to the caller itself inside the nesting budget (ORCH-032,
-// T-155) is refused with the rest of own_pane until that budget exists.
-pub fn dispatch_check(tasks: &[Value], dispatches: &[Value], task: &str, to: &str, caller: Option<&str>, agent_of: &dyn Fn(&str) -> Option<String>) -> Result<(usize, String), Fail> {
-    let i = tasks.iter().position(|t| t["id"] == task).ok_or_else(|| Fail::new("not_found", format!("no task {task}")))?;
+/// The task is looked up in `run` only (ORCH-033). A context-only dispatch to the caller's own pane
+/// is allowed when `own_ok`: the caller still has nesting budget (ORCH-032).
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_check(tasks: &[Value], dispatches: &[Value], task: &str, to: &str, caller: Option<&str>, run: Option<&str>, own_ok: bool, agent_of: &dyn Fn(&str) -> Option<String>) -> Result<(usize, String), Fail> {
+    let i = task_in(tasks, task, run)?;
     match status(&tasks[i]) {
         "ready" => {}
         "pending" => return Err(Fail::new("task_waiting", format!("{task} is still waiting on its dependencies"))),
         "dispatched" => return Err(Fail::new("task_taken", format!("{task} already has a worker ({})", tasks[i]["dispatchId"].as_str().unwrap_or("?")))),
         s => return Err(Fail::new("task_not_ready", format!("{task} is {s}, not ready"))),
     }
-    if caller == Some(to) {
+    if caller == Some(to) && !own_ok {
         return Err(Fail::new("own_pane", "a coordinator cannot hand a task to its own pane"));
     }
     let agent = agent_of(to).ok_or_else(|| Fail::new("not_an_agent", format!("{to} is not running an agent Kolux recognises, or the agent has not finished starting")))?;
@@ -542,14 +622,15 @@ pub struct Brief<'a> {
     pub coordinator: Option<&'a str>,
     /// Commits the worktree is behind its base, and the base's name.
     pub behind: Option<(u32, String)>,
+    /// ORCH-032: how many more levels of workers this worker may start (0: none).
+    pub levels_left: u32,
 }
 
 /// ORCH-014: the text a worker gets: how to report done, beat, ask and look for mail, each a
 /// one-line command that runs in any shell, then the task text last. The commands need no
 /// `--from`: run in the worker's pane, its KOLUX_TERMINAL_HANDLE ties them to that pane.
 // ponytail: questions go out as mail plus `check --wait` until the ask command lands (ORCH-029,
-// T-190); the dispatch pass joins these commands with ORCH-067 (T-155); the sub-worker section,
-// shown only while nesting budget remains, comes with that budget (ORCH-032, T-155). Every worker
+// T-190); the dispatch pass joins these commands with ORCH-067 (T-155-b). Every worker
 // is an agent: dispatch turns shells away and a reused terminal must run the coordinator's own
 // agent (ORCH-016), so the bare-shell "exit after reporting" line has no worker to go to.
 pub fn brief(task: &Value, b: &Brief) -> String {
@@ -568,6 +649,10 @@ pub fn brief(task: &Value, b: &Brief) -> String {
     s += &send("question", "question", "your question");
     s += &format!("  {CLI} orchestration check --wait\n");
     s += &format!("Look for new mail between steps, at least every few minutes:\n  {CLI} orchestration check\n");
+    if b.levels_left > 0 {
+        let more = if b.levels_left == 1 { "one more level".to_string() } else { format!("{} more levels", b.levels_left) };
+        s += &format!("\nYou may hand a separate part of this task to a sub-worker ({more} allowed below you); it reports to you:\n  {CLI} orchestration worker-start --spec \"<that part>\" --tier build --worktree new-child\n");
+    }
     if let Some((n, base)) = b.behind.as_ref().filter(|(n, _)| *n > 0) {
         let commits = if *n == 1 { "commit" } else { "commits" };
         s += &format!("\nBase drift: this worktree is {n} {commits} behind {base}. Bring {base} in before you build on it, or say in your report why you did not.\n");
@@ -719,15 +804,15 @@ mod tests {
         let boxes8 = m.boxes_of("term-8", &[]);
         let got = m.check("term-8", "term-8", &boxes8, Mode::Next, None, None, None).unwrap();
         assert_eq!(got["messages"][0]["reply"], format!("{CLI} orchestration reply --id {id} --body \"<your answer>\""));
-        let r = m.reply("term-8", &id, "on it", None, 3).unwrap();
+        let r = m.reply("term-8", &id, "on it", None, &boxes8, None, 3).unwrap();
         assert_eq!(r["to"], "term:term-1");
         let boxes1 = m.boxes_of("term-1", &[]);
         let back = m.check("term-1", "term-1", &boxes1, Mode::Next, None, None, None).unwrap();
         assert_eq!(back["messages"][0]["threadId"], id.as_str());
         assert_eq!(back["messages"][0]["subject"], "Re: go");
         assert_eq!(back["messages"][0]["body"], "on it");
-        assert_eq!(m.reply("term-8", "msg-99", "x", None, 4).unwrap_err().code, "not_found");
-        assert_eq!(m.reply("term-8", &id, "x", Some("run-9"), 4).unwrap_err().code, "run_mismatch");
+        assert_eq!(m.reply("term-8", "msg-99", "x", None, &boxes8, None, 4).unwrap_err().code, "not_found");
+        assert_eq!(m.reply("term-8", &id, "x", Some("run-9"), &boxes8, None, 4).unwrap_err().code, "run_mismatch");
         for i in 0..7 {
             m.send("term-1", &json!({ "to": "term-8", "subject": format!("n{i}"), "body": "x".repeat(300) }), &[], &live, 10 + i).unwrap();
         }
@@ -791,21 +876,21 @@ mod tests {
         task_create(&mut tasks, &json!({ "spec": "b", "deps": "[\"task-1\"]" }), None, 2).unwrap();
         let agent = |h: &str| (h == "term-5" || h == "term-6").then(|| "claude".to_string());
         let d = vec![json!({ "id": "dispatch-1", "taskId": "task-9", "status": "running", "terminal": 6 })];
-        let code = |t: &str, to: &str| dispatch_check(&tasks, &d, t, to, Some("term-1"), &agent).unwrap_err().code;
+        let code = |t: &str, to: &str| dispatch_check(&tasks, &d, t, to, Some("term-1"), None, false, &agent).unwrap_err().code;
         assert_eq!(code("task-2", "term-5"), "task_waiting");
         assert_eq!(code("task-1", "term-1"), "own_pane");
         assert_eq!(code("task-1", "term-4"), "not_an_agent");
         assert_eq!(code("task-1", "term-6"), "busy");
         assert_eq!(code("task-7", "term-5"), "not_found");
-        assert_eq!(dispatch_check(&tasks, &d, "task-1", "term-5", Some("term-1"), &agent).unwrap(), (0, "claude".to_string()));
-        let b = brief(&tasks[0], &Brief { dispatch: "dispatch-2", run: Some("run-1"), coordinator: Some("term-1"), behind: None });
+        assert_eq!(dispatch_check(&tasks, &d, "task-1", "term-5", Some("term-1"), None, false, &agent).unwrap(), (0, "claude".to_string()));
+        let b = brief(&tasks[0], &Brief { dispatch: "dispatch-2", run: Some("run-1"), coordinator: Some("term-1"), behind: None, levels_left: 0 });
         assert!(b.contains("task-1") && b.contains("dispatch-2") && b.ends_with('a'), "{b}");
     }
 
     #[test]
     fn a_brief_says_how_to_report_ask_and_keep_in_touch() {
         let task = json!({ "id": "task-4", "spec": "Fix the login bug.\nThen run the tests." });
-        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: Some("run-2"), coordinator: Some("term-1"), behind: None });
+        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: Some("run-2"), coordinator: Some("term-1"), behind: None, levels_left: 0 });
         let line = |needle: &str| b.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle} in {b}")).to_string();
         // The done, heartbeat and question commands are one line each and carry this dispatch.
         for kind in ["--type worker_done --outcome succeeded", "--type heartbeat", "--type question"] {
@@ -821,7 +906,7 @@ mod tests {
         assert_eq!(tail.trim_start_matches('\n'), "Fix the login bug.\nThen run the tests.");
         assert!(head.contains("worker_done"));
         // Without a Run, reports go to the coordinator's pane; drift names the base and the count.
-        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: None, coordinator: Some("term-1"), behind: Some((2, "main".into())) });
+        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: None, coordinator: Some("term-1"), behind: Some((2, "main".into())), levels_left: 0 });
         assert!(line_of(&b, "worker_done").contains("--to term-1"), "{b}");
         assert!(b.contains("2 commits behind main"), "{b}");
         assert!(b.find("behind").unwrap() < b.find(DIVIDER).unwrap());
@@ -838,5 +923,99 @@ mod tests {
         assert_eq!(tier_agent(Some("codex"), Some("codex"), "claude").unwrap(), "codex");
         assert_eq!(tier_agent(Some("codex"), None, "claude").unwrap(), "codex");
         assert_eq!(tier_agent(Some("codex"), Some("claude"), "claude").unwrap_err().code, "invalid_arguments");
+    }
+    #[test]
+    fn orch032_workers_nest_only_inside_the_cap() {
+        // A coordinator (no dispatch of its own) starts level 1 under the default cap of 1.
+        assert_eq!(nest(Some("term-1"), &[], None, None).unwrap(), (1, 1));
+        let w1 = vec![json!({ "id": "dispatch-1", "status": "running", "terminal": 2, "depth": 1, "maxDepth": 1 })];
+        let no = nest(Some("term-2"), &w1, None, None).unwrap_err();
+        assert_eq!(no.code, "nesting_limit");
+        assert!(no.message.contains("do this task yourself"), "{}", no.message);
+        // A worker cannot raise the cap it was given; a coordinator can, by flag or by setting.
+        assert_eq!(nest(Some("term-2"), &w1, Some(5), None).unwrap_err().code, "nesting_limit");
+        assert_eq!(nest(Some("term-1"), &[], Some(2), None).unwrap(), (1, 2));
+        assert_eq!(nest(Some("term-1"), &[], None, Some(3)).unwrap(), (1, 3));
+        let w2 = vec![json!({ "id": "dispatch-1", "status": "running", "terminal": 2, "depth": 1, "maxDepth": 2 }), json!({ "id": "dispatch-2", "status": "running", "terminal": 3, "depth": 2, "maxDepth": 2 })];
+        assert_eq!(nest(Some("term-2"), &w2, None, None).unwrap(), (2, 2));
+        assert_eq!(nest(Some("term-3"), &w2, None, None).unwrap_err().code, "nesting_limit");
+        // A dispatch stored before depth was recorded counts as one level down, under the default cap.
+        let old = vec![json!({ "id": "dispatch-1", "status": "running", "terminal": 2 })];
+        assert_eq!(nest(Some("term-2"), &old, None, None).unwrap_err().code, "nesting_limit");
+        // A finished dispatch no longer makes its pane a worker.
+        let done = vec![json!({ "id": "dispatch-1", "status": "abandoned", "terminal": 2, "depth": 1, "maxDepth": 1 })];
+        assert_eq!(nest(Some("term-2"), &done, None, None).unwrap(), (1, 1));
+        // The brief offers sub-workers only while levels remain.
+        let task = json!({ "id": "task-1", "spec": "x" });
+        let with = brief(&task, &Brief { dispatch: "dispatch-3", run: Some("run-1"), coordinator: Some("term-1"), behind: None, levels_left: 1 });
+        assert!(with.contains("sub-worker") && with.contains("orchestration worker-start"), "{with}");
+        let without = brief(&task, &Brief { dispatch: "dispatch-3", run: Some("run-1"), coordinator: Some("term-1"), behind: None, levels_left: 0 });
+        assert!(!without.contains("sub-worker"), "{without}");
+        // ORCH-013: a context-only dispatch to the caller's own pane is allowed inside the budget only.
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), None, 1).unwrap();
+        let agent = |_: &str| Some("claude".to_string());
+        assert!(dispatch_check(&tasks, &[], "task-1", "term-1", Some("term-1"), None, true, &agent).is_ok());
+        assert_eq!(dispatch_check(&tasks, &[], "task-1", "term-1", Some("term-1"), None, false, &agent).unwrap_err().code, "own_pane");
+    }
+
+    #[test]
+    fn orch023_an_abandoned_dispatch_takes_no_more_reports() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), Some(run.clone()), 1).unwrap();
+        tasks[0]["status"] = json!("dispatched");
+        tasks[0]["dispatchId"] = json!("dispatch-1");
+        let mut d = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "mode": "context" })];
+        // Another Run cannot abandon it: the id reads as missing.
+        assert_eq!(abandon(&mut tasks, &mut d, "dispatch-1", Some("run-9"), 5).unwrap_err().code, "not_found");
+        let r = abandon(&mut tasks, &mut d, "dispatch-1", Some(&run), 5).unwrap();
+        assert_eq!((r["status"].as_str(), r["terminal"].as_str(), r["terminalKept"].as_bool()), (Some("abandoned"), Some("term-2"), Some(true)));
+        assert_eq!(d[0]["status"], "abandoned");
+        // Its task can be handed on again.
+        assert_eq!(tasks[0]["status"], "ready");
+        assert!(tasks[0].get("dispatchId").is_none());
+        // Abandoning again answers the same; the worker's done report and heartbeat are turned away.
+        assert_eq!(abandon(&mut tasks, &mut d, "dispatch-1", Some(&run), 6).unwrap()["status"], "abandoned");
+        let to = format!("run:{run}");
+        for kind in [json!({ "type": "worker_done", "outcome": "succeeded" }), json!({ "type": "heartbeat" })] {
+            let mut a = json!({ "to": to, "subject": "task-1 done", "taskId": "task-1", "dispatchId": "dispatch-1" });
+            a.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
+            let no = m.send("term-2", &a, &d, &live, 7).unwrap_err();
+            assert_eq!(no.code, "dispatch_finished", "{}", no.message);
+            assert!(no.message.contains("abandoned"), "{}", no.message);
+        }
+        assert!(m.messages.is_empty());
+        // Ordinary mail still goes through.
+        assert!(m.send("term-2", &json!({ "to": to, "subject": "note" }), &d, &live, 8).is_ok());
+    }
+
+    #[test]
+    fn orch033_one_run_cannot_reach_into_another() {
+        let mut m = Mail::default();
+        let a = m.run_create("term-1", "A", 1)["run"]["id"].as_str().unwrap().to_string();
+        let b = m.run_create("term-5", "B", 2)["run"]["id"].as_str().unwrap().to_string();
+        // A worker acts in the Run of the dispatch it works on.
+        let d = vec![json!({ "id": "dispatch-1", "runId": a, "taskId": "task-1", "status": "running", "terminal": 2 })];
+        assert_eq!(m.run_of("term-2", &d).as_deref(), Some(a.as_str()));
+        assert_eq!(m.run_of("term-5", &d).as_deref(), Some(b.as_str()));
+        assert_eq!(m.run_of("term-7", &d), None);
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "A's" }), Some(a.clone()), 1).unwrap();
+        // From Run B, Run A's task reads exactly as a missing one.
+        assert_eq!(task_in(&tasks, "task-1", Some(&b)).unwrap_err(), task_in(&[], "task-1", Some(&b)).unwrap_err());
+        assert_eq!(task_in(&tasks, "task-1", Some(&a)).unwrap(), 0);
+        let agent = |_: &str| Some("claude".to_string());
+        assert_eq!(dispatch_check(&tasks, &[], "task-1", "term-6", Some("term-5"), Some(&b), false, &agent).unwrap_err().code, "not_found");
+        assert!(dispatch_check(&tasks, &[], "task-1", "term-6", Some("term-1"), Some(&a), false, &agent).is_ok());
+        // A message in Run A cannot be answered from Run B, the same as a missing one.
+        let sent = m.send("term-2", &json!({ "to": format!("run:{a}"), "subject": "q" }), &d, &live, 3).unwrap();
+        let id = sent["messageIds"][0].as_str().unwrap().to_string();
+        let boxes_b = m.boxes_of("term-5", &d);
+        let no = m.reply("term-5", &id, "x", None, &boxes_b, Some(&b), 4).unwrap_err();
+        assert_eq!((no.code, no.message.clone()), ("not_found", format!("no message {id}")));
+        let boxes_a = m.boxes_of("term-1", &d);
+        assert!(m.reply("term-1", &id, "x", None, &boxes_a, Some(&a), 4).is_ok());
     }
 }
