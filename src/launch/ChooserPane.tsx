@@ -168,7 +168,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                   Terminal
                 </label>
               </div>
-              {seat.agent !== null && seat.agent !== TERMINAL && (
+              {seat.agent !== null && modelsFor(seat.agent).length > 0 && (
                 <div className="choices" role="radiogroup" aria-label={`Seat ${i + 1}: which model`}>
                   <span className="label">{seat.model === null ? "Pick a model" : "Model"}</span>
                   {modelsFor(seat.agent).map((m) => (

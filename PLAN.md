@@ -234,9 +234,11 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-137 · USAGE-014 Claude and Codex token analytics panels · USAGE-015 Estimated cost from each model's published prices · USAGE-018 Grok credits panel
 - [x] T-138 · ACCT-016 The Claude accounts list: system default and managed accounts · ACCT-017 Changing the active Claude account is safe with sessions running · ACCT-018 The same Claude account cannot be added twice · ACCT-019 [compat] The Codex accounts list for fast switching · ACCT-020 Codex's system-default login is shown truthfully
 - [ ] T-138-b · Codex accounts list (ACCT 019): label a personal and a business workspace on one email so they can be told apart (today both rows show the email and their own last sign-in time; the workspace kind lives in token claims OpenAI does not document, so it needs a public source first)
-- [ ] T-139 · ACCT-023 A resumed session keeps the account it began on · ACCT-027 The Grok section shows the CLI sign-in and credit use · ACCT-031 [compat] `kolux account add` and `kolux account list` · ACCT-032 Model choice per agent; the live per-account lookup exists but is off the main path · ACCT-064 Changing the Codex account offers to restart live Codex panes
+- [x] T-139-a · ACCT-032 Model choice per agent; the live per-account lookup exists but is off the main path (built-in lists for Claude, Codex, Grok, Gemini and Cursor; any other agent skips the model step; the live per-account lookup is SESS 029 in T-100)
+- [ ] T-139-b · ACCT-023 A resumed session keeps the account it began on · ACCT-064 Changing the Codex account offers to restart live Codex panes (needs per-pane account memory, the foreground-program check and an in-pane restart prompt: HAND TO FABLE)
+- [ ] T-139-c · ACCT-027 The Grok section shows the CLI sign-in and credit use (needs a public source for the Grok CLI's session file and credit figures first)
 - [ ] T-140 · AUTO-014 Saved run output with token and cost figures
-- [ ] T-141 · CLI-014 [compat] kolux account add and account list
+- [ ] T-141 · CLI-014 [compat] kolux account add and account list · ACCT-031 [compat] `kolux account add` and `kolux account list` (the same two commands, moved here from T-139)
 
 ### P1 · theme 7 · Redesign and the new look (18 cards)
 

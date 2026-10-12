@@ -41,7 +41,7 @@ export function clearMissing(seats: Seat[], installedIds: string[]): Seat[] {
 
 /** A terminal needs no model; an AI needs an explicit model pick. */
 export function seatReady(s: Seat): boolean {
-  return s.agent === TERMINAL || (s.agent !== null && s.model !== null);
+  return s.agent === TERMINAL || (s.agent !== null && (s.model !== null || modelsFor(s.agent).length === 0));
 }
 
 export const allReady = (seats: Seat[]): boolean => seats.length > 0 && seats.every(seatReady);
@@ -66,7 +66,7 @@ export function withoutFailed<T extends { key: number; batch?: number }>(panes: 
 /** A model choice: its id on the agent's command line and the label the user reads. */
 export type ModelChoice = { id: string; label: string };
 
-// ponytail: built-in lists only; SESS-029 (P1) asks the installed program for its live list.
+// ponytail: built-in lists only (ACCT-032); the live per-account lookup is SESS-029 (T-100).
 const BUILT_IN: Record<string, ModelChoice[]> = {
   claude: [
     { id: "opus", label: "Claude Opus" },
@@ -94,10 +94,12 @@ const BUILT_IN: Record<string, ModelChoice[]> = {
 
 export const DEFAULT_MODEL = "default";
 
-/** The model row for an agent: its built-in list (when it has one) plus the program's own default,
- * which is an explicit pick that adds no model flag. */
+/** The model row for an agent: its built-in list plus the program's own default, which is an
+ * explicit pick that adds no model flag. ACCT-032: an agent without a built-in list has no model
+ * step at all (empty). */
 export function modelsFor(agentId: string): ModelChoice[] {
-  return [...(BUILT_IN[agentId] ?? []), { id: DEFAULT_MODEL, label: "Program default" }];
+  const list = BUILT_IN[agentId];
+  return list ? [...list, { id: DEFAULT_MODEL, label: "Program default" }] : [];
 }
 
 /** The arguments a model pick adds to the start line; none for the program's own default. */
