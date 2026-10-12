@@ -187,7 +187,9 @@ User sees: the same set of states everywhere, each with its own glyph: working (
 Rules: blocked and waiting both use the permission look; the Agents view adds starting and
   cannot-reach labels, and stopped labels say what caused the stop; the working spinner moves 12
   frames a second with every spinner on screen in step, and holds still when the system asks for
-  reduced motion; hovering a status indicator explains it after about 200 ms.
+  reduced motion; hovering a status indicator explains it after about 200 ms (Kolux RS, T-026-b:
+  the vocabulary, glyphs, spinner and hover are built; the background entry lights with T-123,
+  no-recent-update with the Inbox or the Agents view, the Agents view's labels with that view).
 Acceptance:
   - [ ] Take one agent through working, waiting and done → the glyph and its hover text change each
         time.

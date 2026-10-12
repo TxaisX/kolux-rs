@@ -212,7 +212,7 @@ input { font: inherit; }
 .tab[aria-selected="true"] { background: var(--pane-bg); border-color: var(--line-focus); color: var(--fg); }
 /* TERM-055: one badge beside the agent icon; the spinner reuses the header's spin. */
 .tab .badge { display: inline-flex; flex: none; }
-.tab .badge.working { color: var(--working-icon); animation: spin 1s linear infinite; }
+.tab .badge.working { color: var(--working-icon); }
 .tab .badge.done { color: var(--done-icon); }
 .tab .badge.unread,
 .tab .badge.permission { color: var(--working-icon); }
@@ -227,7 +227,8 @@ input { font: inherit; }
 .pane-head { flex: none; height: 27px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 9px; border-bottom: 1px solid var(--line-subtle); font-size: 12px; white-space: nowrap; }
 .pane-head .st { display: inline-flex; flex: none; }
 .pane-head .st.done { color: var(--done-icon); }
-.pane-head .st.working { color: var(--working-icon); animation: spin 1s linear infinite; }
+.pane-head .st.working { color: var(--working-icon); }
+.pane-head .st.attention { color: var(--working-icon); }
 .pane-head .st.idle { color: var(--dot-idle); }
 .pane-head .agent-mark { display: inline-flex; color: var(--fg-muted); flex: none; }
 .pane-head .title { font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
@@ -272,6 +273,14 @@ input { font: inherit; }
 .btn.primary:disabled { background: transparent; color: var(--fg-icon-dim); border-color: var(--button-border); }
 .pane-body .xterm { height: 100%; }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* STAT-052: every working spinner turns 12 frames a second on the document's clock (Spinner in
+   icons.tsx lines them up), and holds still when the system asks for reduced motion. */
+.spin { animation: spin 1s steps(12) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .spin { animation: none; }
+}
+/* STAT-052: the hover explanation of any status indicator, shown by Tip.tsx about 200 ms after the pointer settles. */
+.tip { position: fixed; z-index: 60; transform: translateX(-50%); max-width: 280px; padding: 4px 8px; border-radius: 6px; background: var(--fg); color: var(--pane-bg); font-size: 11px; line-height: 1.35; pointer-events: none; }
 
 /* ---- 8. status bar: 1 px border + 23 px ---- */
 .statusbar { flex: none; height: 24px; border-top: 1px solid var(--line-strong); background: var(--surface); display: flex; align-items: center; justify-content: flex-end; padding-right: 16px; gap: 20px; font-size: 11px; color: var(--fg-muted); }

@@ -19,6 +19,7 @@ import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, s
 import { orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
+import { VOCAB } from "../terminal/status";
 import { KeyText } from "../keys/KeymapContext";
 
 type Props = {
@@ -348,7 +349,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)}>
         <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state}>
-          <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} />
+          <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
           <span className="name">{worktreeLabel(w)}</span>
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
           {!asking && (
@@ -535,7 +536,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   </div>
                   {main && (
                     <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
-                      <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} />
+                      <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
                       <span className="name">{worktreeLabel(main)}</span>
                       {isActive(main) && <span className="count">{openCount(main)}</span>}
                       <span className="chev">

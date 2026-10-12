@@ -13,7 +13,7 @@
 // Source Control is a card on the right (Mod+Shift+G, Mod+L or the top bar's panel button): the
 // workspace in front's changes, staging and a commit box; its draft message is kept here per
 // worktree (T-018-a, src/scm/SourceControlPanel.tsx).
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
@@ -31,11 +31,12 @@ import SourceControlPanel from "./scm/SourceControlPanel";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
-import { nextNeedsYou, type Crew } from "./terminal/status";
+import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type Turn } from "./terminal/notify";
 import { FINISH_FIELD } from "./settings/Notifications";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
-import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
+import { Bell, StatusGlyph } from "./chrome/icons";
+import Tip from "./chrome/Tip";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, TERMINAL, withoutFailed, type Copies, type Seat } from "./launch/seats";
 import { folderName, type CliWorkspace, type Project, type Worktree } from "./projects/model";
@@ -53,19 +54,19 @@ function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
-/** TERM-055: the one badge a tab carries beside its agent icon. */
-const badges: Record<NonNullable<Badge>, [(p: { size?: number }) => ReactElement, string]> = {
-  working: [Spinner, "working"],
-  permission: [Help, "needs permission"],
-  unread: [Bell, "unread"],
-  done: [CheckCircle, "done"],
-};
+/** TERM-055: the one badge a tab carries beside its agent icon; its look and hover text come from the vocabulary (STAT-052). */
 function TabBadge({ kind }: { kind: Badge }) {
   if (!kind) return null;
-  const [Icon, label] = badges[kind];
+  if (kind === "unread")
+    return (
+      <span className="badge unread" role="img" aria-label="unread" data-tip="Finished or rang the bell while you were away.">
+        <Bell size={11} />
+      </span>
+    );
+  const v = VOCAB[kind];
   return (
-    <span className={`badge ${kind}`} role="img" aria-label={label}>
-      <Icon size={11} />
+    <span className={`badge ${kind}`} role="img" aria-label={kind === "permission" ? "needs permission" : kind} data-tip={v.explain}>
+      <StatusGlyph glyph={v.glyph} size={11} />
     </span>
   );
 }
@@ -628,6 +629,7 @@ function Window() {
   });
   return (
     <div className="app">
+      <Tip />
       <TopBar screen={screen} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
       <div className="body">
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} />}

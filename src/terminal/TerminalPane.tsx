@@ -15,7 +15,7 @@ import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
 import { monoFont, terminalTheme } from "../theme";
 import { folderName } from "../projects/model";
-import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
+import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
@@ -232,7 +232,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     if (hook === "done") setFinishedAt((t) => t ?? Date.now());
     else if (hook === "working") setFinishedAt(null);
   }, [hook]);
-  const { word, tone, icon, age, needsYou } = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  const { word, tone, glyph, explain, age, needsYou } = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
   const needs = useRef(onNeedsYou);
   needs.current = onNeedsYou;
   useEffect(() => {
@@ -247,8 +247,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   return (
     <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
       <header className="pane-head">
-        <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
-          {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}
+        <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
+          <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>
         <span className="agent-mark" title={agentLabel}>
           <VendorMark agent={agent} size={13} />
@@ -264,7 +264,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         <span className="word" title={program ? [program, ...args].join(" ") : undefined}>
           {programWord(agent)}
         </span>
-        <span className={`status ${tone}`}>{word}</span>
+        <span className={`status ${tone}`} data-tip={explain}>
+          {word}
+        </span>
         {crew && crew.length > 0 && (
           <span className="crew" title={crew.map(crewLine).join("\n")}>
             {crewLabel(crew)}
