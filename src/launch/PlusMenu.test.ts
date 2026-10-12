@@ -5,7 +5,7 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import { KeymapContext } from "../keys/KeymapContext";
 import { resolve } from "../keys/keymap";
-import PlusMenu, { markFor, programWord, type AgentInfo } from "./PlusMenu";
+import PlusMenu, { markFor, programWord, shellWord, type AgentInfo } from "./PlusMenu";
 
 const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: ["--permission-mode", "auto"], installed: true, path: "C:\\Users\\me\\.local\\bin\\claude.exe" };
 const codex: AgentInfo = { id: "codex", name: "Codex", program: "codex", args: ["--dangerously-bypass-approvals-and-sandbox"], installed: true, path: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd" };
@@ -69,6 +69,11 @@ test("agent ids map to vendor marks and header words", () => {
   expect(programWord("claude")).toBe("Claude");
   expect(programWord("codex")).toBe("Codex");
   expect(programWord("shell")).toBe("PowerShell");
+  // ACCT-046: an automatic pane is named for the shell that started, fallbacks included.
+  expect(shellWord("C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")).toBe("Windows PowerShell");
+  expect(shellWord("C:/Program Files/PowerShell/7/pwsh.exe")).toBe("PowerShell 7");
+  expect(shellWord("C:\\WINDOWS\\system32\\cmd.exe")).toBe("Command Prompt");
+  expect(shellWord("/bin/zsh")).toBe("zsh");
 });
 
 test("SESS-007: the chooser item appears only when a handler is given", () => {

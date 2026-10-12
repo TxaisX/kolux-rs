@@ -18,7 +18,7 @@ import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
-import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
+import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 
@@ -81,6 +81,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     if (focused && !hidden && !box.current?.contains(document.activeElement)) termRef.current?.focus();
   }, [focused, hidden]);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
+  const [started, setStarted] = useState<string | null>(null); // ACCT-046: the shell that really started
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const [glow, setGlow] = useState(false); // TERM-023: finished while not focused
   const [now, setNow] = useState(() => Date.now());
@@ -205,7 +206,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null });
+        const { id, program: ran } = await invoke<{ id: number; program: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null });
+        setStarted(ran);
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
@@ -291,7 +293,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
         <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
-          {shellName ?? programWord(agent)}
+          {shellName ?? (agent === "shell" && !program && started ? shellWord(started) : programWord(agent))}
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`}>{word}</span>

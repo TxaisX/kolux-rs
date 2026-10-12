@@ -17,6 +17,12 @@ export function markFor(id: string): Agent {
   return id === "claude" || id === "codex" ? id : "shell";
 }
 
+/** ACCT-046: the pane-header word for the shell an automatic pane actually started. */
+export function shellWord(path: string): string {
+  const stem = (path.split(/[\\/]/).pop() ?? path).replace(/\.exe$/i, "").toLowerCase();
+  return ({ pwsh: "PowerShell 7", powershell: "Windows PowerShell", cmd: "Command Prompt" } as Record<string, string>)[stem] ?? stem;
+}
+
 /** The pane-header word for what runs in a pane. */
 export function programWord(agent: Agent): string {
   return agent === "claude" ? "Claude" : agent === "codex" ? "Codex" : "PowerShell";
