@@ -77,6 +77,17 @@ pub(crate) fn native(path: &str) -> String {
 }
 
 impl Git {
+    /// GIT-068: predicting a merge needs `git merge-tree --write-tree`, new in Git 2.38. Read from
+    /// the version found once at startup, so an older Git is never probed for it again; a version
+    /// that cannot be read is tried.
+    pub fn predicts_merges(&self) -> bool {
+        let mut n = self.version.trim_start_matches("git version ").split('.').map(|x| x.parse::<u32>().ok());
+        match (n.next().flatten(), n.next().flatten()) {
+            (Some(major), Some(minor)) => (major, minor) >= (2, 38),
+            _ => true,
+        }
+    }
+
     /// Finds git on the path. Called once at startup; the version is shown to the user.
     pub fn detect() -> Result<Git, String> {
         let version = run(&["--version"], None).map_err(|e| format!("Git is not available: {e}"))?;
@@ -266,6 +277,15 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn merge_predictions_need_git_2_38() {
+        let g = |v: &str| Git { version: v.into() }.predicts_merges();
+        assert!(!g("git version 2.37.1") && !g("git version 1.9.5.msysgit.1"));
+        assert!(g("git version 2.38.0") && g("git version 2.55.0.windows.3") && g("git version 3.0.0"));
+        // A version that cannot be read is tried; merge-tree itself then says whether it can.
+        assert!(g("something else"));
     }
 
     #[test]

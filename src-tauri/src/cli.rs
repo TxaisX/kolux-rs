@@ -1316,7 +1316,12 @@ fn overlap(ctx: &Ctx, p: &Project, w: &Worktree) -> Result<Value, Fail> {
         if shared.is_empty() {
             continue;
         }
-        let (clash, conflicts, why) = match crate::scm::clash(Path::new(&p.path), &w.head, &s.head) {
+        let forecast = if ctx.git.predicts_merges() {
+            crate::scm::clash(Path::new(&p.path), &w.head, &s.head)
+        } else {
+            crate::scm::Clash::Unverifiable(format!("{} is older than 2.38, which predicting a merge needs", ctx.git.version))
+        };
+        let (clash, conflicts, why) = match forecast {
             crate::scm::Clash::Clean => ("clean", Vec::new(), None),
             crate::scm::Clash::Conflict(files) => ("conflict", files, None),
             crate::scm::Clash::Unverifiable(why) => ("unverifiable", Vec::new(), Some(why)),
@@ -2532,6 +2537,15 @@ mod tests {
         assert_eq!(ov["unreadable"].as_array().unwrap().len(), 1);
         let text = text_of("worktree.overlap", &ov);
         assert!(text.contains("unverifiable") && text.contains("could not"), "{text}");
+
+        // GIT-068: with a Git older than 2.38 (read once at startup) the clash is unverifiable and
+        // merge-tree is not tried, even for the sibling that would conflict.
+        let old = Git { version: "git version 2.37.1".into() };
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &old, store: &store, terminals: &terminals, notify: &notify };
+        let ov = dispatch(&ctx, &req("worktree.overlap", &one, json!({ "worktree": "name:one" }))).unwrap();
+        let s2 = ov["siblings"].as_array().unwrap().iter().find(|s| s["branch"] == "two").cloned().unwrap();
+        assert_eq!(s2["clash"], "unverifiable", "{s2}");
+        assert!(s2["why"].as_str().unwrap().contains("older than 2.38"), "{s2}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
