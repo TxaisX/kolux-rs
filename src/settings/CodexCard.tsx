@@ -3,7 +3,8 @@
 // device. Each account Kolux adds runs in a private Codex home; the user's own Codex folder is
 // never touched. A System default row reports Codex's own login as it is, re-read whenever Kolux
 // gets focus (ACCT-020); managed rows can be picked, re-signed or removed (ACCT-019, T-138). The
-// full Connect-card states are T-092; telling a personal from a business workspace is T-138-b.
+// full Connect-card states are T-092. T-138-b: the user names accounts, and two on one email ask
+// to be named, since OpenAI does not document where a sign-in says personal or business.
 import { useCallback, useEffect, useState } from "react";
 import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
@@ -11,7 +12,8 @@ import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attent
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 
-export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean };
+export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean; label?: string };
+const NAME_MAX = 40;
 export type CodexView = {
   accounts: CodexAccount[];
   active: string | null;
@@ -26,7 +28,7 @@ export type CodexView = {
   /** ACCT-019: accounts whose sign-in file has been gone longer than the grace period. */
   missing: string[];
 };
-export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "again"; id: string } | { kind: "install" };
+export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "name"; id: string } | { kind: "label"; id: string; label: string } | { kind: "again"; id: string } | { kind: "install" };
 
 const systemLabel: Record<CodexView["systemDefault"], string> = {
   chatgpt: "a ChatGPT sign-in",
@@ -41,6 +43,10 @@ const systemRow: Record<CodexView["systemDefault"], string> = {
   "signed-out": "Signed out",
 };
 
+const who = (a: CodexAccount) => a.email ?? "ChatGPT account";
+/** ACCT-019: another listed account signs in with the same email. */
+export const sharesEmail = (v: CodexView, a: CodexAccount) => !!a.email && v.accounts.some((b) => b.id !== a.id && b.email?.toLowerCase() === a.email?.toLowerCase());
+
 /** SET-030: what is wrong with one account, if anything. */
 export function codexTrouble(v: CodexView, a: CodexAccount): string | null {
   if (v.missing.includes(a.id)) return "Needs sign-in";
@@ -53,12 +59,12 @@ export function codexHeadline(v: CodexView): string {
   if (v.signingIn === "device") return v.deviceCode ? "Enter the code on any device" : "Asking for a sign-in code…";
   if (v.signingIn) return v.inBrowser ? "Finish signing in in the browser" : "Starting Codex's sign-in…";
   const active = v.accounts.find((a) => a.id === v.active);
-  if (active) return `Connected · ${active.email ?? "ChatGPT account"}`;
+  if (active) return `Connected · ${active.label ? `${active.label} · ` : ""}${who(active)}`;
   if (v.systemDefault !== "signed-out") return `Connected · Codex's own login (${systemLabel[v.systemDefault]})`;
   return "Connect with your ChatGPT plan";
 }
 
-export function CodexCardView({ view, error, confirming = null, onAction }: { view: CodexView | null; error?: string | null; confirming?: string | null; onAction: (a: CodexAction) => void }) {
+export function CodexCardView({ view, error, confirming = null, naming = null, onAction }: { view: CodexView | null; error?: string | null; confirming?: string | null; naming?: string | null; onAction: (a: CodexAction) => void }) {
   if (!view) return null;
   const busy = view.signingIn !== null;
   const connected = view.active !== null || view.systemDefault !== "signed-out";
@@ -91,8 +97,8 @@ export function CodexCardView({ view, error, confirming = null, onAction }: { vi
           {view.accounts.map((a) => (
             <AccountRow
               key={a.id}
-              title={a.email ?? "ChatGPT account"}
-              detail={`Last signed in ${signedInAt(a.lastSignIn)}`}
+              title={a.label ? `${a.label} · ${who(a)}` : who(a)}
+              detail={!a.label && sharesEmail(view, a) ? "Same email as another account: name it, e.g. Work" : `Last signed in ${signedInAt(a.lastSignIn)}`}
               active={view.active === a.id}
               busy={busy}
               trouble={codexTrouble(view, a)}
@@ -105,7 +111,29 @@ export function CodexCardView({ view, error, confirming = null, onAction }: { vi
                 onAsk: () => onAction({ kind: "ask-remove", id: a.id }),
                 onRemove: () => onAction({ kind: "remove", id: a.id }),
                 onKeep: () => onAction({ kind: "keep" }),
+                nameLabel: a.label ? "Rename" : "Name",
+                onName: () => onAction({ kind: "name", id: a.id }),
               }}
+              below={
+                naming === a.id && (
+                  <input
+                    className="field acct-name"
+                    aria-label={`Name for ${who(a)}`}
+                    placeholder="Personal, Work…"
+                    maxLength={NAME_MAX}
+                    defaultValue={a.label ?? ""}
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") e.currentTarget.blur();
+                      if (e.key === "Escape") {
+                        e.stopPropagation();
+                        onAction({ kind: "keep" });
+                      }
+                    }}
+                    onBlur={(e) => onAction({ kind: "label", id: a.id, label: e.currentTarget.value })}
+                  />
+                )
+              }
             />
           ))}
           {view.accounts.some((a) => view.drifted.includes(a.id)) && (
@@ -147,6 +175,7 @@ export default function CodexCard() {
   const [view, setView] = useState<CodexView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [naming, setNaming] = useState<string | null>(null);
   const read = useCallback(() => {
     invoke<CodexView>("codex_accounts")
       .then(setView)
@@ -168,7 +197,8 @@ export default function CodexCard() {
   const act = (a: CodexAction) => {
     setError(null);
     setConfirming(a.kind === "ask-remove" ? a.id : null);
-    if (a.kind === "ask-remove" || a.kind === "keep") return;
+    setNaming(a.kind === "name" ? a.id : null);
+    if (a.kind === "ask-remove" || a.kind === "keep" || a.kind === "name") return;
     const call =
       a.kind === "cancel"
         ? invoke("codex_account_cancel")
@@ -176,10 +206,12 @@ export default function CodexCard() {
           ? invoke("codex_account_activate", { id: a.id })
           : a.kind === "remove"
             ? invoke("codex_account_remove", { id: a.id })
+          : a.kind === "label"
+            ? invoke("codex_account_label", { id: a.id, label: a.label })
           : a.kind === "install"
             ? openInstallPage("codex")
             : invoke("codex_account_sign_in", { device: a.kind === "code", again: a.kind === "again" ? a.id : null });
     call.catch((e) => setError(String(e))).finally(read);
   };
-  return <CodexCardView view={view} error={error} confirming={confirming} onAction={act} />;
+  return <CodexCardView view={view} error={error} confirming={confirming} naming={naming} onAction={act} />;
 }

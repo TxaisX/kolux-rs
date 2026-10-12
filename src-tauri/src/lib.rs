@@ -229,6 +229,7 @@ pub fn run() {
             update::update_restart,
             claude_accounts::claude_account_remove,
             codex_accounts::codex_account_remove,
+            codex_accounts::codex_account_label,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])

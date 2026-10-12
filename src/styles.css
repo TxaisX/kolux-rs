@@ -438,6 +438,7 @@ input { font: inherit; }
 .acct-row[role="button"]:hover { background: var(--row-selected); }
 .acct-row[role="button"]:focus-visible { outline: 2px solid var(--line-focus); outline-offset: -2px; }
 .acct-row[data-active="true"] { cursor: default; }
+.acct-name { margin: 2px 6px 8px; width: calc(100% - 12px); }
 .acct-confirm { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 6px 8px; font-size: 12px; color: var(--fg); }
 .device-code { display: flex; flex-direction: column; gap: 6px; }
 .device-link { color: var(--fg); user-select: all; word-break: break-all; }

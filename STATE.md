@@ -826,6 +826,12 @@ Reset button on the one that caused it. Double-tapping a modifier and the app me
 the sidebar's add-project form to Settings > Git & worktrees (T-116-a-fix). The form keeps one
 link that opens that page.
 
+[accounts] Codex accounts can now be named (T-138-b). Each Codex row in Settings > Accounts & keys
+has a Name button; type Personal or Work and press Enter, and the row reads "Work · you@...".
+When two Codex accounts share one email and have no names yet, both rows say so, so a personal
+and a business workspace can be told apart. Kolux does not guess which is which: OpenAI does not
+publish where a sign-in says personal or business.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1560,7 +1566,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-096-b: Reset takes the command out of this platform's section; when the all-platforms section still overrides it, the shipped default is written into this platform's section instead so the default really returns. Removing a command's last chord leaves it disabled (null in the file), the same as Disable. A recorded chord that clashes is still saved; the resolver drops it as SET-010 says, and the row keeps a Reset button because the file still holds the override.
 
+- [accounts] T-138-b · ACCT-019's personal/business label is a name the user gives (Name / Rename on the row, up to 40 characters, kept across Sign in again), not read from the sign-in: the workspace kind sits in token claims OpenAI does not document. Two unnamed rows on one email ask to be named. Confirm, or point at a public source for the claim.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-138-b · done: `codex_accounts.rs` Account gains `label`, `set_label` (trim, 40 chars, blank clears, kept on re-sign-in) and the `codex_account_label` command; `CodexCard.tsx` Name/Rename with an inline field (Enter saves, Esc keeps), "Same email as another account" note, headline names the active account; `AccountRow.tsx` gains `onName`/`below`; 1 Rust test, 3 front-end tests; live with two seeded Codex accounts on one email · evidence/T-138-b.txt, evidence/T-138-b-1-same-email.png, evidence/T-138-b-2-named.png
 - 2026-10-12 · [accounts] T-116-a-fix · done: `src/settings/GitPage.tsx` gains the New branches card (prefix select, custom field saved on blur, sample and refused/only-slashes warning from `branch_prefix_check`, Default compare base); `ProjectsPanel.tsx` gear keeps a link to the page; DESIGN.md amended · evidence/T-116-a-fix.txt, evidence/t116a-fix-gear.png, evidence/t116a-fix-git-page.png
 - 2026-10-12 · [accounts] Git & worktrees gear move · not done: the sidebar gear's Git & worktrees part is T-116-a (b67005e), which is on main and lane/orchestration but not on lane/accounts, and this lane may not merge; move it into src/settings/GitPage.tsx (with the one-line DESIGN.md amendment) after main is merged into this lane, or in the merge itself
 - 2026-10-12 · [accounts] T-096-b · done: `recordKey`, `editChords`, `removeChord` and the `recording` flag in src/keys/record.ts; `keybindings_write` (one command into this platform's section, through a temp file, refuses a broken file and bad ids or values, emits `keybindings-changed`) in src-tauri/src/keybindings.rs; KeymapProvider `save` and reload on change; the window's shortcuts stand aside while recording; recorder on each Shortcuts row; tests in src/keys/record.test.ts, src/settings/shortcutRows.test.ts and two Rust tests · evidence/T-096-b.txt, evidence/T-096-b-1-recording.png .. -5-clash.png

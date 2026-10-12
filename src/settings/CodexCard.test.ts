@@ -85,3 +85,27 @@ test("ACCT-019: Remove asks first; removing the active one hands back to the sys
   expect(h).toContain("takes over");
   expect(h).toContain("Keep");
 });
+
+test("T-138-b ACCT-019: two accounts on one email ask to be named, and a name labels the row", () => {
+  const work = { ...kim, id: "c2" };
+  const both = { ...off, accounts: [kim, work], active: "c1" };
+  const h = sys(both);
+  expect(h.match(/Same email as another account/g)?.length).toBe(2);
+  expect(h.match(/>Name</g)?.length).toBe(2);
+  const named = sys({ ...both, accounts: [{ ...kim, label: "Personal" }, { ...work, label: "Work" }] });
+  expect(named).toContain("Personal · kim@example.com");
+  expect(named).toContain("Work · kim@example.com");
+  expect(named).not.toContain("Same email as another account");
+  expect(named.match(/>Rename</g)?.length).toBe(2);
+  expect(sys({ ...off, accounts: [kim] })).not.toContain("Same email");
+});
+
+test("T-138-b: naming a row shows its name field in place", () => {
+  const h = renderToString(createElement(CodexCardView, { view: { ...off, accounts: [kim] }, naming: "c1", onAction: () => {} }));
+  expect(h).toContain('aria-label="Name for kim@example.com"');
+  expect(h).toContain('maxLength="40"');
+});
+
+test("T-138-b: the headline names the active account by its name too", () => {
+  expect(codexHeadline({ ...off, accounts: [{ ...kim, label: "Work" }], active: "c1" })).toBe("Connected · Work · kim@example.com");
+});
