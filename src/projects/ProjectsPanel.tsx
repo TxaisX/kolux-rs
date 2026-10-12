@@ -23,10 +23,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
-import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
+import AutomationsRow from "./AutomationsRow";
 import { chromeShown } from "../chrome/chromeItems";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
@@ -60,7 +61,7 @@ type Props = {
   onChoose: () => void;
   /** SESS-009: the dropdown's blank-terminal row (a plain shell tab). */
   onTerminal?: () => void;
-  /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
+  /** DT-17 / AUTO-023: the Automations page is opened from the sidebar's Automations row. */
   /** Which page (Automations, Model routing) is open over the content column, if any. */
   page: Page | null;
   onPage: (page: Page) => void;
@@ -907,6 +908,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </span>
             Artifacts
           </button>
+          {chromeShown(settings, "automationsButton") && <AutomationsRow open={page === "automations"} onOpen={() => onPage("automations")} onHide={() => onSetting("automationsButton", false)} />}
         </nav>
 
         <div className="sb-section">
@@ -1155,11 +1157,6 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           >
             <Gear />
           </button>
-          {chromeShown(settings, "automationsButton") && (
-            <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
-              <Clock />
-            </button>
-          )}
           {/* SET-028: until Settings > Agents exists (T-036, T-054), model routing opens from here. */}
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />
