@@ -49,8 +49,8 @@ export function rowsFor(count: number, stacked = false): number {
 }
 
 /** TERM-001: growing adds empty panes; shrinking drops unstarted panes first, newest first, and
- * never a started session (TERM-003's "ask first" comes with its own task), so `drop` may fall
- * short of the request. */
+ * never a started session (TERM-003's "ask first" is T-151; until then `blocking` names the
+ * sessions in the way), so `drop` may fall short of the request. */
 export function resizePlan(shown: { key: number; started: boolean }[], n: number): { add: number; drop: number[] } {
   const want = clampCount(n);
   if (want >= shown.length) return { add: want - shown.length, drop: [] };
@@ -60,6 +60,12 @@ export function resizePlan(shown: { key: number; started: boolean }[], n: number
     .reverse()
     .slice(0, shown.length - want);
   return { add: 0, drop };
+}
+
+/** The started sessions a shrink to `n` would have to remove, newest first: empty until T-151 asks. */
+export function blocking(shown: { key: number; started: boolean }[], n: number): number[] {
+  const short = shown.length - clampCount(n) - resizePlan(shown, n).drop.length;
+  return short <= 0 ? [] : shown.filter((p) => p.started).map((p) => p.key).reverse().slice(0, short);
 }
 
 /** TERM-006: where a pane split from `key` lands in the shown order: right is the next cell,

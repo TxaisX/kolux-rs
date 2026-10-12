@@ -1,6 +1,6 @@
 // The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040, VIEW-026), pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./grid";
+import { blocking, cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./grid";
 
 const started = (key: number) => ({ key, started: true });
 const empty = (key: number) => ({ key, started: false });
@@ -27,6 +27,18 @@ test("TERM-001: 6 to 4 with 2 unstarted panes removes those 2, newest first, and
   expect(resizePlan([1, 2, 3].map(started), 1)).toEqual({ add: 0, drop: [] });
   expect(resizePlan(six, 20)).toEqual({ add: 6, drop: [] });
   expect(resizePlan(six, 6)).toEqual({ add: 0, drop: [] });
+});
+
+test("TERM-001: the started sessions that keep a shrink from reaching its count, newest first (T-009-fix-b; asking first is T-151)", () => {
+  const shown = [
+    { key: 1, started: true },
+    { key: 2, started: true },
+    { key: 3, started: false },
+  ];
+  expect(blocking(shown, 1)).toEqual([2]);
+  expect(blocking(shown, 2)).toEqual([]);
+  expect(blocking(shown, 4)).toEqual([]);
+  expect(blocking(shown.slice(0, 2), 1)).toEqual([2]);
 });
 
 test("TERM-004: balanced rows for one, two, four, six, nine and twelve panes", () => {

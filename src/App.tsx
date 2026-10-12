@@ -22,7 +22,7 @@ import SettingsPage from "./settings/SettingsPage";
 import SignInNotice from "./settings/SignInNotice";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
-import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
+import { blocking, cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
@@ -325,13 +325,17 @@ function Window() {
 
   // TERM-001: the layout strip sets how many cells the workspace in front holds. Growing adds
   // empty chooser panes (nothing starts on its own); shrinking drops unstarted cells newest
-  // first and leaves started sessions alone (TERM-003's ask comes with its own task).
+  // first and leaves started sessions alone: the ask before removing a started session is
+  // TERM-003 on T-151, so until then the toast names the session in the way.
   const setCount = (n: number) => {
     const shown = cellsOf(panesIn(panes, activeDir));
-    const { add, drop } = resizePlan(shown.map((c) => ({ key: c.group, started: c.panes.some((p) => !p.seats) })), n);
-    if (add === 0 && drop.length === 0 && clampCount(n) < shown.length) {
-      setToast(`All ${shown.length} panes here are started sessions. Close one to go smaller.`);
-      return;
+    const cells = shown.map((c) => ({ key: c.group, started: c.panes.some((p) => !p.seats) }));
+    const { add, drop } = resizePlan(cells, n);
+    const stuck = blocking(cells, n);
+    if (stuck.length) {
+      const first = shown.find((c) => c.group === stuck[0])?.panes[0];
+      setToast(`${first ? tabName(first, titles) : "A pane"} is a started session: close it to go smaller.${stuck.length > 1 ? ` (${stuck.length} in the way.)` : ""}`);
+      if (add === 0 && drop.length === 0) return;
     }
     const fresh: Pane[] = Array.from({ length: add }, () => ({ key: nextKey.current++, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }));
     const rest = panes.filter((p) => !drop.includes(groupOf(p)));

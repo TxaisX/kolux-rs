@@ -971,8 +971,9 @@ recorded default until told otherwise; nothing here blocks a pass.
   pane and Ctrl+T once by hand; the menu route and the tab strip were proven live.
 - 2026-10-09 · T-009: the strip keeps DESIGN.md's 1 / 2 / 4 / 6 presets; 3, 5 and 7..12 panes are
   reached by splitting (the limit is 12, TERM-001), and the strip then shows no pressed button.
-  Shrinking never removes a started session: TERM-003's "ask first" is T-151, so for now a toast
-  says to close one. Closing a pane whose program is still running ends it without asking; the
+  Shrinking never removes a started session: TERM-003's "ask first" is T-151 (the one owner,
+  named in `grid.ts` and `App.tsx`), so for now a toast names the newest started session in the
+  way (T-009-fix-b). Closing a pane whose program is still running ends it without asking; the
   confirmation is TERM-045 (T-057). Closing the last pane leaves the empty placeholder, since tabs
   arrive with T-010. "Split down" is an index jump in the uniform grid (`ponytail:` in grid.ts), not
   a nested split tree, so a pane split down from the bottom row lands at the end. The three chords
@@ -1228,6 +1229,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   row (the review named this fix).
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
 - 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
 - 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
 - 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
@@ -1237,6 +1239,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-026-c · done: `src/inbox/inbox.ts` (+ test), `InboxView.tsx`, the bell and `view.inbox` in `TopBar.tsx` / `App.tsx`, pane state stamps; `evidence/T-026-c-all-clear.png`, `-groups.png`, `-detail.png`, `-opened.png`
 - 2026-10-11 · [core] T-026-b · done: `VOCAB` + `stoppedLabel` + `headerOf` on it (`status.ts`, tests), `StatusGlyph` + synced `Spinner` (`icons.tsx`), `Tip.tsx`, `.spin` 12 fps + reduced motion (`styles.css`), header / badge / dot wired; `evidence/T-026-b-working.png`, `-needs-you.png`, `-done.png`, `-tab-badge.png`, `-sidebar-dot.png`, `-reduced-motion.png`
 - 2026-10-11 · [core] T-026-a · done: `tauri-plugin-notification` + `notify` command, `src/terminal/notify.ts` (+ test), `Session::quiet` / `quiet_check` watcher (+ test), `Terminals::silence`, Settings > Notifications; `evidence/T-026-a-permission-toast.png`, `-finished-toast.png`, `-quiet-toast.png`, `-quiet-window.png`, `-settings.png`
-- 2026-10-09 · [core] T-025-c · done: `src-tauri/src/status.rs` (per-pane session: roster, pending tool, interrupted flag, background work, compact skip, reply, 20-state history; 5 tests), `hooks.rs` answers through it, `terminal.rs` marks Ctrl+C/Escape, pane header roster label (`status.ts` + test); `evidence/T-025-c-lead-working.png`, `-child-needs.png`, `-done.png`, `-interrupted.png`
 
 
