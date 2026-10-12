@@ -636,6 +636,12 @@ switch (on by default). Codex figures drive it today; Claude's arrive with T-041
 
 [accounts] Account commands (T-141). `kolux-dev account add` runs Claude Code's own login (or, with `--agent codex`, Codex's device-code login) right in the terminal and the account then shows in Settings > Accounts; `kolux-dev account list` prints the Claude and Codex accounts with the one new panes use marked (`--json` for both). Nothing starts when Kolux is not running; Ctrl+C part-way through leaves no credentials behind.
 
+[accounts] Terminals now use a proper light colour scheme in light mode (T-145-a): the Tango
+palette on white, while dark mode keeps Kolux's own dark colours, and Match app theme still
+follows the app. The terminal pane also knows how to answer programs that ask for its colours
+or for light/dark mode, and tells subscribed programs when the mode flips, but on Windows those
+questions are swallowed before they reach the pane, so that part is not live yet (T-145-b).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1302,7 +1308,12 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [accounts] T-141 · DT-A4: account commands refuse every flag they do not take (environments, pairing codes and remote targets alike) instead of ignoring remote targets as CLI-014 said; spec/20-cli.md amended.
 - 2026-10-11 · [accounts] T-141 · A Claude account added from the command line is not made active (as with Add Account in Settings); a Codex one is (as Settings does). The macOS Keychain restore is in T-043-d.
 
+- [accounts] T-145-a · Tango light uses its bright yellow (#fce94f) as is, so yellow text is pale on white; a darker yellow would read better but stops being Tango. Kept the card's palette.
+- [accounts] T-145-a · the terminal's light/dark answers follow the app's mode (System, Light, Dark), not the terminal background, so Match app theme and Kolux dark answer the same way.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [accounts] T-145-a · done: `src/theme.ts` (Tango light scheme, `currentDark`), new `src/terminal/colourMode.ts` (DEC 2031 subscribe, CSI ? 996 n query, CSI ? 997 ; 1|2 n reports), `TerminalPane.tsx` wires it to theme changes; T-145-b split off and HAND TO FABLE: Windows ConPTY swallows OSC 4/10/11 "?" and CSI ? 996 n / ? 2031 h before xterm sees them (proved live: a cursor-position query came back, the colour and mode queries did not); custom themes moved to T-148 · evidence/T-145-a.txt, evidence/T-145-1-light-tango.png, evidence/T-145-2-dark-kolux.png
+- 2026-10-11 · [accounts] T-145-b · HAND TO FABLE: the colour and light/dark questions programs ask are swallowed by Windows ConPTY (system conhost via portable-pty) before xterm sees them; fixing it is PTY work (a pass-through console or answering in the Rust reader)
 - 2026-10-11 · [accounts] T-141 · done: new `src-tauri/src/cli_accounts.rs` (app side: `account.list`, `account.add-begin` makes a throwaway folder in the profile's `sign-in-temp`, `account.add-finish` hands it to the same `sign_in` Settings uses and deletes it, a sign-in whose throwaway copy cannot be deleted is failed and not kept; CLI side: the login runs in the user's terminal with inherited input and output, a console handler passes Ctrl+C to the login only, then the folder is removed, a closing terminal removes it on the way out; an unknown begin command reads as a Kolux too old for accounts); `cli.rs` parses `account add [--agent claude|codex]` and `account list` (Claude when left out, an empty `--agent` refused, other flags refused as "this machine"), help text; `state.rs` `Store::dir`; windows-sys Console feature; 5 new Rust tests + 1 parse test; live: stand-in claude/codex, app not running -> `app_unreachable` and no folder made, add Claude -> listed, same again -> refused, add Codex with a printed device code -> listed and active, list text and JSON, Ctrl+C sent part-way -> "Sign-in interrupted; nothing was added" and the throwaway folder empty · evidence/T-141.txt, T-141-1-settings-after-cli-add.png
 - 2026-10-11 · [accounts] T-140 · BLOCKED, not started: AUTO-014 saves a run's output when the run ends, and runs only ever reach "dispatched" until T-072 (AUTO-012, truthful end status) is built; its token and cost figures read the same unpublished Claude Code / Codex usage logs (Needs Txais, token analytics)
 - 2026-10-11 · [accounts] T-139-b · not started · HAND TO FABLE: ACCT-023 and ACCT-064 need each pane to remember the account it started on, a check of the pane's foreground program (PTY) and an in-pane restart prompt that restarts Codex once the shell is ready; terminal-pane internals of the core lane.

@@ -106,3 +106,11 @@ test("SET-005: light mode terminals use the light scheme unless it is turned off
   expect(terminalFor(look({ appearanceMode: "light", terminalLightScheme: false }), false).background).toBe(classic["pane-bg"]);
   expect(terminalFor(look({ appearanceMode: "dark" }), true).background).toBe(classic["pane-bg"]);
 });
+
+test("TERM-098: Kolux dark by default, a Tango-style light scheme in light mode", () => {
+  const light = terminalFor(look({ appearanceMode: "light" }), false);
+  expect(light).toMatchObject({ background: "#ffffff", foreground: "#2e3436", red: "#cc0000", green: "#4e9a06", blue: "#3465a4", brightWhite: "#eeeeec" });
+  expect(terminalFor(look(), true).background).toBe(classic["pane-bg"]);
+  const match = terminalFor(look({ appearanceMode: "light", terminalScheme: "match", appTheme: "sky" }), false);
+  expect(match.red, "Match app theme keeps following the app colours").not.toBe("#cc0000");
+});

@@ -183,6 +183,14 @@ function mix(a: string, b: string, t: number): string {
   return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("");
 }
 
+/** TERM-098: the light scheme for "Kolux dark" in light mode, the Tango Desktop Project palette
+ *  (public domain) on white. */
+const TANGO_LIGHT = {
+  background: "#ffffff", foreground: "#2e3436", cursor: "#2e3436", cursorAccent: "#ffffff",
+  black: "#2e3436", red: "#cc0000", green: "#4e9a06", yellow: "#c4a000", blue: "#3465a4", magenta: "#75507b", cyan: "#06989a", white: "#d3d7cf",
+  brightBlack: "#555753", brightRed: "#ef2929", brightGreen: "#8ae234", brightYellow: "#fce94f", brightBlue: "#729fcf", brightMagenta: "#ad7fa8", brightCyan: "#34e2e2", brightWhite: "#eeeeec",
+};
+
 const ANSI = { red: 0, green: 135, yellow: 45, blue: 215, magenta: 300, cyan: 185 } as const;
 
 /** SET-003: the terminal colours for an appearance. "match" works background, text and the 16-colour
@@ -190,7 +198,7 @@ const ANSI = { red: 0, green: 135, yellow: 45, blue: 215, magenta: 300, cyan: 18
  *  light mode, with the light scheme on, either one becomes its light form. */
 export function terminalFor(a: Appearance, dark = isDark(a)): ITheme {
   const light = !dark && a.lightTerminal;
-  if (a.terminal !== "match" && !light) return terminalTheme(classic);
+  if (a.terminal !== "match") return light ? { ...TANGO_LIGHT } : terminalTheme(classic);
   const base: Appearance = a.terminal === "match" ? a : { ...a, theme: "classic" };
   const t = buildTheme(base, !light);
   const hue = themeHue(base);
@@ -213,6 +221,8 @@ let terminal = terminalFor(readAppearance({}));
 /** The terminal colours in force now; panes listen for TERMINAL_EVENT to follow changes. */
 export const currentTerminal = () => terminal;
 export const TERMINAL_EVENT = "kolux-terminal-theme";
+/** TERM-098: whether the app is in dark mode now (what a program asking the terminal is told). */
+export const currentDark = () => lastDark ?? true;
 
 export function themeVars(t: Theme): Record<string, string> {
   const vars: Record<string, string> = { "--ui-font": uiFont, "--mono-font": monoFont };

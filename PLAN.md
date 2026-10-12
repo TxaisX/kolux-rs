@@ -245,10 +245,11 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-142 · PROJ-085 [compat] Workspace board: lanes by status · also passes: VIEW-027 Large workspace boards stay smooth
 - [ ] T-143 · SESS-009 Agent dropdown leads with three featured agents and searches the rest
 - [ ] T-144 · TERM-010 Resize panes by dragging dividers · TERM-024 Narrow panes drop header items in a set order · TERM-035 Pane right-click menu · TERM-078 [compat] Zoom the terminal font · TERM-097 Terminal font settings
-- [ ] T-145 · TERM-098 Terminal colour themes
+- [x] T-145-a · TERM-098 Terminal colour themes: Kolux dark by default and a Tango-style light scheme in light mode; programs that ask the terminal for its colours or for light/dark mode, or subscribe to mode changes, are answered by the pane (custom themes are in T-148)
+- [ ] T-145-b · TERM 098 rules that need the PTY: on Windows the system console layer swallows the colour and light/dark questions (OSC 4, 10, 11 with "?", CSI ? 996 n, CSI ? 2031 h) before they reach the pane, so programs get no answer; needs a pass-through console or answering in the Rust output reader; also check no stray replies at startup (output that arrives before the pane knows its terminal id is dropped today)
 - [ ] T-146 · VIEW-006 Each workspace screen can have its own theme · VIEW-009 [compat] Full-page views open over the workspace · VIEW-056 [compat] Right sidebar: open, close, width and remembered tab · VIEW-057 [compat] Right sidebar tab strip · VIEW-086 Resume a past session as chat
 - [ ] T-147 · VIEW-096 Status bar: show, hide and choose items
-- [ ] T-148 · SET-016 Appearance page in three foldable sections · SET-018 App font and editor font · SET-020 Show or hide the title, toolbar buttons and status bar items · SET-023 Terminal colour schemes for dark and for light · also: the rest of T-053's card: the scheme catalogue, the separate light scheme and imported schemes go in the same Terminal colours picker as Kolux dark and Match app theme (Settings > Appearance, settings field `terminalScheme`)
+- [ ] T-148 · SET-016 Appearance page in three foldable sections · SET-018 App font and editor font · SET-020 Show or hide the title, toolbar buttons and status bar items · SET-023 Terminal colour schemes for dark and for light · also: the rest of T-053's card: the scheme catalogue, the separate light scheme and imported schemes go in the same Terminal colours picker as Kolux dark and Match app theme (Settings > Appearance, settings field `terminalScheme`); also TERM 098 rule: custom terminal themes can be added (they go in that same picker)
 
 ### P1 · theme 5 · Safety and trust (37 cards)
 
