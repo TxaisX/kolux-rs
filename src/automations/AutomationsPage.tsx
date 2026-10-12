@@ -16,7 +16,7 @@ import AutomationDialog, { TemplateCards } from "./AutomationDialog";
 import type { Template } from "./timetable";
 import RunsDashboard, { Breadcrumb, RunPage } from "./RunsDashboard";
 import { folderName } from "../projects/model";
-import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
+import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, graceWord, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
 /** `runsError` says the history could not be read (AUTO-018: the run count then reads unknown). */
 export type Data = { automations: Automation[]; runs: Run[]; runsError?: string };
@@ -378,7 +378,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
                         </button>
                         {menu === a.id && (
                           <div className="menu autos-menu" role="menu" onClick={(e) => e.stopPropagation()}>
-                            <button className="menu-item" role="menuitem" onClick={() => runNow(a)}>
+                            <button className="menu-item" role="menuitem" disabled={!!a.problem} title={a.problem ? `Run now is blocked: ${a.problem}` : undefined} onClick={() => runNow(a)}>
                               <span className="name">Run now</span>
                             </button>
                             <button className="menu-item" role="menuitem" onClick={() => toggle(a)}>
@@ -432,10 +432,15 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }:
         <label className="autos-switch">
           <input type="checkbox" role="switch" checked={a.enabled} onChange={onToggle} /> {a.enabled ? "On" : "Paused"}
         </label>
-        <button className="btn" onClick={onRun}>
+        <button className="btn" disabled={!!a.problem} title={a.problem ? `Run now is blocked: ${a.problem}` : undefined} onClick={onRun}>
           Run now
         </button>
       </div>
+      {a.problem && (
+        <div className="note warn" role="status">
+          This automation cannot run: {a.problem}. Run now is blocked and timed runs are logged as skipped until it is fixed.
+        </div>
+      )}
       <div className="autos-tabs" role="tablist" aria-label="Automation views">
         {(["overview", "runs"] as const).map((t) => (
           <button key={t} role="tab" aria-selected={tab === t} className="btn" onClick={() => onTab(t)}>
@@ -451,6 +456,8 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }:
           <dd>{upcoming(a, now)}</dd>
           <dt>Worktree</dt>
           <dd>{a.workspaceMode === "new-per-run" ? "A new one for every run" : a.workspace ? folderName(a.workspace) : "Not chosen"}</dd>
+          <dt>If Kolux was away</dt>
+          <dd>{graceWord(a.missedRunGraceMinutes)}</dd>
           <dt>Agent</dt>
           <dd>{agent}</dd>
           <dt>Runs</dt>

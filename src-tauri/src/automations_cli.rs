@@ -1,15 +1,16 @@
 //! CLI-028 / CLI-029 (AUTO-020): the `automations` command group. `list`, `show` and `runs` read
 //! what the Automations page shows; `create`, `edit`, `remove` and `run` change it through the
 //! same checks the page's dialog goes through, and the page follows along. An id is given bare
-//! (`automations show auto-3`) or as `--id`. The precheck, session reuse, the missed-run grace
-//! window and source context wait on T-193-b with the rest of the flag set.
+//! (`automations show auto-3`) or as `--id`. `--missed-run-grace-minutes` sets AUTO-007's grace
+//! window (T-175). The precheck, session reuse and source context wait on T-193-b with the rest
+//! of the flag set.
 
 use super::{pick_project, pick_worktree, Ctx, Fail, Request};
 use crate::automations;
 use serde_json::{json, Map, Value};
 
-const FIELDS: &[&str] = &["name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "enabled", "disabled"];
-const EDIT: &[&str] = &["id", "name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "enabled", "disabled"];
+const FIELDS: &[&str] = &["name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "missed-run-grace-minutes", "enabled", "disabled"];
+const EDIT: &[&str] = &["id", "name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "missed-run-grace-minutes", "enabled", "disabled"];
 pub(super) const COMMANDS: &[(&str, &str, &[&str])] = &[
     ("automations list", "automations.list", &[]),
     ("automations show", "automations.show", &["id"]),
@@ -51,6 +52,11 @@ pub(super) fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<Str
             return Err(Fail::args("--workspace-mode takes existing or new-per-run"));
         }
     }
+    if let Some(g) = text("missed-run-grace-minutes") {
+        if !g.parse::<u64>().is_ok_and(|g| automations::GRACE_MINUTES.contains(&g)) {
+            return Err(Fail::args("--missed-run-grace-minutes takes 0, 30, 60, 180, 720, 1440 or 2880"));
+        }
+    }
     if flags.contains_key("repo") && flags.contains_key("workspace") {
         return Err(Fail::args("give --repo or --workspace, not both"));
     }
@@ -82,6 +88,7 @@ pub(super) fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<Str
         let key = match k.as_str() {
             "schedule" => "trigger",
             "workspace-mode" => "workspaceMode",
+            "missed-run-grace-minutes" => "missedRunGraceMinutes",
             other => other,
         };
         args.insert(key.to_string(), v.clone());
@@ -160,11 +167,11 @@ pub(super) fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let old = if req.command == "automations.edit" { Some(find(ctx, &id)?) } else { None };
             let mut input = json!({ "requestId": if old.is_some() { String::new() } else { req.id.clone() } });
             if let Some(o) = &old {
-                for k in ["id", "name", "prompt", "provider", "projectId", "workspaceMode", "workspace", "baseBranch", "enabled"] {
+                for k in ["id", "name", "prompt", "provider", "projectId", "workspaceMode", "workspace", "baseBranch", "missedRunGraceMinutes", "enabled"] {
                     input[k] = o[k].clone();
                 }
             }
-            for k in ["name", "prompt", "provider"] {
+            for k in ["name", "prompt", "provider", "missedRunGraceMinutes"] {
                 if let Some(v) = text(k) {
                     input[k] = json!(v);
                 }
@@ -336,6 +343,10 @@ mod tests {
         let ed = call(&format!("automations edit {id} --name renamed --workspace-mode existing"), &repo).unwrap();
         assert_eq!((&ed["name"], &ed["trigger"]["cron"], &ed["workspaceMode"]), (&json!("renamed"), &json!("30 10 * * 2"), &json!("existing")));
         assert!(Path::new(ed["workspace"].as_str().unwrap()).ends_with("repo"), "{ed}");
+        // AUTO-007's grace window; anything off the list is refused before the app is asked.
+        let g = call(&format!("automations edit {id} --missed-run-grace-minutes 30"), &repo).unwrap();
+        assert_eq!((&g["missedRunGraceMinutes"], &g["name"]), (&json!(30), &json!("renamed")));
+        assert!(parse(&words("automations edit auto-1 --missed-run-grace-minutes 45")).1.is_err());
         // A cron line is a timetable too.
         assert_eq!(call(&format!("automations edit {id} --trigger */15 --enabled"), &repo).unwrap_err().code, "failed");
         let cron = call_words(["automations", "edit", &id, "--trigger", "0 9 * * 1-5"].map(String::from).to_vec(), &repo).unwrap();

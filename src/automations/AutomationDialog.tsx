@@ -11,7 +11,7 @@ import type { KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { folderName, type Project, type Worktree } from "../projects/model";
-import { defaultForm, findNext, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
+import { defaultForm, findNext, GRACE, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
 import { clampBox, cronWords, fieldNames, from12, nudge, templates, to12, toPreset, weekdayNames, type Template } from "./timetable";
 
 type Props = {
@@ -93,6 +93,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
   const [mode, setMode] = useState<"existing" | "new-per-run">(editing?.workspaceMode ?? "existing");
   const [workspace, setWorkspace] = useState(editing?.workspace ?? "");
   const [base, setBase] = useState(editing?.baseBranch ?? "");
+  const [grace, setGrace] = useState(editing?.missedRunGraceMinutes ?? 0);
   const [form, setForm] = useState<ScheduleForm>(editing?.form ?? start?.form ?? defaultForm);
   // AUTO-002: what was typed into Custom, given back after a visit to a preset.
   const [typed, setTyped] = useState<string | null>(editing?.form?.preset === "custom" ? editing.form.custom : null);
@@ -177,7 +178,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     if (saving || !ready) return;
     setSaving(true);
     setSaveError(null);
-    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", schedule };
+    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", missedRunGraceMinutes: grace, schedule };
     invoke<Automation>("automation_save", { input })
       .then((a) => {
         onSaved(a);
@@ -350,6 +351,16 @@ export default function AutomationDialog({ projects, agents, editing, template, 
             <label className="auto-label">
               Time zone
               <input className="field" value={zone} onChange={(e) => setZone(e.target.value)} />
+            </label>
+            <label className="auto-label">
+              If Kolux was away at the time
+              <select className="field" value={grace} onChange={(e) => setGrace(Number(e.target.value))}>
+                {GRACE.map(([m, word]) => (
+                  <option key={m} value={m}>
+                    {word}
+                  </option>
+                ))}
+              </select>
             </label>
             {previewError ? (
               <div className="note error" role="alert">

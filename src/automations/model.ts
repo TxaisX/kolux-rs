@@ -17,6 +17,10 @@ export type Automation = {
   nextRunAt?: number | null;
   /** AUTO-005: the branch a new-per-run worktree is cut from; empty means the project's default. */
   baseBranch?: string;
+  /** AUTO-007: how many minutes late a missed run may still start; 0 skips it. */
+  missedRunGraceMinutes?: number;
+  /** From the back end (AUTO-022): what keeps it from running (project, worktree or sign-in). */
+  problem?: string | null;
   /** From the back end (AUTO-001): the timetable in words, e.g. "Monday to Friday at 09:00 (UTC)". */
   timetable?: string;
   /** From the back end: the next run in the timetable's zone, e.g. "Monday 09:00". */
@@ -113,6 +117,20 @@ export function triggerLabel(a: Automation): string {
   return cron ? `Custom: ${cron}` : "No timetable";
 }
 
+const CAUSE: Record<string, string> = { missed: "Kolux was away", signin: "sign-in needed" };
+
+/** AUTO-007's choices for a run missed while Kolux was away, in minutes. */
+export const GRACE: [number, string][] = [
+  [0, "Skip it"],
+  [30, "Start it up to 30 minutes late"],
+  [60, "Start it up to 1 hour late"],
+  [180, "Start it up to 3 hours late"],
+  [720, "Start it up to 12 hours late"],
+  [1440, "Start it up to 24 hours late"],
+  [2880, "Start it up to 48 hours late"],
+];
+export const graceWord = (m: number | undefined) => (GRACE.find((g) => g[0] === (m ?? 0)) ?? GRACE[0])[1];
+
 export function statusWord(r: Run): string {
   switch (r.status) {
     case "pending":
@@ -124,7 +142,7 @@ export function statusWord(r: Run): string {
     case "completed":
       return "Completed";
     case "skipped":
-      return r.cause ? `Skipped (${r.cause})` : "Skipped";
+      return r.cause ? `Skipped (${CAUSE[r.cause] ?? r.cause})` : "Skipped";
     case "failed":
       return "Failed to start";
   }

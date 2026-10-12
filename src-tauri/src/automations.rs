@@ -4,7 +4,8 @@
 //! T-086 gives the page its list, Run now, pause / resume and delete (AUTO-016, AUTO-019); T-085-a
 //! the create / edit dialog's save and the timetable with its clock (AUTO-001, AUTO-005); event
 //! triggers and the self-closing run tab are T-085-b (AUTO-004, AUTO-011), truthful completion
-//! T-072 (AUTO-012).
+//! T-072 (AUTO-012). T-175: the grace window for a missed run (AUTO-007), the 100-run history cap
+//! (AUTO-021) and refusing a target that is not ready (AUTO-022).
 
 use crate::git::{Git, Worktree};
 use crate::projects;
@@ -18,6 +19,12 @@ pub const KEY: &str = "automations";
 pub const RUNS_KEY: &str = "automations.runs";
 /// Told to the window whenever an automation or a run changes, so an open page updates itself.
 pub const EVENT: &str = "automations-changed";
+/// AUTO-007: how late a missed run may still start, in minutes; 0 is no grace.
+pub const GRACE_MINUTES: [u64; 7] = [0, 30, 60, 180, 720, 1440, 2880];
+/// AUTO-021: the runs each automation keeps.
+const KEEP_RUNS: usize = 100;
+/// A due time older than this was missed, not merely caught late by the half-minute clock.
+const ON_TIME_MS: i64 = 120_000;
 
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -40,7 +47,15 @@ fn save(store: &Store, key: &str, list: &[Value]) -> Result<(), String> {
 /// words, when it goes next in words, and the preset, time and day the dialog opens with.
 pub fn list(store: &Store) -> Result<Value, String> {
     let now = now_ms() as i64;
-    let autos: Vec<Value> = load(store, KEY)?.into_iter().map(|a| decorate(a, now)).collect();
+    let autos: Vec<Value> = load(store, KEY)?
+        .into_iter()
+        .map(|a| {
+            let why = problem(store, &a).map(|p| p.1);
+            let mut a = decorate(a, now);
+            a["problem"] = json!(why);
+            a
+        })
+        .collect();
     Ok(match load(store, RUNS_KEY) {
         Ok(runs) => json!({ "automations": autos, "runs": runs }),
         Err(e) => json!({ "automations": autos, "runs": [], "runsError": e.replace("automations", "runs") }),
@@ -138,6 +153,11 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         _ => return Err("choose an existing workspace or a new one for every run".into()),
     };
     let timing = preview(&input["schedule"], now)?;
+    let g = &input["missedRunGraceMinutes"];
+    let grace = match g.is_null() {
+        true => None,
+        false => Some(g.as_u64().or_else(|| g.as_str()?.trim().parse().ok()).filter(|g| GRACE_MINUTES.contains(g)).ok_or("a missed run may start late by none, 30 minutes, or 1, 3, 12, 24 or 48 hours")?),
+    };
     let id = text("id");
     let i = if id.is_empty() {
         let n = all.iter().filter_map(|a| a["id"].as_str()?.strip_prefix("auto-")?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
@@ -146,6 +166,7 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
     } else {
         position(&all, &id)?
     };
+    let grace = grace.unwrap_or_else(|| all[i]["missedRunGraceMinutes"].as_u64().unwrap_or(0));
     let row = &mut all[i];
     let enabled = input["enabled"].as_bool().unwrap_or(row["enabled"].as_bool().unwrap_or(true));
     for (k, v) in [
@@ -159,6 +180,7 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         ("baseBranch", json!(text("baseBranch"))),
         ("trigger", timing["trigger"].clone()),
         ("nextRunAt", timing["nextRunAt"].clone()),
+        ("missedRunGraceMinutes", json!(grace)),
         ("enabled", json!(enabled)),
     ] {
         row[k] = v;
@@ -169,24 +191,96 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
 }
 
 /// The clock (AUTO-001): starts every switched-on timed automation whose time has come. A paused
-/// automation, or one waiting for events, is never started by it. A due time more than two minutes
-/// old was missed while Kolux was away; it is moved on, not run (the grace window is AUTO-007,
-/// T-175). Returns the runs it began.
+/// automation, or one waiting for events, is never started by it. AUTO-007: when Kolux was away
+/// at the due time, the run still starts if the most recent due time is inside its grace window;
+/// past it, one skipped entry says Kolux was not available and the timetable moves on, so a pile
+/// of missed runs is never replayed. Returns the runs it began or logged.
 pub fn tick(l: &Launch, now: i64) -> Result<Vec<Value>, String> {
-    let due: Vec<(String, i64)> = {
+    let due: Vec<Value> = {
         let store = l.store.lock().map_err(|e| e.to_string())?;
-        load(&store, KEY)?.iter().filter(|a| a["enabled"] == true && a["trigger"]["kind"] == "schedule").filter_map(|a| Some((a["id"].as_str()?.to_string(), a["nextRunAt"].as_i64()?))).filter(|(_, at)| *at <= now).collect()
+        load(&store, KEY)?.into_iter().filter(|a| a["enabled"] == true && a["trigger"]["kind"] == "schedule" && a["nextRunAt"].as_i64().is_some_and(|at| at <= now)).collect()
     };
     let mut started = Vec::new();
-    for (id, at) in due {
-        if now - at > 120_000 {
-            reschedule(&*l.store.lock().map_err(|e| e.to_string())?, &id, now)?;
-            (l.notify)(EVENT, json!({ "id": id }));
-        } else {
+    for a in due {
+        let id = a["id"].as_str().unwrap_or_default().to_string();
+        let window = (a["missedRunGraceMinutes"].as_u64().unwrap_or(0) as i64 * 60_000).max(ON_TIME_MS);
+        // Is there a due time between the window's start and now? Then the latest one is in it.
+        if next_run(&a, now - window - 1).is_some_and(|t| t <= now) {
             started.push(run(l, &id, "schedule")?);
+        } else {
+            let store = l.store.lock().map_err(|e| e.to_string())?;
+            started.push(skip(&store, &id, "schedule", "missed", "Kolux was not available at the due time, and the grace window has passed")?);
+            reschedule(&store, &id, now)?;
+            (l.notify)(EVENT, json!({ "id": id }));
         }
     }
     Ok(started)
+}
+
+/// A run that never started, logged so the gap shows (AUTO-007, AUTO-022).
+fn skip(store: &Store, id: &str, trigger: &str, cause: &str, detail: &str) -> Result<Value, String> {
+    let run = new_run(store, id, trigger)?;
+    patch_run(store, run["id"].as_str().unwrap_or_default(), json!({ "status": "skipped", "cause": cause, "detail": detail }))
+}
+
+/// AUTO-022: what keeps an automation from running, as `(cause, reason)`, or none when it is
+/// ready. The reason names the project, the worktree or the account that needs signing in.
+fn problem(store: &Store, a: &Value) -> Option<(&'static str, String)> {
+    let Some(project) = projects::load_projects(store).into_iter().find(|p| a["projectId"] == p.id.as_str()) else {
+        return Some(("unavailable", "its project is no longer in Kolux".into()));
+    };
+    if a["workspaceMode"] != "new-per-run" {
+        let path = a["workspace"].as_str().filter(|s| !s.is_empty()).unwrap_or(&project.path);
+        if !Path::new(path).is_dir() {
+            return Some(("unavailable", format!("its worktree {path} is gone")));
+        }
+    }
+    let accounts = crate::cli_accounts::list(store);
+    let stale = accounts["accounts"].as_array()?.iter().find(|x| x["agent"] == a["provider"] && x["active"] == true && x["needsSignIn"] == true)?;
+    let agent = if a["provider"] == "codex" { "Codex" } else { "Claude" };
+    Some(("signin", format!("the {agent} account {} needs signing in again", stale["email"].as_str().unwrap_or("in use"))))
+}
+
+fn in_progress(r: &Value) -> bool {
+    ["pending", "dispatching", "dispatched"].contains(&r["status"].as_str().unwrap_or_default())
+}
+
+/// AUTO-021: keeps an automation's newest 100 runs; a run still in progress is never dropped.
+fn prune(runs: &mut Vec<Value>, id: &str) {
+    let extra = runs.iter().filter(|r| r["automationId"] == id).count().saturating_sub(KEEP_RUNS);
+    let mut old: Vec<usize> = (0..runs.len()).filter(|&i| runs[i]["automationId"] == id && !in_progress(&runs[i])).collect();
+    old.sort_by_key(|&i| runs[i]["number"].as_u64().unwrap_or(0));
+    let gone: std::collections::HashSet<usize> = old.into_iter().take(extra).collect();
+    let mut i = 0;
+    runs.retain(|_| {
+        i += 1;
+        !gone.contains(&(i - 1))
+    });
+}
+
+/// AUTO-021 on load: an old run without a number is given the next one, and a history saved too
+/// large is cut down to each automation's newest 100.
+pub fn tidy(store: &Store) -> Result<(), String> {
+    let mut all = load(store, KEY)?;
+    let mut runs = load(store, RUNS_KEY)?;
+    let mut bare: Vec<usize> = (0..runs.len()).filter(|&i| runs[i]["number"].as_u64().is_none()).collect();
+    bare.sort_by_key(|&i| runs[i]["at"].as_u64().unwrap_or(0));
+    for i in bare {
+        let id = runs[i]["automationId"].clone();
+        let seen = runs.iter().filter(|r| r["automationId"] == id).filter_map(|r| r["number"].as_u64()).max().unwrap_or(0);
+        let auto = all.iter_mut().find(|a| a["id"] == id);
+        let number = seen.max(auto.as_ref().and_then(|a| a["lastRunNumber"].as_u64()).unwrap_or(0)) + 1;
+        if let Some(a) = auto {
+            a["lastRunNumber"] = json!(number);
+        }
+        runs[i]["number"] = json!(number);
+    }
+    let ids: std::collections::BTreeSet<String> = runs.iter().filter_map(|r| r["automationId"].as_str().map(String::from)).collect();
+    for id in &ids {
+        prune(&mut runs, id);
+    }
+    save(store, RUNS_KEY, &runs)?;
+    save(store, KEY, &all)
 }
 
 fn position(list: &[Value], id: &str) -> Result<usize, String> {
@@ -227,6 +321,7 @@ fn new_run(store: &Store, id: &str, trigger: &str) -> Result<Value, String> {
     let n = runs.iter().filter_map(|r| r["id"].as_str()?.strip_prefix("run-")?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
     let run = json!({ "id": format!("run-{n}"), "automationId": id, "number": number, "trigger": trigger, "status": "pending", "at": now_ms() });
     runs.push(run.clone());
+    prune(&mut runs, id);
     all[i]["lastRunNumber"] = json!(number);
     save(store, RUNS_KEY, &runs)?;
     save(store, KEY, &all)?;
@@ -259,14 +354,26 @@ pub struct Launch<'a> {
 /// AUTO-019 Run now: begins a run at once whatever the timetable or the switch says (a paused
 /// automation runs too) and logs it as a manual run. The run is queued (`pending`) first, then
 /// placed and handed to the window as a background tab (`dispatched`, AUTO-011), or ends as
-/// skipped (`unavailable`) when its project or workspace is gone, or failed to dispatch when the
-/// agent cannot start. The precheck (AUTO-008, T-192) is never run for a manual run.
+/// skipped (`unavailable`) when its project or worktree vanishes on the way, or failed to dispatch
+/// when the agent cannot start. AUTO-022: a target that is not ready refuses Run now with the
+/// reason and leaves no run behind; a timed run is logged as skipped with it instead. The precheck
+/// (AUTO-008, T-192) is never run for a manual run.
 pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
     let (auto, run) = {
         let store = l.store.lock().map_err(|e| e.to_string())?;
-        let run = new_run(&store, id, trigger)?;
         let all = load(&store, KEY)?;
-        (all[position(&all, id)?].clone(), run)
+        let auto = all[position(&all, id)?].clone();
+        if let Some((cause, why)) = problem(&store, &auto) {
+            if trigger == "manual" {
+                return Err(format!("Run now is blocked: {why}"));
+            }
+            let out = skip(&store, id, trigger, cause, &why)?;
+            reschedule(&store, id, now_ms() as i64)?;
+            drop(store);
+            (l.notify)(EVENT, json!({ "runId": out["id"] }));
+            return Ok(out);
+        }
+        (auto, new_run(&store, id, trigger)?)
     };
     let run_id = run["id"].as_str().unwrap_or_default().to_string();
     (l.notify)(EVENT, json!({ "runId": run_id }));
@@ -314,7 +421,7 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
     } else {
         let path = auto["workspace"].as_str().filter(|s| !s.is_empty()).unwrap_or(&project.path).to_string();
         if !Path::new(&path).is_dir() {
-            return Err(Stop::Skipped(format!("its workspace {path} is gone")));
+            return Err(Stop::Skipped(format!("its worktree {path} is gone")));
         }
         Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None }
     };
@@ -370,10 +477,16 @@ fn launch_for<R>(app: &tauri::AppHandle, f: impl FnOnce(&Launch) -> R) -> R {
 /// Starts the clock: it looks for due automations about once a minute (every 30 seconds, so a run
 /// begins within its minute) for as long as the app runs.
 pub fn start_clock(app: tauri::AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        if let Err(e) = launch_for(&app, |l| tick(l, now_ms() as i64)) {
-            eprintln!("automations clock: {e}");
+    std::thread::spawn(move || {
+        // AUTO-021: a history saved too large is cut down as Kolux loads it.
+        if let Err(e) = launch_for(&app, |l| tidy(&*l.store.lock().map_err(|e| e.to_string())?)) {
+            eprintln!("automations history: {e}");
+        }
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            if let Err(e) = launch_for(&app, |l| tick(l, now_ms() as i64)) {
+                eprintln!("automations clock: {e}");
+            }
         }
     });
 }
@@ -458,11 +571,10 @@ mod tests {
         store.lock().unwrap().set(RUNS_KEY, "[]").unwrap();
         assert_eq!(run(&l, "auto-1", "manual").unwrap()["number"], json!(2));
 
-        // A project that is gone: skipped as unavailable, never a launch.
+        // A project that is gone: Run now is refused with the reason, never a launch (AUTO-022).
         let before = said.borrow().len();
-        let gone = run(&l, "auto-2", "manual").unwrap();
-        assert_eq!((gone["status"].as_str(), gone["cause"].as_str(), gone["number"].as_u64()), (Some("skipped"), Some("unavailable"), Some(1)));
-        assert!(said.borrow()[before..].iter().all(|(e, _)| e == EVENT));
+        assert!(run(&l, "auto-2", "manual").unwrap_err().contains("project"));
+        assert_eq!(said.borrow().len(), before);
 
         // An agent that is not installed: failed to dispatch.
         let no = |_: &str| false;
@@ -551,7 +663,9 @@ mod tests {
                 r["nextRunAt"] = json!(at);
                 r
             };
-            let autos = json!([row("due", true, FRI_NOON), row("paused", false, FRI_NOON), row("missed", true, FRI_NOON - 3_600_000), row("later", true, FRI_NOON + 60_000)]);
+            let mut autos = json!([row("due", true, FRI_NOON), row("paused", false, FRI_NOON), row("missed", true, FRI_NOON - 5_400_000), row("later", true, FRI_NOON + 60_000)]);
+            // Half past every hour: 11:30 was missed and nothing has fallen due since.
+            autos[2]["trigger"]["cron"] = json!("30 * * * *");
             s.set(KEY, &autos.to_string()).unwrap();
         }
         let git = Git::detect().unwrap();
@@ -559,14 +673,167 @@ mod tests {
         let yes = |_: &str| true;
         let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
         let started = tick(&l, FRI_NOON + 5_000).unwrap();
-        assert_eq!(started.len(), 1);
+        assert_eq!(started.iter().filter(|r| r["status"] == "dispatched").count(), 1);
         assert_eq!((started[0]["automationId"].as_str(), started[0]["trigger"].as_str()), (Some("due"), Some("schedule")));
         let after = list(&store.lock().unwrap()).unwrap();
         let next = |id: &str| after["automations"].as_array().unwrap().iter().find(|a| a["id"] == id).unwrap()["nextRunAt"].as_i64();
         assert!(next("due").unwrap() > FRI_NOON + 5_000, "a run moves the time on");
         assert!(next("missed").unwrap() > FRI_NOON + 5_000, "a missed time is moved on, not run");
         assert_eq!(next("paused"), Some(FRI_NOON));
-        assert_eq!(after["runs"].as_array().unwrap().len(), 1);
+        let runs = after["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "the run that began and one skipped entry for the missed time");
+        assert!(runs.iter().any(|r| r["automationId"] == "missed" && r["cause"] == "missed"));
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn runs_of(store: &Mutex<Store>, id: &str) -> Vec<Value> {
+        let all = list(&store.lock().unwrap()).unwrap();
+        all["runs"].as_array().unwrap().iter().filter(|r| r["automationId"] == id).cloned().collect()
+    }
+
+    #[test]
+    fn a_missed_time_runs_late_inside_its_grace_window_and_is_logged_once_past_it() {
+        let dir = temp("grace");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        let hourly = json!({ "kind": "schedule", "cron": "0 * * * *", "timezone": "UTC" });
+        {
+            let s = store.lock().unwrap();
+            seed(&s, &ws);
+            let mut f = form(&ws, json!({ "preset": "hourly", "time": "09:00", "timezone": "UTC" }));
+            f["missedRunGraceMinutes"] = json!(45);
+            assert!(save_automation(&s, &f, FRI_NOON).unwrap_err().contains("30 minutes"));
+            f["missedRunGraceMinutes"] = json!(180);
+            assert_eq!(save_automation(&s, &f, FRI_NOON).unwrap()["missedRunGraceMinutes"], json!(180));
+            let row = |id: &str, grace: u64| json!({ "id": id, "name": id, "prompt": "check", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": ws.to_string_lossy(), "trigger": hourly, "enabled": true, "nextRunAt": FRI_NOON, "missedRunGraceMinutes": grace });
+            s.set(KEY, &json!([row("late", 30), row("strict", 0)]).to_string()).unwrap();
+        }
+        let git = Git::detect().unwrap();
+        let notify = |_: &str, _: Value| {};
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+
+        // Kolux shut over noon and back at 12:20: 30 minutes of grace runs late, none skips.
+        let started = tick(&l, FRI_NOON + 20 * 60_000).unwrap();
+        assert_eq!(started.iter().filter(|r| r["status"] == "dispatched").map(|r| r["automationId"].as_str().unwrap()).collect::<Vec<_>>(), ["late"]);
+        let strict = runs_of(&store, "strict");
+        assert_eq!(strict.len(), 1);
+        assert_eq!((strict[0]["status"].as_str(), strict[0]["cause"].as_str()), (Some("skipped"), Some("missed")));
+        assert!(strict[0]["detail"].as_str().unwrap().contains("not available"));
+
+        // Shut for three hours more with no grace: a single skipped entry, never one per hour.
+        tick(&l, FRI_NOON + 200 * 60_000).unwrap();
+        tick(&l, FRI_NOON + 200 * 60_000 + 30_000).unwrap();
+        let strict = runs_of(&store, "strict");
+        assert_eq!(strict.len(), 2);
+        assert!(strict.iter().all(|r| r["status"] == "skipped"));
+        let next = list(&store.lock().unwrap()).unwrap()["automations"][1]["nextRunAt"].as_i64();
+        assert_eq!(next, Some(FRI_NOON + 4 * 3_600_000), "the timetable carries on");
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_keeps_the_newest_100_runs_and_never_drops_one_in_progress() {
+        let dir = temp("cap");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        seed(&store.lock().unwrap(), &ws);
+        let git = Git::detect().unwrap();
+        let notify = |_: &str, _: Value| {};
+        // Not installed: every run fails to start, so it is finished at once.
+        let no = |_: &str| false;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &no, notify: &notify };
+        new_run(&store.lock().unwrap(), "auto-1", "manual").unwrap(); // #1 stays queued: in progress
+        for _ in 0..104 {
+            run(&l, "auto-1", "manual").unwrap();
+        }
+        let numbers = || {
+            let mut n: Vec<u64> = runs_of(&store, "auto-1").iter().map(|r| r["number"].as_u64().unwrap()).collect();
+            n.sort();
+            n
+        };
+        let mut want: Vec<u64> = vec![1];
+        want.extend(7..=105);
+        assert_eq!(numbers(), want, "the run in progress stays past the cap");
+        patch_run(&store.lock().unwrap(), "run-1", json!({ "status": "completed" })).unwrap();
+        assert!(numbers().contains(&1), "it finishes and stays listed");
+        assert_eq!(run(&l, "auto-1", "manual").unwrap()["number"], json!(106));
+        assert_eq!(numbers(), (7..=106).collect::<Vec<u64>>());
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn loading_numbers_old_runs_and_cuts_an_oversized_history() {
+        let dir = temp("tidy");
+        let store = Store::open(&dir).unwrap();
+        seed(&store, &dir);
+        let mut runs: Vec<Value> = (1..=120u64).map(|i| json!({ "id": format!("run-{i}"), "automationId": "auto-1", "number": i, "status": "failed", "at": i })).collect();
+        runs.push(json!({ "id": "run-121", "automationId": "auto-2", "status": "skipped", "at": 5 }));
+        store.set(RUNS_KEY, &Value::Array(runs).to_string()).unwrap();
+        tidy(&store).unwrap();
+        let all = list(&store).unwrap();
+        let mine: Vec<u64> = all["runs"].as_array().unwrap().iter().filter(|r| r["automationId"] == "auto-1").map(|r| r["number"].as_u64().unwrap()).collect();
+        assert_eq!(mine, (21..=120).collect::<Vec<u64>>());
+        let other: Vec<&Value> = all["runs"].as_array().unwrap().iter().filter(|r| r["automationId"] == "auto-2").collect();
+        assert_eq!(other[0]["number"], json!(1), "an old run without a number is given one");
+        assert_eq!(new_run(&store, "auto-2", "manual").unwrap()["number"], json!(2));
+        assert_eq!(new_run(&store, "auto-1", "manual").unwrap()["number"], json!(121));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_now_refuses_a_target_that_is_not_ready_and_the_clock_logs_it_skipped() {
+        let dir = temp("ready");
+        let ws = dir.join("gone-ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        seed(&store.lock().unwrap(), &ws);
+        let git = Git::detect().unwrap();
+        let notify = |_: &str, _: Value| {};
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+
+        std::fs::remove_dir_all(&ws).unwrap();
+        let why = run(&l, "auto-1", "manual").unwrap_err();
+        assert!(why.contains("worktree") && why.contains("gone-ws"), "{why}");
+        assert!(runs_of(&store, "auto-1").is_empty(), "a refused Run now leaves no run behind");
+        let shown = list(&store.lock().unwrap()).unwrap();
+        assert!(shown["automations"][0]["problem"].as_str().unwrap().contains("worktree"));
+        assert!(shown["automations"][1]["problem"].as_str().unwrap().contains("project"));
+
+        // A due time passes with the project removed: one skipped entry marked unavailable.
+        {
+            let s = store.lock().unwrap();
+            let mut autos = load(&s, KEY).unwrap();
+            autos[1]["trigger"] = json!({ "kind": "schedule", "cron": "0 * * * *", "timezone": "UTC" });
+            autos[1]["nextRunAt"] = json!(FRI_NOON);
+            save(&s, KEY, &autos).unwrap();
+        }
+        tick(&l, FRI_NOON + 5_000).unwrap();
+        let gone = runs_of(&store, "auto-2");
+        assert_eq!(gone.len(), 1);
+        assert_eq!((gone[0]["status"].as_str(), gone[0]["cause"].as_str()), (Some("skipped"), Some("unavailable")));
+
+        // The agent's account needs signing in again: named, and Run now is blocked.
+        std::fs::create_dir_all(&ws).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let acct = json!([{ "id": "a1", "email": "me@example.com", "organization": null, "configDir": "c", "lastSignIn": 0, "stale": true }]);
+            s.set(crate::claude_accounts::LIST_KEY, &acct.to_string()).unwrap();
+            s.set(crate::claude_accounts::ACTIVE_KEY, "a1").unwrap();
+        }
+        let why = run(&l, "auto-1", "manual").unwrap_err();
+        assert!(why.contains("me@example.com") && why.contains("sign"), "{why}");
+        assert!(runs_of(&store, "auto-1").is_empty());
         drop(l);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
