@@ -49,7 +49,7 @@ export const isCommitShortcut = (e: KeyLike): boolean => e.key === "Enter" && (e
 /** The sum of every section, for the panel's header. */
 export const changeCount = (s: Status | null): number => (s ? s.staged.length + s.changed.length + s.untracked.length + s.conflicts.length : 0);
 
-export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" | "publish" | "rebase";
+export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" | "publish" | "rebase" | "pullpush";
 
 /** What the main button offers; `reason` is why it waits, null when it can go. */
 export type Step = { label: string; action: "stage" | "commit" | "pr" | RemoteAction; reason: string | null };
@@ -122,7 +122,39 @@ export const summaryLabel = (branch: string | null, s: Summary): string => {
 };
 
 /** What a remote action came to (GIT-007). */
-export type ActionOutcome = { ok: boolean; output: string };
+export type ActionOutcome = { ok: boolean; output: string; kind?: FailureKind | null; detail?: string | null };
+/** GIT-009: how the back end sorted a failed remote action. */
+export type FailureKind = "protected" | "sign-in" | "network" | "submodule" | "non-fast-forward" | "hook" | "other";
+
+const FAILURE_WORDS: Record<FailureKind, string> = {
+  protected: "refused: the branch is protected on the remote",
+  "sign-in": "failed: the remote wants you to sign in",
+  network: "failed: the remote could not be reached",
+  submodule: "failed: a submodule has commits that are not on its remote",
+  "non-fast-forward": "refused: the remote has commits this copy lacks; pull first",
+  hook: "blocked by a hook (a lint or test check failed)",
+  other: "failed",
+};
+
+/** GIT-009: the notice's title, naming the kind of failure. */
+export const failureTitle = (label: string, out: ActionOutcome): string => `${label} ${FAILURE_WORDS[out.kind ?? "other"]}`;
+
+/** GIT-005: one item of the commit button's dropdown; `id` is the remote step after the commit. */
+export type CommitItem = { id: "push" | "sync" | "force" | "pullpush"; label: string; title: string; reason: string | null };
+
+/** GIT-005: commit and push, sync, force push with lease, or pull and push; each says why when it cannot run. */
+export const commitItems = (s: Status | null, message: string): CommitItem[] => {
+  const st = s ?? emptyStatus;
+  const first =
+    s === null ? "Loading" : st.conflicts.length > 0 ? "Resolve the conflicts first" : st.staged.length === 0 ? "Nothing staged to commit" : !message.trim() ? "Write a commit message first" : st.upstream === null ? "Branch unpublished; publish it first" : null;
+  const item = (id: CommitItem["id"], label: string, title: string, own: string | null = null): CommitItem => ({ id, label, title, reason: first ?? own });
+  return [
+    item("push", "Commit and push", "Commit, then push; nothing is pushed when the commit fails", st.behind > 0 ? `The remote has ${plural(st.behind, "commit")} this copy lacks; use commit and sync` : null),
+    item("sync", "Commit and sync", "Commit, then pull and push"),
+    item("force", "Commit and force push", "Commit, then push with a lease: commits on the remote that this copy has not seen are never overwritten"),
+    item("pullpush", "Commit, then pull and push", "Commit, then pull (rebasing the new commit onto the remote's) and push"),
+  ];
+};
 
 /** EDIT-040: one workspace's handoff note as the back end keeps it. */
 export type Note = { text: string; updated: number | null };

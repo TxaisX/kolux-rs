@@ -1,6 +1,24 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+
+test("GIT-005: commit-and items fit the branch and say why when they cannot run", () => {
+  const ready: Status = { ...emptyStatus, branch: "fix", upstream: "origin/fix", base: "origin/main", staged: [{ path: "a.txt", status: "M", from: null }] };
+  const ids = (s: Status | null, m = "fix it") => commitItems(s, m).map((i) => [i.id, i.reason]);
+  expect(ids(ready)).toEqual([["push", null], ["sync", null], ["force", null], ["pullpush", null]]);
+  expect(commitItems(ready, "x").find((i) => i.id === "force")?.title).toMatch(/lease/);
+  expect(ids({ ...ready, behind: 2 })[0]).toEqual(["push", "The remote has 2 commits this copy lacks; use commit and sync"]);
+  expect(new Set(ids({ ...ready, upstream: null }).map((r) => r[1]))).toEqual(new Set(["Branch unpublished; publish it first"]));
+  expect(new Set(ids(ready, " ").map((r) => r[1]))).toEqual(new Set(["Write a commit message first"]));
+  expect(new Set(ids({ ...ready, staged: [] }).map((r) => r[1]))).toEqual(new Set(["Nothing staged to commit"]));
+});
+
+test("GIT-009: push failure notices name the kind, and only a hook failure is offered to an agent", () => {
+  expect(failureTitle("Push", { ok: false, output: "", kind: "protected", detail: null })).toBe("Push refused: the branch is protected on the remote");
+  expect(failureTitle("Push", { ok: false, output: "", kind: "hook", detail: "lint" })).toBe("Push blocked by a hook (a lint or test check failed)");
+  expect(failureTitle("Fetch", { ok: false, output: "", kind: "network", detail: null })).toBe("Fetch failed: the remote could not be reached");
+  expect(failureTitle("Pull", { ok: false, output: "" })).toBe("Pull failed");
+});
 
 test("GIT-065: the sidebar badge says synced, unpushed, unpublished or cannot be checked", () => {
   expect(pushBadge({ path: "a", state: "synced", count: 0 })).toEqual({ text: "synced", tone: "good" });

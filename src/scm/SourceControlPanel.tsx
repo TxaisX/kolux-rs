@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -43,7 +43,7 @@ type Props = {
 
 type Asking = { agent: string; prompt: string; remember: boolean };
 
-type Failure = { title: string; output: string };
+type Failure = { title: string; output: string; fix?: string | null };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
 export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction }: Props) {
@@ -148,16 +148,28 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
         setFailure({ title: out.blocked ? "Commit blocked by a hook" : "Commit failed", output: out.output });
       }
     });
-  const remote = (action: RemoteAction, label: string) =>
+  // GIT-009: a failed action names its kind; only a hook failure is offered to an agent, with the
+  // hook's output and the pushed files.
+  const runRemote = async (action: RemoteAction, label: string) => {
+    const out = await invoke<ActionOutcome>("scm_remote", { worktree: dir, action });
+    if (out.ok) {
+      setFailure(null);
+      setInfo(`${label}: done`);
+    } else {
+      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null });
+    }
+  };
+  const remote = (action: RemoteAction, label: string) => guarded(() => runRemote(action, label));
+  // GIT-005: commit, then the remote step; a commit that fails pushes nothing.
+  const commitThen = (action: RemoteAction, label: string) =>
     guarded(async () => {
-      const out = await invoke<ActionOutcome>("scm_remote", { worktree: dir, action });
-      if (out.ok) {
-        setFailure(null);
-        setInfo(`${label}: done`);
-      } else {
-        setFailure({ title: `${label} failed`, output: out.output });
-      }
+      const out = await invoke<CommitOutcome>("scm_commit", { worktree: dir, message: draft });
+      if (!out.id) return setFailure({ title: out.blocked ? "Commit blocked by a hook; nothing was pushed" : "Commit failed; nothing was pushed", output: out.output });
+      onDraft("");
+      await runRemote(action, `Committed ${out.id}; ${label}`);
     });
+  const [commitMenu, setCommitMenu] = useState<{ left: number; top: number } | null>(null);
+  const commitButton = useRef<HTMLButtonElement>(null);
 
   const step = nextStep(status, draft);
   const mainAction = () => {
@@ -257,11 +269,51 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                 <button className="btn primary" title={step.reason ?? step.label} disabled={busy || step.reason !== null} onClick={() => void mainAction()}>
                   <span>{step.label}</span>
                 </button>
+                <button
+                  ref={commitButton}
+                  className="btn"
+                  title="Commit and push, sync or force push"
+                  aria-label="Commit and"
+                  aria-haspopup="menu"
+                  aria-expanded={commitMenu !== null}
+                  disabled={busy}
+                  onClick={() => {
+                    const r = commitButton.current?.getBoundingClientRect();
+                    if (r) setCommitMenu({ left: Math.max(8, r.right - 280), top: r.bottom + 4 });
+                  }}
+                >
+                  <ChevronDown />
+                </button>
                 <button ref={remoteButton} className="btn" title="Remote actions" aria-haspopup="menu" aria-expanded={menu !== null} disabled={busy} onClick={openMenu}>
                   Remote <ChevronDown />
                 </button>
               </div>
             </div>
+            {commitMenu && (
+              <>
+                <div className="menu-backdrop" onClick={() => setCommitMenu(null)} aria-hidden="true" />
+                <div className="menu" role="menu" aria-label="Commit and" style={{ left: commitMenu.left, top: commitMenu.top, width: 280 }}>
+                  <div className="menu-title">Commit and</div>
+                  {commitItems(status, draft).map((item) => (
+                    <button
+                      key={item.id}
+                      role="menuitem"
+                      className="menu-item"
+                      data-commit={item.id}
+                      disabled={item.reason !== null}
+                      title={item.reason ?? item.title}
+                      onClick={() => {
+                        setCommitMenu(null);
+                        void commitThen(item.id, item.label.replace(/^Commit,? (then |and )?/, "").replace(/^./, (c) => c.toUpperCase()));
+                      }}
+                    >
+                      <span className="name">{item.label}</span>
+                      {item.reason && <span className="reason">{item.reason}</span>}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             {menu && (
               <>
                 <div className="menu-backdrop" onClick={() => setMenu(null)} aria-hidden="true" />
@@ -298,9 +350,11 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                   <summary>{failure.title}</summary>
                   <pre>{failure.output || "git gave no reason"}</pre>
                 </details>
-                <button className="btn" onClick={() => onFix(failure.output)}>
-                  Fix with AI
-                </button>
+                {failure.fix !== null && (
+                  <button className="btn" onClick={() => onFix(failure.fix ?? failure.output)}>
+                    Fix with AI
+                  </button>
+                )}
               </div>
             )}
             {error && <div className="note error">{error}</div>}

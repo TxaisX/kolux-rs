@@ -225,6 +225,70 @@ pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<
 pub struct ActionOutcome {
     pub ok: bool,
     pub output: String,
+    /// GIT-009: what kind of failure it was (see `failure_kind`); None when it worked.
+    pub kind: Option<&'static str>,
+    /// GIT-009: for a hook failure, what an agent is handed: the end of the hook's output with
+    /// colour codes removed and a capped list of the files in the push.
+    pub detail: Option<String>,
+}
+
+/// GIT-009: sorts a failed push, pull or fetch by what git and the remote printed: protected,
+/// sign-in, network, submodule, non-fast-forward, hook (a remote hook, or a local pre-push hook
+/// when `local_hook` says one ran) or other.
+pub fn failure_kind(output: &str, local_hook: bool) -> &'static str {
+    let t = output.to_lowercase();
+    let any = |words: &[&str]| words.iter().any(|w| t.contains(w));
+    if any(&["protected branch", "gh006", "gl-protected"]) {
+        "protected"
+    } else if any(&["authentication failed", "could not read username", "could not read password", "terminal prompts disabled", "permission denied (publickey", "invalid username or password", "returned error: 403", "returned error: 401"]) {
+        "sign-in"
+    } else if any(&["could not resolve host", "connection refused", "connection timed out", "timed out", "network is unreachable", "failed to connect", "connection reset"]) {
+        "network"
+    } else if t.contains("submodule") {
+        "submodule"
+    } else if any(&["non-fast-forward", "(fetch first)", "[rejected]", "stale info"]) {
+        "non-fast-forward"
+    } else if t.contains("hook declined") || local_hook {
+        "hook"
+    } else {
+        "other"
+    }
+}
+
+/// Removes terminal colour and cursor codes (ESC [ ... letter) from hook output.
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for n in chars.by_ref() {
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// GIT-009: the end of the hook output (40 lines at most) and the files the push carries (30 at
+/// most), for the agent asked to fix it.
+fn hook_detail(worktree: &Path, output: &str, against: Option<&str>) -> String {
+    let text = plain(output);
+    let lines: Vec<&str> = text.lines().collect();
+    let tail = lines[lines.len().saturating_sub(40)..].join("\n");
+    let range = format!("{}..HEAD", against.unwrap_or("HEAD~1"));
+    let files: Vec<String> = run(&["diff", "--name-only", &range], Some(worktree)).unwrap_or_default().lines().map(String::from).collect();
+    let mut shown: Vec<String> = files.iter().take(30).map(|f| format!("- {f}")).collect();
+    if files.len() > 30 {
+        shown.push(format!("- and {} more", files.len() - 30));
+    }
+    format!("{tail}\n\nFiles in this push:\n{}", shown.join("\n"))
 }
 
 /// GIT-007: one remote action against the branch's own remote, never a target of its own:
@@ -240,6 +304,9 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
         "push" => vec![vec!["push"]],
         "pull" => vec![vec!["pull"]],
         "sync" => vec![vec!["pull"], vec!["push"]],
+        // GIT-005: the last step of commit then pull and push: the new commit is rebased onto
+        // what the remote gained, then pushed.
+        "pullpush" => vec![vec!["pull", "--rebase"], vec!["push"]],
         "fetch" => vec![vec!["fetch"]],
         "ff" => vec![vec!["pull", "--ff-only"]],
         "force" => vec![vec!["push", "--force-with-lease"]],
@@ -254,10 +321,15 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
         output.push_str(String::from_utf8_lossy(&out.stderr).trim());
         output.push('\n');
         if !out.status.success() {
-            return Ok(ActionOutcome { ok: false, output: output.trim().to_string() });
+            let pushing = args[0] == "push";
+            let hooks = run(&["rev-parse", "--git-path", "hooks"], Some(worktree)).map(|d| worktree.join(native(&d))).ok();
+            let local_hook = pushing && hooks.is_some_and(|d| d.join("pre-push").is_file());
+            let kind = failure_kind(&output, local_hook);
+            let detail = (kind == "hook").then(|| hook_detail(worktree, &output, st.upstream.as_deref().or(base.as_deref())));
+            return Ok(ActionOutcome { ok: false, output: plain(output.trim()), kind: Some(kind), detail });
         }
     }
-    Ok(ActionOutcome { ok: true, output: output.trim().to_string() })
+    Ok(ActionOutcome { ok: true, output: output.trim().to_string(), kind: None, detail: None })
 }
 
 /// Parses porcelain v2 with NUL separators, so names with spaces, quotes or non-ASCII letters
@@ -428,6 +500,52 @@ mod tests {
     fn counts(dir: &Path) -> (Option<String>, u32, u32, bool) {
         let st = status(dir).unwrap();
         (st.upstream, st.ahead, st.behind, st.rewritten)
+    }
+
+    #[test]
+    fn push_failures_are_sorted_by_kind() {
+        let kind = |text: &str| failure_kind(text, false);
+        assert_eq!(kind("remote: error: GH006: Protected branch update failed for refs/heads/main.\n ! [remote rejected] main -> main (protected branch hook declined)"), "protected");
+        assert_eq!(kind("fatal: Authentication failed for 'https://github.com/a/b.git/'"), "sign-in");
+        assert_eq!(kind("fatal: could not read Username for 'https://github.com': terminal prompts disabled"), "sign-in");
+        assert_eq!(kind("git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."), "sign-in");
+        assert_eq!(kind("fatal: unable to access 'https://github.com/a/b.git/': Could not resolve host: github.com"), "network");
+        assert_eq!(kind(" ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs"), "non-fast-forward");
+        assert_eq!(kind("The following submodule paths contain changes that can\nnot be found on any remote:\n  lib"), "submodule");
+        assert_eq!(kind(" ! [remote rejected] main -> main (pre-receive hook declined)"), "hook");
+        assert_eq!(failure_kind("lint: 2 problems\nerror: failed to push some refs to 'origin'", true), "hook");
+        assert_eq!(kind("error: something odd"), "other");
+    }
+
+    #[test]
+    fn a_failing_pre_push_hook_hands_its_output_and_files_to_an_agent_and_commit_then_pull_and_push_works() {
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-hook-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("hook");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        commit_file(&dir, "login.ts", "x\n");
+        let hook = dir.join(".git").join("hooks").join("pre-push");
+        fs::write(&hook, "#!/bin/sh\nprintf '\\033[31mlint: 2 problems in login.ts\\033[0m\\n' >&2\nexit 1\n").unwrap();
+        let out = remote(&dir, "push").unwrap();
+        assert!(!out.ok);
+        assert_eq!(out.kind, Some("hook"), "{}", out.output);
+        let detail = out.detail.unwrap();
+        assert!(detail.contains("lint: 2 problems in login.ts"), "{detail}");
+        assert!(!detail.contains('\u{1b}'), "colour codes are removed: {detail:?}");
+        assert!(!out.output.contains(char::from(27)), "and from the notice");
+        assert!(detail.contains("Files in this push:\n- login.ts"), "{detail}");
+
+        // Commit then pull (rebasing onto the remote) and push: the commit lands on the remote.
+        fs::remove_file(&hook).unwrap();
+        commit_file(&dir, "two.txt", "2\n");
+        let done = remote(&dir, "pullpush").unwrap();
+        assert!(done.ok, "{}", done.output);
+        assert_eq!((done.kind, counts(&dir).1), (None, 0));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&bare);
     }
 
     #[test]
