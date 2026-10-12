@@ -6,7 +6,7 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import AutomationsPage, { type Data } from "./AutomationsPage";
 
-const render = (initial: { data?: Data; error?: string }) =>
+const render = (initial: { data?: Data; error?: string; runs?: boolean }) =>
   renderToString(createElement(AutomationsPage, { projects: [{ id: "p1", name: "shop", path: "C:\\src\\shop" }], agents: [], settings: {}, onSettings: () => {}, initial }));
 
 test("a failed load is an error with Retry, not a nothing-created message", () => {
@@ -39,4 +39,36 @@ test("opening the page selects the first automation in sort order and shows its 
   expect(html).toContain("#<!-- -->1");
   expect(html).toContain("by hand");
   expect(html).not.toContain('role="menu"'); // no row's menu is open
+});
+
+const many: Data = {
+  automations: [
+    { id: "auto-1", name: "Nightly checks", prompt: "", provider: "claude", projectId: "p1", enabled: true },
+    { id: "auto-2", name: "On new PR", prompt: "", provider: "claude", projectId: "p1", enabled: true, trigger: { kind: "event", event: "pr-opened" } },
+  ],
+  runs: [
+    { id: "run-1", automationId: "auto-1", number: 1, trigger: "manual", status: "failed", at: Date.now() - 60000, detail: "claude did not start" },
+    { id: "run-2", automationId: "auto-2", number: 1, trigger: "event", status: "completed", at: Date.now() - 120000 },
+  ],
+};
+
+test("AUTO-015: Runs opens one table of every automation's runs, with tiles and the event named on hover", () => {
+  const html = render({ data: many, runs: true });
+  expect(html).toContain("Nightly checks");
+  expect(html).toContain("On new PR");
+  expect(html).toContain('title="When a pull request opens"');
+  expect(html).toMatch(/<b>1<\/b> succeeded in 24 h/);
+  expect(html).toMatch(/<b>1<\/b> failed in 7 days/);
+  expect(html).toContain("Automations</button>");
+  expect(html).not.toContain("New Automation");
+});
+
+test("AUTO-015: with no runs at all the dashboard says so plainly", () => {
+  const html = render({ data: { automations: many.automations, runs: [] }, runs: true });
+  expect(html).toContain("No runs yet");
+});
+
+test("AUTO-015: the Runs button is live on the Automations page", () => {
+  const html = render({ data: many });
+  expect(html).toMatch(/<button class="btn" title="Every automation&#x27;s runs in one place">Runs<\/button>/);
 });

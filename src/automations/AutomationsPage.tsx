@@ -2,8 +2,7 @@
 // and search, a quick-actions menu on each row (Run now, pause / resume, Edit, Delete), and the
 // selected automation's prompt and numbered runs below. The page reloads itself whenever the
 // back end says an automation or a run changed, so a run's status moves without a refresh.
-// New Automation and Edit open the dialog of AUTO-005; Runs opens the dashboard of AUTO-015
-// (T-130) and is present and disabled until then.
+// New Automation and Edit open the dialog of AUTO-005; Runs opens the dashboard of AUTO-015.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -11,6 +10,7 @@ import { Dots, Plus, Refresh, Search } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import type { Project } from "../projects/model";
 import AutomationDialog from "./AutomationDialog";
+import RunsDashboard, { RunPage } from "./RunsDashboard";
 import { ago, CONFIRM_DELETE_KEY, confirmDelete, lastRun, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
 export type Data = { automations: Automation[]; runs: Run[] };
@@ -21,7 +21,7 @@ type Props = {
   settings: Record<string, unknown>;
   onSettings: (next: Record<string, unknown>) => void;
   /** Seeds the page without asking the back end (tests render it to HTML). */
-  initial?: { data?: Data; error?: string };
+  initial?: { data?: Data; error?: string; runs?: boolean };
 };
 
 const columns: Array<{ key: SortKey; label: string }> = [
@@ -58,6 +58,9 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   // The dialog: undefined shut, null a new automation, else the latest saved copy being edited.
   const [dialog, setDialog] = useState<Automation | null | undefined>(undefined);
   const search = useRef<HTMLInputElement>(null);
+  // AUTO-015: the Runs dashboard, and the run opened from it as a full page.
+  const [runsView, setRunsView] = useState(initial?.runs ?? false);
+  const [openRun, setOpenRun] = useState<string | null>(null);
 
   const load = () =>
     invoke<Data>("automations_list")
@@ -127,6 +130,33 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
     setNote(`Saved ${a.name}`);
     void load();
   };
+  // A failed refresh keeps the rows already shown and says so, rather than emptying the dashboard.
+  const refreshRuns = () =>
+    invoke<Data>("automations_list")
+      .then((d) => {
+        setData(d);
+        setNote(null);
+      })
+      .catch((e) => setNote(`Refresh failed: ${String(e)}`));
+  if (runsView) {
+    const shown = runs.find((r) => r.id === openRun);
+    const toAutomations = () => {
+      setOpenRun(null);
+      setRunsView(false);
+      setNote(null);
+    };
+    return (
+      <div className="autos">
+        {note && (
+          <div className="note warn" role="status">
+            {note}
+          </div>
+        )}
+        <RunsDashboard runs={runs} automations={all} now={now} onRefresh={() => void refreshRuns()} onAutomations={toAutomations} onOpen={(r) => setOpenRun(r.id)} hidden={shown !== undefined} />
+        {shown && <RunPage run={shown} automation={all.find((a) => a.id === shown.automationId)} now={now} onRuns={() => setOpenRun(null)} onAutomations={toAutomations} />}
+      </div>
+    );
+  }
   const sortBy = (key: SortKey) => setSort((s) => ({ key, desc: s.key === key ? !s.desc : false }));
   const filtered = filters.state !== "all" || filters.result !== "all" || filters.agents.length > 0 || (q ?? "") !== "";
 
@@ -163,7 +193,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
         <button className="ib" title="Refresh" onClick={() => void load()}>
           <Refresh />
         </button>
-        <button className="btn" disabled title="The runs dashboard comes with T-130">
+        <button className="btn" title="Every automation's runs in one place" onClick={() => setRunsView(true)}>
           Runs
         </button>
         <button className="btn primary" disabled={projects.length === 0} title={projects.length === 0 ? "Add a project first" : undefined} onClick={() => setDialog(null)}>

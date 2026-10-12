@@ -168,3 +168,30 @@ export function findNext(text: string, query: string, from: number): number {
 export function preselect(worktrees: Array<{ path: string; isMain: boolean }>): string {
   return (worktrees.find((w) => w.isMain) ?? worktrees[0])?.path ?? "";
 }
+
+/** AUTO-015: the Runs dashboard across every automation. */
+export type RunFilter = "all" | "progress" | "success" | "failed" | "skipped";
+export const RUN_BATCH = 100;
+const group = (s: RunStatus): Exclude<RunFilter, "all"> => (s === "completed" ? "success" : s === "failed" ? "failed" : s === "skipped" ? "skipped" : "progress");
+export const startedBy = (r: Run): string => (r.trigger === "manual" ? "by hand" : r.trigger === "event" ? "by an event" : "by the timetable");
+
+/** Every run that fits the filter and the search, newest first. */
+export function dashboardRows(runs: Run[], automation: (id: string) => string, filter: RunFilter, query: string): Run[] {
+  const q = query.trim().toLowerCase();
+  return runs
+    .filter((r) => filter === "all" || group(r.status) === filter)
+    .filter((r) => q === "" || [automation(r.automationId), statusWord(r), startedBy(r), r.worktreeName ?? "", r.detail ?? ""].some((t) => t.toLowerCase().includes(q)))
+    .sort((x, y) => y.at - x.at || y.number - x.number);
+}
+
+/** Successes and failures over the last 24 hours and 7 days; a run dated in the future counts in neither. */
+export function runTiles(runs: Run[], now: number) {
+  const count = (span: number, status: RunStatus) => runs.filter((r) => r.status === status && r.at <= now && r.at > now - span).length;
+  const day = 86400000;
+  return { day: { ok: count(day, "completed"), failed: count(day, "failed") }, week: { ok: count(7 * day, "completed"), failed: count(7 * day, "failed") } };
+}
+
+/** The rows a scrolled list draws, `[start, end)`: those on screen and a few spare either side. */
+export function onScreen(scrollTop: number, height: number, rowHeight: number, total: number, spare = 5): [number, number] {
+  return [Math.max(0, Math.floor(scrollTop / rowHeight) - spare), Math.min(total, Math.ceil((scrollTop + height) / rowHeight) + spare)];
+}

@@ -328,6 +328,26 @@ input { font: inherit; }
 .autos-runs li { display: flex; align-items: center; gap: 10px; height: 26px; border-bottom: 1px solid var(--line-inner); }
 .autos-runs .num { width: 34px; color: var(--fg-label); }
 .autos-runs .muted, .autos-none { color: var(--fg-faint); font-size: 12px; }
+/* AUTO-015: the Runs dashboard and a run's own page. */
+.runs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.runs[hidden] { display: none; }
+.runs-crumbs { display: flex; align-items: center; gap: 6px; margin-right: 6px; color: var(--fg-faint); }
+.runs-crumbs button { padding: 0; color: var(--fg-muted); font: inherit; font-size: 13px; }
+.runs-crumbs button:hover { color: var(--fg); text-decoration: underline; }
+.runs-crumbs h2 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg); }
+.runs-tiles { display: flex; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line-subtle); flex-wrap: wrap; }
+.runs-tile { flex: 1 1 140px; padding: 8px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--input-bg); font-size: 12px; color: var(--fg-muted); }
+.runs-tile b { display: block; font-size: 18px; font-weight: 600; color: var(--fg); }
+.runs-tile.ok b { color: var(--done); }
+.runs-tile.bad b { color: var(--danger); }
+.runs-table th { padding: 0 12px; height: 30px; }
+.runs-row { cursor: pointer; }
+.runs-status.failed { color: var(--danger); }
+.runs-count { margin: 0; padding: 8px 12px; font-size: 11px; color: var(--fg-faint); }
+.run-facts { margin: 0; padding: 12px 14px; display: grid; grid-template-columns: max-content 1fr; gap: 8px 18px; font-size: 12px; }
+.run-facts div { display: contents; }
+.run-facts dt { color: var(--fg-label); }
+.run-facts dd { margin: 0; min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
 /* AUTO-005: the create / edit dialog. */
 .scrim { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.5); }
 .auto-dialog { width: min(920px, calc(100vw - 48px)); height: min(620px, calc(100vh - 48px)); display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 12px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); color: var(--fg); }

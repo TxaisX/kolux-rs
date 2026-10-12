@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { confirmDelete, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, triggerLabel, upcoming, type Automation, type Names, type Run } from "./model";
+import { confirmDelete, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, triggerLabel, upcoming, type Automation, type Names, type Run } from "./model";
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };
 const auto = (id: string, name: string, extra: Partial<Automation> = {}): Automation => ({ id, name, prompt: "", provider: "claude", projectId: "p1", enabled: true, ...extra });
@@ -64,4 +64,35 @@ test("the list shows the back end's timetable sentence and when it goes next", (
   expect(upcoming(a, 0)).toBe("Monday 09:00 · in 3 days");
   expect(upcoming({ ...a, enabled: false }, 0)).toBe("Paused");
   expect(triggerLabel(auto("b", "Raw", { trigger: { kind: "schedule", cron: "5  4 * * *" } }))).toBe("Custom: 5 4 * * *");
+});
+
+// AUTO-015: the Runs dashboard across every automation.
+test("AUTO-015: the status filter groups runs into in progress, successful, failed and skipped", () => {
+  const all = [run("a", 1, "pending"), run("a", 2, "dispatching"), run("a", 3, "dispatched"), run("a", 4, "completed"), run("a", 5, "failed"), run("a", 6, "skipped")];
+  const named = (id: string) => (id === "a" ? "Nightly" : id);
+  expect(dashboardRows(all, named, "failed", "").map((r) => r.status)).toEqual(["failed"]);
+  expect(dashboardRows(all, named, "progress", "").map((r) => r.status)).toEqual(["dispatched", "dispatching", "pending"]);
+  expect(dashboardRows(all, named, "success", "").map((r) => r.status)).toEqual(["completed"]);
+  expect(dashboardRows(all, named, "all", "").map((r) => r.at)).toEqual([6, 5, 4, 3, 2, 1]); // newest first
+});
+
+test("AUTO-015: search matches the automation's name and the run's words, case ignored", () => {
+  const all = [run("a", 1, "completed"), run("b", 2, "failed")];
+  const named = (id: string) => ({ a: "Nightly checks", b: "Weekly report" })[id] ?? id;
+  expect(dashboardRows(all, named, "all", "WEEKLY").map((r) => r.automationId)).toEqual(["b"]);
+  expect(dashboardRows(all, named, "all", "completed").map((r) => r.automationId)).toEqual(["a"]);
+});
+
+test("AUTO-015: the tiles count successes and failures over 24 hours and 7 days, future runs left out", () => {
+  const now = 10 * 86400000;
+  const h = 3600000;
+  const all = [run("a", now - h, "completed"), run("a", now - 2 * h, "failed"), run("a", now - 3 * 86400000, "completed"), run("a", now - 8 * 86400000, "failed"), run("a", now + h, "completed"), run("a", now - h, "skipped")];
+  expect(runTiles(all, now)).toEqual({ day: { ok: 1, failed: 1 }, week: { ok: 2, failed: 1 } });
+});
+
+test("AUTO-015: only the rows on screen are drawn, with a few spare either side", () => {
+  expect(onScreen(0, 320, 32, 10000)).toEqual([0, 15]);
+  expect(onScreen(32 * 5000, 320, 32, 10000)).toEqual([4995, 5015]);
+  expect(onScreen(32 * 9995, 320, 32, 10000)).toEqual([9990, 10000]);
+  expect(RUN_BATCH).toBe(100);
 });
