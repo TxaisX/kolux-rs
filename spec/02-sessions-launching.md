@@ -469,6 +469,7 @@ Acceptance:
   - [ ] Make an agent's model listing come back in an unexpected format → the list holds no discovered models, never a partial one.
 Compat: —
 Source: D-02-029
+Amended 2026-10-12 (DT-R38): Claude Code publishes no model-listing command, so its list stays built in; Grok and Cursor are asked.
 
 ### SESS-035 · New workspace composer: pick the project
 Tier: P1 · Pushed: 2 · State at 0.15.0: live-unverified

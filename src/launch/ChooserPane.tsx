@@ -11,12 +11,25 @@
 // effort levels or fast mode shows those options on its seat only (SESS-016); "Use last lineup"
 // (SESS-021) appears when this project has one whose agents are still here.
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Close, Dots } from "../chrome/icons";
 import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
 import { canLaunch, type AgentPass } from "./agents";
-import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
+import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, lineupAgents, type Lineup, LISTED, setDiscovered } from "./seats";
+
+const asked: Record<string, Promise<boolean>> = {};
+/** SESS-029: one live model listing per agent per app run; true when it added models. */
+function liveModels(id: string): Promise<boolean> {
+  asked[id] ??= invoke<{ id: string; label: string }[] | null>("agent_models", { id })
+    .then((found) => {
+      setDiscovered(id, found);
+      return !!found?.length;
+    })
+    .catch(() => false);
+  return asked[id];
+}
 
 type Props = {
   /** The session's number, shown in the header. */
@@ -62,11 +75,14 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
   useEffect(() => {
     if (focused && !hidden && !box.current?.contains(document.activeElement)) box.current?.focus();
   }, [focused, hidden]);
-  // A program with no model list has nothing to pick: its seat uses the program's own default.
-  const pickAgent = (i: number, id: string) => {
-    const only = modelsFor(id).length === 1;
-    setSeat(i, { agent: id, model: id !== TERMINAL && only ? DEFAULT_MODEL : null, effort: undefined, fast: undefined });
-  };
+  // A program with no model list has nothing to pick: its seat stores no model and starts on the
+  // program's own default.
+  const pickAgent = (i: number, id: string) => setSeat(i, { agent: id, model: null, effort: undefined, fast: undefined });
+  // SESS-029: Grok and Cursor are asked for their models once per app run.
+  const [, setLive] = useState(0);
+  useEffect(() => {
+    for (const a of agents) if (a.installed && LISTED.includes(a.id)) void liveModels(a.id).then((n) => n && setLive((v) => v + 1));
+  }, [agents]);
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const searched = !pass || canLaunch(pass);
   const ready = allReady(seats) && !busy && searched;
@@ -296,7 +312,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                     <label className="choice">
                       Effort
                       <select aria-label={`Seat ${i + 1}: effort`} value={seat.effort ?? ""} onChange={(e) => setSeat(i, { effort: e.currentTarget.value || undefined })}>
-                        <option value="">Model default</option>
+                        <option value="">{choiceOf(seat)?.defaultEffort ? `Model default (${choiceOf(seat)?.defaultEffort})` : "Model default"}</option>
                         {choiceOf(seat)?.efforts?.map((l) => (
                           <option key={l} value={l}>
                             {l}
