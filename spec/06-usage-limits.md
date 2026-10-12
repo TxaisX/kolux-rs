@@ -160,11 +160,16 @@ Rules: off out of the box; switching it off discards anything waiting, switching
   by while Kolux was closed, and is never typed into twice; if the terminal refuses the text Kolux
   does not try again, and notes the refusal in its log a single time; the timer runs only while at
   least one resume is waiting.
+  (Kolux RS, T-041-b: `src-tauri/src/resume.rs`. "Claude in the foreground" is the `claude` program
+  Kolux started for the pane, from its start until its exit; a pane running a shell cannot tell,
+  so it waits and gives up half an hour after the due time. A restored wait settles two minutes.
+  The 15-second check thread idles rather than stopping while nothing waits. Waits live under
+  kv `claudeResumeWaiting`; the refusal note goes to `logs/kolux.log`.)
 Acceptance:
-  - [ ] Switch it on and let a Claude pane stop on a limit that has a reset time → about a minute
-        after the reset the continue prompt appears once and Claude resumes.
-  - [ ] Type a draft into the stopped pane → nothing is sent at the reset.
-  - [ ] Exit Claude so that only a shell is left → nothing is typed and the waiting resume expires.
+  - [x] Switch it on and let a Claude pane stop on a limit that has a reset time → about a minute
+        after the reset the continue prompt appears once and Claude resumes. (T-041-b: typed into a real Claude Code pane whose input held a `/`, so no request went out)
+  - [x] Type a draft into the stopped pane → nothing is sent at the reset. (T-041-b)
+  - [x] Exit Claude so that only a shell is left → nothing is typed and the waiting resume expires. (T-041-b: in Kolux RS the pane's terminal ends with the program, so the wait drops)
   - [ ] Leave the switch off → nothing is ever typed.
 Compat: A saved on/off choice that stays off unless the user turns it on.
 Source: D-06-007

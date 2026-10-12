@@ -15,6 +15,7 @@ mod names;
 mod projects;
 mod scm;
 mod pty;
+mod resume;
 mod secrets;
 mod state;
 mod status;
@@ -54,7 +55,14 @@ fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, v
     let store = store.lock().map_err(|e| e.to_string())?;
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
     let value = secrets::keep_stored_secrets(&store.settings(), value);
+    let before = store.settings().get(resume::FIELD) == Some(&serde_json::Value::Bool(true));
     store.save_settings(&value).map_err(|e| e.to_string())?;
+    drop(store);
+    // USAGE-007: off discards the waits, on picks up the panes already stopped on a limit.
+    let after = value.get(resume::FIELD) == Some(&serde_json::Value::Bool(true));
+    if before != after {
+        resume::switched(&app, after);
+    }
     // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
     let _ = tauri::Emitter::emit(&app, "settings-saved", ());
     Ok(())
@@ -86,6 +94,7 @@ pub fn run() {
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
             app.manage(Terminals::default());
+            app.manage(resume::Registry::default());
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());
             app.manage(codex_accounts::SignIns::default());
@@ -101,9 +110,19 @@ pub fn run() {
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.
             let handle = app.handle().clone();
+            let log_dir = dir.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 secrets::sealing_pass(&handle.state::<Mutex<Store>>(), &dir);
+            });
+            // USAGE-007: the resumes the previous run left waiting, then the timer that types them.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                resume::restore_from(app.handle(), &store);
+            }
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(15));
+                resume::tick(&handle, &log_dir);
             });
             // STAT-045: a working agent that prints nothing for the chosen minutes is reported once
             // per silent spell. Silence is the terminal's own output, never the hooks.

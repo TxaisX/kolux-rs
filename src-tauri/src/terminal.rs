@@ -32,6 +32,8 @@ struct Inner {
 struct Mark {
     started: Instant,
     last_output: Option<Instant>,
+    /// The agent the program is credited as (`claude`, `codex`), none for another program.
+    agent: Option<&'static str>,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -105,7 +107,8 @@ impl Terminals {
         )?;
         inner.sessions.insert(id, session);
         if is_program {
-            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None });
+            let agent = program.as_deref().and_then(crate::agents::credited_agent);
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, agent });
         }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
@@ -140,6 +143,13 @@ impl Terminals {
         let inner = self.inner.lock().ok()?;
         let same = |d: &str| std::path::Path::new(d).canonicalize().ok() == dir.canonicalize().ok();
         inner.marks.iter().filter(|(id, m)| m.started >= since && inner.dirs.get(id).is_some_and(|d| same(d))).map(|(id, m)| (*id, m.last_output)).next()
+    }
+
+    /// What session `id` runs: `None` when it is gone, `Some(None)` for a shell (the foreground
+    /// cannot be told), `Some(Some(agent))` for a program Kolux started (USAGE-007).
+    pub fn program(&self, id: u32) -> Option<Option<&'static str>> {
+        let inner = self.inner.lock().ok()?;
+        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent))
     }
 
     /// How long the program in `id` has printed nothing (since it started, when it never has), for
@@ -216,11 +226,13 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
 }
 
 #[tauri::command]
-pub fn terminal_write(terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
+pub fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
     // STAT-028: Ctrl+C or Escape on its own, while the agent works, marks the coming Stop interrupted.
     if data == "\x03" || data == "\x1b" {
         crate::status::cancel(id);
     }
+    // USAGE-007: the user's own typing after a limit stop cancels the resume.
+    crate::resume::user_typed(&app, id);
     terminals.write(id, &data)
 }
 

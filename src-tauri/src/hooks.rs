@@ -417,6 +417,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
         Some(req) => {
             let (code, status) = answer(&req, token);
             if let Some(status) = status {
+                crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
                 let _ = app.emit(EVENT, status);
             }
             code

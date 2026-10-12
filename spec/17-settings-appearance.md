@@ -79,6 +79,8 @@ Rules: Claude and Codex each have warnings of their own; Codex also warns when i
   on screen; limit auto-resume (Claude carries on once its limit resets) is a switch the user opts
   into, off by default; a Codex helper that quits because it was handed bad launch arguments is not
   reported as a sign-in problem.
+  (Kolux RS, T-041-b: one active Claude account serves the whole window, so the limit figures on
+  screen are always that account's; there is no per-view account to filter by.)
 Acceptance:
   - [ ] Sign Claude out from its own CLI → the page shows Claude's sign-in warning.
   - [ ] Turn auto-resume on and restart → it is still on.

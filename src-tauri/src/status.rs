@@ -393,6 +393,21 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
     })
 }
 
+/// The panes whose hooks last reported for `terminal`.
+pub fn panes_of(terminal: u32) -> Vec<u32> {
+    with_sessions(|s| s.iter().filter(|(_, x)| x.terminal == Some(terminal)).map(|(k, _)| *k).collect())
+}
+
+/// The terminal `pane_key`'s hooks last reported for.
+pub fn terminal_of(pane_key: u32) -> Option<u32> {
+    with_sessions(|s| s.get(&pane_key).and_then(|x| x.terminal))
+}
+
+/// The panes currently blocked on a usage limit (USAGE-007's pick-up when the switch goes on).
+pub fn limit_stops() -> Vec<(u32, Stop)> {
+    with_sessions(|s| s.iter().filter(|(_, x)| x.own == Some("blocked")).filter_map(|(k, x)| x.stop.clone().filter(|st| st.cause == "limit").map(|st| (*k, st))).collect())
+}
+
 /// A cancel keystroke typed into `terminal` (STAT-028).
 pub fn cancel(terminal: u32) {
     with_sessions(|s| {

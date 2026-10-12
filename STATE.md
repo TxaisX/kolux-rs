@@ -576,7 +576,9 @@ compact meter (context bar in tokens plus the agent's 5-hour and weekly plan per
 tabs a tiny context ring, and the pane header's gauge fills and turns yellow at 70% and red past
 90% (T-040-a, [core]). Claude and Codex panes start held to a 200k context window unless
 Settings > Agents switches the cap off, and the top-right pill is a read-only weekly figure per
-provider, tinted by use, hidden until a weekly figure is known (T-041-a, [core]).
+provider, tinted by use, hidden until a weekly figure is known (T-041-a, [core]). With the
+Claude card's resume switch on, a Claude pane stopped on a usage limit gets a continue prompt
+typed in a minute after the limit resets (T-041-b, [core]).
 
 [accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
 the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
@@ -1433,7 +1435,29 @@ recorded default until told otherwise; nothing here blocks a pass.
   built: the provider's usage service and the hidden-terminal usage screen (DT-C14), the
   status-bar usage item switch (item list is T-148), the resume after a limit (T-041-b).
 
+- 2026-10-12 · [core] T-041-b: resume after a limit (USAGE-007). New `resume.rs`: `pick_reset`
+  takes the stop's own time, else the used-up weekly window, else the used-up 5-hour window (past
+  or not-used-up ignored, a used-up weekly without a time never swapped); `Resumes` keeps one wait
+  per pane, fires it once per reset time (times a minute apart count as one) a minute after the
+  reset, only when the pane's foreground is the `claude` program Kolux started (`Terminals::program`
+  from the spawn's credited agent), expires it when a shell or another program is in front or the
+  terminal is gone, keeps waiting while the foreground cannot be told up to half an hour past the
+  due time, and persists the waits under kv `claudeResumeWaiting` so a restart restores them with a
+  two-minute settle and past resets skipped. `hooks.rs` schedules from every reported status whose
+  stop is a limit; `terminal_write` cancels the pane's wait on the user's own keystrokes;
+  `save_settings` clears on off and picks up blocked panes on on; a 15-second thread in `lib.rs`
+  types the prompt (`Terminals::write`) and logs a refusal once to `logs/kolux.log`. Live in the
+  lane app with a real Claude Code pane (a `/` pasted into its input first, so the typed line
+  became an unknown slash command and no request went out): switch on, a posted weekly-100%
+  report with a reset 75 s ahead plus a `StopFailure rate_limit` event → kv held the wait, and
+  about 2.5 min after the post Claude Code showed `Unknown command: /The ... Args from unknown
+  skill: usage limit has reset. Please continue where you left off.`, the wait gone; a second
+  reset with a keystroke pasted into the pane after the stop → the wait dropped at once; a third
+  reset with the pane closed → the wait dropped at its due time (`evidence/T-041-b-resume.png`). The rest of T-045's card (panels list only the view's
+  accounts) is moot: one active Claude account per window.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-041-b · done: resume after a limit (resume.rs, timer, foreground check, cancel on typing, persisted waits); evidence/T-041-b-resume.png
 - 2026-10-12 · [core] T-041-a · done: 200k cap (env for Claude, -c overrides for Codex, Settings > Agents switch), weekly-only read-only pill with tint and countdown, config-folder guard and one-window merge on status-line reports; DT-C14 drops the usage service; evidence/T-041-a-cap.png
 - 2026-10-12 · [core] T-040-a · done: Board card meter (context bar in tokens + plan %), tab ring, header gauge colours, USAGE-005 maths against the 200k cap; Agents view parts split to T-040-b; evidence/T-040-a-meter.png
 - 2026-10-12 · [core] T-039-b · done: statusLine slot taken with a chaining bash command, /claude-status route → kv claudeRateLimits + claudeUsageLimitResetsAt, pill 'Claude N% left', header gauge, limit stop carries the reset; evidence/T-039-b-usage.png
@@ -1443,6 +1467,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
 - 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
 - 2026-10-12 · [core] T-003b-fix-b · done: DESIGN.md sections 6 and 7, globe tab glyph in `App.tsx`, web view inset in `styles.css`, projects test temp-folder collision fixed; `evidence/T-003b-fix-b-browser.png`
-- 2026-10-12 · [core] T-013-fix-b · done: Unicode-name fallback in `names.rs` (+ tests, crate `unicode_names2`), `nameOf()` in `workspaces.ts` (+ test), typed names flow `ProjectsPanel` → `App` → pane header; `evidence/T-013-fix-b-preview.png`, `-header.png`
 
 
