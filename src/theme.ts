@@ -42,6 +42,7 @@ export const classic = {
   "done-icon": "#039567",
   "dot-live": "#00bb80",
   "dot-idle": "#3c3c3c",
+  link: "#b2baf6", // links in markdown documents (DESIGN.md terminal colours)
   gauge: "#8beeb0",
   "gauge-text": "#83e4a6",
   // warnings and danger (used as literals before SET-005; light mode needs them as tokens)

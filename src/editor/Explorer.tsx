@@ -1,0 +1,604 @@
+// The explorer (EDIT-033): the worktree's files as a tree in a panel on the right. Arrows, Home and
+// End move the highlight; Right opens a folder or steps into it, Left folds it or climbs to its
+// parent; Enter or a click opens a file; Mod-click and Shift-click select several rows. Only the rows
+// on screen are drawn, so a huge folder scrolls smoothly. A symlink opens as a folder only once
+// it is confirmed to point at one. Open folders and the scroll survive hiding the panel; App mounts
+// one explorer per worktree, so they reset when the worktree changes.
+// File operations (EDIT-034, part 1): New file and New folder in the header, F2 renames in place
+// (Enter or leaving the field commits, Escape cancels), Delete moves the selection to the trash after
+// one question, Mod+Z and Mod+Shift+Z (or Ctrl+Y) undo and redo those, and the path or the relative
+// path can be copied. Part 2: Mod+C then Mod+V copies the selection into the highlighted folder (a taken
+// name gets " copy"), dragging rows moves them into the folder under the pointer (the tree scrolls near its
+// edges), and files dropped in from the desktop are copied there; each of these undoes too.
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { ChevronDown, Close, FileCode, FolderPlus, Plus } from "../chrome/icons";
+import { useKeymap } from "../keys/KeymapContext";
+import { matchEvent } from "../keys/keymap";
+
+export type Node = { name: string; path: string; kind: "dir" | "file" | "link" };
+export type Row = { node: Node; depth: number; parent: string | null };
+export type Draft = { dir: string; folder: boolean };
+/** One explorer action, as the undo history keeps it. */
+export type Op =
+  | { kind: "create"; path: string }
+  | { kind: "rename"; from: string; to: string }
+  | { kind: "trash"; paths: string[] }
+  | { kind: "copy"; from: string[]; dir: string; made: string[] }
+  | { kind: "move"; moves: [string, string][] }; // [from, to]
+type Gone = { path: string; permanent: boolean; error: string | null };
+type Placed = { from: string; to: string | null; error: string | null };
+
+const ROW = 22; // px
+const SPARE = 10; // rows drawn beyond each edge
+/** A WSL share has no trash, so a delete there is for good (matches fsops::is_wsl). */
+export const isWsl = (p: string) => /^(\\\\|\/\/)(\?[\\/]unc[\\/])?wsl(\$|\.localhost)[\\/]/i.test(p);
+export const DRAFT = "\u0000draft"; // the path of the row a new name is typed into
+
+/** The rows on show: every loaded child of an open folder, depth first; a draft row leads its folder. */
+export function flatten(root: string, kids: Record<string, Node[] | undefined>, open: Set<string>, draft?: Draft | null): Row[] {
+  const out: Row[] = [];
+  const walk = (dir: string, depth: number) => {
+    const parent = dir === root ? null : dir;
+    if (draft?.dir === dir) out.push({ node: { name: "", path: DRAFT, kind: draft.folder ? "dir" : "file" }, depth, parent });
+    for (const node of kids[dir] ?? []) {
+      out.push({ node, depth, parent });
+      if (open.has(node.path)) walk(node.path, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return out;
+}
+
+/** The paths from row a to row b, either way round. */
+export const between = (rows: Row[], a: number, b: number) => rows.slice(Math.min(a, b), Math.max(a, b) + 1).map((r) => r.node.path);
+export const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")));
+export const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
+const inside = (p: string, dir: string) => p.startsWith(dir + "\\") || p.startsWith(dir + "/");
+/** A selection to delete: a folder chosen along with things inside it goes once, as the folder. */
+export const tops = (paths: string[]) => paths.filter((p) => p !== DRAFT && !paths.some((q) => q !== p && inside(p, q)));
+/** The call that undoes an action, and the one that does it again. */
+export function undoOf(op: Op): [string, Record<string, unknown>] {
+  switch (op.kind) {
+    case "create":
+      return ["fs_trash", { paths: [op.path] }];
+    case "rename":
+      return ["fs_rename", { path: op.to, name: baseName(op.from) }];
+    case "trash":
+      return ["fs_restore", { paths: op.paths }];
+    case "copy":
+      return ["fs_trash", { paths: op.made }];
+    case "move":
+      return ["fs_move", { moves: op.moves.map(([from, to]) => [to, parentOf(from)]) }];
+  }
+}
+export function redoOf(op: Op): [string, Record<string, unknown>] {
+  switch (op.kind) {
+    case "create":
+      return ["fs_restore", { paths: [op.path] }];
+    case "rename":
+      return ["fs_rename", { path: op.from, name: baseName(op.to) }];
+    case "trash":
+      return ["fs_trash", { paths: op.paths }];
+    case "copy":
+      return ["fs_copy", { paths: op.from, dir: op.dir }];
+    case "move":
+      return ["fs_move", { moves: op.moves.map(([from, to]) => [from, parentOf(to)]) }];
+  }
+}
+const touched = (op: Op) =>
+  op.kind === "trash" ? op.paths : op.kind === "create" ? [op.path] : op.kind === "rename" ? [op.from, op.to] : op.kind === "copy" ? op.made : op.moves.flat();
+/** The folder something lands in at row i: that folder, or the one holding that file; past the last row, the root. */
+export function dirAt(rows: Row[], i: number, root: string, isDir: (n: Node) => boolean) {
+  const r = rows[i];
+  return !r || r.node.path === DRAFT ? root : isDir(r.node) ? r.node.path : (r.parent ?? root);
+}
+/** A drag's moves: each top-level item not already in that folder and not the folder itself. */
+export const movesInto = (paths: string[], dir: string): [string, string][] => tops(paths).filter((p) => p !== dir && parentOf(p) !== dir).map((p) => [p, dir]);
+const EDGE = 24; // px from the tree's top or bottom where a drag scrolls it
+
+type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; onClose: () => void };
+
+export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Props) {
+  const keymap = useKeymap();
+  const [kids, setKids] = useState<Record<string, Node[] | undefined>>({});
+  const [failed, setFailed] = useState<Record<string, string>>({});
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const [real, setReal] = useState<Record<string, string>>({}); // a link's confirmed kind
+  const [at, setAt] = useState<string | null>(null);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const anchor = useRef<string | null>(null);
+  const [scroll, setScroll] = useState(0);
+  const [height, setHeight] = useState(400);
+  const box = useRef<HTMLDivElement>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [asking, setAsking] = useState<string[] | null>(null); // paths waiting for the delete answer
+  const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null); // bad notes show as failures
+  const [clip, setClip] = useState<string[] | null>(null); // what Mod+C picked, for Mod+V
+  const [dropAt, setDropAt] = useState<string | null>(null); // the folder a drag or a desktop drop would land in
+  const swallow = useRef(false); // the click that ends a drag is not a click on the row
+  const done = useRef<Op[]>([]);
+  const undone = useRef<Op[]>([]);
+
+  const load = (dir: string) =>
+    invoke<Node[]>("dir_list", { path: dir }).then(
+      (list) => {
+        setKids((k) => ({ ...k, [dir]: list }));
+        setFailed(({ [dir]: _, ...f }) => f);
+      },
+      (err) => setFailed((f) => ({ ...f, [dir]: String(err) })),
+    );
+  useEffect(() => void load(root), [root]);
+  const reloadAround = (paths: string[]) => new Set(paths.map(parentOf)).forEach((d) => void load(d));
+
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => el.clientHeight && setHeight(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // Hidden, the panel loses its scroll; showing it again puts the scroll back.
+  useEffect(() => {
+    if (!hidden && box.current) box.current.scrollTop = scroll;
+    // A hidden tree must not keep the keyboard.
+    if (hidden && box.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+  }, [hidden]);
+  useEffect(() => {
+    if (focusAsk && !hidden) box.current?.focus();
+  }, [focusAsk, hidden]);
+
+  const rows = flatten(root, kids, open, draft);
+  const index = rows.findIndex((r) => r.node.path === at);
+  const isDir = (n: Node) => n.kind === "dir" || (n.kind === "link" && real[n.path] === "dir");
+
+  const show = (i: number) => {
+    const el = box.current;
+    if (!el || i < 0) return;
+    if (i * ROW < el.scrollTop) el.scrollTop = i * ROW;
+    else if ((i + 1) * ROW > el.scrollTop + el.clientHeight) el.scrollTop = (i + 1) * ROW - el.clientHeight;
+  };
+  const pick = (path: string) => {
+    setAt(path);
+    setSel(new Set([path]));
+    anchor.current = path;
+  };
+  const moveTo = (i: number) => {
+    const r = rows[Math.max(0, Math.min(rows.length - 1, i))];
+    if (!r) return;
+    pick(r.node.path);
+    show(rows.indexOf(r));
+  };
+  const fold = (path: string) =>
+    setOpen((o) => {
+      const next = new Set(o);
+      next.delete(path);
+      return next;
+    });
+  // Opens a folder, or a link once it is known to be one; anything else opens as a file.
+  const expand = async (n: Node) => {
+    let kind = n.kind === "link" ? real[n.path] : n.kind;
+    if (n.kind === "link" && !kind) {
+      kind = await invoke<string>("path_kind", { path: n.path }).catch(() => "missing");
+      setReal((r) => ({ ...r, [n.path]: kind! }));
+    }
+    if (kind !== "dir") return onOpen(n.path);
+    setOpen((o) => new Set(o).add(n.path));
+    if (!kids[n.path]) void load(n.path);
+  };
+  const activate = (n: Node) => (open.has(n.path) ? fold(n.path) : n.kind === "file" ? onOpen(n.path) : void expand(n));
+
+  // --- file operations (EDIT-034) ---
+  const fail = (err: unknown) => setNote({ text: String(err), bad: true });
+  const record = (op: Op) => {
+    done.current.push(op);
+    undone.current = [];
+    setNote(null);
+  };
+  const back = () => box.current?.focus();
+  const startNew = (folder: boolean) => {
+    const dir = dirAt(rows, index, root, isDir);
+    if (dir !== root) setOpen((o) => new Set(o).add(dir));
+    setRenaming(null);
+    setDraft({ dir, folder });
+    setNote(null);
+  };
+  const commitNew = (name: string) => {
+    const d = draft;
+    setDraft(null);
+    back();
+    if (!d || !name.trim()) return;
+    invoke<string>("fs_create", { dir: d.dir, name, folder: d.folder }).then((path) => {
+      record({ kind: "create", path });
+      void load(d.dir).then(() => pick(path));
+    }, fail);
+  };
+  /** Open folders that moved or were renamed stay open at their new paths. */
+  const follow = (moves: [string, string][], also?: string) => {
+    const to = (p: string) => moves.reduce((q, [a, b]) => (q === a || inside(q, a) ? b + q.slice(a.length) : q), p);
+    const next = new Set([...open].map(to));
+    if (also && also !== root) next.add(also);
+    setOpen(next);
+    [...open].filter((p) => to(p) !== p).forEach((p) => void load(to(p)));
+  };
+  const commitRename = (from: string, name: string) => {
+    setRenaming(null);
+    back();
+    if (!name.trim() || name === baseName(from)) return;
+    invoke<string>("fs_rename", { path: from, name }).then((to) => {
+      record({ kind: "rename", from, to });
+      follow([[from, to]]);
+      void load(parentOf(from)).then(() => pick(to));
+    }, fail);
+  };
+  const askDelete = () => {
+    const chosen = tops(sel.size ? [...sel] : at ? [at] : []);
+    if (chosen.length) setAsking(chosen);
+  };
+  const doDelete = (paths: string[]) => {
+    setAsking(null);
+    back();
+    invoke<Gone[]>("fs_trash", { paths }).then((gone) => {
+      const binned = gone.filter((g) => !g.error && !g.permanent).map((g) => g.path);
+      if (binned.length) record({ kind: "trash", paths: binned });
+      const errors = gone.filter((g) => g.error).map((g) => g.error);
+      setNote(errors.length ? { text: `Not deleted: ${errors.join("; ")}`, bad: true } : null);
+      reloadAround(paths);
+      setSel(new Set());
+    }, fail);
+  };
+  const errorsOf = (res: Placed[]) => res.flatMap((p) => (p.error ? [p.error] : []));
+  const doCopy = (paths: string[], dir: string) =>
+    invoke<Placed[]>("fs_copy", { paths, dir }).then((res) => {
+      const landed = res.filter((p) => p.to);
+      const made = landed.map((p) => p.to!);
+      if (made.length) record({ kind: "copy", from: landed.map((p) => p.from), dir, made });
+      const errors = errorsOf(res);
+      if (errors.length) setNote({ text: errors.join("; "), bad: true });
+      if (dir !== root) setOpen((o) => new Set(o).add(dir));
+      void load(dir).then(() => made.length && (setSel(new Set(made)), setAt(made[0])));
+    }, fail);
+  const doMove = (paths: string[], dir: string) => {
+    const moves = movesInto(paths, dir);
+    if (!moves.length) return;
+    invoke<Placed[]>("fs_move", { moves }).then((res) => {
+      const ok = res.flatMap((p): [string, string][] => (p.to ? [[p.from, p.to]] : []));
+      if (ok.length) record({ kind: "move", moves: ok });
+      const errors = errorsOf(res);
+      if (errors.length) setNote({ text: `Not moved: ${errors.join("; ")}`, bad: true });
+      follow(ok, dir);
+      reloadAround(ok.flat());
+      void load(dir);
+      setSel(new Set(ok.map(([, to]) => to)));
+      if (ok.length) setAt(ok[0][1]);
+    }, fail);
+  };
+  const replay = (from: typeof done, to: typeof done, call: (op: Op) => [string, Record<string, unknown>]) => {
+    const op = from.current.pop();
+    if (!op) return;
+    const [cmd, args] = call(op);
+    invoke<Gone[] | Placed[] | string | null>(cmd, args).then(
+      (res) => {
+        const err = Array.isArray(res) ? res.find((g) => g.error)?.error : null;
+        if (err) return fail(err);
+        if (op.kind === "copy" && cmd === "fs_copy") op.made = (res as Placed[]).flatMap((p) => (p.to ? [p.to] : [])); // the copies may get new names
+        to.current.push(op);
+        setNote(null);
+        if (cmd === "fs_move") follow((res as Placed[]).flatMap((p): [string, string][] => (p.to ? [[p.from, p.to]] : [])));
+        if (cmd === "fs_rename") follow([[args.path as string, res as string]]);
+        reloadAround(touched(op));
+      },
+      (err) => {
+        from.current.push(op); // still there to try again
+        fail(err);
+      },
+    );
+  };
+  const relative = (p: string) => (p.startsWith(root) ? p.slice(root.length).replace(/^[\\/]/, "") : p);
+  const copy = (text: string) =>
+    invoke("clip_write", { text })
+      .catch(() => navigator.clipboard.writeText(text))
+      .then(() => setNote({ text: `Copied ${text}` }), fail);
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.target !== box.current) return; // a field inside the panel keeps its own keys
+    const r = rows[index];
+    const hit = matchEvent(keymap, e.nativeEvent, ["explorer"]);
+    const mod = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+    const key = !hit && mod && (e.key === "c" || e.key === "v") ? `Mod+${e.key.toUpperCase()}` : e.key;
+    switch (hit?.id ?? key) {
+      case "Mod+C": {
+        const chosen = tops(sel.size ? [...sel] : at ? [at] : []);
+        if (!chosen.length) break;
+        setClip(chosen);
+        setNote({ text: `${chosen.length === 1 ? baseName(chosen[0]) : `${chosen.length} items`} ready to paste with Ctrl+V into a folder` });
+        break;
+      }
+      case "Mod+V":
+        if (clip) void doCopy(clip, dirAt(rows, index, root, isDir));
+        break;
+      case "fileExplorer.undo":
+        replay(done, undone, undoOf);
+        break;
+      case "fileExplorer.redo":
+        replay(undone, done, redoOf);
+        break;
+      case "fileExplorer.copyPath":
+        if (at) void copy(at);
+        break;
+      case "fileExplorer.copyRelativePath":
+        if (at) void copy(relative(at));
+        break;
+      case "fileExplorer.delete":
+        askDelete();
+        break;
+      case "F2":
+        if (r) setRenaming(r.node.path);
+        break;
+      case "ArrowDown":
+        moveTo(index + 1);
+        break;
+      case "ArrowUp":
+        moveTo(index < 0 ? 0 : index - 1);
+        break;
+      case "Home":
+        moveTo(0);
+        break;
+      case "End":
+        moveTo(rows.length - 1);
+        break;
+      case "ArrowRight":
+        if (!r) moveTo(0);
+        else if (r.node.kind === "file" || (r.node.kind === "link" && real[r.node.path] && !isDir(r.node))) break;
+        else if (!open.has(r.node.path)) void expand(r.node);
+        else if (rows[index + 1]?.parent === r.node.path) moveTo(index + 1);
+        break;
+      case "ArrowLeft":
+        if (!r) break;
+        if (open.has(r.node.path)) fold(r.node.path);
+        else if (r.parent) moveTo(rows.findIndex((x) => x.node.path === r.parent));
+        break;
+      case "Enter":
+        if (r) activate(r.node);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  // Dragging rows moves them. Pointer events, not HTML drag and drop: on Windows the web view hands
+  // HTML drags to the desktop drop handler below.
+  const rowAt = (clientY: number) => {
+    const el = box.current!;
+    return Math.floor((clientY - el.getBoundingClientRect().top + el.scrollTop) / ROW);
+  };
+  const startDrag = (e: React.PointerEvent, path: string) => {
+    if (e.button !== 0 || path === DRAFT || path === renaming) return;
+    const paths = sel.has(path) ? [...sel] : [path];
+    const [x0, y0] = [e.clientX, e.clientY];
+    let on = false;
+    let edge = 0;
+    let last = y0;
+    const timer = window.setInterval(() => {
+      if (!on || !edge || !box.current) return;
+      box.current.scrollTop += edge * (ROW / 2);
+      setDropAt(dirAt(rows, rowAt(last), root, isDir));
+    }, 30);
+    const move = (ev: PointerEvent) => {
+      if (!on && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
+      on = true;
+      last = ev.clientY;
+      const b = box.current!.getBoundingClientRect();
+      edge = ev.clientY < b.top + EDGE ? -1 : ev.clientY > b.bottom - EDGE ? 1 : 0;
+      setDropAt(dirAt(rows, rowAt(ev.clientY), root, isDir));
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.clearInterval(timer);
+      setDropAt(null);
+      if (!on) return;
+      swallow.current = true;
+      window.setTimeout(() => (swallow.current = false));
+      const b = box.current!.getBoundingClientRect();
+      const inTree = ev.clientX >= b.left && ev.clientX <= b.right && ev.clientY >= b.top && ev.clientY <= b.bottom;
+      if (inTree) doMove(paths, dirAt(rows, rowAt(ev.clientY), root, isDir));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  // Files dragged in from the desktop are copied into the folder under the pointer.
+  const live = useRef({ rows, isDir, doCopy });
+  live.current = { rows, isDir, doCopy };
+  useEffect(() => {
+    if (hidden) return;
+    let off: (() => void) | undefined;
+    let gone = false;
+    getCurrentWebview()
+      .onDragDropEvent(({ payload: p }) => {
+        const el = box.current;
+        if (p.type === "leave" || !el) return setDropAt(null);
+        const ratio = window.devicePixelRatio || 1;
+        const [x, y] = [p.position.x / ratio, p.position.y / ratio];
+        const b = el.getBoundingClientRect();
+        const over = x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+        const dir = over ? dirAt(live.current.rows, rowAt(y), root, live.current.isDir) : null;
+        if (p.type !== "drop") return setDropAt(dir);
+        setDropAt(null);
+        if (dir) void live.current.doCopy(p.paths, dir);
+      })
+      .then((u) => (gone ? u() : (off = u)), () => {});
+    return () => {
+      gone = true;
+      off?.();
+    };
+  }, [hidden, root]);
+
+  const onRow = (e: React.MouseEvent, i: number) => {
+    if (swallow.current) return;
+    const n = rows[i].node;
+    if (n.path === DRAFT || n.path === renaming) return;
+    box.current?.focus();
+    setAt(n.path);
+    if (e.ctrlKey || e.metaKey) {
+      setSel((s) => {
+        const next = new Set(s);
+        if (!next.delete(n.path)) next.add(n.path);
+        return next;
+      });
+      anchor.current = n.path;
+      return;
+    }
+    if (e.shiftKey && anchor.current) {
+      const a = rows.findIndex((x) => x.node.path === anchor.current);
+      setSel(new Set(between(rows, a < 0 ? i : a, i)));
+      return;
+    }
+    pick(n.path);
+    activate(n);
+  };
+
+  const first = Math.max(0, Math.floor(scroll / ROW) - SPARE);
+  const last = Math.min(rows.length, Math.ceil((scroll + height) / ROW) + SPARE);
+  const name = baseName(root.replace(/[\\/]+$/, "")) || root;
+  const wsl = asking?.some(isWsl);
+  return (
+    <aside className="explorer" hidden={hidden} aria-label="Explorer">
+      <header className="explorer-head">
+        <span className="title">Explorer</span>
+        <span className="path" title={root}>
+          {name}
+        </span>
+        <button className="ib" onClick={() => startNew(false)} title="New file" aria-label="New file">
+          <Plus size={12} />
+        </button>
+        <button className="ib" onClick={() => startNew(true)} title="New folder" aria-label="New folder">
+          <FolderPlus size={12} />
+        </button>
+        <button className="ib" onClick={onClose} title="Hide the explorer (Ctrl+Shift+E)" aria-label="Hide the explorer">
+          <Close size={12} />
+        </button>
+      </header>
+      {failed[root] && (
+        <div className="notice load-failed" role="alert">
+          The folder did not load: {failed[root]}
+          <button className="btn" onClick={() => void load(root)}>
+            Retry
+          </button>
+        </div>
+      )}
+      {asking && (
+        <div className="notice ex-ask" role="alertdialog" aria-label="Delete">
+          <span>
+            {wsl ? "Delete" : "Move"} {asking.length === 1 ? baseName(asking[0]) : `${asking.length} items`} {wsl ? "for good? A WSL share has no trash." : "to the trash?"}
+          </span>
+          <button className="btn" autoFocus onClick={() => doDelete(asking)}>
+            {wsl ? "Delete" : "Move to trash"}
+          </button>
+          <button className="btn" onClick={() => (setAsking(null), back())}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {note && (
+        <div className={`notice${note.bad ? "" : " ex-note"}`} role={note.bad ? "alert" : "status"}>
+          <span>{note.text}</span>
+          <button className="ib" onClick={() => setNote(null)} aria-label="Dismiss">
+            <Close size={10} />
+          </button>
+        </div>
+      )}
+      <div
+        className={`explorer-rows${dropAt === root ? " drop" : ""}`}
+        ref={box}
+        tabIndex={0}
+        role="tree"
+        aria-label={`Files of ${name}`}
+        aria-multiselectable
+        aria-activedescendant={index >= 0 ? `ex-row-${index}` : undefined}
+        onKeyDown={onKey}
+        onFocus={() => index < 0 && rows.length && setAt(rows[0].node.path)}
+        onScroll={(e) => setScroll(e.currentTarget.scrollTop)}
+      >
+        {kids[root] && !rows.length && <div className="menu-hint">This folder is empty.</div>}
+        <div style={{ height: rows.length * ROW, position: "relative" }}>
+          {rows.slice(first, last).map((r, k) => {
+            const i = first + k;
+            const dir = r.node.kind !== "file" && !(r.node.kind === "link" && real[r.node.path] && !isDir(r.node));
+            const isOpen = open.has(r.node.path);
+            const editing = r.node.path === DRAFT || r.node.path === renaming;
+            return (
+              <div
+                key={r.node.path}
+                id={`ex-row-${i}`}
+                role="treeitem"
+                aria-level={r.depth + 1}
+                aria-expanded={dir ? isOpen : undefined}
+                aria-selected={sel.has(r.node.path)}
+                className={`ex-row${sel.has(r.node.path) ? " sel" : ""}${i === index ? " at" : ""}${dropAt === r.node.path ? " drop" : ""}`}
+                style={{ top: i * ROW, paddingLeft: 8 + r.depth * 12 }}
+                onMouseDown={(e) => editing || e.preventDefault()}
+                onPointerDown={(e) => startDrag(e, r.node.path)}
+                onClick={(e) => onRow(e, i)}
+                title={editing ? undefined : r.node.path}
+              >
+                <span className="ex-twist">{dir ? <ChevronDown size={10} style={isOpen ? undefined : { transform: "rotate(-90deg)" }} /> : <FileCode size={11} />}</span>
+                {editing ? (
+                  <NameField
+                    initial={r.node.name}
+                    label={r.node.path === DRAFT ? (r.node.kind === "dir" ? "New folder name" : "New file name") : `New name for ${r.node.name}`}
+                    onDone={(v) => (v === null ? (setDraft(null), setRenaming(null), back()) : r.node.path === DRAFT ? commitNew(v) : commitRename(r.node.path, v))}
+                  />
+                ) : (
+                  <span className="ex-name">{r.node.name}</span>
+                )}
+                {r.node.kind === "link" && <span className="ex-link">link</span>}
+                {failed[r.node.path] && (
+                  <span className="ex-link" title={failed[r.node.path]}>
+                    not readable
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/** The in-place name field: Enter or leaving it commits, Escape cancels (null). */
+function NameField({ initial, label, onDone }: { initial: string; label: string; onDone: (v: string | null) => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  const settled = useRef(false);
+  const finish = (v: string | null) => {
+    if (settled.current) return;
+    settled.current = true;
+    onDone(v);
+  };
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    const dot = initial.lastIndexOf(".");
+    el.setSelectionRange(0, dot > 0 ? dot : initial.length); // the name without its extension
+  }, []);
+  return (
+    <input
+      ref={ref}
+      className="ex-input"
+      aria-label={label}
+      defaultValue={initial}
+      spellCheck={false}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") finish(e.currentTarget.value);
+        else if (e.key === "Escape") finish(null);
+      }}
+      onBlur={(e) => finish(e.currentTarget.value)}
+    />
+  );
+}

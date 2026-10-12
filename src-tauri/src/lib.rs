@@ -1,5 +1,7 @@
 mod agents;
+mod artifacts;
 mod automations;
+mod capture;
 mod browser;
 pub mod cli;
 mod claude_accounts;
@@ -7,6 +9,8 @@ mod claude_key;
 mod codex_accounts;
 mod codex_usage;
 mod creatures;
+mod files;
+mod fsops;
 mod git;
 mod include;
 mod keybindings;
@@ -24,6 +28,7 @@ mod state;
 mod sysmem;
 mod terminal;
 mod trust;
+mod update;
 mod visibility;
 
 use state::Store;
@@ -68,6 +73,7 @@ fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, v
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
@@ -87,6 +93,10 @@ pub fn run() {
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());
             app.manage(codex_accounts::SignIns::default());
+            app.manage(artifacts::Library::new(dir.join("artifacts")));
+            // Pages Claude sessions publish are kept in the library as they happen (SKILL-035).
+            capture::start(app.handle().clone());
+            app.manage(update::Updates::default());
             // Git is checked once here; every project and workspace action runs through it.
             app.manage(git::Git::detect()?);
             // The command line reaches the app through a loopback port (PROJ-077).
@@ -102,6 +112,8 @@ pub fn run() {
             });
             Ok(())
         })
+        // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
+        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req))
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
             if let tauri::WindowEvent::Destroyed = event {
@@ -181,7 +193,34 @@ pub fn run() {
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
-            codex_accounts::codex_account_activate
+            codex_accounts::codex_account_activate,
+            files::file_read,
+            files::file_write,
+            files::md_list,
+            artifacts::artifacts_list,
+            artifacts::artifact_add,
+            artifacts::artifact_remove,
+            artifacts::open_external,
+            files::file_list,
+            files::md_new,
+            files::diff_sides,
+            files::git_changes,
+            files::change_entries,
+            files::diff_image,
+            files::dir_list,
+            files::path_kind,
+            fsops::fs_create,
+            fsops::fs_rename,
+            fsops::fs_trash,
+            fsops::fs_restore,
+            fsops::fs_copy,
+            fsops::fs_move,
+            fsops::clip_write,
+            update::update_status,
+            update::update_mark,
+            update::update_check,
+            update::update_download,
+            update::update_restart
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -191,6 +230,8 @@ pub fn run() {
                 if let Ok(dir) = app.path().app_data_dir() {
                     let _ = std::fs::remove_file(dir.join(cli::FILE));
                 }
+                // APP-025: an update that finished downloading installs as the app quits.
+                update::install_on_quit(app);
             }
         });
 }

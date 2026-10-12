@@ -615,7 +615,7 @@ pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    let changes = git.changes(Path::new(&target.path))?;
+    let changes = git.status_lines(Path::new(&target.path))?;
     let here = Path::new(&target.path);
     // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
     let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();

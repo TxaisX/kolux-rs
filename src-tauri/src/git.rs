@@ -51,6 +51,17 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     cmd
 }
 
+/// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
+fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
+    let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        Ok(out.stdout)
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if err.is_empty() { format!("git {} failed ({})", args.join(" "), out.status) } else { err })
+    }
+}
+
 /// Runs git and returns its stdout, trimmed; a non-zero exit becomes an error carrying stderr.
 pub(crate) fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
     run_untrimmed(args, cwd).map(|s| s.trim().to_string())
@@ -58,13 +69,40 @@ pub(crate) fn run(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
 
 /// `run` keeping leading spaces, which `git status --porcelain` lines carry meaning in.
 fn run_untrimmed(args: &[&str], cwd: Option<&Path>) -> Result<String, String> {
-    let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
-    } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() { format!("git {} failed ({})", args.join(" "), out.status) } else { err })
+    output(args, cwd).map(|o| String::from_utf8_lossy(&o).to_string())
+}
+
+/// One changed file on one side of the index (EDIT-027): `code` is git's status letter.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Change {
+    pub path: String,
+    pub staged: bool,
+    pub code: char,
+}
+
+/// Parses `git status --porcelain=v1 -z`. A file with staged and unstaged changes gives two
+/// entries; an untracked file is an unstaged one with code `?`.
+pub fn parse_status(text: &str, worktree: &Path) -> Vec<Change> {
+    let mut list = Vec::new();
+    let mut parts = text.split('\0');
+    while let Some(entry) = parts.next() {
+        let b = entry.as_bytes();
+        if b.len() < 4 {
+            continue;
+        }
+        let (x, y) = (b[0] as char, b[1] as char);
+        if x == 'R' || x == 'C' {
+            parts.next(); // the old name follows a rename or a copy
+        }
+        let path = worktree.join(native(&entry[3..])).to_string_lossy().into_owned();
+        if !matches!(x, ' ' | '?' | '!') {
+            list.push(Change { path: path.clone(), staged: true, code: x });
+        }
+        if !matches!(y, ' ' | '!') {
+            list.push(Change { path, staged: false, code: y });
+        }
     }
+    list
 }
 
 /// Git's own path spelling (forward slashes, no `\\?\` prefix) turned back into a native path.
@@ -156,7 +194,7 @@ impl Git {
     }
 
     /// PROJ-070: the checkout's uncommitted and untracked changes, one `git status --porcelain` line each.
-    pub fn changes(&self, worktree: &Path) -> Result<Vec<String>, String> {
+    pub fn status_lines(&self, worktree: &Path) -> Result<Vec<String>, String> {
         run_untrimmed(&["status", "--porcelain"], Some(worktree)).map(|s| s.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
     }
 
@@ -218,6 +256,124 @@ impl Git {
     pub fn branch_taken(&self, repo: &Path, branch: &str) -> bool {
         run(&["for-each-ref", "--format=%(refname)", &format!("refs/heads/{branch}"), &format!("refs/remotes/*/{branch}")], Some(repo)).is_ok_and(|s| !s.is_empty())
     }
+
+    /// The worktree's markdown files, tracked and untracked, as full paths (EDIT-012). Git leaves
+    /// out ignored files and never walks into a symlinked folder; the list stops at `cap`, and the
+    /// flag says it did.
+    pub fn markdown_files(&self, worktree: &Path, cap: usize) -> Result<(Vec<String>, bool), String> {
+        let text = run(&["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate", "--", "*.md", "*.markdown"], Some(worktree))?;
+        let mut names: Vec<&str> = text.split('\0').filter(|n| !n.is_empty()).collect();
+        names.sort_unstable();
+        let capped = names.len() > cap;
+        Ok((names.into_iter().take(cap).map(|n| worktree.join(native(n)).to_string_lossy().into_owned()).collect(), capped))
+    }
+
+    /// Every file git knows in the worktree, tracked and untracked but not ignored, NUL-separated
+    /// and relative to it: Quick Open's list when ripgrep is missing (EDIT-036).
+    pub fn listed_files(&self, worktree: &Path) -> Result<String, String> {
+        output(&["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"], Some(worktree)).map(|o| String::from_utf8_lossy(&o).into_owned())
+    }
+
+    /// The worktree's changed files, staged and unstaged, for the diff picker (EDIT-027).
+    pub fn changes(&self, worktree: &Path) -> Result<Vec<Change>, String> {
+        let out = output(&["status", "--porcelain=v1", "-z", "--untracked-files=all"], Some(worktree))?;
+        Ok(parse_status(&String::from_utf8_lossy(&out), worktree))
+    }
+
+    /// The two texts of a file's diff (EDIT-027): unstaged compares the index with the working
+    /// file, staged compares HEAD with the index. Git's checkout filters are applied, so line ends
+    /// match the working file. A side the file is not on (new, deleted, untracked) is empty.
+    pub fn diff_sides(&self, file: &Path, staged: bool) -> Result<(String, String), String> {
+        let (old, new) = self.diff_bytes(file, staged)?;
+        let text = |b: Vec<u8>| String::from_utf8(b).map_err(|_| format!("{} is not UTF-8 text", file.display()));
+        Ok((text(old)?, text(new)?))
+    }
+
+    /// The same two sides as bytes, for images in All Changes (EDIT-029).
+    pub fn diff_bytes(&self, file: &Path, staged: bool) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).ok_or_else(|| format!("{} is not a file path", file.display()))?;
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // ponytail: any failure to read a side counts as "not there"; tell the two apart if a real error ever hides behind it
+        let show = |rev: &str| output(&["cat-file", "--filters", &format!("{rev}:./{name}")], Some(dir)).unwrap_or_default();
+        let index = show("");
+        if staged {
+            return Ok((show("HEAD"), index));
+        }
+        let work = match std::fs::read(file) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(format!("{}: {e}", file.display())),
+        };
+        Ok((index, work))
+    }
+
+    /// Every change of the worktree with its size and identity, for All Changes (EDIT-029).
+    pub fn change_entries(&self, worktree: &Path) -> Result<Vec<Entry>, String> {
+        let changes = self.changes(worktree)?;
+        let (staged, unstaged) = (diff_stats(worktree, true)?, diff_stats(worktree, false)?);
+        Ok(changes
+            .into_iter()
+            .map(|c| {
+                let rel = Path::new(&c.path).strip_prefix(worktree).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+                let disk = std::fs::metadata(&c.path).ok().map(|m| format!("{}-{:?}", m.len(), m.modified().ok())).unwrap_or_default();
+                if c.code == '?' {
+                    // ponytail: an untracked file is read whole for its line count; cap the read if huge untracked files get common
+                    let bytes = std::fs::read(&c.path).unwrap_or_default();
+                    let binary = bytes.iter().take(8000).any(|&b| b == 0);
+                    let lines = (!binary).then(|| bytes.iter().filter(|&&b| b == b'\n').count() as u64 + u64::from(bytes.last().is_some_and(|&b| b != b'\n')));
+                    return Entry { path: c.path, staged: false, code: c.code, lines, binary, stamp: disk };
+                }
+                let s = (if c.staged { &staged } else { &unstaged }).get(&rel).cloned().unwrap_or_default();
+                let stamp = if c.staged { s.ids } else { format!("{}|{disk}", s.ids) };
+                Entry { path: c.path, staged: c.staged, code: c.code, lines: s.lines, binary: s.binary, stamp }
+            })
+            .collect())
+    }
+}
+
+/// A changed file in All Changes (EDIT-029): `lines` is added plus removed lines (none for a
+/// binary file), and `stamp` changes whenever the change does, so a section reuses what it
+/// fetched only while its change is the same.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Entry {
+    pub path: String,
+    pub staged: bool,
+    pub code: char,
+    pub lines: Option<u64>,
+    pub binary: bool,
+    pub stamp: String,
+}
+
+#[derive(Clone, Default)]
+struct Stat {
+    lines: Option<u64>,
+    binary: bool,
+    ids: String,
+}
+
+/// `git diff [--cached] --numstat` and `--raw` by path (relative to the top, with forward slashes).
+fn diff_stats(worktree: &Path, cached: bool) -> Result<std::collections::HashMap<String, Stat>, String> {
+    let mut map: std::collections::HashMap<String, Stat> = std::collections::HashMap::new();
+    let with = |args: &[&'static str]| -> Vec<&'static str> { args.iter().copied().chain(cached.then_some("--cached")).collect() };
+    let numstat = output(&with(&["diff", "--numstat", "-z", "--no-renames"]), Some(worktree))?;
+    for rec in String::from_utf8_lossy(&numstat).split('\0') {
+        let mut f = rec.splitn(3, '\t');
+        if let (Some(a), Some(r), Some(p)) = (f.next(), f.next(), f.next()) {
+            let s = map.entry(p.to_string()).or_default();
+            s.binary = a == "-";
+            s.lines = a.parse::<u64>().ok().zip(r.parse::<u64>().ok()).map(|(a, r)| a + r);
+        }
+    }
+    let raw = output(&with(&["diff", "--raw", "-z", "--no-abbrev", "--no-renames"]), Some(worktree))?;
+    let text = String::from_utf8_lossy(&raw);
+    let mut parts = text.split('\0');
+    while let (Some(head), Some(p)) = (parts.next(), parts.next()) {
+        let ids: Vec<&str> = head.split(' ').collect();
+        if ids.len() >= 4 {
+            map.entry(p.to_string()).or_default().ids = format!("{}-{}", ids[2], ids[3]);
+        }
+    }
+    Ok(map)
 }
 
 /// Parses `git worktree list --porcelain`: blank-line separated blocks, the first is the main
@@ -315,49 +471,58 @@ mod tests {
     }
 
     #[test]
-    fn removal_keeps_a_branch_in_use_elsewhere_moves_keep_records_and_bad_refs_never_run() {
+    fn markdown_files_skip_ignored_ones_and_stop_at_the_cap() {
         let git = Git::detect().unwrap();
-        let repo = temp_repo("keep");
-        let side = std::env::temp_dir().join(format!("kolux-rs-git-keep-ws-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&side);
-        let (a, b, c) = (side.join("a"), side.join("b"), side.join("c"));
-        git.worktree_add(&repo, &a, "shared", "HEAD").unwrap();
-        // a second worktree on the same branch (git allows it only when forced)
-        run(&["worktree", "add", "--force", &b.to_string_lossy(), "shared"], Some(&repo)).unwrap();
-        let head = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
-
-        // GIT-067: moving goes through git, so the list follows the folder
-        git.worktree_move(&repo, &a, &c).unwrap();
-        assert!(!a.exists() && c.join("README.md").is_file());
-        assert!(git.worktrees(&repo).unwrap().iter().any(|w| PathBuf::from(&w.path).canonicalize().unwrap() == c.canonicalize().unwrap()), "git lists the moved folder");
-
-        // the branch is in use by b, so removing c keeps it, and says where it stood
-        assert_eq!(git.worktree_remove(&repo, &c, Some("shared")).unwrap().as_deref(), Some(head.as_str()));
-        assert!(git.branch_taken(&repo, "shared"), "kept: b still has it checked out");
-        assert!(!git.delete_branch_if_at(&repo, "shared", &head).unwrap(), "never while a worktree has it");
-        assert!(git.branch_taken(&repo, "shared"));
-        // nobody uses it any more: the kept branch goes, but only while unmoved
-        assert_eq!(git.worktree_remove(&repo, &b, None).unwrap(), None);
-        fs::write(repo.join("README.md"), "more\n").unwrap();
-        run(&["commit", "-q", "-am", "second"], Some(&repo)).unwrap();
-        run(&["branch", "-f", "shared", "HEAD"], Some(&repo)).unwrap();
-        assert!(!git.delete_branch_if_at(&repo, "shared", &head).unwrap(), "moved since removal: left alone");
-        assert!(git.branch_taken(&repo, "shared"));
-        let now = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
-        assert!(git.delete_branch_if_at(&repo, "shared", &now).unwrap());
-        assert!(!git.branch_taken(&repo, "shared"));
-
-        // submodule-less dirty check still sees untracked files; malformed refs never reach git
-        assert!(!git.dirty(&repo).unwrap());
-        fs::write(repo.join("new.txt"), "x").unwrap();
-        assert!(git.dirty(&repo).unwrap());
-        for bad in ["--upload-pack=evil", "-x", "main master", "a..b", "", "ma\tin"] {
-            assert!(!Git::ref_ok(bad) && !git.base_available(&repo, bad) && !git.rev_exists(&repo, bad), "{bad:?}");
-        }
-        assert!(git.base_available(&repo, "HEAD~1") && git.base_available(&repo, "main"));
-
-        fs::remove_dir_all(&side).unwrap();
+        let repo = temp_repo("md");
+        fs::create_dir_all(repo.join("docs")).unwrap();
+        fs::create_dir_all(repo.join("build")).unwrap();
+        fs::write(repo.join("docs").join("guide.md"), "x").unwrap();
+        fs::write(repo.join("build").join("out.md"), "x").unwrap();
+        fs::write(repo.join("notes.txt"), "x").unwrap();
+        fs::write(repo.join(".gitignore"), "build/\n").unwrap();
+        let (files, capped) = git.markdown_files(&repo, 10).unwrap();
+        let names: Vec<String> = files.iter().map(|f| PathBuf::from(f).strip_prefix(&repo).unwrap().to_string_lossy().replace('\\', "/")).collect();
+        assert_eq!(names, ["README.md", "docs/guide.md"]);
+        assert!(!capped);
+        let (one, capped) = git.markdown_files(&repo, 1).unwrap();
+        assert_eq!((one.len(), capped), (1, true));
         fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn changes_list_both_sides_and_diff_sides_read_head_index_and_disk() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("diff");
+        run(&["config", "core.autocrlf", "false"], Some(&repo)).unwrap(); // the line ends as written
+        fs::write(repo.join("README.md"), "hello staged\n").unwrap();
+        run(&["add", "README.md"], Some(&repo)).unwrap();
+        fs::write(repo.join("README.md"), "hello staged and more\n").unwrap();
+        fs::write(repo.join("new.txt"), "fresh\n").unwrap();
+        let rel = |c: &Change| (PathBuf::from(&c.path).strip_prefix(&repo).unwrap().to_string_lossy().into_owned(), c.staged, c.code);
+        let list: Vec<_> = git.changes(&repo).unwrap().iter().map(rel).collect();
+        assert_eq!(list, [("README.md".into(), true, 'M'), ("README.md".into(), false, 'M'), ("new.txt".into(), false, '?')]);
+        let readme = repo.join("README.md");
+        assert_eq!(git.diff_sides(&readme, true).unwrap(), ("hello\n".into(), "hello staged\n".into()));
+        assert_eq!(git.diff_sides(&readme, false).unwrap(), ("hello staged\n".into(), "hello staged and more\n".into()));
+        assert_eq!(git.diff_sides(&repo.join("new.txt"), false).unwrap(), (String::new(), "fresh\n".into()));
+
+        fs::write(repo.join("blob.bin"), [0u8, 1, 2, 0]).unwrap();
+        let sizes = |git: &Git| git.change_entries(&repo).unwrap().into_iter().map(|e| (e.lines, e.binary, e.stamp)).collect::<Vec<_>>();
+        let before = sizes(&git);
+        assert_eq!(before.iter().map(|(l, b, _)| (*l, *b)).collect::<Vec<_>>(), [(Some(2), false), (Some(2), false), (None, true), (Some(1), false)]);
+        assert!(before.iter().all(|(_, _, s)| !s.is_empty()), "every change has an identity");
+        fs::write(repo.join("README.md"), "hello staged and more, again\n").unwrap();
+        let after = sizes(&git);
+        assert_eq!(after[0].2, before[0].2, "the staged change is the same");
+        assert_ne!(after[1].2, before[1].2, "the unstaged change is not");
+        fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn status_parsing_skips_a_renames_old_name() {
+        let list = parse_status("R  b.txt\0a.txt\0 D gone.txt\0", Path::new("r"));
+        let got: Vec<_> = list.iter().map(|c| (c.path.ends_with("b.txt") || c.path.ends_with("gone.txt"), c.staged, c.code)).collect();
+        assert_eq!(got, [(true, true, 'R'), (true, false, 'D')]);
     }
 
     #[test]

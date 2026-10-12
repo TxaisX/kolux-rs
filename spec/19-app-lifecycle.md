@@ -102,6 +102,7 @@ Acceptance:
   - [ ] Cut the network for an hour → no error appears; restore it → a check runs within about a minute.
 Compat: the update feed is the GitHub releases of TxaisX/kolux-releases, which carry the update
   manifest that installed 0.15.0 copies read.
+  Amended 2026-10-09 (OD-20, DT-R01): Kolux RS reads its own feed, the GitHub releases of TxaisX/kolux-rs-releases, with a signed Tauri update manifest; the old feed is not touched.
 Source: D-19-024
 
 ### APP-025 · A downloaded update waits behind a small ready pop-up and installs on restart or quit
@@ -155,6 +156,7 @@ Acceptance:
   - [ ] Publish a release whose notes have five bullets → the card lists them.
   - [ ] Go offline before the notes load → the card appears without notes and the update still installs.
 Compat: —
+  Amended 2026-10-09 (DT-R02): the notes come from the signed manifest's notes field (the release's notes copied in at publish time), not from a second fetch of the release page.
 Source: D-19-027
 
 ### APP-058 · One ship command commits, syncs and lands work on main
@@ -199,6 +201,7 @@ Acceptance:
   - [ ] Ship twice in quick succession → exactly two builds run, one after the other, never side by side.
 Compat: `kolux --version` prints the release version; an environment variable can point the release
   job at a different build checkout; the release job takes `--dry-run` and `--no-publish`.
+  Amended 2026-10-09 (DT-R07, DT-R09): a release carries the Windows installer, its signature file and the update manifest, the signature taking the block map's place; the version is set only in the release checkout and never committed.
 Source: D-19-059
 
 ### APP-060 · CI on main runs in four shards and gates releases

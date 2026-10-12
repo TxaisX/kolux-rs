@@ -10,7 +10,8 @@ import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import CodexPill from "../usage/CodexPill";
 
-export type Screen = "agents" | "board" | "terminals";
+/** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
+export type Screen = "agents" | "board" | "terminals" | "artifacts";
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },
@@ -67,7 +68,7 @@ export default function TopBar({ screen, classic = false, onScreen, onSettings, 
       )}
 
       <div className="topbar-right">
-        <button className="ib panel" title={rightOpen ? "Hide Source Control" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
+        <button className="ib panel" title={rightOpen ? "Hide the right panel" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
           <PanelRight />
         </button>
         <button className="searchbox" title="Search (not built yet)">

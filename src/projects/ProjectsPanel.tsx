@@ -27,6 +27,7 @@ import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, He
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
+import { requestUpdateCheck } from "../update/UpdateCenter";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing";
@@ -72,6 +73,9 @@ type Props = {
   /** PROJ-047: child workspaces nest under their parent unless this is off. */
   nest: boolean;
   onNest: (on: boolean) => void;
+  /** SKILL-036: the Artifacts row opens the library and shows as current while it is up. */
+  artifactsOn: boolean;
+  onArtifacts: () => void;
 };
 
 // SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
@@ -93,7 +97,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -846,7 +850,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </span>
             Tasks
           </button>
-          <button className="row" title="Artifacts (not built yet)">
+          <button className={`row${artifactsOn ? " on" : ""}`} aria-current={artifactsOn ? "page" : undefined} onClick={onArtifacts}>
             <span className="ic">
               <FileCode />
             </span>
@@ -1119,7 +1123,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           <button className="ib" title="Help (not built yet)">
             <Help />
           </button>
-          <button className="upd" title="Updates (not built yet)">
+          <button className="upd" title="Check for a newer version of Kolux RS" onClick={requestUpdateCheck}>
             <Refresh size={13} />
             Check for updates
           </button>

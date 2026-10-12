@@ -13,6 +13,10 @@
 // Source Control is a card on the right (Mod+Shift+G, Mod+L or the top bar's panel button): the
 // workspace in front's changes, staging and a commit box; its draft message is kept here per
 // worktree (T-018-a, src/scm/SourceControlPanel.tsx).
+// An editor tab is one file in CodeMirror (T-093-a, src/editor/EditorPane.tsx): "File..." in the
+// New tab menu opens one, and Mod+S saves the focused editor while the terminals screen is up.
+// Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
+// worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -27,8 +31,20 @@ import { readLook, startScreen } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
+import EditorPane, { editors } from "./editor/EditorPane";
+import { baseName, keyOf } from "./editor/buffers";
+import PreviewPane from "./editor/PreviewPane";
+import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
+import ArtifactsPage from "./artifacts/ArtifactsPage";
+import DiffPane, { diffNav } from "./editor/DiffPane";
+import AllChangesPane from "./editor/AllChangesPane";
+import Explorer from "./editor/Explorer";
+import { isMarkdown } from "./editor/markdown";
+import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
+import { FileCode } from "./chrome/icons";
+import UpdateCenter from "./update/UpdateCenter";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
@@ -52,11 +68,15 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
+  if (p.kind === "editor") return baseName(p.path ?? "");
+  if (p.kind === "preview") return `Preview ${baseName(p.path ?? "")}`;
+  if (p.kind === "changes") return "All Changes";
+  if (p.kind === "diff") return `${baseName(p.path ?? "")} (${p.staged ? "staged" : "unstaged"})`;
   return p.title || (p.agent !== "shell" ? programWord(p.agent) : `Terminal ${p.key}`);
 }
 /** TERM-055: the one badge a tab carries beside its agent icon. */
@@ -108,6 +128,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [scmOpen, setScmOpen] = useState(false);
   // GIT-004: a half-written commit message per worktree, kept through closing the panel.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // EDIT-033: the explorer on the right; closed at start (DT-R17). A bump of explorerFocus moves focus into its tree.
+  const [explorerOpen, setExplorerOpen] = useState(false);
+  const [explorerFocus, setExplorerFocus] = useState(0);
+  const toggleExplorer = () => {
+    if (explorerOpen && document.activeElement?.closest(".explorer")) return setExplorerOpen(false);
+    setScreen("terminals");
+    setExplorerOpen(true);
+    setExplorerFocus((n) => n + 1);
+  };
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -146,6 +175,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const classic = readLook(settings) === "classic";
   // SET-027: everywhere but Settings, only agents that are switched on are offered.
   const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
+  const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
+  const [picking, setPicking] = useState<"file" | "markdown" | "change" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
   const defaultId = defaultAgentId(settings);
   const installedIds = agents.filter((a) => a.installed).map((a) => a.id);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -229,8 +260,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const browser = panes.find((p) => p.key === focused)?.kind === "browser" && screen === "terminals";
-      const hit = (browser && matchEvent(keymap, e, ["browser"])) || matchEvent(keymap, e, screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+      const kind = screen === "terminals" ? panes.find((p) => p.key === focused)?.kind : undefined;
+      const inTree = !!document.activeElement?.closest(".explorer"); // the explorer's own keys (EDIT-034) come with T-094-b
+      // EDIT-001: in an editor the editor shortcuts come first and terminal ones do not apply;
+      // the ones Kolux has no action for yet are left to CodeMirror.
+      const hit =
+        (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
+        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       const inBrowser = (sel: string) => document.querySelector<HTMLElement>(`.pane.browser[data-key="${focused}"] ${sel}`);
@@ -251,6 +287,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "app.settings":
           if (!settingsOpen) setSettingsAt((a) => ({ target: null, n: a.n }));
           setSettingsOpen(true);
+          break;
+        case "editor.save": {
+          const save = editors.get(focused);
+          if (!save) return;
+          void save();
+          break;
+        }
+        case "sidebar.explorer.toggle":
+          toggleExplorer();
           break;
         case "sidebar.left.toggle":
           setSidebarOpen((o) => !o);
@@ -279,6 +324,31 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           break;
         case "tab.newBrowser":
           void newTab("browser");
+          break;
+        case "editor.nextChange":
+        case "editor.previousChange": {
+          const step = diffNav.get(focused);
+          if (!step) return;
+          step(hit.id === "editor.nextChange" ? 1 : -1);
+          break;
+        }
+        case "editor.markdownPreview": {
+          const p = panes.find((x) => x.key === focused);
+          if (!p?.path || !isMarkdown(p.path)) return;
+          openPreview(p.path);
+          break;
+        }
+        case "worktree.quickOpen":
+          if (!activeDir) setToast("Open a workspace to find a file in it.");
+          else setPicking("file");
+          break;
+        case "tab.openMarkdown":
+          if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
+          else setPicking("markdown");
+          break;
+        case "tab.newMarkdown":
+          if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
+          else invoke<string>("md_new", { root: activeDir }).then(openFile, (err) => setToast(String(err)));
           break;
         case "tab.newAgent": {
           // SET-027: with no default (switched off), the first agent available
@@ -338,6 +408,27 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
   // workspace an agent has no folder to work in, so it gets a fresh worktree instead (SESS-004).
   const newTab = async (what: NewTab) => {
+    if (what === "diff") {
+      if (!activeDir) setToast("Open a workspace to pick one of its changed files.");
+      else setPicking("change");
+      return;
+    }
+    if (what === "changes") {
+      // EDIT-029: one All Changes tab per cell; an open one comes to the front.
+      if (!activeDir) return setToast("Open a workspace to see its changes.");
+      const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+      const same = here && panes.find((p) => p.kind === "changes" && groupOf(p) === groupOf(here));
+      if (same) return setFocused(same.key);
+      const key = nextKey.current++;
+      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "changes" }]);
+      setFocused(key);
+      return;
+    }
+    if (what === "file") {
+      const path = await open({ multiple: false, directory: false, defaultPath: activeDir ?? undefined, title: "Open a file" }).catch(() => null);
+      if (typeof path === "string") openFile(path);
+      return;
+    }
     const a = what === "browser" ? null : what;
     if (a && activeDir === null) return launch(a, null);
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
@@ -358,6 +449,42 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     } catch (err) {
       setNotice(String(err));
     }
+  };
+
+  // EDIT-001: a file opens as a tab beside the focused pane; a file already open in that cell
+  // comes to the front instead of opening twice.
+  const openFile = (path: string) => {
+    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const same = here && panes.find((p) => p.kind === "editor" && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
+    if (same) return setFocused(same.key);
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path }]);
+    setFocused(key);
+  };
+
+  // EDIT-027: a changed file's diff opens as a tab beside the focused pane; its staged and
+  // unstaged diffs are separate tabs, and one already open in that cell comes to the front.
+  const openDiff = (path: string, staged: boolean) => {
+    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const same = here && panes.find((p) => p.kind === "diff" && !!p.staged === staged && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
+    if (same) return setFocused(same.key);
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "diff", path, staged }]);
+    setFocused(key);
+  };
+
+  // EDIT-012: Mod+Shift+V shows the file in a read-only preview tab beside it; a preview tab
+  // already in that cell is reused for the new file.
+  const openPreview = (path: string) => {
+    const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const old = here && panes.find((p) => p.kind === "preview" && groupOf(p) === groupOf(here));
+    if (old) {
+      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...p, path } : p)));
+      return setFocused(old.key);
+    }
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "preview", path }]);
+    setFocused(key);
   };
 
   // TERM-001: the layout strip sets how many cells the workspace in front holds. Growing adds
@@ -490,6 +617,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setPage(null);
     recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
     setActiveDir(dir);
+    if (screen === "artifacts") setScreen("terminals");
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else addShell(dir, branch);
   };
@@ -603,6 +731,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       const { [key]: _gone, ...rest } = r;
       return rest;
     });
+    setDirty((d) => {
+      const { [key]: _gone, ...rest } = d;
+      return rest;
+    });
     const gone = panes.find((p) => p.key === key);
     const rest = panes.filter((p) => p.key !== key);
     const next = gone ? neighbourTab(rest.filter((p) => groupOf(p) === groupOf(gone)).map((p) => p.key).concat(key), key) : null;
@@ -663,7 +795,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   });
   return (
     <div className="app">
-      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
+      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
       <div className="body">
         {asking && (
           <CloseAsk
@@ -677,7 +809,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           />
         )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
-        {terminals && sidebarOpen && (
+        {(terminals || screen === "artifacts") && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
             states={rowStates}
@@ -706,6 +838,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             createRequest={createRequest}
             deleteRequest={deleteRequest}
             onStartIn={startIn}
+            artifactsOn={screen === "artifacts"}
+            onArtifacts={() => setScreen("artifacts")}
             onIndex={(list, dirs) => {
               setProjects(list);
               setOwner(dirs);
@@ -738,6 +872,33 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           {terminals && (
             <>
               {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />}
+              {picking === "file" && activeDir && (
+                <FilePicker
+                  root={activeDir}
+                  what="file"
+                  load={() => invoke<{ files: string[]; capped: boolean; source: string; rgMissing: boolean }>("file_list", { root: activeDir }).then((l) => quickOpenList(activeDir, l))}
+                  onPick={(f) => openFile(f.path)}
+                  onClose={() => setPicking(null)}
+                />
+              )}
+              {picking === "markdown" && activeDir && (
+                <FilePicker
+                  root={activeDir}
+                  what="markdown file"
+                  load={() => invoke<{ files: string[]; capped: boolean }>("md_list", { root: activeDir }).then((n) => ({ items: n.files.map((path) => ({ path })), capped: n.capped }))}
+                  onPick={(f) => openFile(f.path)}
+                  onClose={() => setPicking(null)}
+                />
+              )}
+              {picking === "change" && activeDir && (
+                <FilePicker
+                  root={activeDir}
+                  what="changed file"
+                  load={() => invoke<{ path: string; staged: boolean; code: string }[]>("git_changes", { root: activeDir }).then((cs) => ({ items: cs.map((c): Pick => ({ path: c.path, staged: c.staged, tag: c.staged ? "Staged" : c.code === "?" ? "Untracked" : "Unstaged" })), capped: false }))}
+                  onPick={(f) => openDiff(f.path, !!f.staged)}
+                  onClose={() => setPicking(null)}
+                />
+              )}
               {toast && (
                 <div className="toast" role="status">
                   {toast}
@@ -758,7 +919,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               )}
             </>
           )}
-          {!terminals && !board && (
+          {screen === "artifacts" && (
+            <>
+              <ArtifactsPage onToast={setToast} />
+              {toast && (
+                <div className="toast" role="status">
+                  {toast}
+                </div>
+              )}
+            </>
+          )}
+          {!terminals && !board && screen !== "artifacts" && (
             <div className="empty">
               <h2>{screens.find((s) => s.id === screen)?.label}</h2>
               <p>Nothing here yet. This screen is built in a later task.</p>
@@ -797,9 +968,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
-                            <VendorMark agent={p.agent} size={12} />
+                            {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key))} />}
                             <span className="tab-name">{tabName(p, titles)}</span>
+                            {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
                             </button>
@@ -810,6 +982,35 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
                   <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || settingsOpen || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                ) : p.kind === "editor" && p.path ? (
+                  <EditorPane
+                    key={p.key}
+                    id={p.key}
+                    path={p.path}
+                    hidden={!terminals || p.key !== active}
+                    focused={p.key === focused}
+                    onFocus={() => setFocused(p.key)}
+                    onClose={() => closePane(p.key)}
+                    onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
+                    onToast={setToast}
+                  />
+                ) : p.kind === "diff" && p.path ? (
+                  <DiffPane
+                    key={p.key}
+                    id={p.key}
+                    path={p.path}
+                    staged={!!p.staged}
+                    hidden={!terminals || p.key !== active}
+                    focused={p.key === focused}
+                    onFocus={() => setFocused(p.key)}
+                    onClose={() => closePane(p.key)}
+                    onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
+                    onToast={setToast}
+                  />
+                ) : p.kind === "changes" && p.cwd ? (
+                  <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                ) : p.kind === "preview" && p.path ? (
+                  <PreviewPane key={p.key} id={p.key} path={p.path} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
                   <ChooserPane
                     key={p.key}
@@ -878,7 +1079,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         {terminals && scmOpen && (
           <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
+        {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
       </div>
+      <UpdateCenter />
       <StatusBar
         terminals={live.length}
         agents={live.filter((p) => p.agent !== "shell").length}
