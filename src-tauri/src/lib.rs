@@ -163,6 +163,7 @@ pub fn run() {
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_summary,
             scm::scm_stage,
+            scm::scm_discard,
             scm::scm_commit, scm::scm_remote,
             terminal::terminal_busy,
             keybindings::keybindings_read,

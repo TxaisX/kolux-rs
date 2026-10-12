@@ -299,6 +299,11 @@ fn check_paths(paths: &[String]) -> Result<(), String> {
 pub fn stage(worktree: &Path, paths: &[String], on: bool) -> Result<(), String> {
     check_paths(paths)?;
     let args: &[&str] = if on { &["--literal-pathspecs", "add", "--pathspec-from-file=-", "--pathspec-file-nul"] } else { &["--literal-pathspecs", "restore", "--staged", "--pathspec-from-file=-", "--pathspec-file-nul"] };
+    piped(worktree, args, paths)
+}
+
+/// Runs git with the paths on its standard input, NUL separated; git's own words when it fails.
+fn piped(worktree: &Path, args: &[&str], paths: &[String]) -> Result<(), String> {
     let mut child = command(args, Some(worktree)).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
     let input = paths.iter().map(|p| format!("{p}\0")).collect::<String>();
     child.stdin.take().ok_or("git has no input")?.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
@@ -307,6 +312,29 @@ pub fn stage(worktree: &Path, paths: &[String], on: bool) -> Result<(), String> 
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+/// VIEW-067: throws away the changes in one section of the panel. Staged rows go back to the last
+/// commit in the index and on disk (so a staged new file is deleted), changed rows go back to what
+/// is staged, untracked rows are deleted. git clean only ever removes untracked files, so a tracked
+/// name sent as untracked is left alone.
+pub fn discard(worktree: &Path, section: &str, paths: &[String]) -> Result<(), String> {
+    check_paths(paths)?;
+    match section {
+        "staged" => piped(worktree, &["--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul"], paths),
+        "changed" => piped(worktree, &["--literal-pathspecs", "restore", "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul"], paths),
+        "untracked" => {
+            // ponytail: git clean reads no list from its input, so the names go on the command line
+            // in chunks that stay well under the Windows command-line limit.
+            for chunk in paths.chunks(100) {
+                let mut args = vec!["--literal-pathspecs", "clean", "-f", "-d", "-q", "--"];
+                args.extend(chunk.iter().map(String::as_str));
+                run(&args, Some(worktree))?;
+            }
+            Ok(())
+        }
+        _ => Err(format!("the {section} section cannot be discarded")),
     }
 }
 
@@ -347,6 +375,11 @@ pub fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> 
 #[tauri::command]
 pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool) -> Result<(), String> {
     stage(Path::new(&worktree), &paths, on)
+}
+
+#[tauri::command]
+pub fn scm_discard(worktree: String, section: String, paths: Vec<String>) -> Result<(), String> {
+    discard(Path::new(&worktree), &section, &paths)
 }
 
 #[tauri::command]
@@ -513,6 +546,41 @@ mod tests {
             assert!(err.contains("outside this workspace"), "{bad}: {err}");
         }
         assert!(stage(&repo, &[], true).unwrap_err().contains("nothing"));
+        fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn discarding_puts_each_section_back_and_deletes_only_untracked_or_staged_new_files() {
+        let repo = temp_repo("discard");
+        commit_file(&repo, "keep.txt", "one\n");
+        commit_file(&repo, "gone.txt", "two\n");
+        // Changes: an edit and a deletion go back to what is staged.
+        fs::write(repo.join("README.md"), "edited\n").unwrap();
+        fs::remove_file(repo.join("gone.txt")).unwrap();
+        discard(&repo, "changed", &["README.md".into(), "gone.txt".into()]).unwrap();
+        assert_eq!(fs::read_to_string(repo.join("README.md")).unwrap(), "hello\n");
+        assert_eq!(fs::read_to_string(repo.join("gone.txt")).unwrap(), "two\n");
+        // Staged: an edit goes back to the last commit on disk too; a staged new file is deleted.
+        fs::write(repo.join("keep.txt"), "staged edit\n").unwrap();
+        fs::write(repo.join("new.txt"), "new\n").unwrap();
+        stage(&repo, &["keep.txt".into(), "new.txt".into()], true).unwrap();
+        discard(&repo, "staged", &["keep.txt".into(), "new.txt".into()]).unwrap();
+        assert_eq!(fs::read_to_string(repo.join("keep.txt")).unwrap(), "one\n");
+        assert!(!repo.join("new.txt").exists());
+        // Untracked: files and folders go, names are literal, and a tracked name sent as untracked stays.
+        fs::create_dir_all(repo.join("scratch")).unwrap();
+        fs::write(repo.join("scratch/a.txt"), "x").unwrap();
+        fs::write(repo.join("b[1].txt"), "x").unwrap();
+        fs::write(repo.join("b1.txt"), "x").unwrap();
+        discard(&repo, "untracked", &["scratch/".into(), "b[1].txt".into(), "keep.txt".into()]).unwrap();
+        assert!(!repo.join("scratch").exists());
+        assert!(!repo.join("b[1].txt").exists());
+        assert!(repo.join("keep.txt").exists());
+        let st = status(&repo).unwrap();
+        assert!(st.staged.is_empty() && st.changed.is_empty());
+        assert_eq!(paths(&st.untracked), ["b1.txt"]);
+        assert!(discard(&repo, "untracked", &["../x".into()]).unwrap_err().contains("outside"));
+        assert!(discard(&repo, "conflicts", &["keep.txt".into()]).is_err());
         fs::remove_dir_all(&repo).unwrap();
     }
 

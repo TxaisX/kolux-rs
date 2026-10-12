@@ -838,6 +838,12 @@ Ctrl+Shift+G jump to a tab, and dragging its left edge makes it wider or narrowe
 restart it comes back open or closed, on the same tab and at the same width. It is open on
 Explorer the first time. Agents, Checks and Search tabs come with T-146-b.
 
+[accounts] Source Control can now throw changes away (T-153-a): each row and each section but
+Conflicts has a discard button, and a prompt first says what will happen, file by file or as
+counts (deleted, restored, or losing its changes). Every confirmation prompt is now one dialog:
+Cancel has focus when it opens, Escape backs out, and the don't-ask-again box only counts when
+you confirm. VIEW-054 waits for Txais's click-through (T-153-c).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1577,7 +1583,11 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-146-a · VIEW-056 says the right sidebar is open by default; that replaces DT-R17's "explorer closed at start" for a first run. With no workspace open it shows "Open a workspace to browse its files."
 - [accounts] T-146-a · the tabs are short words (Explorer, Source Control), not icons, until more tabs arrive with T-146-b; the width is at least 240 px and always leaves the workspace 400 px.
 
+- [accounts] T-153-a · closing a tab with a running program (TERM-045) used to open with Close tab focused; it now opens with Cancel focused, as VIEW-116 asks, and Enter closes the tab only after Tab moves focus to Close tab.
+- [accounts] T-153-c · VIEW-054 needs a click-through of the installed app (DT-37) that the clean-room rule bars the builder from; Txais does it, then T-153-c is built or marked SKIPPED.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-153-a · done: new `src/chrome/Ask.tsx` (one confirmation dialog, `askKey`), replaces `src/terminal/CloseAsk.tsx` and the automation delete strip; `scm.rs` `discard` + `scm_discard` (staged back to HEAD, changes back to the index, untracked via git clean), Source Control discard buttons and `discardAsk` wording; T-153 split into -a/-b/-c · evidence/T-153-a.txt, T-153-a-1..6 png
 - 2026-10-12 · [accounts] T-146-a · done: new `src/chrome/RightSidebar.tsx` (frame, tab strip, drag edge, `readRight`, `clampWidth`), `App.tsx` keeps open/tab/width in settings (rightSidebarOpen/Tab/Width) and routes Ctrl+L, Ctrl+Shift+E/G and the top-bar button through it; fixed the Explorer and sidebar not hiding (their display:flex beat the hidden attribute); T-146 split into -a/-b/-c · evidence/T-146-a.txt, T-146-a-1-explorer-tab.png, T-146-a-2-scm-640.png, T-146-a-3-after-restart-explorer.png
 - 2026-10-12 · [accounts] T-138-b · done: `codex_accounts.rs` Account gains `label`, `set_label` (trim, 40 chars, blank clears, kept on re-sign-in) and the `codex_account_label` command; `CodexCard.tsx` Name/Rename with an inline field (Enter saves, Esc keeps), "Same email as another account" note, headline names the active account; `AccountRow.tsx` gains `onName`/`below`; 1 Rust test, 3 front-end tests; live with two seeded Codex accounts on one email · evidence/T-138-b.txt, evidence/T-138-b-1-same-email.png, evidence/T-138-b-2-named.png
 - 2026-10-12 · [accounts] T-116-a-fix · done: `src/settings/GitPage.tsx` gains the New branches card (prefix select, custom field saved on blur, sample and refused/only-slashes warning from `branch_prefix_check`, Default compare base); `ProjectsPanel.tsx` gear keeps a link to the page; DESIGN.md amended · evidence/T-116-a-fix.txt, evidence/t116a-fix-gear.png, evidence/t116a-fix-git-page.png

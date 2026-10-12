@@ -227,8 +227,7 @@ input { font: inherit; }
 .scm-main .btn.primary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-item .reason { margin-left: auto; font-size: 11px; color: var(--fg-faint); }
 .scm-sec { display: flex; align-items: center; height: 28px; padding: 0 4px 0 12px; font-size: 12px; font-weight: 500; color: var(--fg-label); }
-.scm-sec .count { margin-left: 6px; color: var(--fg-muted); }
-.scm-sec .ib { margin-left: auto; }
+.scm-sec .count { margin: 0 auto 0 6px; color: var(--fg-muted); }
 .scm-row { display: flex; align-items: center; height: 28px; padding: 0 4px 0 12px; gap: 8px; border-radius: 6px; font-size: 12.5px; color: var(--fg-row); white-space: nowrap; }
 .scm-row:hover { background: #1f1f1f; }
 .scm-row .letter { width: 14px; text-align: center; font: 11px var(--mono-font); color: var(--fg-muted); flex: none; }
@@ -348,8 +347,6 @@ input { font: inherit; }
 .autos-search .field { padding-left: 28px; }
 .autos-agents { display: flex; gap: 4px; }
 .autos-gap { flex: 1; }
-.autos-confirm { display: flex; align-items: center; gap: 10px; padding: 8px 12px; font-size: 12px; color: var(--fg); background: var(--surface); border-bottom: 1px solid var(--line-subtle); }
-.autos-confirm label { display: flex; align-items: center; gap: 4px; color: var(--fg-muted); }
 .autos-table-wrap { flex: 1 1 55%; min-height: 120px; overflow: auto; }
 .autos-table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12px; color: var(--fg-row); }
 .autos-table th { position: sticky; top: 0; z-index: 2; background: var(--surface); text-align: left; font-weight: 500; color: var(--fg-label); border-bottom: 1px solid var(--line); padding: 0; white-space: nowrap; }
@@ -529,6 +526,7 @@ input { font: inherit; }
 .ask-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
 .ask-body { margin: 0 0 14px; font-size: 12px; color: var(--fg-muted); }
 .ask .btn-row { justify-content: flex-end; }
+.ask-check { display: flex; align-items: center; gap: 6px; margin: -6px 0 14px; font-size: 12px; color: var(--fg-muted); }
 .agent-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--chip-bg); min-width: 0; }
 .agent-on { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .agent-name { font-size: 13px; color: var(--fg-row); }

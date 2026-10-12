@@ -165,6 +165,13 @@ export const Refresh = (p: P) => (
     <path d="M12 1.75v2.5h-2.5M4 14.25v-2.5h2.5" />
   </Glyph>
 );
+/** Discard: an arrow turning back. */
+export const Undo = (p: P) => (
+  <Glyph {...p}>
+    <path d="M3 6.5h7a3.5 3.5 0 0 1 0 7H6" />
+    <path d="M5.5 4 3 6.5 5.5 9" />
+  </Glyph>
+);
 export const Target = (p: P) => (
   <Glyph {...p}>
     <circle cx="8" cy="8" r="6" />

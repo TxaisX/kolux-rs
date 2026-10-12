@@ -23,7 +23,7 @@ import { listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
-import CloseAsk from "./terminal/CloseAsk";
+import Ask from "./chrome/Ask";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
@@ -823,9 +823,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       <TopBar appName={chromeShown(settings, "titleBarAppName")} screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body">
         {asking && (
-          <CloseAsk
+          <Ask
             title={asking.title}
             body={asking.body}
+            confirm="Close tab"
+            enter
             onCancel={() => setAsking(null)}
             onConfirm={() => {
               asking.keys.forEach(dropPane);
