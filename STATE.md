@@ -1219,7 +1219,15 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-029 and T-030: deferred to their feeders (T-098; T-082 / T-083 / T-089 /
   T-325). Ordering, not a contradiction; no DECISIONS row.
 
+- 2026-10-11 · [core] T-003b-fix-a: the top bar is a three-column grid (left group, switcher,
+  right group) instead of an absolutely centred switcher. The switcher is centred on the window
+  while the right group fits in its half (at 1920 it sits at 855..1065, DESIGN.md's figure); below
+  about 1540 px the right group keeps its width and the switcher moves left (70 px at the 1400
+  default) instead of covering the search box. DESIGN.md section 4 notes the rule; no DECISIONS
+  row (the review named this fix).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
 - 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
 - 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
 - 2026-10-11 · [core] T-028-a · done: `src/board/chip.ts` (+ test), Board lanes and chip rows in `App.tsx` / `TerminalPane.tsx` / `styles.css`, `agent_answer` and `Change.wrote` in `status.rs` / `hooks.rs`; `evidence/T-028-a-board.png`, `-approved.png`, `-deny-ask.png`, `-denied.png`
@@ -1229,6 +1237,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-026-a · done: `tauri-plugin-notification` + `notify` command, `src/terminal/notify.ts` (+ test), `Session::quiet` / `quiet_check` watcher (+ test), `Terminals::silence`, Settings > Notifications; `evidence/T-026-a-permission-toast.png`, `-finished-toast.png`, `-quiet-toast.png`, `-quiet-window.png`, `-settings.png`
 - 2026-10-09 · [core] T-025-c · done: `src-tauri/src/status.rs` (per-pane session: roster, pending tool, interrupted flag, background work, compact skip, reply, 20-state history; 5 tests), `hooks.rs` answers through it, `terminal.rs` marks Ctrl+C/Escape, pane header roster label (`status.ts` + test); `evidence/T-025-c-lead-working.png`, `-child-needs.png`, `-done.png`, `-interrupted.png`
 - 2026-10-09 · [core] T-025-b · done: `src-tauri/src/hooks.rs` (Codex event mapping, script, `hooks.json` installer after the user's groups, trust from Codex's own `hooks/list`, managed-home install at spawn) + 3 tests; `terminal.rs` spawn hook; `codex_usage.rs` and `trust.rs` helpers shared; `evidence/T-025-b-trust.txt`, `-needs.png`, `-done.png` (scratch Codex home; no real Codex session yet, T-025-e)
-- 2026-10-09 · [core] T-025-a · done: `src-tauri/src/hooks.rs` (loopback listener, Claude event mapping, hook script, settings installer, pane variables) + 5 tests; `terminal.rs` env list and pane key; `lib.rs` start and exit; `status.ts`, `tabs.ts`, `TerminalPane.tsx`, `App.tsx` hook-fed states + tests; `evidence/T-025-a-needs.png`, `-cycle.png`, `-done.png` (events sent through the real script to the lane app; no real Claude session yet, T-025-d)
 
 

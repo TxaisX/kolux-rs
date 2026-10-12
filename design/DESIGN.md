@@ -174,6 +174,10 @@ minus 1 px.
 
 Content is vertically centred on y 17-18. Left to right:
 
+(Kolux RS, T-003b-fix-a: the bar is a three-column grid; the switcher is centred on the window
+while the right group fits in its half, and gives way to the left below about 1540 px so it never
+covers the search box.)
+
 | Item | x range | Notes |
 |---|---|---|
 | App mark | 10..23 (14 px) | Six-spoke asterisk, `#c5c5c5` |

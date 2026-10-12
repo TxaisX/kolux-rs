@@ -25,7 +25,10 @@ input { font: inherit; }
 .ib.dim { color: var(--fg-icon-dim); }
 
 /* ---- 4. top bar: 35 px fill + 1 px border = 36 px ---- */
-.topbar { position: relative; flex: none; height: 36px; background: var(--surface); border-bottom: 1px solid var(--line-strong); display: flex; align-items: center; }
+/* three columns: the switcher sits in the middle one, centred on the window while the right
+   group fits in its half; when the window is too narrow for that, the right group keeps its
+   width and the switcher gives way instead of covering the search box (T-003b-fix-a). */
+.topbar { position: relative; flex: none; height: 36px; background: var(--surface); border-bottom: 1px solid var(--line-strong); display: grid; grid-template-columns: minmax(0, 1fr) auto 1fr; align-items: center; }
 .topbar-left { display: flex; align-items: center; height: 100%; padding-left: 4px; }
 .topbar-left .mark { color: var(--mark); }
 .topbar-left .dots { margin-left: -1px; }
@@ -33,12 +36,12 @@ input { font: inherit; }
 .topbar-left .back { margin-left: 11px; }
 .topbar-left .fwd { margin-left: -2px; }
 
-.switcher { position: absolute; left: 50%; top: 3px; transform: translateX(-50%); height: 30px; width: 210px; display: flex; align-items: center; gap: 2px; padding: 0 3px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; }
+.switcher { justify-self: center; height: 30px; width: 210px; display: flex; align-items: center; gap: 2px; padding: 0 3px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; }
 .switcher button { height: 24px; padding: 0 12px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--fg-muted); white-space: nowrap; }
 .switcher button:hover { color: var(--fg); }
 .switcher button[aria-pressed="true"] { background: var(--seg-active); color: var(--fg); font-weight: 600; }
 
-.topbar-right { margin-left: auto; display: flex; align-items: center; height: 100%; }
+.topbar-right { justify-self: end; display: flex; align-items: center; height: 100%; }
 .topbar-right .panel { margin-right: 12px; }
 .searchbox { display: flex; align-items: center; gap: 6px; width: 190px; height: 28px; padding: 0 6px 0 9px; background: var(--input-bg); border: 1px solid var(--line); border-radius: 8px; color: var(--fg-muted); font-size: 12.5px; margin-right: 8px; }
 .searchbox:hover { border-color: var(--line-focus); }
