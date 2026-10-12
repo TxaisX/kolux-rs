@@ -30,6 +30,65 @@ pub fn shell_command(cwd: Option<&str>) -> CommandBuilder {
     cmd
 }
 
+/// SESS-006: a shell the create menu offers, one item each. The first is the one Ctrl+T opens.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct ShellInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+/// The installed shells: on Windows, Windows PowerShell (always there), PowerShell 7, Command
+/// Prompt, Git Bash and WSL when found; elsewhere the login shell, then bash, zsh and fish.
+pub fn shells(find: impl Fn(&str) -> Option<std::path::PathBuf>) -> Vec<ShellInfo> {
+    let mut out: Vec<ShellInfo> = Vec::new();
+    let mut add = |id, name, program: Option<std::path::PathBuf>, args: &[&str]| {
+        if let Some(p) = program {
+            let program = p.to_string_lossy().into_owned();
+            if !out.iter().any(|s| s.program.eq_ignore_ascii_case(&program)) {
+                out.push(ShellInfo { id, name, program, args: args.iter().map(|a| a.to_string()).collect() });
+            }
+        }
+    };
+    if cfg!(windows) {
+        add("powershell", "Windows PowerShell", Some(find("powershell.exe").unwrap_or_else(|| "powershell.exe".into())), &["-NoLogo"]);
+        add("pwsh", "PowerShell 7", find("pwsh.exe"), &["-NoLogo"]);
+        add("cmd", "Command Prompt", find("cmd.exe"), &[]);
+        // Git for Windows' own bash, never the WSL launcher that System32 calls bash.exe.
+        let git = std::env::var_os("ProgramFiles").map(|p| std::path::PathBuf::from(p).join("Git").join("bin").join("bash.exe")).filter(|p| p.is_file());
+        add("gitbash", "Git Bash", git, &["--login", "-i"]);
+        // wsl.exe ships with Windows even with no Linux installed; it counts once a distribution is.
+        add("wsl", "WSL", find("wsl.exe").filter(|_| wsl_has_distro()), &[]);
+    } else {
+        add("login", "Login shell", std::env::var_os("SHELL").map(std::path::PathBuf::from), &[]);
+        add("bash", "bash", find("bash"), &[]);
+        add("zsh", "zsh", find("zsh"), &[]);
+        add("fish", "fish", find("fish"), &[]);
+    }
+    out
+}
+
+/// WSL keeps its default distribution under the user's Lxss key once one is installed.
+#[cfg(windows)]
+fn wsl_has_distro() -> bool {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_ANY};
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (key, name) = (wide(r"Software\Microsoft\Windows\CurrentVersion\Lxss"), wide("DefaultDistribution"));
+    let mut len = 0u32;
+    // SAFETY: both strings are NUL-terminated and live across the call; only the size is asked for.
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_ANY, std::ptr::null_mut(), std::ptr::null_mut(), &mut len) == 0 }
+}
+#[cfg(not(windows))]
+fn wsl_has_distro() -> bool {
+    false
+}
+
+#[tauri::command]
+pub fn shell_list() -> Vec<ShellInfo> {
+    shells(crate::agents::find_program)
+}
+
 /// TERM-040: where a new terminal starts. A requested folder may be relative to the workspace or
 /// an absolute folder outside it; a missing one falls back to the workspace folder.
 pub fn start_dir(workspace: &str, requested: Option<&str>) -> String {
@@ -174,6 +233,23 @@ mod tests {
             assert_eq!(program, shim.as_os_str());
             assert!(head.is_empty());
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_create_menu_lists_each_installed_shell_once_powershell_first() {
+        let found = |name: &str| match name {
+            "pwsh.exe" => Some(std::path::PathBuf::from("C:/pf/pwsh.exe")),
+            "cmd.exe" => Some(std::path::PathBuf::from("C:/Windows/System32/cmd.exe")),
+            _ => None,
+        };
+        let list = shells(found);
+        let ids: Vec<_> = list.iter().map(|s| s.id).collect();
+        assert_eq!(&ids[..3], &["powershell", "pwsh", "cmd"]);
+        assert_eq!(list[0].program, "powershell.exe");
+        assert!(!ids.contains(&"wsl"));
+        // Nothing found but the built-in one: still one item.
+        assert_eq!(shells(|_| None).first().map(|s| s.id), Some("powershell"));
     }
 
     /// The round trip every pane depends on: a real shell, a typed command, its output read back.

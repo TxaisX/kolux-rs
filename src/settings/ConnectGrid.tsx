@@ -124,7 +124,8 @@ export function ConnectGrid({ cards }: { cards: Record<ConnectId, ReactNode> }) 
     readAgents();
     readInstalls();
     for (const c of CONNECT) void invoke<boolean>("agent_can_install", { agent: c.id }).then((v) => setCan((m) => ({ ...m, [c.id]: v }))).catch(() => {});
-    const offs = [listen("agents-changed", readAgents), listen("agent-install", readInstalls)];
+    // SESS-002: the window searches once and sends the list; this takes it rather than searching again.
+    const offs = [listen<AgentInfo[] | null>("agents-changed", (e) => Array.isArray(e.payload) && setAgents(e.payload)), listen("agent-install", readInstalls)];
     return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
   }, [readAgents, readInstalls]);
   const run = (p: Promise<unknown>) => {

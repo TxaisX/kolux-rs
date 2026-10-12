@@ -5,11 +5,11 @@ import type { AgentInfo } from "./PlusMenu";
 /** The settings key that names the default agent by its stable id. */
 export const DEFAULT_AGENT_KEY = "defaultAgent";
 
-/** The default agent's id from the settings object; Claude Code when nothing (valid) is set, and
- * "" (no default) once it was cleared, as switching the default agent off does (SET-027). */
+/** The default agent's id from the settings object; "" (no default, so lists keep catalogue order)
+ * on a fresh install (SESS-010) and once it was cleared, as switching the default agent off does (SET-027). */
 export function defaultAgentId(settings: Record<string, unknown> | null | undefined): string {
   const v = settings?.[DEFAULT_AGENT_KEY];
-  return typeof v === "string" ? v : "claude";
+  return typeof v === "string" ? v : "";
 }
 
 /** The settings key listing the agents switched off on the Agents page (SET-027). */
@@ -33,6 +33,18 @@ export function switchAgent(settings: Record<string, unknown>, id: string, on: b
   if (!on && defaultAgentId(settings) === id) next[DEFAULT_AGENT_KEY] = "";
   return next;
 }
+
+/** SESS-003: some agent is installed, yet every installed one is switched off. */
+export function allSwitchedOff(all: AgentInfo[], settings: Record<string, unknown> | null | undefined): boolean {
+  const installed = all.filter((a) => a.installed);
+  return installed.length > 0 && offeredAgents(installed, settings).length === 0;
+}
+
+/** SESS-002: where the agent search stands. Nothing counts as not installed before the first
+ * pass is done, and an errored pass blocks launching until one succeeds. */
+export type AgentPass = { looking: boolean; done: boolean; error: string | null };
+export const FIRST_PASS: AgentPass = { looking: true, done: false, error: null };
+export const canLaunch = (p: AgentPass): boolean => p.done && p.error === null;
 
 /** Installed agents with the default first and the others in catalogue order. */
 export function menuAgents(agents: AgentInfo[], defaultId: string): AgentInfo[] {

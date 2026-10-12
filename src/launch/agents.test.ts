@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { defaultAgentId, disabledAgents, menuAgents, offeredAgents, switchAgent } from "./agents";
+import { allSwitchedOff, canLaunch, defaultAgentId, disabledAgents, FIRST_PASS, menuAgents, offeredAgents, switchAgent } from "./agents";
 import type { AgentInfo } from "./PlusMenu";
 
 const mk = (id: string, installed: boolean): AgentInfo => ({ id, name: id, program: id, args: [], installed, path: installed ? `C:\\bin\\${id}.exe` : null });
@@ -14,12 +14,13 @@ test("the menu lists only installed agents, the default first, the rest in catal
   expect(menuAgents([], "claude")).toEqual([]);
 });
 
-test("the default agent comes from settings and falls back to Claude Code", () => {
+test("the default agent comes from settings; a fresh install has none (SESS-010)", () => {
   expect(defaultAgentId({ defaultAgent: "codex" })).toBe("codex");
   expect(defaultAgentId({ defaultAgent: "" })).toBe("");
-  expect(defaultAgentId({ defaultAgent: 3 })).toBe("claude");
-  expect(defaultAgentId({})).toBe("claude");
-  expect(defaultAgentId(null)).toBe("claude");
+  // SESS-010: a fresh install has no default.
+  expect(defaultAgentId({ defaultAgent: 3 })).toBe("");
+  expect(defaultAgentId({})).toBe("");
+  expect(defaultAgentId(null)).toBe("");
 });
 
 test("switched-off agents are not offered, and switching off the default leaves no default", () => {
@@ -33,4 +34,13 @@ test("switched-off agents are not offered, and switching off the default leaves 
   expect(switchAgent({ defaultAgent: "codex" }, "aider", false)).toEqual({ defaultAgent: "codex", disabledAgents: ["aider"] });
   expect(switchAgent(off, "codex", true)).toEqual({ defaultAgent: "", disabledAgents: [] });
   expect(disabledAgents({ disabledAgents: "codex" })).toEqual([]);
+});
+
+test("SESS-003: all switched off is told apart from none installed; SESS-002: launching waits for a good search", () => {
+  expect(allSwitchedOff(list, { disabledAgents: ["claude", "codex", "grok"] })).toBe(true);
+  expect(allSwitchedOff(list, { disabledAgents: ["claude", "codex"] })).toBe(false);
+  expect(allSwitchedOff(list.filter((a) => !a.installed), { disabledAgents: [] })).toBe(false);
+  expect(canLaunch(FIRST_PASS)).toBe(false);
+  expect(canLaunch({ looking: false, done: true, error: "boom" })).toBe(false);
+  expect(canLaunch({ looking: true, done: true, error: null })).toBe(true);
 });

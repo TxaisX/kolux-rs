@@ -26,6 +26,7 @@ import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRo
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
+import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 
@@ -56,6 +57,10 @@ type Props = {
   defaultId: string;
   onSetDefault: (id: string) => void;
   onChoose: () => void;
+  /** SESS-003 / SESS-002: every installed agent is off; where the agent search stands. */
+  allOff?: boolean;
+  pass?: AgentPass;
+  onRefresh?: () => void;
   /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
   /** Which page (Automations, Model routing) is open over the content column, if any. */
   page: Page | null;
@@ -97,7 +102,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -1088,6 +1093,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             agents={agents}
             defaultId={defaultId}
             onSetDefault={onSetDefault}
+            allOff={allOff}
+            pass={pass}
+            onRefresh={onRefresh}
             onChoose={() => {
               setPlusOpen(false);
               onChoose();

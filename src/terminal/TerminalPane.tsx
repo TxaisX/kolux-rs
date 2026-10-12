@@ -49,6 +49,8 @@ type Props = {
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
   title?: string;
+  /** SESS-006: the shell picked in the create menu names itself in the header. */
+  shellName?: string;
   /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
   typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
@@ -69,7 +71,7 @@ type Props = {
   card?: { expanded: boolean; onToggle: () => void };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -267,7 +269,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
         <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
-          {programWord(agent)}
+          {shellName ?? programWord(agent)}
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`}>{word}</span>

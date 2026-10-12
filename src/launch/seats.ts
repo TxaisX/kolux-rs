@@ -173,3 +173,13 @@ export function withoutRules(text: string): string {
   const at = text.indexOf(RULES_MARK);
   return at < 0 ? text : text.slice(0, at).trimEnd();
 }
+
+/** SESS-008: what the remove-session shortcut closes among the panes in front: the newest chooser
+ * (silently, `chooser` true), else the focused pane, else the last one. A lone chooser stays, so
+ * the grid never drops below one pane. */
+export function removeTarget<T extends { key: number; seats?: Seat[] }>(shown: T[], focused: number): { key: number; chooser: boolean } | null {
+  const chooser = [...shown].reverse().find((p) => p.seats);
+  if (chooser) return shown.length > 1 ? { key: chooser.key, chooser: true } : null;
+  const target = shown.find((p) => p.key === focused) ?? shown[shown.length - 1];
+  return target ? { key: target.key, chooser: false } : null;
+}

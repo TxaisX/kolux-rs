@@ -91,3 +91,18 @@ test("SESS-012: the lineup shows the shape row, a task for every seat, and each 
   expect(custom.split("<button").find((b) => b.includes(">Custom<"))).toContain('aria-pressed="true"');
   expect(custom).not.toContain("seat-role");
 });
+
+test("SESS-002: Start waits for a search that succeeded, and an errored one says so", () => {
+  const seats: Seat[] = [{ agent: TERMINAL, model: null }];
+  const view = (pass: { looking: boolean; done: boolean; error: string | null }) =>
+    renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: false, onCopies: () => {}, closable: true, onClose: () => {}, pass, onRefresh: () => {} }));
+  const start = (html: string) => html.split("</button>").find((b) => b.includes("Start"))!;
+  expect(start(view({ looking: false, done: true, error: null }))).not.toContain("disabled");
+  const failed = view({ looking: false, done: true, error: "IPC down" });
+  expect(failed.replace(/<!-- -->/g, "")).toContain("could not look for agents (IPC down)");
+  expect(start(failed)).toContain("disabled");
+  const first = view({ looking: true, done: false, error: null });
+  expect(first).toContain("Looking for agents");
+  expect(start(first)).toContain("disabled");
+  expect(view({ looking: false, done: true, error: null })).toContain("Refresh agents");
+});

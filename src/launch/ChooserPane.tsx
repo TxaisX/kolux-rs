@@ -8,6 +8,7 @@
 import { Close } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
+import { canLaunch, type AgentPass } from "./agents";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, resizeLineup, sameForAll, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
 
 type Props = {
@@ -35,11 +36,15 @@ type Props = {
   closable: boolean;
   onClose: () => void;
   onFocus?: () => void;
+  /** SESS-002: where the agent search stands; Start waits for a pass that succeeded. */
+  pass?: AgentPass;
+  onRefresh?: () => void;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, pass, onRefresh }: Props) {
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
-  const ready = allReady(seats) && !busy;
+  const searched = !pass || canLaunch(pass);
+  const ready = allReady(seats) && !busy && searched;
   const anyReady = seats.some(seatReady);
   // The free field applies on Enter or blur, not per keystroke: typing "15" must not pass
   // through a one-seat moment that drops the picks of seats 2 and up.
@@ -67,6 +72,13 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
       </header>
       <div className="chooser-body">
         <p className="caption">Every seat starts blank. Kolux never picks an AI or a model for you.</p>
+        {pass?.error ? (
+          <p className="caption warn" role="alert">
+            Kolux could not look for agents ({pass.error}). Nothing can start until a search succeeds.
+          </p>
+        ) : pass && !pass.done ? (
+          <p className="caption">Looking for agents…</p>
+        ) : null}
         <div className="count-row" role="group" aria-label="Launch shape">
           <span className="label">Shape</span>
           {SHAPES.map((s) => (
@@ -189,7 +201,12 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
           ))}
         </div>
         <div className="btn-row">
-          <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : "Pick an AI and a model (or Terminal) for every seat first"}>
+          {onRefresh && (
+            <button className="btn" disabled={pass?.looking} onClick={onRefresh} title="Look for installed agent CLIs again, for one you just installed">
+              {pass?.looking ? "Looking…" : "Refresh agents"}
+            </button>
+          )}
+          <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : !searched ? "Waiting for a search for agents that succeeds" : "Pick an AI and a model (or Terminal) for every seat first"}>
             {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
           </button>
         </div>

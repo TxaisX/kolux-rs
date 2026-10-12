@@ -158,6 +158,7 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::project_set,
             agents::agent_list,
+            pty::shell_list,
             agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_summary,

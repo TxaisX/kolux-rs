@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, type Seat } from "./seats";
+import { allReady, clearMissing, defaultCopies, emptySeat, removeTarget, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, type Seat } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -109,4 +109,23 @@ test("SESS-025: the rules block follows the task, names the note, and is cut off
   expect(withoutRules(full)).toBe(`${ROLE_BRIEFS.builder}\n\nFix the login page`);
   expect(withoutRules("Fix it")).toBe("Fix it");
   expect(openingPrompt(claude, "", rules)).toBe("");
+});
+
+test("SESS-008: remove closes the newest chooser silently, then the focused session (asking), never the last chooser", () => {
+  const running = { key: 1 };
+  const chooser = { key: 2, seats: [emptySeat()] };
+  expect(removeTarget([running, chooser], 1)).toEqual({ key: 2, chooser: true });
+  expect(removeTarget([running], 1)).toEqual({ key: 1, chooser: false });
+  expect(removeTarget([running, { key: 3 }], 9)).toEqual({ key: 3, chooser: false });
+  expect(removeTarget([chooser], 2)).toBeNull();
+  expect(removeTarget([], 1)).toBeNull();
+});
+
+test("SESS-002: a seat whose agent is gone or switched off is emptied, not swapped", () => {
+  const seats: Seat[] = [{ agent: "claude", model: "opus" }, { agent: "codex", model: "default" }, { agent: TERMINAL, model: null }];
+  const after = clearMissing(seats, ["claude"]);
+  expect(after[0]).toBe(seats[0]);
+  expect(after[1]).toEqual(emptySeat());
+  expect(after[2]).toBe(seats[2]);
+  expect(allReady(after)).toBe(false);
 });

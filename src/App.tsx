@@ -19,7 +19,7 @@
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
@@ -29,7 +29,7 @@ import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import { readLook, startScreen } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
-import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
+import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
@@ -53,13 +53,13 @@ import RoutingPage from "./settings/RoutingPage";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { SUMMARY_UPSTREAM_KEY } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
-import { DEFAULT_AGENT_KEY, defaultAgentId, menuAgents, offeredAgents } from "./launch/agents";
+import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { nextNeedsYou } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
+import { clearMissing, removeTarget, defaultCopies, emptySeat, modelArgs, openingPrompt, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -68,7 +68,7 @@ import { matchEvent } from "./keys/keymap";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -171,6 +171,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
+  const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
+  const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
   const classic = readLook(settings) === "classic";
   // SET-027: everywhere but Settings, only agents that are switched on are offered.
@@ -201,10 +203,16 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
-    const readAgents = () => void invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
-    readAgents();
-    // SET-027: Refresh on the Agents page looks again; the window takes the new list too.
-    const offAgents = listen("agents-changed", readAgents);
+    refreshAgents();
+    invoke<ShellInfo[]>("shell_list").then(setShells, () => setShells([]));
+    // SET-027: Refresh on the Agents page looks again; the window takes the list it found, so
+    // one refresh is one search (SESS-002).
+    // An install that finished (SET-026) says so with no list: the window searches once for everyone.
+    const offAgents = listen<AgentInfo[] | null>("agents-changed", (e) => {
+      if (!Array.isArray(e.payload)) return refreshAgents();
+      setAgents(e.payload);
+      setAgentPass({ looking: false, done: true, error: null });
+    });
     // SET-001: the saved look is put on the window every time the settings are read.
     const readSettings = () =>
       void invoke<Record<string, unknown>>("get_settings")
@@ -220,6 +228,37 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       void offAgents.then((u) => u()).catch(() => {});
     };
   }, []);
+
+  // SESS-002: one refresh is one search. An errored search keeps the last list but blocks
+  // launching until a search succeeds; nothing counts as missing before the first one is done.
+  function refreshAgents() {
+    setAgentPass((p) => ({ ...p, looking: true }));
+    invoke<AgentInfo[]>("agent_list").then(
+      (list) => {
+        setAgents(list);
+        setAgentPass({ looking: false, done: true, error: null });
+        void emit("agents-changed", list).catch(() => {});
+      },
+      (err) => setAgentPass((p) => ({ ...p, looking: false, error: String(err) || "the search failed" })),
+    );
+  }
+  // SESS-002 / SESS-003: once a search is done, a seat whose agent is gone (or switched off) is
+  // emptied for good, never refilled when the agent comes back.
+  const offeredKey = installedIds.join(",");
+  useEffect(() => {
+    if (!agentPass.done || agentPass.error) return;
+    setPanes((ps) => {
+      let changed = false;
+      const next = ps.map((p) => {
+        if (!p.seats) return p;
+        const seats = clearMissing(p.seats, installedIds);
+        if (seats.every((s, i) => s === p.seats![i])) return p;
+        changed = true;
+        return { ...p, seats };
+      });
+      return changed ? next : ps;
+    });
+  }, [agentPass, offeredKey]);
 
   const saveSetting = (key: string, value: unknown) => {
     const next = { ...settings, [key]: value };
@@ -343,15 +382,23 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           else setPicking("file");
           break;
         case "tab.openMarkdown":
-          if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
-          else setPicking("markdown");
+          void newTab("markdown-open");
           break;
         case "tab.newMarkdown":
-          if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
-          else invoke<string>("md_new", { root: activeDir }).then(openFile, (err) => setToast(String(err)));
+          void newTab("markdown-new");
+          break;
+        case "sessions.add":
+          addChooser();
+          break;
+        case "sessions.remove":
+          removeSession();
           break;
         case "tab.newAgent": {
-          // SET-027: with no default (switched off), the first agent available
+          if (agentPass.error) {
+            setNotice(`Kolux could not look for agents (${agentPass.error}). Refresh agents, then try again.`);
+            break;
+          }
+          // SET-027 / SESS-010: with no default, the first agent available
           const a = defaultId ? agents.find((x) => x.id === defaultId && x.installed) : agents.find((x) => x.installed);
           if (!a) setNotice(defaultId ? `The default agent (${defaultId}) is not installed or is switched off.` : "No agent is installed and switched on.");
           else void newTab(a);
@@ -398,11 +445,22 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setFocused(key);
   };
 
-  // SESS-007: a pane that asks what to run, in the workspace in front.
+  // SESS-007: a pane that asks what to run, in the workspace in front. SESS-008: a grid holds
+  // up to MAX_PANES.
   const addChooser = () => {
+    if (cellsOf(panesIn(panes, activeDir)).length >= MAX_PANES) return setToast(`A workspace holds up to ${MAX_PANES} panes.`);
     const key = nextKey.current++;
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }]);
     setFocused(key);
+  };
+  // SESS-008: the remove-session shortcut closes the newest chooser pane in front without asking;
+  // with none, the focused session, which asks first (once) when a program would stop. A lone
+  // chooser stays, so the grid never drops below one pane.
+  const removeSession = () => {
+    const t = removeTarget(panesIn(panes, activeDir), focused);
+    if (!t) return;
+    if (t.chooser) dropPane(t.key);
+    else if (!asking) closePane(t.key); // at most one question per press
   };
   // TERM-040 / TERM-041: a new tab joins the focused pane's cell (or opens its own cell) and
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
@@ -421,6 +479,25 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       if (same) return setFocused(same.key);
       const key = nextKey.current++;
       setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "changes" }]);
+      setFocused(key);
+      return;
+    }
+    if (what === "chooser") return addChooser();
+    if (what === "markdown-open") {
+      if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
+      else setPicking("markdown");
+      return;
+    }
+    if (what === "markdown-new") {
+      if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
+      else invoke<string>("md_new", { root: activeDir }).then(openFile, (err) => setToast(String(err)));
+      return;
+    }
+    if (what !== null && typeof what === "object" && "shell" in what) {
+      // SESS-006: another installed shell, as a tab beside the focused pane.
+      const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+      const key = nextKey.current++;
+      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: what.shell.program, args: what.shell.args, word: what.shell.name }]);
       setFocused(key);
       return;
     }
@@ -832,6 +909,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             launching={launching}
             onLaunch={launch}
             onChoose={addChooser}
+            allOff={allSwitchedOff(allAgents, settings)}
+            pass={agentPass}
+            onRefresh={refreshAgents}
             page={page}
             onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}
@@ -871,7 +951,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           )}
           {terminals && (
             <>
-              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />}
+              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} />}
               {picking === "file" && activeDir && (
                 <FilePicker
                   root={activeDir}
@@ -1019,7 +1099,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     agents={agents.filter((a) => a.installed)}
-                    seats={clearMissing(p.seats, installedIds)}
+                    seats={p.seats}
+                    pass={agentPass}
+                    onRefresh={refreshAgents}
                     onSeats={(s) => setSeats(p.key, s)}
                     shape={p.shape ?? "custom"}
                     onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
@@ -1060,6 +1142,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title}
                     typed={p.typed}
+                    shellName={p.word}
                     number={p.key}
                     onClose={() => closePane(p.key)}
                     agents={agents}
