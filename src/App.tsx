@@ -66,7 +66,7 @@ import { nextNeedsYou } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, removeTarget, defaultCopies, emptySeat, modelArgs, openingPrompt, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
+import { applyLineup, clearMissing, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, defaultCopies, emptySeat, seatArgs, openingPrompt, type Lineup, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -676,6 +676,23 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
   const setChooser = (key: number, patch: Partial<Pane>) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, ...patch } : p)));
 
+  // SESS-021: a lineup is kept per project once one of its agent seats has really started (its
+  // pane reports a running program); until then it waits here under its batch.
+  const pendingLineup = useRef<Record<number, { pid: string; lineup: Lineup }>>({});
+  const lineupsOf = (s: Record<string, unknown>) => (s[LAST_LINEUP_KEY] ?? {}) as Record<string, Lineup>;
+  const rememberLineup = (batch: number) => {
+    const wait = pendingLineup.current[batch];
+    if (!wait) return;
+    delete pendingLineup.current[batch];
+    void invoke<Record<string, unknown>>("get_settings")
+      .then((s) => {
+        const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
+        setSettings(next);
+        return invoke("save_settings", { value: next });
+      })
+      .catch((err) => setNotice(String(err)));
+  };
+
   // SESS-014: a chooser can copy only inside a Git project: its workspace, or (outside any
   // workspace) the registered projects.
   const inGitFor = (p: Pane) => p.cwd !== null || projects.length > 0;
@@ -725,7 +742,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         const note = a && side ? await invoke<string>("handoff_note_prepare", { root, name: separate ? folderName(cwd) : `${folderName(cwd)}-seat-${i + 1}` }) : null;
         prompts.push(a ? openingPrompt(seats[i], task, note && rulesBlock(note)) : "");
       }
-      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: modelArgs(seats[i].model), prompt: prompts[i] }) : null)));
+      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: seatArgs(seats[i]), prompt: prompts[i], picked: true }) : null)));
       const made: Pane[] = seats.map((s, i) => {
         const a = picked[i];
         const line = lines[i];
@@ -736,6 +753,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           ? { key: k, cwd, branch, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
           : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
+      if (pid && picked.some(Boolean)) pendingLineup.current[batch] = { pid, lineup: lineupOf(chooser.shape ?? "custom", separate ? "separate" : "shared", seats) };
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
       setToast(made.length === 1 ? "Starting 1 session" : `Starting ${made.length} sessions`);
       setActiveDir(made[0].cwd);
@@ -1368,6 +1386,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     seats={p.seats}
                     pass={agentPass}
                     onRefresh={refreshAgents}
+                    lastLineup={offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds)}
+                    onUseLineup={() => {
+                      const l = offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds);
+                      if (l) setChooser(p.key, { ...applyLineup(l, installedIds), copies: l.copies });
+                    }}
                     onSeats={(s) => setSeats(p.key, s)}
                     shape={p.shape ?? "custom"}
                     onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
@@ -1403,6 +1426,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     unread={unreadPanes.has(p.key)}
                     onPty={(id) => {
                       ptys.current[p.key] = id;
+                      if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                     }}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}

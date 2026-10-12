@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, defaultCopies, emptySeat, removeTarget, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, type Seat } from "./seats";
+import { allReady, applyLineup, FAST_SETTINGS, lineupAgents, lineupOf, offeredLineup, seatArgs, clearMissing, defaultCopies, emptySeat, removeTarget, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, type Seat } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -128,4 +128,25 @@ test("SESS-002: a seat whose agent is gone or switched off is emptied, not swapp
   expect(after[1]).toEqual(emptySeat());
   expect(after[2]).toBe(seats[2]);
   expect(allReady(after)).toBe(false);
+});
+
+test("SESS-016: a seat's effort and fast mode reach its start line only when its model offers them", () => {
+  expect(seatArgs({ agent: "claude", model: "opus", effort: "xhigh", fast: true })).toEqual(["--model", "opus", "--effort", "xhigh", "--settings", FAST_SETTINGS]);
+  expect(seatArgs({ agent: "claude", model: "haiku", effort: "high", fast: true })).toEqual(["--model", "haiku"]);
+  expect(seatArgs({ agent: "claude", model: "opus" })).toEqual(["--model", "opus"]);
+  expect(seatArgs({ agent: "claude", model: "default", effort: "high" })).toEqual([]);
+});
+
+test("SESS-021: a lineup keeps shape, folders and each seat's agent and model, never options or prompts", () => {
+  const seats: Seat[] = [{ agent: "codex", model: "gpt-5", prompt: "x", role: "builder" }, { agent: "claude", model: "opus", effort: "max", title: "T", role: "reviewer" }];
+  const l = lineupOf("pair", "separate", seats);
+  expect(l).toEqual({ shape: "pair", copies: "separate", seats: [{ agent: "codex", model: "gpt-5" }, { agent: "claude", model: "opus" }] });
+  expect(lineupAgents(l)).toEqual(["codex", "claude"]);
+  expect(offeredLineup(l, ["claude"])).toBe(l);
+  expect(offeredLineup(l, ["gemini"])).toBeNull();
+  expect(offeredLineup(undefined, ["claude"])).toBeNull();
+  expect(offeredLineup({ shape: "odd", seats: [] }, ["claude"])).toBeNull();
+  const back = applyLineup(l, ["claude"]);
+  expect(back.shape).toBe("pair");
+  expect(back.seats).toEqual([{ agent: null, model: null, role: "builder" }, { agent: "claude", model: "opus", role: "reviewer" }]);
 });
