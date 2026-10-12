@@ -195,3 +195,23 @@ export function runTiles(runs: Run[], now: number) {
 export function onScreen(scrollTop: number, height: number, rowHeight: number, total: number, spare = 5): [number, number] {
   return [Math.max(0, Math.floor(scrollTop / rowHeight) - spare), Math.min(total, Math.ceil((scrollTop + height) / rowHeight) + spare)];
 }
+
+/** AUTO-017: what a key does on the Automations page. `control` is focus in any field, button or
+ *  link (the search box counts as `search` too), `row` is focus on a row itself, and `overlay` is a
+ *  dialog, menu or confirmation on top of the page. Escape steps back from an opened automation
+ *  to the list, then closes the page. */
+export type PageKey = "up" | "down" | "open" | "tab" | "back" | "close";
+export function pageKey(e: { key: string; mods: boolean; control: boolean; search: boolean; row: boolean; overlay: boolean; opened: boolean }): PageKey | null {
+  if (e.mods || e.overlay) return null;
+  if (e.control && !(e.search && ["ArrowUp", "ArrowDown", "Enter"].includes(e.key))) return null;
+  if (e.key === "ArrowUp") return "up";
+  if (e.key === "ArrowDown") return "down";
+  if (e.key === "Enter" || (e.key === " " && e.row)) return e.opened ? null : "open";
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") return "tab";
+  if (e.key === "Escape") return e.opened ? "back" : "close";
+  return null;
+}
+
+/** AUTO-017: the selection stays put; when its row is gone it moves to the row now at its place. */
+export const keepSelection = (rows: string[], selected: string | null, lastIndex: number): string | null =>
+  rows.length === 0 ? null : selected !== null && rows.includes(selected) ? selected : rows[Math.min(lastIndex, rows.length - 1)];

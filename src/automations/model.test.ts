@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { confirmDelete, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, triggerLabel, upcoming, type Automation, type Names, type Run } from "./model";
+import { confirmDelete, keepSelection, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, triggerLabel, upcoming, type Automation, type Names, type Run } from "./model";
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };
 const auto = (id: string, name: string, extra: Partial<Automation> = {}): Automation => ({ id, name, prompt: "", provider: "claude", projectId: "p1", enabled: true, ...extra });
@@ -95,4 +95,24 @@ test("AUTO-015: only the rows on screen are drawn, with a few spare either side"
   expect(onScreen(32 * 5000, 320, 32, 10000)).toEqual([4995, 5015]);
   expect(onScreen(32 * 9995, 320, 32, 10000)).toEqual([9990, 10000]);
   expect(RUN_BATCH).toBe(100);
+});
+
+test("page keys: arrows, Enter and Escape act only outside fields, pop-ups and dialogs, with no modifier (AUTO-017)", () => {
+  const k = (key: string, o: Partial<Parameters<typeof pageKey>[0]> = {}) => pageKey({ key, mods: false, control: false, search: false, row: false, overlay: false, opened: false, ...o });
+  expect([k("ArrowUp"), k("ArrowDown"), k("Enter"), k("ArrowLeft"), k("ArrowRight"), k("Escape")]).toEqual(["up", "down", "open", "tab", "tab", "close"]);
+  expect(k("Escape", { opened: true })).toBe("back");
+  expect(k("Enter", { opened: true })).toBeNull();
+  expect([k("ArrowDown", { search: true, control: true }), k("Enter", { search: true, control: true })]).toEqual(["down", "open"]);
+  expect([k("Escape", { search: true, control: true }), k("ArrowLeft", { search: true, control: true })]).toEqual([null, null]);
+  expect([k("ArrowDown", { control: true }), k("Enter", { control: true })]).toEqual([null, null]);
+  expect([k("ArrowDown", { mods: true }), k("Escape", { overlay: true })]).toEqual([null, null]);
+  expect([k(" "), k(" ", { row: true })]).toEqual([null, "open"]);
+});
+
+test("when the selected row vanishes the selection moves to the row beside it (AUTO-017)", () => {
+  expect(keepSelection(["a", "b", "c"], "b", 1)).toBe("b");
+  expect(keepSelection(["a", "c"], "b", 1)).toBe("c");
+  expect(keepSelection(["a"], "c", 2)).toBe("a");
+  expect(keepSelection([], "a", 0)).toBeNull();
+  expect(keepSelection(["a", "b"], null, 0)).toBe("a");
 });

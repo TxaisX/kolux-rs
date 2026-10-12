@@ -327,7 +327,15 @@ input { font: inherit; }
 .autos-detail h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--fg); }
 .autos-detail h4 { margin: 12px 0 6px; font-size: 12px; font-weight: 500; color: var(--fg-label); }
 .autos-switch { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-muted); }
-.autos-prompt { margin: 10px 0 0; padding: 8px 10px; max-height: 120px; overflow: auto; background: var(--input-bg); border: 1px solid var(--line-subtle); border-radius: 6px; color: var(--fg-row); font: 12px/1.5 var(--mono-font); white-space: pre-wrap; }
+.autos-prompt { margin: 10px 0 0; padding: 8px 10px; overflow: auto; background: var(--input-bg); border: 1px solid var(--line-subtle); border-radius: 6px; color: var(--fg-row); font: 12px/1.5 var(--mono-font); white-space: pre-wrap; }
+.autos-prompt.folded { max-height: 7.6em; overflow: hidden; }
+.autos-fold { margin-top: 4px; padding: 0; font-size: 12px; }
+.autos-tabs { display: flex; gap: 4px; margin: 10px 0 8px; }
+.autos-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 12px; }
+.autos-facts dt { color: var(--fg-label); }
+.autos-facts dd { margin: 0; color: var(--fg-row); }
+.autos-detail-head .chip { height: 18px; }
+tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset: -1px; }
 .autos-runs { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--fg-row); }
 .autos-runs li { display: flex; align-items: center; gap: 10px; height: 26px; border-bottom: 1px solid var(--line-inner); }
 .autos-runs .num { width: 34px; color: var(--fg-label); }

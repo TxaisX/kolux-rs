@@ -20,7 +20,7 @@ const filters: Array<{ value: RunFilter; label: string }> = [
 const eventTip = (r: Run, a: Automation | undefined) => (r.trigger === "event" ? (a?.trigger?.kind === "event" ? triggerLabel(a) : "Started by an event") : undefined);
 
 type Crumbs = { onAutomations: () => void; onRuns?: () => void; last: string };
-function Breadcrumb({ onAutomations, onRuns, last }: Crumbs) {
+export function Breadcrumb({ onAutomations, onRuns, last }: Crumbs) {
   return (
     <nav className="runs-crumbs" aria-label="Breadcrumb">
       <button className="link" onClick={onAutomations}>

@@ -739,6 +739,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           <SignInNotice />
           {terminals && page === "automations" && (
             <AutomationsPage
+              onClose={() => setPage(null)}
               projects={projects}
               agents={agents}
               settings={settings}
