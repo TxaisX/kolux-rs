@@ -88,9 +88,24 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json]\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
 
-const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages"];
+const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "focus", "include-visual-layouts", "tab"];
+/// CLI-023, CLI-026, CLI-027: the terminal commands and their flags. Focus is another word for
+/// switch; stop is the old word for close, kept out of the help.
+const TERMINAL: &[(&str, &str, &[&str])] = &[
+    ("terminal list", "terminal.list", &["worktree", "limit", "include-visual-layouts"]),
+    ("terminal show", "terminal.show", &["terminal"]),
+    ("terminal create", "terminal.create", &["worktree", "command", "title", "focus"]),
+    ("terminal split", "terminal.split", &["terminal", "direction", "command"]),
+    ("terminal rename", "terminal.rename", &["terminal", "title"]),
+    ("terminal switch", "terminal.switch", &["terminal"]),
+    ("terminal focus", "terminal.switch", &["terminal"]),
+    ("terminal close", "terminal.close", &["terminal", "tab", "worktree", "all"]),
+    ("terminal stop", "terminal.close", &["terminal", "tab", "worktree", "all"]),
+];
+/// CLI-027: what the retired word says.
+const STOP_GONE: &str = "terminal stop was replaced by terminal close: use kolux-dev terminal close --worktree <selector> --all, or --terminal <handle>";
 /// ORCH-001..006, ORCH-010, ORCH-011, ORCH-013 / CLI-030..032, CLI-034: the mail and task commands
 /// and their flags. `--dispatch-capability` is accepted and unused until the dispatch pass (ORCH-067, T-155).
 const MAIL: &[(&str, &str, &[&str])] = &[
@@ -222,6 +237,7 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             "orchestration worker-start" => (WORKER_START, WORKER_FLAGS),
             other if QUERY.iter().any(|(w, _, _)| *w == other) => QUERY.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
             other if MAIL.iter().any(|(w, _, _)| *w == other) => MAIL.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
+            other if TERMINAL.iter().any(|(w, _, _)| *w == other) => TERMINAL.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
             "open" => ("app.open", OPEN_FLAGS),
             _ => return Err(Fail::args(format!("unknown command `{joined}`; run kolux-dev --help"))),
         };
@@ -368,6 +384,14 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             if text("limit").is_some_and(|v| v.parse::<u64>().map(|n| n == 0).unwrap_or(true)) {
                 return Err(Fail::args("--limit takes a number above zero"));
             }
+        } else if command.starts_with("terminal.") {
+            check_terminal(&joined, command, &flags)?;
+            for (k, v) in &flags {
+                args.insert(camel(k), v.clone());
+            }
+            if joined == "terminal stop" {
+                args.insert("note".into(), json!(STOP_GONE));
+            }
         } else if command == "worktree.rm" {
             if text("worktree").map(str::trim).unwrap_or_default().is_empty() {
                 return Err(Fail::args("--worktree is required"));
@@ -381,6 +405,44 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
     (json, inner)
 }
 
+
+/// CLI-023, CLI-026, CLI-027: what a terminal command needs, checked before the app is asked.
+fn check_terminal(joined: &str, command: &str, flags: &Map<String, Value>) -> Result<(), Fail> {
+    let has = |k: &str| flags.contains_key(k);
+    let text = |k: &str| flags.get(k).and_then(Value::as_str).map(str::trim);
+    if let Some(k) = flags.keys().find(|k| k.as_str() != "title" && text(k).is_some_and(str::is_empty)) {
+        return Err(Fail::args(format!("--{k} cannot be empty")));
+    }
+    if joined == "terminal stop" && !has("terminal") && !has("all") {
+        return Err(Fail::args(STOP_GONE));
+    }
+    match command {
+        "terminal.show" | "terminal.split" | "terminal.rename" | "terminal.switch" if !has("terminal") => {
+            return Err(Fail::args("--terminal is required: the handle terminal list prints, like term-3"));
+        }
+        "terminal.close" => {
+            if has("tab") && !has("terminal") {
+                return Err(Fail::args("--tab closes the whole tab of --terminal <handle>; name the terminal"));
+            }
+            if has("all") != has("worktree") {
+                return Err(Fail::args("--worktree and --all go together: --worktree <selector> --all closes every terminal in that worktree"));
+            }
+            match (has("terminal"), has("all")) {
+                (true, true) => return Err(Fail::args("give --terminal <handle> or --worktree <selector> --all, not both")),
+                (false, false) => return Err(Fail::args("say what to close: --terminal <handle> (add --tab for its whole tab) or --worktree <selector> --all")),
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    if text("direction").is_some_and(|d| !["horizontal", "vertical"].contains(&d)) {
+        return Err(Fail::args("--direction takes horizontal or vertical"));
+    }
+    if text("limit").is_some_and(|v| v.parse::<u64>().map(|n| n == 0).unwrap_or(true)) {
+        return Err(Fail::args("--limit takes a number above zero"));
+    }
+    Ok(())
+}
 
 /// ORCH-016 / ORCH-018 / ORCH-019 / CLI-035: what a worker start must and must not combine,
 /// checked before the app is asked so nothing is half made.
@@ -598,7 +660,7 @@ fn request_id() -> String {
 
 /// What a success looks like without `--json`.
 fn text_of(command: &str, r: &Value) -> String {
-    if let Some(t) = query_text(command, r) {
+    if let Some(t) = query_text(command, r).or_else(|| terminal_text(command, r)) {
         return t;
     }
     let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
@@ -809,6 +871,9 @@ pub fn main(words: Vec<String>) -> i32 {
         }
         Err(f) => return finish(Err(f)),
     };
+    if !json && parsed.command == "terminal.list" {
+        parsed.args.insert("includeVisualLayouts".into(), Value::Bool(true));
+    }
     let retry_word = CHANGES.contains(&parsed.command.as_str()).then(|| {
         let id = parsed.args.get("retryRequest").and_then(Value::as_str).map(str::to_string).unwrap_or_else(uuid);
         parsed.args.insert("retryRequest".into(), json!(id));
@@ -951,7 +1016,9 @@ fn pick_in(ctx: &Ctx, sel: &str, cwd: &str, parent: bool) -> Result<(Project, Wo
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut hits: Vec<(Project, Worktree)> = Vec::new();
     for p in projects::load_projects(&store) {
-        for w in projects::list_workspaces(ctx.git, &store, &p)? {
+        // A project whose folder is gone or unreadable has no worktrees to match; it must not stop
+        // every other lookup.
+        for w in projects::list_workspaces(ctx.git, &store, &p).unwrap_or_default() {
             let folder = Path::new(&w.path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
             let same = |x: &str| under(&w.path, x) && under(x, &w.path);
             let ok = match kind {
@@ -1059,8 +1126,234 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         WORKER_START => worker_start(ctx, req),
         c if QUERY.iter().any(|(_, w, _)| *w == c) => query(ctx, req),
         c if c.starts_with("orchestration.") => mail(ctx, req),
+        c if c.starts_with("terminal.") => terminal_cmd(ctx, req),
         other => Err(Fail::args(format!("unknown command {other}"))),
     }
+}
+
+// ---------------------------------------------------------------- terminals (CLI-023, CLI-026, CLI-027)
+
+/// How long a terminal command waits for the window to act on it.
+const PANE_WAIT: Duration = Duration::from_secs(15);
+
+fn no_terminal(h: &str) -> Fail {
+    Fail { code: "not_found", message: format!("no open terminal is {h}"), data: json!({ "hint": "kolux-dev terminal list prints the handles" }) }
+}
+
+/// CLI-026: one-shot forms of a startup command (exec, print, review, help) stay in the background.
+fn one_shot(command: &str) -> bool {
+    command.split_whitespace().skip(1).any(|w| ["exec", "review", "help", "-p", "--print", "--help", "-h"].contains(&w))
+}
+
+/// CLI-023: every open terminal with its worktree and where the window shows it: its pane (a cell
+/// of the worktree's grid, counted from 1), its tab inside that pane, and whether it is in view.
+fn terminal_rows(ctx: &Ctx) -> Result<Vec<Value>, Fail> {
+    let mut trees: Vec<(String, Option<String>)> = Vec::new();
+    {
+        let store = ctx.store.lock().map_err(|e| e.to_string())?;
+        for p in projects::load_projects(&store) {
+            trees.extend(projects::list_workspaces(ctx.git, &store, &p).unwrap_or_default().into_iter().map(|w| (w.path, w.branch)));
+        }
+    }
+    let layout = ctx.terminals.layout();
+    Ok(ctx
+        .terminals
+        .every()
+        .into_iter()
+        .map(|(handle, dir, program)| {
+            let at = layout.iter().find(|r| r["handle"] == handle.as_str()).cloned().unwrap_or(Value::Null);
+            let home = dir.as_deref().and_then(|d| trees.iter().filter(|(w, _)| under(w, d)).max_by_key(|(w, _)| w.len()));
+            json!({ "handle": handle, "title": at["title"], "worktree": home.map(|h| h.0.clone()), "branch": home.and_then(|h| h.1.clone()), "cwd": dir, "program": program, "host": "local", "pane": at["cell"], "tab": at["tab"], "shown": at["shown"].as_bool().unwrap_or(false) })
+        })
+        .collect())
+}
+
+/// CLI-023: worktree, then pane, then the tabs inside it, each in window order.
+fn layouts(rows: &[Value]) -> Value {
+    let mut out: Vec<Value> = Vec::new();
+    for r in rows {
+        let i = out.iter().position(|w| w["worktree"] == r["worktree"]).unwrap_or_else(|| {
+            out.push(json!({ "worktree": r["worktree"], "panes": [] }));
+            out.len() - 1
+        });
+        let panes = out[i]["panes"].as_array_mut().expect("panes is a list");
+        let j = panes.iter().position(|p| p["pane"] == r["pane"]).unwrap_or_else(|| {
+            panes.push(json!({ "pane": r["pane"], "tabs": [] }));
+            panes.len() - 1
+        });
+        panes[j]["tabs"].as_array_mut().expect("tabs is a list").push(json!({ "tab": r["tab"], "handle": r["handle"], "title": r["title"], "shown": r["shown"] }));
+    }
+    for w in &mut out {
+        let panes = w["panes"].as_array_mut().expect("panes is a list");
+        panes.sort_by_key(|p| p["pane"].as_u64().unwrap_or(u64::MAX));
+        for p in panes {
+            p["tabs"].as_array_mut().expect("tabs is a list").sort_by_key(|t| t["tab"].as_u64().unwrap_or(u64::MAX));
+        }
+    }
+    Value::Array(out)
+}
+
+/// Waits for the window's layout to show what found looks for.
+fn await_layout(ctx: &Ctx, what: &str, found: impl Fn(&Value) -> Option<Result<Value, Fail>>) -> Result<Value, Fail> {
+    let until = Instant::now() + PANE_WAIT;
+    loop {
+        if let Some(out) = ctx.terminals.layout().iter().find_map(&found) {
+            return out;
+        }
+        if Instant::now() >= until {
+            return Err(Fail { code: "timeout", message: format!("the window did not {what} within 15 seconds"), data: json!({ "hint": "it may still happen; kolux-dev terminal list shows what is open" }) });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The pane the window opened for request ask, or why it could not.
+fn await_pane(ctx: &Ctx, ask: &str) -> Result<Value, Fail> {
+    await_layout(ctx, "open the terminal", |r| {
+        (r["ask"] == ask).then(|| r["error"].as_str().map_or(Ok(r.clone()), |e| Err(Fail::new("failed", e)))).filter(|out| out.is_err() || r["handle"].is_string())
+    })
+}
+
+fn terminal_cmd(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    let a = &req.args;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let live = |h: &str| if ctx.terminals.live(h) { Ok(()) } else { Err(no_terminal(h)) };
+    let handle = text("terminal").unwrap_or_default();
+    match req.command.as_str() {
+        "terminal.list" => {
+            let only = text("worktree").map(|s| pick_worktree(ctx, &s, &req.cwd)).transpose()?;
+            let mut rows: Vec<Value> = terminal_rows(ctx)?.into_iter().filter(|r| only.as_ref().is_none_or(|(_, w)| r["worktree"].as_str().is_some_and(|x| same_dir(x, &w.path)))).collect();
+            let total = rows.len();
+            if let Some(n) = text("limit").and_then(|l| l.parse::<usize>().ok()) {
+                rows.truncate(n);
+            }
+            let mut out = json!({ "terminals": rows, "truncated": total > rows.len(), "scope": only.map(|(_, w)| w.path), "hosts": hosts() });
+            if a["includeVisualLayouts"] == true {
+                out["layouts"] = layouts(&rows);
+            }
+            Ok(out)
+        }
+        "terminal.show" => terminal_rows(ctx)?.into_iter().find(|r| r["handle"] == handle.as_str()).ok_or_else(|| no_terminal(&handle)),
+        "terminal.create" => {
+            let (_, w) = pick_worktree(ctx, &text("worktree").unwrap_or_else(|| "current".into()), &req.cwd)?;
+            crate::pty::check_start_dir(&w.path, false)?;
+            let command = text("command");
+            let asked = a["focus"] == true;
+            let quiet = command.as_deref().is_some_and(one_shot);
+            let focus = asked && !quiet;
+            (ctx.notify)(json!({ "kind": "terminal-create", "path": w.path, "branch": w.branch, "command": command, "title": text("title"), "focus": focus, "ask": req.id }));
+            let row = await_pane(ctx, &req.id)?;
+            if focus {
+                (ctx.front)()?;
+            }
+            let note = (asked && quiet).then_some("a one-shot command stays in the background, so it was not brought into view");
+            Ok(json!({ "handle": row["handle"], "worktree": w.path, "branch": w.branch, "command": command, "title": row["title"], "pane": row["cell"], "tab": row["tab"], "focused": focus, "note": note }))
+        }
+        "terminal.split" => {
+            live(&handle)?;
+            let direction = text("direction").unwrap_or_else(|| "vertical".into());
+            let dir = if direction == "horizontal" { "down" } else { "right" };
+            (ctx.notify)(json!({ "kind": "terminal-split", "handle": handle, "dir": dir, "command": text("command"), "ask": req.id }));
+            let row = await_pane(ctx, &req.id)?;
+            Ok(json!({ "handle": row["handle"], "from": handle, "direction": direction, "pane": row["cell"], "tab": row["tab"], "focused": false }))
+        }
+        "terminal.rename" => {
+            live(&handle)?;
+            let title = text("title");
+            (ctx.notify)(json!({ "kind": "terminal-rename", "handle": handle, "title": title }));
+            let want = json!(title);
+            let row = await_layout(ctx, "rename the terminal", |r| (r["handle"] == handle.as_str() && r["custom"] == want).then(|| Ok(r.clone())))?;
+            Ok(json!({ "handle": handle, "title": row["title"], "default": title.is_none() }))
+        }
+        "terminal.switch" => {
+            live(&handle)?;
+            (ctx.notify)(json!({ "kind": "terminal-switch", "handle": handle }));
+            (ctx.front)()?;
+            let row = await_layout(ctx, "bring the terminal into view", |r| (r["handle"] == handle.as_str() && r["shown"] == true).then(|| Ok(r.clone())))?;
+            Ok(json!({ "handle": handle, "title": row["title"], "shown": true }))
+        }
+        "terminal.close" => {
+            let rows = terminal_rows(ctx)?;
+            let of = |r: &Value| r["handle"].as_str().unwrap_or_default().to_string();
+            let targets: Vec<String> = if handle.is_empty() {
+                let (_, w) = pick_worktree(ctx, &text("worktree").unwrap_or_default(), &req.cwd)?;
+                rows.iter().filter(|r| r["worktree"].as_str().is_some_and(|x| same_dir(x, &w.path))).map(of).collect()
+            } else {
+                let row = rows.iter().find(|r| r["handle"] == handle.as_str()).ok_or_else(|| no_terminal(&handle))?;
+                if a["tab"] == true && !row["pane"].is_null() {
+                    rows.iter().filter(|r| r["cwd"] == row["cwd"] && r["pane"] == row["pane"]).map(of).collect()
+                } else {
+                    vec![handle.clone()]
+                }
+            };
+            // The terminal this command runs in is left open: closing it would cut off the answer.
+            let me = caller(ctx, req).ok().flatten();
+            let (mine, targets): (Vec<String>, Vec<String>) = targets.into_iter().partition(|h| me.as_deref() == Some(h.as_str()));
+            if targets.is_empty() && !mine.is_empty() && !handle.is_empty() {
+                return Err(Fail::args(format!("{handle} is the terminal this command runs in; close it from another terminal or from the window")));
+            }
+            let (closed, alive): (Vec<String>, Vec<String>) = targets.iter().cloned().partition(|h| ctx.terminals.close(h));
+            (ctx.notify)(json!({ "kind": "terminal-close", "handles": targets }));
+            let out = json!({ "closed": closed, "notConfirmed": alive, "leftOpen": mine, "note": a["note"] });
+            if !alive.is_empty() {
+                return Err(Fail { code: "failed", message: format!("{} terminal(s) may still be running: {}", alive.len(), alive.join(", ")), data: out });
+            }
+            Ok(out)
+        }
+        other => Err(Fail::args(format!("unknown command {other}"))),
+    }
+}
+
+/// The readable form of the terminal commands' answers.
+fn terminal_text(command: &str, r: &Value) -> Option<String> {
+    let s = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
+    let list = |k: &str| r[k].as_array().cloned().unwrap_or_default().iter().filter_map(|h| h.as_str().map(String::from)).collect::<Vec<_>>();
+    let mut lines: Vec<String> = Vec::new();
+    match command {
+        "terminal.list" => {
+            let rows = r["terminals"].as_array().cloned().unwrap_or_default();
+            if rows.is_empty() {
+                lines.push(format!("no terminals open in {}", r["scope"].as_str().unwrap_or("any worktree")));
+            } else if let Some(trees) = r["layouts"].as_array() {
+                for w in trees {
+                    lines.push(w["worktree"].as_str().unwrap_or("(outside every worktree)").to_string());
+                    for p in w["panes"].as_array().into_iter().flatten() {
+                        lines.push(p["pane"].as_u64().map_or("  (not in the window yet)".into(), |n| format!("  pane {n}")));
+                        for t in p["tabs"].as_array().into_iter().flatten() {
+                            lines.push(format!("    {}  {}{}", s(t, "handle"), s(t, "title"), if t["shown"] == true { "  (in view)" } else { "" }));
+                        }
+                    }
+                }
+            } else {
+                lines.extend(rows.iter().map(|t| format!("{}  {}  {}", s(t, "handle"), s(t, "title"), t["worktree"].as_str().unwrap_or("-"))));
+            }
+            if r["truncated"] == true {
+                lines.push("(more not shown; raise --limit)".into());
+            }
+            lines.push("hosts covered: local; none left out".into());
+        }
+        "terminal.show" => {
+            lines.push(format!("{}  {}", s(r, "handle"), s(r, "title")));
+            lines.push(format!("worktree {} · pane {} tab {} · host {}{}", r["worktree"].as_str().unwrap_or("none"), r["pane"], r["tab"], s(r, "host"), if r["shown"] == true { " · in view" } else { "" }));
+        }
+        "terminal.create" => lines.push(format!("opened {} in {}{}", s(r, "handle"), s(r, "worktree"), if r["focused"] == true { " and brought it into view" } else { " in the background" })),
+        "terminal.split" => lines.push(format!("split {}: {} opened {}", s(r, "from"), s(r, "handle"), if s(r, "direction") == "horizontal" { "below it" } else { "beside it" })),
+        "terminal.rename" => lines.push(if r["default"] == true { format!("{} has its default name back: {}", s(r, "handle"), s(r, "title")) } else { format!("{} is now called {}", s(r, "handle"), s(r, "title")) }),
+        "terminal.switch" => lines.push(format!("{} is in view", s(r, "handle"))),
+        "terminal.close" => {
+            let closed = list("closed");
+            lines.push(if closed.is_empty() { "nothing was open there to close".into() } else { format!("closed and confirmed stopped: {}", closed.join(", ")) });
+            let mine = list("leftOpen");
+            if !mine.is_empty() {
+                lines.push(format!("left open: {} (the terminal this command runs in)", mine.join(", ")));
+            }
+        }
+        _ => return None,
+    }
+    if let Some(n) = r["note"].as_str() {
+        lines.push(format!("note: {n}"));
+    }
+    Some(lines.join("\n"))
 }
 
 // ---------------------------------------------------------------- repos, projects, worktrees (CLI-015..017)
@@ -1891,6 +2184,50 @@ mod tests {
 
     fn words(s: &str) -> Vec<String> {
         s.split(' ').map(String::from).collect()
+    }
+
+    /// CLI-023, CLI-026, CLI-027: the terminal words, their flags, focus as switch and stop as a
+    /// hidden close that says what replaced it.
+    #[test]
+    fn the_terminal_commands_are_checked_before_the_app_is_asked() {
+        let ok = |s: &str| parse(&words(s)).1.unwrap().unwrap();
+        let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
+        let p = ok("terminal list --worktree name:a --limit 2 --include-visual-layouts");
+        assert_eq!((p.command.as_str(), &p.args["worktree"], &p.args["limit"], &p.args["includeVisualLayouts"]), ("terminal.list", &json!("name:a"), &json!("2"), &json!(true)));
+        let p = ok("terminal create --worktree active --command codex --title Review --focus");
+        assert_eq!((p.command.as_str(), &p.args["command"], &p.args["focus"]), ("terminal.create", &json!("codex"), &json!(true)));
+        assert_eq!(ok("terminal focus --terminal term-3").command, "terminal.switch");
+        assert_eq!(ok("terminal rename --terminal term-3").args.get("title"), None);
+        assert_eq!(ok("terminal split --terminal term-3 --direction horizontal").args["direction"], "horizontal");
+        assert!(refused("terminal split --terminal term-3 --direction sideways").contains("horizontal or vertical"));
+        assert!(refused("terminal show").contains("--terminal is required"));
+        assert!(refused("terminal close").contains("say what to close"));
+        assert!(refused("terminal close --all").contains("go together"));
+        assert!(refused("terminal close --tab --worktree name:a --all").contains("--tab"));
+        assert!(refused("terminal close --terminal term-1 --worktree name:a --all").contains("not both"));
+        assert_eq!(ok("terminal close --terminal term-1 --tab").args["tab"], true);
+        assert!(refused("terminal list --limit 0").contains("above zero"));
+        assert!(refused("terminal create --colour red").contains("unknown flag"));
+        // the old word: hidden, still explains itself, and with a target it closes with a note
+        assert!(refused("terminal stop").contains("replaced by terminal close"));
+        let p = ok("terminal stop --worktree name:a --all");
+        assert_eq!(p.command, "terminal.close");
+        assert!(p.args["note"].as_str().unwrap().contains("terminal close"));
+        assert!(!HELP.contains("terminal stop") && HELP.contains("terminal close"));
+        assert!(one_shot("codex exec fix it") && one_shot("claude -p hi") && !one_shot("codex") && !one_shot("claude --model opus"));
+    }
+
+    /// CLI-023: the readable listing nests tabs under their pane, worktree by worktree, and an
+    /// empty one says what it looked at.
+    #[test]
+    fn the_terminal_listing_draws_panes_with_their_tabs() {
+        let row = |h: &str, wt: &str, pane: u64, tab: u64, shown: bool| json!({ "handle": h, "title": format!("T {h}"), "worktree": wt, "pane": pane, "tab": tab, "shown": shown });
+        let rows = vec![row("term-4", "C:/a", 2, 1, false), row("term-2", "C:/a", 1, 2, true), row("term-1", "C:/a", 1, 1, false), row("term-9", "C:/b", 1, 1, true)];
+        let out = json!({ "terminals": rows, "layouts": layouts(&rows), "hosts": hosts() });
+        let text = terminal_text("terminal.list", &out).unwrap();
+        assert_eq!(text, "C:/a\n  pane 1\n    term-1  T term-1\n    term-2  T term-2  (in view)\n  pane 2\n    term-4  T term-4\nC:/b\n  pane 1\n    term-9  T term-9  (in view)\nhosts covered: local; none left out");
+        let empty = terminal_text("terminal.list", &json!({ "terminals": [], "scope": "C:/a" })).unwrap();
+        assert!(empty.starts_with("no terminals open in C:/a") && empty.ends_with("none left out"));
     }
 
     #[test]

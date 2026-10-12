@@ -200,7 +200,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-103-b · VIEW-036 [compat] Add or remove sessions by shortcut (the commands exist; the live check needs keys assigned, and writing ~/.kolux/keybindings.json was refused; this card says remove always asks, while the session-remove card drops an empty chooser without asking)
 - [x] T-104-a · ACCT-046 Windows terminals choose the best shell on the machine · ACCT-048 Terminals begin with a clean environment · ACCT-049 Terminals refuse start folders that are unsafe or out of reach
 - [ ] T-104-b · ACCT-047 Startup commands run once, after the shell is ready · ACCT-065 macOS and Linux terminals fall back to a shell that works (the ready signal needs shell wrappers and prompt markers, which nothing reads yet; the macOS and Linux fallback can only be proven on those systems)
-- [ ] T-105 · CLI-023 [compat] kolux terminal list and show · CLI-026 [compat] kolux terminal create, split, rename and switch (also focus)
+- [x] T-105 · CLI-023 [compat] kolux terminal list and show · CLI-026 [compat] kolux terminal create, split, rename and switch (also focus)
 
 ### P1 · theme 2 · Isolation: one worktree per agent (36 cards)
 
@@ -312,7 +312,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-183 · APP-021 Broken folder permissions are detected and repaired on Windows · APP-039 After a crash the app offers to report it as a GitHub issue · APP-042 When the interface crashes or a screen fails to load, the app recovers or asks · APP-043 Repeated graphics crashes lead to safe graphics, with the user's consent · APP-049 A damaged saved-state file never wipes the user's setup
 - [ ] T-184 · APP-053 Closing a terminal or the app leaves no orphaned processes · APP-062 A manual restore check proves terminals survive quits and a killed service · also passes: STAT-054 Closing an agent ends every process it started · ACCT-051 Closing a pane or quitting ends every child process
 - [x] T-185-a · CLI-006 [compat] Windows: the kolux.cmd shim and the kolux.exe launcher · CLI-010 Which commands need the app to be running · CLI-038 [compat] Safe retry after a lost result: the retry flag, request-show and reset (T-185 split; registering the install's bin folder on the system PATH is T-250, and agent-context and skills answering without the app are T-198)
-- [ ] T-185-b · CLI-027 [compat] kolux terminal close, with the old stop kept as a hidden alias (from T-185: built with T-105's terminal command group)
+- [x] T-185-b · CLI-027 [compat] kolux terminal close, with the old stop kept as a hidden alias (from T-185: built with T-105's terminal command group)
 
 ### P1 · theme 11 · Orchestration and automations (47 cards)
 

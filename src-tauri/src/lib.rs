@@ -135,6 +135,7 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            terminal::terminal_layout,
             projects::git_version,
             projects::project_list,
             projects::project_add,

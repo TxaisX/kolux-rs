@@ -80,7 +80,7 @@ type KitWait = { role: string; upstream: string; key: number; prompt: string };
 type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number> };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -180,6 +180,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const markDir = (dir: string, un: boolean) => setUnreadDirs((u) => new Set(un ? [...u, dir] : [...u].filter((d) => !sameDir(d, dir))));
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
+  const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
@@ -670,18 +671,24 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   };
 
   // TERM-006: a split opens a shell in the pane's own folder, beside it (right) or under it.
-  const splitPane = (key: number, dir: "right" | "down") => {
+  // CLI-026: a split from the command line works on the pane named, wherever it is, and leaves the
+  // active tab and the focus alone.
+  const splitPane = (key: number, dir: "right" | "down", cli?: { ask: string; command: string | null }) => {
     const src = panes.find((p) => p.key === key);
-    if (!src) return;
-    const shown = cellsOf(panesIn(panes, activeDir));
-    if (shown.length >= MAX_PANES) {
-      setToast(`A workspace holds up to ${MAX_PANES} panes.`);
+    if (!src) {
+      if (cli) cliFailed.current[cli.ask] = "that terminal is not in the window";
       return;
     }
-    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [] };
+    const shown = cellsOf(panesIn(panes, src.cwd));
+    if (shown.length >= MAX_PANES) {
+      if (cli) cliFailed.current[cli.ask] = `its worktree already holds ${MAX_PANES} panes; open a tab with terminal create instead`;
+      else setToast(`A workspace holds up to ${MAX_PANES} panes.`);
+      return;
+    }
+    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [], typed: cli?.command ?? undefined, ask: cli?.ask };
     const at = splitIndex(shown.map((c) => c.group), groupOf(src), dir, columnsFor(shown.length + 1));
     setPanes(insertBefore(panes, shown[at]?.panes[0], pane));
-    setFocused(pane.key);
+    if (!cli) setFocused(pane.key);
   };
 
   const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
@@ -883,11 +890,50 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
 
   // PROJ-077: a workspace made or removed from the command line shows up like one made here;
   // the handlers are read through a ref so the one listener never goes stale.
-  const cli = useRef({ startIn, select, removed });
-  cli.current = { startIn, select, removed };
+  // CLI-026, CLI-027: the terminal commands. A new terminal joins the worktree's last pane as a
+  // tab; unless asked to come into view it leaves that pane's shown tab and the focus as they were.
+  const keyOfHandle = (h: string) => Number(Object.keys(ptys.current).find((k) => `term-${ptys.current[Number(k)]}` === h) ?? NaN);
+  const showDir = (dir: string | null) => {
+    setPage(null);
+    if (dir !== null) recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
+    setActiveDir(dir);
+    setScreen("terminals");
+  };
+  const termCreate = (c: { path: string; branch: string | null; command: string | null; title: string | null; focus: boolean; ask: string }) => {
+    const here = cellsOf(panesIn(panes, c.path));
+    const last = here[here.length - 1];
+    const key = nextKey.current++;
+    if (last && !c.focus) {
+      const on = last.panes.some((p) => p.key === activeTab[last.group]) ? activeTab[last.group] : last.panes[last.panes.length - 1].key;
+      setActiveTab((m) => ({ ...m, [last.group]: on }));
+    }
+    setPanes((ps) => [...ps, { key, cwd: c.path, branch: c.branch, agent: "shell", program: null, args: [], typed: c.command ?? undefined, title: c.title ?? undefined, ask: c.ask, group: last?.group }]);
+    if (c.focus) {
+      showDir(c.path);
+      setFocused(key);
+    }
+  };
+  const termSwitch = (handle: string) => {
+    const p = panes.find((x) => x.key === keyOfHandle(handle));
+    if (!p) return;
+    showDir(p.cwd);
+    setFocused(p.key);
+  };
+  const termRename = (handle: string, title: string | null) => {
+    const key = keyOfHandle(handle);
+    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title: title ?? undefined } : p)));
+  };
+  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, dropPane: (_k: number) => {} });
+  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, dropPane: (k: number) => dropPane(k) };
   useEffect(() => {
     const off = listen<CliWorkspace>("cli-workspace", (e) => {
       const p = e.payload;
+      const c = cli.current;
+      if (p.kind === "terminal-create") return c.termCreate(p);
+      if (p.kind === "terminal-split") return c.splitPane(c.keyOfHandle(p.handle), p.dir, p);
+      if (p.kind === "terminal-rename") return c.termRename(p.handle, p.title);
+      if (p.kind === "terminal-switch") return c.termSwitch(p.handle);
+      if (p.kind === "terminal-close") return p.handles.map(c.keyOfHandle).filter(Number.isFinite).forEach(c.dropPane);
       setRefresh((n) => n + 1);
       if (p.kind === "removed") {
         cli.current.removed(p.path);
@@ -1056,6 +1102,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // the workspace's empty placeholder.
   // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
   const failedPane = (key: number, error: string) => {
+    const ask = panes.find((p) => p.key === key)?.ask;
+    if (ask) cliFailed.current[ask] = error;
     const { panes: rest, batchEmpty } = withoutFailed(panes, key);
     setPanes(rest);
     setFocused((f) => (f === key ? focusIn(rest, activeDir, f) : f));
@@ -1126,6 +1174,27 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     if (!cell) return false;
     return board || (terminals && sameDir(cell.panes[0].cwd, activeDir) && activeOf(cell) === key);
   };
+  // CLI-023: the command line learns where each terminal sits (its worktree pane, its tab, its
+  // name, whether it is in view) from this report, sent whenever that changes.
+  const layoutSent = useRef("");
+  const reportLayout = () => {
+    const rows: Record<string, unknown>[] = [];
+    for (const c of cells) {
+      const here = cells.filter((x) => sameDir(x.panes[0].cwd, c.panes[0].cwd));
+      c.panes.forEach((p, i) => {
+        const id = ptys.current[p.key];
+        if (id !== undefined) rows.push({ handle: `term-${id}`, dir: p.cwd, cell: here.indexOf(c) + 1, tab: i + 1, title: tabName(p, titles), custom: p.title ?? null, shown: inView(p.key), ask: p.ask ?? null });
+      });
+    }
+    for (const [ask, error] of Object.entries(cliFailed.current)) rows.push({ ask, error });
+    const sent = JSON.stringify(rows);
+    if (sent === layoutSent.current) return;
+    layoutSent.current = sent;
+    void invoke("terminal_layout", { rows }).catch(() => undefined);
+  };
+  const report = useRef(reportLayout);
+  report.current = reportLayout;
+  useEffect(() => report.current());
   const noticed = (p: Pane, what: string) => {
     if (!marksUnread(p.key, new Set(panes.map((x) => x.key)), unreadPanes, inView(p.key), winFocused)) return;
     setUnreadPanes((u) => new Set([...u, p.key]));
@@ -1446,6 +1515,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     unread={unreadPanes.has(p.key)}
                     onPty={(id) => {
                       ptys.current[p.key] = id;
+                      report.current();
                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                     }}
                     onFailed={(error) => failedPane(p.key, error)}

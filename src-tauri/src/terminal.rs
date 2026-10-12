@@ -3,9 +3,9 @@
 
 use crate::pty::{check_start_dir, inherited_noise, is_shell_program, program_command, shell_commands, start_dir, PtySession};
 use base64::Engine as _;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 pub const OUTPUT_EVENT: &str = "terminal-output";
@@ -14,6 +14,9 @@ pub const EXIT_EVENT: &str = "terminal-exit";
 #[derive(Default, Clone)]
 pub struct Terminals {
     inner: Arc<Mutex<Inner>>,
+    /// CLI-023: where each terminal sits in the window (worktree pane, tab, title, in view), as the
+    /// window last reported it, plus the command-line requests it could not open.
+    layout: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 #[derive(Default)]
@@ -29,6 +32,8 @@ struct Inner {
     /// CLI-007 / ORCH-001: each session secret pane key, put in its environment as
     /// `KOLUX_PANE_KEY` next to its handle, so a command run inside it can prove which pane it is.
     keys: HashMap<u32, String>,
+    /// CLI-027: sessions whose process has ended, so a close can confirm the program is gone.
+    ended: HashSet<u32>,
 }
 
 /// `dir` at the front of a search path (CLI-007).
@@ -152,6 +157,7 @@ impl Terminals {
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
                     inner.keys.remove(&id);
+                    inner.ended.insert(id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
@@ -269,10 +275,44 @@ impl Terminals {
 
     /// CLI-017: every open session as (handle, the folder it started in, its program; none for a shell).
     pub fn sessions(&self) -> Vec<(String, String, Option<String>)> {
+        self.every().into_iter().filter_map(|(h, dir, program)| Some((h, dir?, program))).collect()
+    }
+
+    /// CLI-023: every open session, a shell started in the home folder (no folder) included.
+    pub fn every(&self) -> Vec<(String, Option<String>, Option<String>)> {
         let Ok(inner) = self.inner.lock() else { return Vec::new() };
         let mut ids: Vec<u32> = inner.sessions.keys().copied().collect();
         ids.sort_unstable();
-        ids.into_iter().filter_map(|id| Some((handle_of(id), inner.dirs.get(&id)?.clone(), inner.marks.get(&id).map(|m| m.program.clone())))).collect()
+        ids.into_iter().map(|id| (handle_of(id), inner.dirs.get(&id).cloned(), inner.marks.get(&id).map(|m| m.program.clone()))).collect()
+    }
+
+    /// CLI-023: the window's latest report of its panes and tabs.
+    pub fn layout(&self) -> Vec<serde_json::Value> {
+        self.layout.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+
+    pub fn set_layout(&self, rows: Vec<serde_json::Value>) {
+        if let Ok(mut l) = self.layout.lock() {
+            *l = rows;
+        }
+    }
+
+    /// CLI-027: ends a session and waits up to three seconds for its process to be gone; true only
+    /// once that is confirmed. A session that had already ended counts as stopped.
+    pub fn close(&self, handle: &str) -> bool {
+        let Some(id) = id_of(handle) else { return false };
+        if !self.live(handle) {
+            return true;
+        }
+        let _ = self.kill(id);
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            if self.inner.lock().map(|mut i| i.ended.remove(&id)).unwrap_or(false) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
     }
 
     /// The folder terminal `handle` was started in (ORCH-014 checks it for base drift).
@@ -359,6 +399,12 @@ mod tests {
         assert_eq!(parts, ["D:\\app", "C:\\old\\kolux", "C:\\Windows"].map(std::path::PathBuf::from));
         assert_eq!(std::env::split_paths(&cli_first(dir, None)).count(), 1);
     }
+}
+
+/// CLI-023: the window reports which terminal sits in which pane and tab.
+#[tauri::command]
+pub fn terminal_layout(terminals: tauri::State<'_, Terminals>, rows: Vec<serde_json::Value>) {
+    terminals.set_layout(rows);
 }
 
 #[tauri::command]
