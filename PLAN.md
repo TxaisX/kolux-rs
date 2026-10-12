@@ -237,7 +237,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-130 · AUTO-015 Runs dashboard across every automation
 - [ ] T-131 · SAFE-005 Unsent comments are kept when the sheet closes and reopens · SAFE-006 A very long plan is cut down in the sheet, with a pointer to the terminal · SAFE-007 The sheet turns read-only once Claude stops waiting on that plan
 - [ ] T-132 · EDIT-007 [compat] Copy a selection together with its path and line numbers · EDIT-020 [compat] Review notes on a file, sent to an agent
-- [ ] T-133 · SET-034 Notifications page: which alerts, which sounds
+- [x] T-133 · SET-034 Notifications page: which alerts, which sounds
 - [ ] T-134 · CLI-024 [compat] kolux terminal read: output history or the screen as it looks now · CLI-025 [compat] kolux terminal send and wait · CLI-040 [compat] kolux agent hooks: status, on, off and prepare-codex
 
 ### P1 · theme 4 · Accounts, sign-in and usage limits (21 cards)
