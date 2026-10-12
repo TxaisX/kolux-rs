@@ -47,7 +47,7 @@ Versions: the installed CLI reported 0.15.2 when its help was captured; the sour
 | Aliases | Resolve before anything else (table 2.6 lists them). |
 | Global options | `--json` and `--help` on every command, and they may come before the command words. `--page` selects a browser page on the browser commands. The old `--pairing-code` and `--environment` globals: not carried, see `DECISIONS.md`. |
 | Repo selector | `--repo` takes an id: prefix, a name: prefix or a path: prefix. |
-| Worktree selector | `--worktree` takes identity:, id: (repo id, two colons, path), name:, branch:, issue:, path:, or the words active or current. Example: `kolux worktree show --worktree branch:main` |
+| Worktree selector | `--worktree` takes identity:, id: (repo id, two colons, path), name:, branch:, issue:, path:, or the words active or current. Example: `kolux worktree show --worktree branch:main` (Kolux RS, T-014-b-fix: identity: and active are refused with the accepted forms listed, DT-C12.) |
 | Terminal selector | `--terminal` takes a handle printed by `kolux terminal list --json`. Inside a Kolux terminal it defaults to that terminal. |
 | Parent selectors | `--parent-worktree` and `--no-parent` on worktree create and set. |
 

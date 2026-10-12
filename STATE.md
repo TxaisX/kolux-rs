@@ -1320,7 +1320,23 @@ recorded default until told otherwise; nothing here blocks a pass.
   Rust; `history.test.ts` for the entries. Still open: a page's `pushState` and app chords
   such as Ctrl+T / Ctrl+W pressed inside a page (not browser-scope; they stay with the page).
 
+- 2026-10-12 · [core] T-014-b-fix: `kolux-dev worktree create` stops refusing a prompt with no
+  agent named. The app picks the agent the way the first-prompt card says: the settings' default
+  agent when it is installed, else the first installed one in catalogue order (`fallback_agent`
+  in `cli.rs`, sharing `default_agent` with the worker start); with no agent installed the call
+  fails and says so; a create with neither prompt nor agent still makes a bare worktree with no
+  agent tab. The flags nobody acts on yet are named instead of swallowed: `--setup run`,
+  `--run-hooks` (on create and rm) and `--comment` each add a sentence to a `warnings` list in
+  the result, and `main` prints every one as `warning: ...` on stderr whether or not `--json`
+  was asked, so a script that counts on setup scripts learns they did not run. `issue:` is a
+  working worktree selector now (it reads the issue number recorded with the worktree's origin;
+  `projects::origin` is public for it). `identity:` and `active` stay refused, with the accepted
+  forms listed, by DT-C12. Tests: the parse test accepts the prompt alone; the create-and-remove
+  test checks the fallback agent against the real catalogue, the three warnings, `issue:12`,
+  `issue:99` not found, and the two refusals. No live proof: the CLI has no window part.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
 - 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
 - 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
 - 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
@@ -1331,6 +1347,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
 - 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
 - 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
-- 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
 
 

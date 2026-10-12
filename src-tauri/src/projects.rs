@@ -116,8 +116,8 @@ pub fn set_origin(store: &Store, path: &str, origin: Option<&serde_json::Value>)
     store.set(ORIGINS_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())
 }
 
-/// ponytail: read by tests only until the sidebar draws lineage (PROJ-047, T-077).
-#[cfg(test)]
+/// How the workspace at `path` came to be, when the command line made it; the `issue:` selector
+/// reads it (T-014-b-fix). The sidebar's lineage (PROJ-047, T-077) is its other reader.
 pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
     load_origins(store).remove(&name_key(path))
 }

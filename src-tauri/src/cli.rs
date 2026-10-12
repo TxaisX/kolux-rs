@@ -72,7 +72,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|path:\n--json prints one envelope on stdout; without it, errors go to stderr. Exit 0 worked, 1 any error.\n";
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --tier major|deep|build|light)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--json]\n\nSelectors: --repo id:|name:|path:   --worktree current|id:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing\nacts on yet go to stderr and into the result's `warnings` list. Exit 0 worked, 1 any error.\n";
 
 const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent"];
 const CREATE_FLAGS: &[&str] = &["name", "repo", "agent", "prompt", "setup", "base-branch", "issue", "comment", "parent-worktree", "no-parent", "run-hooks", "activate"];
@@ -151,9 +151,6 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         if command == "worktree.create" {
             if text("name").map(str::trim).unwrap_or_default().is_empty() {
                 return Err(Fail::args("--name is required"));
-            }
-            if text("prompt").is_some() && text("agent").is_none() {
-                return Err(Fail::args("a prompt needs --agent to name who gets it"));
             }
             for k in ["agent", "prompt", "setup", "parent-worktree"] {
                 if empty(k) {
@@ -341,6 +338,11 @@ pub fn main(words: Vec<String>) -> i32 {
     let (json, parsed) = parse(&words);
     let id = request_id();
     let finish = |out: Result<(String, Value), Fail>| -> i32 {
+        if let Ok((_, env)) = &out {
+            for w in env["result"]["warnings"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                eprintln!("warning: {w}");
+            }
+        }
         match (&out, json) {
             (Ok((command, env)), true) => {
                 println!("{}", serde_json::to_string_pretty(env).unwrap_or_default());
@@ -454,8 +456,12 @@ fn calling_worktree(ctx: &Ctx, project: &Project, cwd: &str) -> Result<Option<St
     Ok(inside.into_iter().next())
 }
 
+const SELECTOR_FORMS: &str = "use current, id:, name:, branch:, issue: or path:";
+
 /// The worktree `--worktree` means: `current` is the one the call was made in; `name:` matches
-/// the typed name, the branch or the folder name; `branch:` and `path:` match exactly.
+/// the typed name, the branch or the folder name; `branch:` and `path:` match exactly; `issue:`
+/// matches the issue number recorded when the worktree was made (T-014-b-fix). `active` is the
+/// window's choice and `identity:` has no definition, so both are refused (DT-C12).
 fn pick_worktree(ctx: &Ctx, sel: &str, cwd: &str) -> Result<(Project, Worktree), Fail> {
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut hits: Vec<(Project, Worktree)> = Vec::new();
@@ -464,12 +470,13 @@ fn pick_worktree(ctx: &Ctx, sel: &str, cwd: &str) -> Result<(Project, Worktree),
             let folder = Path::new(&w.path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
             let ok = match (sel, selector(sel)) {
                 ("current", _) => under(&w.path, cwd),
-                ("active", _) => return Err(Fail::args("`active` is not known to the command line yet; use current, name:, branch: or path:")),
+                ("active", _) => return Err(Fail::args(format!("`active` is the window's choice, not known to the command line; {SELECTOR_FORMS}"))),
                 (_, ("name", v)) => w.name.as_deref() == Some(v) || w.branch.as_deref() == Some(v) || folder == v,
                 (_, ("branch", v)) => w.branch.as_deref() == Some(v),
                 (_, ("path", v)) => under(&w.path, v) && under(v, &w.path),
                 (_, ("id", v)) => v.split_once("::").is_some_and(|(id, path)| id == p.id && under(&w.path, path) && under(path, &w.path)),
-                (_, (k, _)) => return Err(Fail::args(format!("{k}: selectors are not supported yet; use current, name:, branch: or path:"))),
+                (_, ("issue", v)) => v.parse::<u64>().ok().is_some_and(|n| projects::origin(&store, &w.path).is_some_and(|o| o["issue"] == json!(n))),
+                (_, (k, _)) => return Err(Fail::args(format!("{k}: selectors are not supported; {SELECTOR_FORMS}"))),
             };
             if ok {
                 hits.push((p.clone(), w));
@@ -490,10 +497,13 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     match req.command.as_str() {
         "worktree.create" => {
             let name = text("name").ok_or_else(|| Fail::args("--name is required"))?;
-            let agent = text("agent").map(|id| installed_agent(&id).map(|_| id)).transpose()?;
-            if agent.is_none() && text("prompt").is_some() {
-                return Err(Fail::args("a prompt needs --agent to name who gets it"));
-            }
+            // PROJ-038: a prompt with no agent named goes to the default agent, else the first
+            // installed one in catalogue order; a worktree made with neither gets no agent tab.
+            let agent = match text("agent") {
+                Some(id) => Some(installed_agent(&id).map(|_| id)?),
+                None if text("prompt").is_some() => Some(fallback_agent(ctx)?.id),
+                None => None,
+            };
             let project = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
             // Lineage: the worktree the call was made from, unless a flag says otherwise.
             let parent = if a["noParent"].as_bool().unwrap_or(false) {
@@ -522,8 +532,21 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             obj.insert("activated".into(), json!(activate));
             obj.extend(origin.as_object().expect("an origin is an object").clone());
             // ponytail: setup scripts (PROJ-033) and issue lookups (PROJ-037) are T-107; the
-            // values are recorded and echoed, nothing runs on them yet.
-            obj.insert("setup".into(), json!(text("setup").unwrap_or_else(|| "inherit".into())));
+            // values are recorded and echoed, nothing runs on them yet, and the caller is told so
+            // (T-014-b-fix) rather than left to think the scripts ran.
+            let setup = text("setup").unwrap_or_else(|| "inherit".into());
+            let mut warnings = Vec::new();
+            if setup == "run" {
+                warnings.push("--setup run: setup scripts do not run yet; the worktree was made without them");
+            }
+            if a["runHooks"].as_bool().unwrap_or(false) {
+                warnings.push("--run-hooks: setup scripts do not run yet; the worktree was only activated");
+            }
+            if text("comment").is_some() {
+                warnings.push("--comment: recorded with the worktree's origin, shown nowhere yet");
+            }
+            obj.insert("setup".into(), json!(setup));
+            obj.insert("warnings".into(), json!(warnings));
             (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": made, "agent": agent, "prompt": text("prompt").unwrap_or_default(), "activate": activate }));
             Ok(result)
         }
@@ -545,7 +568,8 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 projects::set_name(&store, &w.path, None)?;
             }
             (ctx.notify)(json!({ "kind": "removed", "path": w.path }));
-            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id }))
+            let warnings: Vec<&str> = if a["runHooks"].as_bool().unwrap_or(false) { vec!["--run-hooks: teardown scripts do not run yet; the worktree was removed without them"] } else { vec![] };
+            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "warnings": warnings }))
         }
         WORKER_START => worker_start(ctx, req),
         other => Err(Fail::args(format!("unknown command {other}"))),
@@ -573,6 +597,21 @@ fn save_list(store: &Store, key: &str, list: &[Value]) -> Result<(), Fail> {
 fn next_id(list: &[Value], prefix: &str) -> String {
     let n = list.iter().filter_map(|t| t["id"].as_str()?.strip_prefix(prefix)?.parse::<u64>().ok()).max().unwrap_or(0);
     format!("{prefix}{}", n + 1)
+}
+
+/// The settings' default agent id (`claude` when none is set).
+fn default_agent(ctx: &Ctx) -> Result<String, Fail> {
+    let store = ctx.store.lock().map_err(|e| e.to_string())?;
+    Ok(store.settings()["defaultAgent"].as_str().filter(|s| !s.is_empty()).unwrap_or("claude").to_string())
+}
+
+/// PROJ-038's fallback when no agent is named: the default agent when it is installed, else the
+/// first installed one in catalogue order.
+fn fallback_agent(ctx: &Ctx) -> Result<crate::agents::AgentInfo, Fail> {
+    let wanted = default_agent(ctx)?;
+    let list = crate::agents::agent_list();
+    let hit = list.iter().find(|x| x.id == wanted && x.installed).or_else(|| list.iter().find(|x| x.installed));
+    hit.cloned().ok_or_else(|| Fail::new("failed", "no agent is installed to take the prompt; install one or pass --agent"))
 }
 
 fn installed_agent(id: &str) -> Result<crate::agents::AgentInfo, Fail> {
@@ -639,13 +678,7 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     if text("terminal").is_some() {
         return Err(Fail::new("unsupported", "terminal handles are not known to the command line yet; use --agent or --tier"));
     }
-    let agent_id = match text("agent") {
-        Some(id) => id,
-        None => {
-            let store = ctx.store.lock().map_err(|e| e.to_string())?;
-            store.settings()["defaultAgent"].as_str().filter(|s| !s.is_empty()).unwrap_or("claude").to_string()
-        }
-    };
+    let agent_id = text("agent").map(Ok).unwrap_or_else(|| default_agent(ctx))?;
     let agent = installed_agent(&agent_id)?;
     let tier = text("tier");
     let (model, effort) = match &tier {
@@ -823,7 +856,8 @@ mod tests {
         assert_eq!(p.command, "worktree.rm");
         assert_eq!(p.args["force"], true);
         let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
-        assert!(refused("worktree create --name x --prompt hi").contains("--agent"));
+        // T-014-b-fix: a prompt with no --agent goes to the app, which picks the agent (PROJ-038).
+        assert_eq!(parse(&words("worktree create --name x --prompt hi")).1.unwrap().unwrap().args["prompt"], "hi");
         assert!(refused("worktree create --name x --name y").contains("twice"));
         assert!(refused("worktree create --name x --bogus 1").contains("--bogus"));
         assert!(refused("worktree create --name x --setup later").contains("run, skip or inherit"));
@@ -918,6 +952,8 @@ mod tests {
         assert!(path.join(".git").exists(), "{}", path.display());
         assert_eq!(made["name"], "cli one");
         assert_eq!(made["branch"], "cli-one");
+        assert_eq!(made["agent"], Value::Null, "no prompt, no agent asked: none is picked");
+        assert_eq!(made["warnings"], json!([]), "nothing inert was passed");
         assert_eq!(events.lock().unwrap()[0]["kind"], "created");
         // CLI-018 lineage: called from the main checkout, the parent is the main checkout.
         assert_eq!(made["madeBy"], "cli");
@@ -926,6 +962,10 @@ mod tests {
         assert_eq!(child["parent"], json!(path.display().to_string()));
         assert_eq!(child["issue"], 12);
         assert_eq!(child["comment"], "from a test");
+        // T-014-b-fix: flags nobody acts on yet are named, not swallowed.
+        let warned = child["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(warned.len(), 1, "{warned:?}");
+        assert!(warned[0].starts_with("--comment"), "{warned:?}");
         let child_path = child["path"].as_str().unwrap().to_string();
         let stored = projects::origin(&store.lock().unwrap(), &child_path).unwrap();
         assert_eq!(stored["parent"], json!(path.display().to_string()));
@@ -934,19 +974,57 @@ mod tests {
         assert_eq!(inside["parent"], json!(path.display().to_string()), "called from inside cli one");
         let alone = dispatch(&ctx, &req("worktree.create", &path, json!({ "name": "alone", "noParent": true }))).unwrap();
         assert_eq!(alone["parent"], Value::Null);
-        let from_elsewhere = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "top", "repo": "name:repo" }))).unwrap();
+        let from_elsewhere = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "top", "repo": "name:repo", "setup": "run", "runHooks": true, "activate": true }))).unwrap();
         assert_eq!(from_elsewhere["parent"], Value::Null, "called from outside every worktree");
+        let warned = from_elsewhere["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(warned.len(), 2, "{warned:?}");
+        assert!(warned[0].starts_with("--setup run"), "{warned:?}");
+        assert!(warned[1].starts_with("--run-hooks"), "{warned:?}");
         let missing = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "x", "parentWorktree": "name:nope" }))).unwrap_err();
         assert_eq!(missing.code, "not_found");
-        for n in ["child", "grandchild", "alone", "top"] {
+        // T-014-b-fix: the issue: selector finds the worktree made for that issue; the forms with
+        // no meaning on the command line are refused with the accepted ones listed.
+        let no_issue = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "issue:99", "force": true }))).unwrap_err();
+        assert_eq!(no_issue.code, "not_found");
+        for sel in ["identity:x", "active"] {
+            let refused = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": sel, "force": true }))).unwrap_err();
+            assert_eq!(refused.code, "invalid_arguments", "{sel}");
+            assert!(refused.message.contains("issue:") && refused.message.contains("branch:"), "{sel}: {}", refused.message);
+        }
+        let by_issue = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "issue:12", "force": true }))).unwrap();
+        assert_eq!(by_issue["path"], json!(child_path));
+        for n in ["grandchild", "alone"] {
             dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": format!("name:{n}"), "force": true }))).unwrap();
         }
+        let top = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "name:top", "force": true, "runHooks": true }))).unwrap();
+        assert!(top["warnings"][0].as_str().unwrap().starts_with("--run-hooks"), "{}", top["warnings"]);
         assert!(projects::origin(&store.lock().unwrap(), &child_path).is_none(), "the origin goes with the worktree");
 
         let outside = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "nowhere" }))).unwrap_err();
         assert_eq!(outside.code, "not_found");
         let unknown = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "x", "agent": "nobody" }))).unwrap_err();
         assert!(unknown.message.contains("nobody"));
+        // T-014-b-fix, PROJ-038: a prompt with no --agent goes to the default agent when it is
+        // installed, else to the first installed one in catalogue order; none installed is an error.
+        let list = crate::agents::agent_list();
+        let wanted = list.iter().find(|x| x.id == "claude" && x.installed).or_else(|| list.iter().find(|x| x.installed)).map(|x| x.id.clone());
+        let prompted = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "prompted", "prompt": "say hi" })));
+        match wanted {
+            Some(id) => {
+                let made = prompted.unwrap();
+                assert_eq!(made["agent"], json!(id));
+                let ev = events.lock().unwrap();
+                let last = ev.last().unwrap();
+                assert_eq!(last["agent"], json!(id));
+                assert_eq!(last["prompt"], "say hi");
+                drop(ev);
+                dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "name:prompted", "force": true }))).unwrap();
+            }
+            None => {
+                let err = prompted.unwrap_err();
+                assert!(err.message.contains("installed"), "{}", err.message);
+            }
+        }
 
         std::fs::write(path.join("junk.txt"), "x").unwrap();
         let dirty = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "name:cli one" }))).unwrap_err();

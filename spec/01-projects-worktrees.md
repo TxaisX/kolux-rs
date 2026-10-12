@@ -149,6 +149,9 @@ User does: chooses an agent and types a prompt while creating a workspace, or pa
 User sees: the workspace opens with that agent already working on the prompt in its first tab.
 Rules: the agent runs in the startup tab made for it, not in an extra default tab; when no agent is
   chosen, the fallback order follows the catalog of installed agents.
+  (Kolux RS, T-014-b-fix: on the command line the fallback is the settings' default agent when it
+  is installed, else the first installed agent in catalogue order, and only when a prompt was
+  given; a create with no prompt and no agent makes the worktree and opens no agent tab.)
 Acceptance:
   - [ ] Create with Claude and the prompt hello → the first tab runs Claude with that prompt.
   - [ ] Create with an agent and a prompt → no additional empty default tab is opened.
