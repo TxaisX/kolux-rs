@@ -73,6 +73,8 @@ type Props = {
   onIndex: (projects: Project[], owner: Record<string, string>) => void;
   /** Bumped by Mod+N (workspace.create): opens the name field for the project in front. */
   createRequest: number;
+  /** PROJ-057: a name typed in the palette, put in the name field that createRequest opens. */
+  createName?: string;
   /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
   deleteRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
@@ -104,7 +106,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -415,7 +417,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   // The project in front: the one whose workspace is shown, else the first; "" with none yet.
   const projectInFront = () => projects.find((p) => (worktrees[p.id] ?? []).some((w) => activeDir !== null && same(activeDir, w.path)))?.id ?? projects[0]?.id ?? "";
   useEffect(() => {
-    if (createRequest > 0) setCreating(projectInFront());
+    if (createRequest === 0) return;
+    setCreating(projectInFront());
+    if (createName) setName(createName);
   }, [createRequest]);
   useEffect(() => {
     if (deleteRequest === 0 || activeDir === null) return;

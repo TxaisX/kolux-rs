@@ -18,6 +18,7 @@
 // Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
@@ -28,7 +29,9 @@ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import { readLook, startScreen } from "./settings/general";
-import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
+import { OPEN_SETTINGS, openSettings, PAGES, type PageId, type SettingsTarget } from "./settings/pages";
+import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
+import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import EditorPane, { editors } from "./editor/EditorPane";
@@ -198,6 +201,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
+  const [createName, setCreateName] = useState(""); // PROJ-057: the palette's typed name, prefilled there
+  const [palette, setPalette] = useState(false); // PROJ-057 / VIEW-037: the worktree palette is open
+  const [hist, setHist] = useState(EMPTY_HISTORY); // VIEW-046: workspaces and pages shown, for back and forward
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
@@ -394,7 +400,38 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "workspace.create":
           setScreen("terminals");
           setSidebarOpen(true);
+          setCreateName("");
           setCreateRequest((n) => n + 1);
+          break;
+        case "worktree.palette":
+          setPalette(true);
+          break;
+        // PROJ-055 / VIEW-046: keyboard moves follow the sidebar list as shown (a project's main
+        // checkout row, then its workspace rows), so folded rows are skipped; the sidebar is
+        // brought up first so there is a list to follow.
+        case "worktree.navigateUp":
+        case "worktree.navigateDown":
+        case "workspace.selectByIndex":
+        case "sidebar.focusWorktreeList": {
+          flushSync(() => {
+            setScreen("terminals");
+            setSidebarOpen(true);
+          });
+          const rows = [...document.querySelectorAll<HTMLElement>(".sidebar :is(button.branch, .sess[role=button])")];
+          const at = rows.findIndex((r) => r.classList.contains("sel"));
+          if (hit.id === "sidebar.focusWorktreeList") {
+            rows[Math.max(at, 0)]?.focus();
+            break;
+          }
+          const i = navTarget(rows.length, at, hit.id === "workspace.selectByIndex" ? { index: hit.index ?? 0 } : { step: hit.id === "worktree.navigateDown" ? 1 : -1 });
+          if (i === null) return;
+          rows[i].click();
+          rows[i].scrollIntoView({ block: "nearest" });
+          break;
+        }
+        case "worktree.history.back":
+        case "worktree.history.forward":
+          if (!step(hit.id === "worktree.history.back" ? -1 : 1)) return;
           break;
         case "view.cycleWorkspaceView":
           if (!classic) setScreen((s) => nextScreen(s));
@@ -742,6 +779,54 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     else addShell(dir, branch);
   };
 
+  // VIEW-046: every workspace and page shown is a stop for back and forward; a step back lands on
+  // the place already current, which visit leaves alone.
+  useEffect(() => setHist((h) => visit(h, { dir: activeDir, page })), [activeDir, page]);
+  // Deleted workspaces are skipped: a place counts while some project still lists its folder.
+  const stillThere = (p: Place) => p.dir === null || Object.keys(owner).some((d) => sameDir(d, p.dir));
+  const step = (dir: 1 | -1) => {
+    const i = travel(hist, dir, stillThere);
+    if (i === null) return false;
+    const p = hist.list[i];
+    setHist({ ...hist, at: i });
+    setScreen("terminals");
+    if (p.dir === null) setActiveDir(null);
+    else if (!sameDir(p.dir, activeDir)) select(p.dir, null);
+    setPage(p.page as Page | null);
+    return true;
+  };
+  // PROJ-057 / VIEW-037: the palette's rows besides worktrees and projects.
+  const paletteItems = (): PaletteItem[] => [
+    ...panes
+      .filter((p) => !p.seats)
+      .map((p) => ({
+        section: "Open tabs",
+        label: tabName(p, titles),
+        hint: p.cwd ? folderName(p.cwd) : "Home",
+        run: () => {
+          setScreen("terminals");
+          if (!sameDir(p.cwd, activeDir)) {
+            setPage(null);
+            setActiveDir(p.cwd);
+          }
+          setFocused(p.key);
+        },
+      })),
+    ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
+    { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
+    { section: "Quick actions", label: "New session", run: () => addChooser() },
+    {
+      section: "Quick actions",
+      label: "New workspace",
+      run: () => {
+        setScreen("terminals");
+        setSidebarOpen(true);
+        setCreateName("");
+        setCreateRequest((n) => n + 1);
+      },
+    },
+  ];
+
   // PROJ-066: removing a workspace closes every pane in it, wherever it was; the view stays
   // unless it was the one removed, then it falls back to the home group.
   // PROJ-070: the removed one gives way to the sibling used last that still has panes; the shown
@@ -1019,8 +1104,26 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   });
   return (
     <div className="app">
-      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
+      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
       <div className="body">
+        {palette && (
+          <WorktreePalette
+            projects={projects}
+            items={paletteItems()}
+            prOf={(d) => Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1].pr ?? null}
+            onWorktree={(w) => {
+              setScreen("terminals");
+              select(w.path, w.branch ?? null);
+            }}
+            onCreate={(name) => {
+              setScreen("terminals");
+              setSidebarOpen(true);
+              setCreateName(name);
+              setCreateRequest((n) => n + 1);
+            }}
+            onClose={() => setPalette(false)}
+          />
+        )}
         {asking && (
           <CloseAsk
             title={asking.title}
@@ -1063,6 +1166,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}
             createRequest={createRequest}
+            createName={createName}
             deleteRequest={deleteRequest}
             onStartIn={startIn}
             artifactsOn={screen === "artifacts"}

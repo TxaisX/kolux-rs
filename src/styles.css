@@ -680,6 +680,9 @@ input { font: inherit; }
 .picker-folder { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-faint); }
 .picker-tip { position: fixed; z-index: 60; max-width: min(640px, 70vw); padding: 4px 8px; border: 1px solid var(--line-focus); border-radius: 6px; background: var(--pane-bg); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; pointer-events: none; }
 .picker-tip-folder { color: var(--fg-muted); }
+/* PROJ-057 / VIEW-037: the worktree palette's section headings and matched letters. */
+.palette-section { padding: 6px 10px 2px; font-size: 11px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.palette mark { background: none; color: var(--fg); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
 
 /* EDIT-027: the diff tab. Its body scrolls (both columns move together in side by side). */

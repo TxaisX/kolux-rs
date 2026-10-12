@@ -28,9 +28,9 @@ ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id && waiting.has(
 const send = (method, params = {}) => new Promise((r) => { const i = ++id; waiting.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const KEYS = { Enter: { code: "Enter", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }, Escape: { code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 }, Tab: { code: "Tab", key: "Tab", windowsVirtualKeyCode: 9 } };
+const KEYS = { Enter: { code: "Enter", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }, Escape: { code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 }, Tab: { code: "Tab", key: "Tab", windowsVirtualKeyCode: 9 }, ArrowUp: { code: "ArrowUp", key: "ArrowUp", windowsVirtualKeyCode: 38 }, ArrowDown: { code: "ArrowDown", key: "ArrowDown", windowsVirtualKeyCode: 40 }, ArrowLeft: { code: "ArrowLeft", key: "ArrowLeft", windowsVirtualKeyCode: 37 }, ArrowRight: { code: "ArrowRight", key: "ArrowRight", windowsVirtualKeyCode: 39 } };
 const key = async (name, mods = 0) => {
-  const k = KEYS[name] || { code: "Key" + name.toUpperCase(), key: name, windowsVirtualKeyCode: name.toUpperCase().charCodeAt(0) };
+  const k = KEYS[name] || { code: (/^[0-9]$/.test(name) ? "Digit" : "Key") + name.toUpperCase(), key: name, windowsVirtualKeyCode: name.toUpperCase().charCodeAt(0) };
   await send("Input.dispatchKeyEvent", { type: "keyDown", modifiers: mods, ...k });
   await send("Input.dispatchKeyEvent", { type: "keyUp", modifiers: mods, ...k });
 };

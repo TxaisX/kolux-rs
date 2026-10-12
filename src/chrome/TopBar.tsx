@@ -19,9 +19,9 @@ export const screens: Array<{ id: Screen; label: string }> = [
 ];
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
-type Props = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
+type Props = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; onSearch?: () => void; onBack?: () => void; onForward?: () => void };
 
-export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
+export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, onSearch, onBack, onForward }: Props) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -49,10 +49,10 @@ export default function TopBar({ screen, classic = false, onScreen, onSettings, 
         <button className="ib panel" title={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-pressed={sidebarOpen} onClick={onToggleSidebar}>
           <PanelLeft />
         </button>
-        <button className="ib back" title="Back" disabled>
+        <button className="ib back" title="Back to the last workspace or page shown" disabled={!onBack} onClick={onBack}>
           <ArrowLeft size={12} />
         </button>
-        <button className="ib fwd" title="Forward" disabled>
+        <button className="ib fwd" title="Forward" disabled={!onForward} onClick={onForward}>
           <ArrowRight size={12} />
         </button>
       </div>
@@ -71,7 +71,7 @@ export default function TopBar({ screen, classic = false, onScreen, onSettings, 
         <button className="ib panel" title={rightOpen ? "Hide the right panel" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
           <PanelRight />
         </button>
-        <button className="searchbox" title="Search (not built yet)">
+        <button className="searchbox" title="Jump to a worktree, tab, project or setting" onClick={onSearch}>
           <Search />
           <span className="ph">Search</span>
           <Kbd id="worktree.palette" />
