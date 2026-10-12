@@ -88,16 +88,21 @@ impl Terminals {
         command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
         command.env("KOLUX_PANE_KEY", &key);
         // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
-        // registered system-wide, and it is told which app folder to call. ponytail: the folder
-        // is the app's own; the release launcher (CLI-006, T-185) and the Linux `kolux` launcher
-        // folder land with the packaged build.
+        // registered system-wide, and it is told which app folder to call. An installed copy keeps
+        // its CLI in the bin folder of the install (CLI-006); a development build runs kolux-dev
+        // from its own folder. ponytail: the Linux `kolux` launcher folder lands with that build.
         if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
+            let bin = dir.join("bin");
+            let dir = if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() { bin } else { dir };
             let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
             command.env("PATH", path);
         }
         if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
             command.env(crate::cli::APP_DIR_ENV, dir);
         }
+        // CLI-010: a Kolux started from another copy's terminal inherits that copy's data-folder
+        // override, which would send this pane's commands to the other app.
+        command.env_remove("KOLUX_USER_DATA_PATH");
         // SET-027: the user's variables for this agent; Kolux's account variable below wins.
         for (k, v) in own_env {
             command.env(k, v);
