@@ -8,6 +8,7 @@
 //        node cdp.mjs <targetMatch> insert "<text>" [enter]   (one edit, emoji safe)
 //        node cdp.mjs <targetMatch> key <Enter|Escape|...> [mods: Alt=1 Ctrl=2 Shift=8]
 //        node cdp.mjs <targetMatch> focus "<css selector>"
+//        node cdp.mjs <targetMatch> wheel "<css selector>" <deltaY>   (the mouse wheel over its middle)
 // targetMatch is a substring of the target's url or title; "main" = the localhost dev page.
 const PORT = process.env.CDP_PORT || "9222";
 const [match, cmd, ...rest] = process.argv.slice(2);
@@ -58,6 +59,12 @@ if (cmd === "eval") {
   // mods: Alt=1, Ctrl=2, Meta=4, Shift=8
   await key(rest[0], Number(rest[1] || 0));
   console.log("key", rest[0], rest[1] || "");
+} else if (cmd === "wheel") {
+  const r = await send("Runtime.evaluate", { expression: `(()=>{const e=[...document.querySelectorAll(${JSON.stringify(rest[0])})].find(x=>x.offsetParent!==null); if(!e) return null; const b=e.getBoundingClientRect(); return [b.x+b.width/2,b.y+b.height/2];})()`, returnByValue: true });
+  const at = r.result?.result?.value;
+  if (!at) { console.error("missing", rest[0]); process.exit(2); }
+  await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: at[0], y: at[1], deltaX: 0, deltaY: Number(rest[1] || 0) });
+  console.log("wheel", rest[1], "at", at.map(Math.round).join(","));
 } else {
   console.error("unknown cmd", cmd); process.exit(2);
 }

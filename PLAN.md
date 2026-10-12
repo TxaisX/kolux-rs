@@ -196,7 +196,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-101-a · TERM-005 Default pane count for a new workspace · TERM-007 Starting a session into a full grid makes room · TERM-012 [compat] Move focus between panes
 - [ ] T-101-b · TERM-002 [compat] Add and remove session shortcuts (live check with keys assigned) · TERM-009 [compat] Equalize pane sizes (needs resizable panes and the pane menu)
 - [ ] T-102 · TERM-015 Drag a pane to rearrange the split · TERM-044 [compat] Close tabs in bulk · TERM-049 Tab right-click menu · TERM-054 Reorder tabs by dragging · also: the rest of T-057's card: a tab that holds several split panes, and closing tabs in bulk, go through `closeTab` in App.tsx with all their pane keys, so one question covers them all · also from T-094-a: an editor pane rebuilt by a move to another pane keeps its caret, selection and scroll, which needs that state kept per tab
-- [ ] T-103 · VIEW-036 [compat] Add or remove sessions by shortcut · VIEW-108 [compat] Terminals keep their scroll position across view switches
+- [x] T-103-a · VIEW-108 [compat] Terminals keep their scroll position across view switches
+- [ ] T-103-b · VIEW-036 [compat] Add or remove sessions by shortcut (the commands exist; the live check needs keys assigned, and writing ~/.kolux/keybindings.json was refused; this card says remove always asks, while the session-remove card drops an empty chooser without asking)
 - [ ] T-104 · ACCT-046 Windows terminals choose the best shell on the machine · ACCT-047 Startup commands run once, after the shell is ready · ACCT-048 Terminals begin with a clean environment · ACCT-049 Terminals refuse start folders that are unsafe or out of reach · ACCT-065 macOS and Linux terminals fall back to a shell that works
 - [ ] T-105 · CLI-023 [compat] kolux terminal list and show · CLI-026 [compat] kolux terminal create, split, rename and switch (also focus)
 
