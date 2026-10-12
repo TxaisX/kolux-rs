@@ -681,6 +681,13 @@ box that finds titles, areas, ids, extra words (cls finds Clear active pane) and
 are written (Mod+K, Ctrl + K, Cmd+K). When two commands share a chord, both rows say so and name the
 other command; switched-off agents' new-tab commands never count. Recording keys is T-096-b.
 
+[accounts] Shortcuts can now be changed from Settings > Shortcuts (T-096-b): click a command's keys
+and press new ones, Add a second shortcut, remove one with x, Disable or Reset. Esc stops recording
+and keeps what was there; Shift alone or a bare key is refused with a note. Each change is written
+straight into the Windows section of ~/.kolux/keybindings.json, leaving the rest of the file as it
+was, and every open window picks it up. A shortcut that clashes shows Conflicts on both rows with a
+Reset button on the one that caused it. Double-tapping a modifier and the app menu refresh are later (T-246, T-248).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1367,7 +1374,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-096-a: the shortcut search matches keys as a substring of the written or drawn chord with spaces and plus signs removed, so Cmd+D also finds Cmd+Down; no command sits behind a feature flag yet, so SET-008's flag rule has nothing to leave out today.
 
+- [accounts] T-096-b: Reset takes the command out of this platform's section; when the all-platforms section still overrides it, the shipped default is written into this platform's section instead so the default really returns. Removing a command's last chord leaves it disabled (null in the file), the same as Disable. A recorded chord that clashes is still saved; the resolver drops it as SET-010 says, and the row keeps a Reset button because the file still holds the override.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-096-b · done: `recordKey`, `editChords`, `removeChord` and the `recording` flag in src/keys/record.ts; `keybindings_write` (one command into this platform's section, through a temp file, refuses a broken file and bad ids or values, emits `keybindings-changed`) in src-tauri/src/keybindings.rs; KeymapProvider `save` and reload on change; the window's shortcuts stand aside while recording; recorder on each Shortcuts row; tests in src/keys/record.test.ts, src/settings/shortcutRows.test.ts and two Rust tests · evidence/T-096-b.txt, evidence/T-096-b-1-recording.png .. -5-clash.png
 - 2026-10-12 · [accounts] T-096-a · done: `resolve` records clashes and takes an ignore list (src/keys/keymap.ts); `shortcutRows`, `filterRows`, `MAX_QUERY` in src/settings/shortcutRows.ts; `keywords` on actions; KeymapProvider ignores disabled agents' new-tab commands; Shortcuts page rebuilt; tests in src/settings/shortcutRows.test.ts and src/keys/keymap.test.ts · evidence/T-096-a.txt, evidence/T-096-a-1.png .. -3.png
 - 2026-10-12 · [accounts] T-143 · done: `agentRows`, `searchAgents` (name, word start, alias, initials, command; over 40 characters ignored) and `wantsTerminal` in src/launch/agents.ts; PlusMenu search box, Show more toggle, Blank terminal row and Manage agents; sidebar row opens a shell tab, pane row splits a shell; tests in src/launch/dropdown.test.ts · evidence/T-143.txt, evidence/T-143-1-folded.png .. T-143-5-manage.png
 - 2026-10-12 · [accounts] T-148-d · done: Appearance fields `paneDividerWidth`, `paneDividerDark`, `paneDividerLight`, `paneDim` (clamped, colours #rrggbb only) as CSS vars `--divider-width`, `--divider`, `--pane-dim`; the grid gap and ground follow them, unfocused pane content fades over 140 ms; Panes card under Terminal; DT-A7 + SET-023 amendment · evidence/T-148-d.txt, evidence/T-148-d-1.png .. T-148-d-3.png

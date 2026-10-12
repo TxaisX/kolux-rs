@@ -71,7 +71,8 @@ export function labelParts(chord: string, platform: Platform): string[] {
 const keyLabels: Record<string, string> = { Comma: ",", Period: ".", Equal: "=", Minus: "-", Plus: "+", Slash: "/", Backslash: "\\", Backquote: "`", Quote: "'", Semicolon: ";", BracketLeft: "[", BracketRight: "]", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right", NumpadAdd: "Numpad +", NumpadSubtract: "Numpad -", Escape: "Esc", PageUp: "PgUp", PageDown: "PgDn", Backspace: "Backspace", Delete: "Del", Insert: "Ins" };
 export const keyLabel = (key: string): string => keyLabels[key] ?? key;
 
-export type Binding = { action: Action; chords: string[]; custom: boolean };
+/** `dropped`: the file overrides this command but the override clashed and was dropped (SET-010). */
+export type Binding = { action: Action; chords: string[]; custom: boolean; dropped?: boolean };
 export type Keymap = {
   platform: Platform;
   bindings: Map<string, Binding>;
@@ -191,7 +192,7 @@ function dropConflicts(bindings: Map<string, Binding>, errors: string[], platfor
     if (dropped.size === 0) return;
     const names = [...dropped].map((b) => b.action.title).sort();
     errors.push(`These custom shortcuts clash with another in the same place and were dropped, their defaults stay: ${names.join(", ")}.`);
-    for (const b of dropped) bindings.set(b.action.id, { action: b.action, chords: defaultsFor(b.action, platform), custom: false });
+    for (const b of dropped) bindings.set(b.action.id, { action: b.action, chords: defaultsFor(b.action, platform), custom: false, dropped: true });
   }
 }
 

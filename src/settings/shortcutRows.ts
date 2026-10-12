@@ -11,7 +11,7 @@ export const FILTERS: Array<[Filter, string]> = [["all", "All"], ["modified", "M
 /** A longer search is cut to this, so an enormous paste cannot freeze the list. */
 export const MAX_QUERY = 100;
 
-export type Row = { id: string; title: string; area: string; chords: string[]; labels: string[]; modified: boolean; badges: Badge[]; hint?: string; find: string[] };
+export type Row = { id: string; title: string; area: string; chords: string[]; defaults: string[]; labels: string[]; custom: boolean; modified: boolean; badges: Badge[]; hint?: string; find: string[] };
 
 const compact = (s: string) => s.toLowerCase().replace(/[\s+]/g, "");
 const names = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
@@ -19,7 +19,7 @@ const names = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1
 export function shortcutRows(map: Keymap): Row[] {
   const p = map.platform;
   const title = (id: string) => map.bindings.get(id)?.action.title ?? id;
-  return [...map.bindings.values()].map(({ action, chords, custom }) => {
+  return [...map.bindings.values()].map(({ action, chords, custom, dropped }) => {
     const defaults = defaultsFor(action, p);
     const disabled = custom && chords.length === 0 && defaults.length > 0;
     const modified = custom && chords.join() !== defaults.join();
@@ -38,6 +38,8 @@ export function shortcutRows(map: Keymap): Row[] {
       title: action.title,
       area: AREAS[action.scope],
       chords,
+      defaults,
+      custom: custom || !!dropped,
       labels: chords.map((c) => label(c)),
       modified,
       badges,

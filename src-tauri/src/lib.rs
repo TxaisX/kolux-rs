@@ -141,6 +141,7 @@ pub fn run() {
             scm::scm_commit, scm::scm_remote,
             terminal::terminal_busy,
             keybindings::keybindings_read,
+            keybindings::keybindings_write,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             browser::browser_open,

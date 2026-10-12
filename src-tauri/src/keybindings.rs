@@ -1,5 +1,6 @@
 //! The shortcuts file the user owns: `~/.kolux/keybindings.json` (COMPAT.md section 4.1,
-//! SET-011). This side only finds the file, creates it empty when it is missing and reads it.
+//! SET-011). This side finds the file, creates it empty when it is missing, reads it, and writes
+//! one command at a time into this platform's section (SET-009), keeping the rest as it was.
 //! It never writes over a file it cannot parse. Which chord fires which action is decided in the
 //! page (`src/keys`), because that is where the keys are pressed.
 
@@ -59,9 +60,64 @@ fn create_empty(path: &Path) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
+    write_whole(path, EMPTY)
+}
+
+fn write_whole(path: &Path, text: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, EMPTY)?;
+    fs::write(&tmp, text)?;
     fs::rename(&tmp, path)
+}
+
+/// This platform's section name in the file: darwin, linux or win32.
+pub fn platform_name() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        _ => "linux",
+    }
+}
+
+/// SET-009 and COMPAT.md 4.1 "Writing": puts one command's chords (a chord, a list, or null for
+/// disabled) into `platform`'s section and leaves the rest of the file as it was. `reset` takes the
+/// command out of that section instead; when the all-platforms section still overrides it, `value`
+/// (the shipped default) is written so the default really comes back.
+pub fn write(home: &Path, platform: &str, id: &str, value: serde_json::Value, reset: bool) -> Result<KeybindingsFile, String> {
+    use serde_json::Value;
+    if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') {
+        return Err(format!("\"{id}\" is not a command id"));
+    }
+    let ok = match &value {
+        Value::Null | Value::String(_) => true,
+        Value::Array(xs) => xs.iter().all(Value::is_string),
+        _ => false,
+    };
+    if !ok {
+        return Err("A shortcut must be a chord, a list of chords or null".into());
+    }
+    let now = read(home);
+    let Some(Value::Object(mut file)) = now.value else {
+        return Err(now.error.unwrap_or_else(|| "The shortcuts file could not be read".into()));
+    };
+    let shared_has = match file.get("keybindings") {
+        Some(Value::Object(k)) => k.contains_key(id),
+        Some(_) => false,
+        None => file.contains_key(id),
+    };
+    let Value::Object(platforms) = file.entry("platforms").or_insert_with(|| Value::Object(Default::default())) else {
+        return Err("\"platforms\" in the shortcuts file is not an object; the file was left alone.".into());
+    };
+    let Value::Object(section) = platforms.entry(platform).or_insert_with(|| Value::Object(Default::default())) else {
+        return Err(format!("The {platform} section of the shortcuts file is not an object; the file was left alone."));
+    };
+    if reset && !shared_has {
+        section.shift_remove(id);
+    } else {
+        section.insert(id.to_string(), value);
+    }
+    let text = serde_json::to_string_pretty(&Value::Object(file)).map_err(|e| e.to_string())? + "\n";
+    write_whole(&path_under(home), &text).map_err(|e| format!("Could not write the shortcuts file: {e}"))?;
+    Ok(read(home))
 }
 
 #[tauri::command]
@@ -69,6 +125,16 @@ pub fn keybindings_read(app: tauri::AppHandle) -> Result<KeybindingsFile, String
     use tauri::Manager;
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
     Ok(read(&home))
+}
+
+/// Writes one command's chords and tells every window, so each reads the file again.
+#[tauri::command]
+pub fn keybindings_write(app: tauri::AppHandle, id: String, value: serde_json::Value, reset: bool) -> Result<KeybindingsFile, String> {
+    use tauri::{Emitter, Manager};
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let out = write(&home, platform_name(), &id, value, reset)?;
+    let _ = app.emit("keybindings-changed", ());
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -127,6 +193,52 @@ mod tests {
         assert_eq!(got.value, None);
         assert!(got.error.as_deref().unwrap().contains("not a JSON object"));
         assert_eq!(fs::read_to_string(&path).unwrap(), "[1, 2]");
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_write_touches_one_command_in_this_platforms_section_only() {
+        let home = temp_home("write");
+        let path = path_under(&home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"$schema":"x","version":1,"keybindings":{"app.settings":"Mod+Shift+Comma"},"platforms":{"darwin":{"a.b":null},"win32":{"z.last":"Mod+Z","a.first":false}}}"#).unwrap();
+        let v = write(&home, "win32", "terminal.clear", serde_json::json!("Mod+Shift+K"), false).unwrap().value.unwrap();
+        assert_eq!(v["platforms"]["win32"]["terminal.clear"], "Mod+Shift+K");
+        // Everything else stays, in the order it was written.
+        assert_eq!(v["$schema"], "x");
+        assert_eq!(v["platforms"]["darwin"]["a.b"], serde_json::Value::Null);
+        let keys: Vec<_> = v["platforms"]["win32"].as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ["z.last", "a.first", "terminal.clear"]);
+        // Disabled is null; several chords are a list.
+        write(&home, "win32", "terminal.clear", serde_json::Value::Null, false).unwrap();
+        let v = write(&home, "win32", "tab.next", serde_json::json!(["Mod+Tab", "Alt+Right"]), false).unwrap().value.unwrap();
+        assert_eq!(v["platforms"]["win32"]["terminal.clear"], serde_json::Value::Null);
+        assert_eq!(v["platforms"]["win32"]["tab.next"], serde_json::json!(["Mod+Tab", "Alt+Right"]));
+        // Reset takes the command out; when the all-platforms section still overrides it, the
+        // shipped default is written instead.
+        let v = write(&home, "win32", "terminal.clear", serde_json::json!(["Mod+K"]), true).unwrap().value.unwrap();
+        assert!(v["platforms"]["win32"].get("terminal.clear").is_none());
+        let v = write(&home, "win32", "app.settings", serde_json::json!(["Mod+Comma"]), true).unwrap().value.unwrap();
+        assert_eq!(v["platforms"]["win32"]["app.settings"], serde_json::json!(["Mod+Comma"]));
+        assert!(!path.with_extension("json.tmp").exists());
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_write_refuses_a_broken_file_and_bad_input() {
+        let home = temp_home("write-bad");
+        let path = path_under(&home);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{ broken").unwrap();
+        assert!(write(&home, "win32", "terminal.clear", serde_json::json!("Mod+K"), false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ broken");
+        fs::write(&path, "{}").unwrap();
+        assert!(write(&home, "win32", "../x", serde_json::json!("Mod+K"), false).is_err());
+        assert!(write(&home, "win32", "terminal.clear", serde_json::json!(5), false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{}");
+        // A file with no platforms block gets one.
+        let v = write(&home, "linux", "terminal.clear", serde_json::json!("Mod+K"), false).unwrap().value.unwrap();
+        assert_eq!(v["platforms"]["linux"]["terminal.clear"], "Mod+K");
         fs::remove_dir_all(&home).unwrap();
     }
 

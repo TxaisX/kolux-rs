@@ -15,10 +15,13 @@ export type KeymapState = Keymap & {
   path: string | null;
   /** Reads the file again. */
   reload: () => void;
+  /** SET-009: writes one command's chords into this platform's section (null: disabled), or with
+   *  `reset` puts the shipped default back. Every window reads the file again afterwards. */
+  save: (id: string, chords: string[] | null, reset?: boolean) => Promise<void>;
 };
 
 const platform = detectPlatform();
-const fallback: KeymapState = { ...defaultsOnly(platform), path: null, reload: () => {} };
+const fallback: KeymapState = { ...defaultsOnly(platform), path: null, reload: () => {}, save: async () => {} };
 
 export const KeymapContext = createContext<KeymapState>(fallback);
 
@@ -34,6 +37,20 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
       .catch((e) => setFailure(String(e)));
   }, []);
   useEffect(reload, [reload]);
+  // SET-009: a change saved in any window reaches every window.
+  useEffect(() => {
+    const off = listen("keybindings-changed", reload);
+    return () => void off.then((u) => u()).catch(() => {});
+  }, [reload]);
+  const save = useCallback(async (id: string, chords: string[] | null, reset = false) => {
+    const value = chords === null || chords.length === 0 ? null : chords.length === 1 ? chords[0] : chords;
+    try {
+      setFile(await invoke<KeybindingsFile>("keybindings_write", { id, value, reset }));
+      setFailure(null);
+    } catch (e) {
+      setFailure(String(e));
+    }
+  }, []);
   // SET-010: the new-tab commands of agents switched off on the Agents page never clash.
   const [ignore, setIgnore] = useState<string[]>([]);
   useEffect(() => {
@@ -44,9 +61,9 @@ export function KeymapProvider({ children }: { children: ReactNode }) {
   }, []);
   const value = useMemo<KeymapState>(() => {
     const map = resolve(file?.value ?? null, platform, ignore);
-    const errors = [...(file?.error ? [file.error] : []), ...(failure ? [`Could not read the shortcuts file: ${failure}`] : []), ...map.errors];
-    return { ...map, errors, path: file?.path ?? null, reload };
-  }, [file, failure, reload, ignore]);
+    const errors = [...(file?.error ? [file.error] : []), ...(failure ? [`The shortcuts file: ${failure}`] : []), ...map.errors];
+    return { ...map, errors, path: file?.path ?? null, reload, save };
+  }, [file, failure, reload, ignore, save]);
   return <KeymapContext.Provider value={value}>{children}</KeymapContext.Provider>;
 }
 

@@ -48,6 +48,7 @@ import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, rules
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
+import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { useUsageAlerts } from "./usage/alerts";
 
@@ -234,6 +235,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
+      if (recording.on) return;
       const browser = panes.find((p) => p.key === focused)?.kind === "browser" && screen === "terminals";
       const hit = (browser && matchEvent(keymap, e, ["browser"])) || matchEvent(keymap, e, screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
       if (!hit) return;

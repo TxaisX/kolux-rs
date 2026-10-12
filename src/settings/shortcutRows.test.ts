@@ -19,6 +19,8 @@ test("every command is listed under its area with its chords and badges", () => 
   expect(by("view.code").badges).toEqual([]);
   expect(by("workspace.openBoard").badges).toEqual(["Unassigned"]);
   expect(by("view.tasks").badges).toEqual(["Unassigned", "Conflicts"]);
+  // Its override was dropped, but the file still holds it, so the row still offers Reset.
+  expect([by("view.tasks").custom, by("worktree.quickOpen").custom]).toEqual([true, false]);
   expect(by("worktree.quickOpen").badges).toEqual(["Conflicts"]);
   expect(by("worktree.quickOpen").hint).toBe("Ctrl+P is also used by Open Tasks here. Give one of them other keys.");
 });
