@@ -252,6 +252,9 @@ struct Mark {
 struct OutputPayload {
     id: u32,
     data: String,
+    /// TERM-098: the pane's own key, so output that arrives before the pane has learned its
+    /// terminal id (the shell's first frame and its cursor question) is not dropped.
+    pane: Option<u32>,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -317,7 +320,7 @@ impl Terminals {
             rows.max(1),
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
-                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data });
+                let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key });
                 if let Ok(mut inner) = out_registry.lock() {
                     inner.logs.entry(id).or_default().push(chunk);
                     if is_program {

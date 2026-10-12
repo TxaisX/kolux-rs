@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { decodeOutput, endedLabel } from "./codec";
+import { decodeOutput, endedLabel, forPane } from "./codec";
 
 test("base64 output chunks decode to the exact PTY bytes, including a split multi-byte character", () => {
   // "é" is C3 A9 in UTF-8; the Rust side may cut a chunk between the two bytes.
@@ -18,4 +18,12 @@ test("the ended label names a non-zero exit code only", () => {
   expect(endedLabel(0)).toBe("ended");
   expect(endedLabel(null)).toBe("ended");
   expect(endedLabel(1)).toBe("ended (exit 1)");
+});
+
+test("TERM-098: output before the pane knows its id is matched by pane key, after by id", () => {
+  expect(forPane({ id: 7, pane: 3 }, null, 3)).toBe(true);
+  expect(forPane({ id: 7, pane: 4 }, null, 3)).toBe(false);
+  expect(forPane({ id: 7, pane: 3 }, null, undefined)).toBe(false);
+  expect(forPane({ id: 7, pane: 3 }, 7, 9)).toBe(true);
+  expect(forPane({ id: 8, pane: 3 }, 7, 3)).toBe(false);
 });

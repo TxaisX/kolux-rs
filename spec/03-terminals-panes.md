@@ -720,6 +720,11 @@ Rules: defaults: a Kolux dark theme and a Tango-style light theme, separate ligh
   asking the terminal for its colours get correct answers, with no leaked replies at startup; no
   flash of the wrong theme at startup; programs that subscribe to light/dark changes are told when
   the mode flips.
+  (Kolux RS, T-145-b: on Windows the pane's replies are written to the console layer as
+  win32-input-mode key events, since it drops them as plain bytes; the palette question and the
+  light/dark question and subscription get through and are answered; the foreground/background
+  questions, OSC 10 and 11 with "?", never leave the console layer, so they go unanswered until the
+  pseudoconsole's pass-through flag is reachable, DT-C20 and T-145-c.)
 Acceptance:
   - [ ] Switching the app to light mode switches terminals to the light theme.
   - [ ] A program asking for the terminal's colours gets the current theme's colours, and nothing

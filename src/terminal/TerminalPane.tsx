@@ -13,7 +13,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { attachRenderer, type RendererMode } from "./renderer";
-import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
+import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
@@ -200,7 +200,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     (async () => {
       unlisteners.push(
         await listen<OutputEvent>("terminal-output", (e) => {
-          if (e.payload.id !== idRef.current) return;
+          if (!forPane(e.payload, idRef.current, number)) return;
           term.write(decodeOutput(e.payload.data));
           sawOutput();
         }),
