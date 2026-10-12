@@ -23,6 +23,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
@@ -126,6 +127,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [promptDraft, setPromptDraft] = useState("");
   const [pathDraft, setPathDraft] = useState("");
   const [showAdd, setShowAdd] = useState(false);
+  // PROJ-002: the Add Project dialog, from the folder button or the composer's Add project item.
+  const [adding, setAdding] = useState(false);
   const [creating, setCreating] = useState<string | null>(null); // project id whose name field is open; "" with no project yet
   const [pending, setPending] = useState<{ projectId: string; name: string } | null>(null); // the stand-in row while Git works
   const shown = useRef(activeDir); // the workspace in front, read when a create finishes
@@ -395,7 +398,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const pickProject = (id: string) => {
     if (id === ADD_ITEM) {
       setCreating(null);
-      setShowAdd(true);
+      setAdding(true);
     } else if (id !== creating) {
       setCreating(id);
       setParentDraft(null); // the parent belongs to the old project
@@ -856,7 +859,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             <button className={`ib${filterOpen ? " on" : ""}`} title="Group and sort the list" aria-pressed={filterOpen} onClick={() => setFilterOpen((o) => !o)}>
               <Sliders size={13} />
             </button>
-            <button className="ib" title="Add a project: choose folders that hold a Git repository" onClick={browse} disabled={busy !== ""}>
+            <button className="ib" title="Add project: clone, open a folder or start a new one" aria-pressed={adding} onClick={() => setAdding(true)} disabled={busy !== ""}>
               <FolderPlus size={13} />
             </button>
             <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => setCreating(creating === null ? projectInFront() : null)}>
@@ -1086,6 +1089,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             }}
           />
         )}
+        {adding && <AddProject onBrowse={browse} onClose={() => setAdding(false)} />}
         <div className="sb-foot">
           <button
             className="ib"

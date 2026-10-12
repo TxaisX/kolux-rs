@@ -346,7 +346,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme 6 · Business-user frame (33 cards)
 
-- [ ] T-200 · PROJ-002 The Add Project dialog opens on cloning, with browse and create one step away
+- [x] T-200 · PROJ-002 The Add Project dialog opens on cloning, with browse and create one step away (the clone and new-project steps say they are not built yet and lead back until T-214)
 - [ ] T-201 · SESS-017 Featured agent cards show what is missing and how to set it up · SESS-019 The older launch dialog with starter kits and a folded Advanced section
 - [ ] T-202 · ACCT-015 Disconnect removes only what Kolux made
 - [ ] T-203 · GIT-061 Turn a plain folder into a Git repository

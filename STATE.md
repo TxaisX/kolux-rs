@@ -855,6 +855,12 @@ was and is never treated as lost, and clearing a key still works and stays clear
 store is back. The proxy address and browser search link are on the sealed list for when
 their settings arrive.
 
+[accounts] The folder button in the sidebar header, and Add project… in the new-workspace
+composer, now open an Add project dialog (T-200): Clone from a URL is the big first choice,
+with Open a folder… and New project beside it; arrow keys and Enter move between them and
+Escape closes. Open a folder works as before; cloning and new projects arrive with T-214, and
+until then their steps say so and offer Back or Open a folder.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1601,7 +1607,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-157 · SAFE-026 vs ACCT-009 off Windows: DT-A8. On Windows a save while the secret store is down fails and writes nothing; macOS and Linux keep the scramble with its log line until a keyring is chosen there.
 
+- [accounts] T-200 · The dialog's Browse choice is worded Open a folder… (clearer than Browse for a non-coder); the Clone and New project steps exist now with a plain not-built-yet line and a disabled Clone button until T-214 builds them.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-200 · done: new `src/projects/AddProject.tsx` (`nextChoice`, `AddProjectView`, focus kept inside the dialog on every step), opened from the sidebar folder button and the composer's Add project item; `scripts/evidence/cdp.mjs` learns the arrow keys · evidence/T-200.txt, T-200-1..3 png
 - 2026-10-12 · [accounts] T-157 · done: `secrets.rs` seals four fields (`httpProxy` and `browserSearchSessionUrl` added for T-240/T-323), a save while the store is down fails with "the system secret store is not answering; nothing was saved", `drop_unreadable` probes the store first so an outage never clears a key, `clear_setting` needs no store, `KOLUX_RS_SECRET_STORE_DOWN` stands in for an outage in development builds only · evidence/T-157.txt, T-157-1..2 png
 - 2026-10-12 · [accounts] T-156 · not built, left unticked · HAND TO FABLE: SAFE-016/017/018/020 sit on the protected-action hook that T-058/T-059 build (the PreToolUse hook program, the listener, the rule engine and the Safety page section do not exist yet, and hooks are a Fable theme); SAFE-025 / STAT-056 need the shared setup, archive and issue scripts to run first (T-107-b, T-107-c). Build after T-058, T-059 and T-107-b.
 - 2026-10-12 · [accounts] T-154-a · done: `secrets.rs` `drop_unreadable` (run at start before the window), `dropped`/`dismiss_dropped` + `secrets_dropped`/`secrets_dropped_dismiss`, `mask` applied to every log line, a masked log line when the Claude key connects; new `src/settings/KeyLostNotice.tsx` in the main window; T-154 split into -a/-b · evidence/T-154-a.txt, T-154-a-1..3 png

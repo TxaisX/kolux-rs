@@ -413,3 +413,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-154-a · rules from the ACCT-010 and ACCT-011 cards; no outside source and no old Kolux source read
 
 > 2026-10-12 · T-157 · rules from the SAFE-026 and ACCT-009 cards; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-200 · rules from the PROJ-002 card; no outside source and no old Kolux source read
