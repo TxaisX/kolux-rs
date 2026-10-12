@@ -442,6 +442,13 @@ pub fn scm_github_repo(worktree: String) -> Option<GhRepo> {
     github_repo(&url, &ssh_config())
 }
 
+/// GIT-066: the signed-in gh login, read from gh's own config (no network); None without gh.
+pub fn gh_login() -> Option<String> {
+    let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", "github.com", "user"]).output().ok()?;
+    let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !login.is_empty()).then_some(login)
+}
+
 fn gh_program() -> Result<std::path::PathBuf, String> {
     crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
 }
