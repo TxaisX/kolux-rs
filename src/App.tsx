@@ -30,6 +30,7 @@ import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
+import { chromeShown } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
@@ -667,7 +668,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   });
   return (
     <div className="app">
-      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
+      <TopBar appName={chromeShown(settings, "titleBarAppName")} screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && scmOpen} onToggleRight={() => { setScreen("terminals"); setScmOpen((o) => !o); }} />
       <div className="body">
         {asking && (
           <CloseAsk

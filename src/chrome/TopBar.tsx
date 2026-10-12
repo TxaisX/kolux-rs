@@ -18,9 +18,10 @@ export const screens: Array<{ id: Screen; label: string }> = [
 ];
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
-type Props = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void };
+type Props = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean };
 
-export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight }: Props) {
+/** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
+export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false }: Props) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -42,6 +43,11 @@ export default function TopBar({ screen, classic = false, onScreen, onSettings, 
         <button className="ib mark" title="Kolux RS" disabled>
           <Mark />
         </button>
+        {appName && (
+          <span className="app-name" data-tauri-drag-region>
+            Kolux
+          </span>
+        )}
         <button className="ib dots" title="Menu (not built yet)">
           <Dots />
         </button>

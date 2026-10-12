@@ -8,7 +8,8 @@ import { importScheme } from "../terminal/schemes";
 import { schemeOptions, SchemeList } from "./SchemePicker";
 import { useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
-import { FIELDS as STATUS_FIELDS, readStatusBar } from "../chrome/statusItems";
+import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
+import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
 import { Segmented } from "./GeneralPage";
 
 const MODE_LABEL: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
@@ -223,21 +224,42 @@ function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: A
   );
 }
 
-/** VIEW-096: the status bar hidden from its right-click menu comes back here. */
-function StatusBarSwitch({ settings, error, save }: ReturnType<typeof useSettings>) {
+/** SET-020: the app name, the Tasks and Automations buttons, and the status bar with its items.
+ *  VIEW-096: a status bar hidden from its right-click menu comes back here. */
+function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings>) {
   if (!settings) return null;
+  const bar = readStatusBar(settings);
   return (
-    <section className="conn-card" data-section="status-bar">
-      <h2 className="conn-name">Status bar</h2>
-      <label className="conn-switch">
-        <input type="checkbox" role="switch" checked={readStatusBar(settings).visible} onChange={(e) => void save({ [STATUS_FIELDS.visible]: e.target.checked })} />
-        <span>
-          Show status bar
-          <small>Right-click the bar to choose which items it shows.</small>
-        </span>
-      </label>
-      {error && <p className="conn-detail warn">{error}</p>}
-    </section>
+    <>
+      <section className="conn-card" data-section="window-items">
+        <h2 className="conn-name">Title bar and sidebar</h2>
+        {CHROME.map((c) => (
+          <label key={c.id} className="conn-switch">
+            <input type="checkbox" role="switch" checked={chromeShown(settings, c.id)} onChange={(e) => void save({ [c.id]: e.target.checked })} />
+            <span>{c.label}</span>
+          </label>
+        ))}
+      </section>
+      <section className="conn-card" data-section="status-bar">
+        <h2 className="conn-name">Status bar</h2>
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={bar.visible} onChange={(e) => void save({ [STATUS_FIELDS.visible]: e.target.checked })} />
+          <span>
+            Show status bar
+            <small>Or right-click the bar to choose which items it shows.</small>
+          </span>
+        </label>
+        <div className="status-ticks" aria-label="Status bar items">
+          {STATUS_ITEMS.map((i) => (
+            <label key={i.id} className={bar.visible ? "status-tick" : "status-tick off"}>
+              <input type="checkbox" disabled={!bar.visible} checked={!bar.hidden.includes(i.id)} onChange={() => void save({ [STATUS_FIELDS.hidden]: toggleItem(bar.hidden, i.id) })} />
+              {i.label}
+            </label>
+          ))}
+        </div>
+        {error && <p className="conn-detail warn">{error}</p>}
+      </section>
+    </>
   );
 }
 
@@ -265,7 +287,7 @@ export default function AppearancePage() {
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
-      {look && <AppearanceView look={look} onChange={change} windowPart={<StatusBarSwitch {...status} />} windowSummary={status.settings && !readStatusBar(status.settings).visible ? "Status bar hidden" : "Status bar shown"} />}
+      {look && <AppearanceView look={look} onChange={change} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
     </>
   );
 }

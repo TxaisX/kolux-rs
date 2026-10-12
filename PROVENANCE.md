@@ -373,3 +373,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-148-a · rules from the SET-023 and TERM-098 cards; scheme palettes from their public, permissively licensed projects (Solarized MIT, Dracula MIT, Nord MIT, Gruvbox MIT, One Half MIT, Campbell from Windows Terminal MIT, Tango public domain); the scheme JSON shape (name, background, foreground, cursorColor, black..brightWhite, purple for magenta) from the public Windows Terminal colour schemes documentation; no old Kolux source read
 
 > 2026-10-12 · T-148-b · rules from the SET-016 and SET-018 cards; the installed font list via `System.Drawing.Text.InstalledFontCollection` from the public .NET documentation and `fc-list : family` from the public fontconfig man page; the HTML `<details>`/`<summary>` element and its toggle event from MDN; no old Kolux source read
+
+> 2026-10-12 · T-148-c · rules from the SET-020 and VIEW-096 cards and DESIGN.md section 11; no outside source needed; no old Kolux source read

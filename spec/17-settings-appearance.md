@@ -461,6 +461,7 @@ Acceptance:
         turns off.
   - [ ] Switch Show Titlebar App Name off → the title bar shows no name.
 Compat: —
+Amended 2026-10-12 (DT-A6): the app name is off by default; the Automations button is on by default until the command palette exists.
 Source: D-17-020
 
 ### SET-023 · Terminal colour schemes for dark and for light

@@ -24,6 +24,7 @@ import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, s
 import { nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
 import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
+import { chromeShown } from "../chrome/chromeItems";
 import { KeyText } from "../keys/KeymapContext";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -490,12 +491,14 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     <div className="sidebar-wrap">
       <aside className="sidebar" aria-label="Sidebar">
         <nav className="sb-nav">
-          <button className="row" title="Tasks (not built yet)">
-            <span className="ic">
-              <List />
-            </span>
-            Tasks
-          </button>
+          {chromeShown(settings, "tasksButton") && (
+            <button className="row" title="Tasks (not built yet)">
+              <span className="ic">
+                <List />
+              </span>
+              Tasks
+            </button>
+          )}
           <button className="row" title="Artifacts (not built yet)">
             <span className="ic">
               <FileCode />
@@ -704,9 +707,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           <button className="ib" title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`} aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
             <Gear />
           </button>
-          <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
-            <Clock />
-          </button>
+          {chromeShown(settings, "automationsButton") && (
+            <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
+              <Clock />
+            </button>
+          )}
           {/* SET-028: until Settings > Agents exists (T-036, T-054), model routing opens from here. */}
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />

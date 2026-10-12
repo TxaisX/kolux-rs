@@ -659,6 +659,11 @@ summary (for Terminal: the font and the dark / light schemes). A link to a setti
 opens just that section. Interface gains App font and Editor font fields that suggest the fonts
 installed on this PC as you type; a font that is not installed still draws text in the default.
 
+[accounts] Window & Sidebar switches (T-148-c): Settings > Appearance > Window & Sidebar can show the
+app name beside the mark, and hide the sidebar's Tasks row, its Automations button, the status bar,
+or single status bar items. Changes show at once; the status bar's right-click menu and the
+Settings ticks always agree. The app name starts off and Automations starts on (DT-A6).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1337,7 +1342,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-148-b · the font fields apply when a suggestion is picked, on Enter or on leaving the field, not on every keystroke (a half-typed name would flash the whole window into the fallback font).
 - [accounts] T-148-b · App font and Editor font sit in the Interface section; the Editor font has no editor to draw yet (T-323), so for now it is only saved.
 
+- [accounts] T-148-c · DT-A6: the title bar app name is off by default (DESIGN.md draws it nowhere) and the Automations button is on by default until the command palette exists; SET-020's card says shown and hidden. Confirm or flip.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-148-c · done: new `src/chrome/chromeItems.ts` (`titleBarAppName`, `tasksButton`, `automationsButton` with DT-A6 defaults, folded summary), Window & Sidebar switches and status bar item ticks in Settings > Appearance, TopBar app name, ProjectsPanel Tasks row and Automations button follow the switches; DT-A6 + SET-020 amendment; View-menu submenu on T-248, used/left usage on T-041 · evidence/T-148-c.txt, evidence/T-148-c-1-defaults.png .. T-148-c-5-automations-hidden.png
 - 2026-10-12 · [accounts] T-148-b · done: Appearance page in three `<details>` sections with folded summaries (SET-016), links unfold their section (SettingsPage), App font / Editor font fields with installed-font suggestions (new `src-tauri/src/fonts.rs` `list_fonts`, `src/settings/fonts.ts`), fonts kept in `appFont` / `editorFont` and cached for the first frame; icon chooser, search unfolding, terminal font and editor noted on T-300, T-246, T-247, T-323 · evidence/T-148-b.txt, evidence/T-148-b-1-sections.png .. T-148-b-7-link-unfolds-window.png
 - 2026-10-12 · [accounts] T-148-a · done: new `src/terminal/schemes.ts` (catalogue, search, Windows Terminal import, tidy on load), `src/settings/SchemePicker.tsx` (scheme lists), theme.ts dark/light picks (`terminalScheme`, `terminalSchemeLight`, `terminalCustomSchemes`), Appearance page Terminal colours rebuilt · evidence/T-148-a.txt, evidence/T-148-a-1-pickers.png .. T-148-a-5-custom-terminal.png
 - 2026-10-11 · [accounts] T-147 · done: new `src/chrome/statusItems.ts` (items, `readStatusBar` with old-list clean-up, `toggleItem`), `StatusBar.tsx` (right-click menu, popover guard, hidden items), App wiring (`statusBarVisible`, `statusBarHidden`), Settings > Appearance status bar switch; DT-A5 + VIEW-096 amendment; menu-bar item added to T-248 · evidence/T-147.txt, evidence/T-147-1-menu.png .. T-147-5-appearance-switch.png
