@@ -307,7 +307,7 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P1 · theme 11 · Orchestration and automations (47 cards)
 
 - [x] T-186-a · PROJ-040 Nest a new workspace under a parent workspace · PROJ-048 Change a workspace's parent · PROJ-078 [compat] `kolux worktree` list, show, current and set · PROJ-079 [compat] `kolux worktree changes` and `kolux worktree overlap` (list, show and current were built on T-117-a, changes and overlap on T-118)
-- [ ] T-186-b · PROJ-048's Board-card middle drop and PROJ-078's `worktree set` with its parent flags (split from T-186: the Board is T-025..T-030 and `worktree set` is T-117-b), plus PROJ-040's fall back to the active folder workspace when the parent is gone (folder workspaces are T-218)
+- [ ] T-186-b · the rest of T-186-a's cards: changing a parent by a Board-card middle drop and by `worktree set` with its parent flags (split from T-186: the Board is T-025..T-030 and `worktree set` is T-117-b), plus the fall back to the active folder workspace when the parent is gone (folder workspaces are T-218)
 - [ ] T-187 · SESS-020 [compat] Save a lineup as a shape or team and use it again · SESS-031 Carry a conversation over to a different agent · SESS-033 Start an agent to fix failing checks · SESS-034 Start an agent directly from an issue
 - [ ] T-188 · TERM-126 [compat] Send a prompt to an agent and confirm it was submitted
 - [ ] T-189 · VIEW-011 [compat] Automations and Skills pages · VIEW-069 Ask an agent to fix things from Source Control · VIEW-087 Continue a session with another agent
