@@ -27,7 +27,7 @@ import CloseAsk from "./terminal/CloseAsk";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
-import { readLook, startScreen } from "./settings/general";
+import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, titleBarButton } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
 import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
@@ -53,7 +53,7 @@ import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
 import SourceControlPanel from "./scm/SourceControlPanel";
-import { SUMMARY_UPSTREAM_KEY } from "./scm/model";
+import { SCM_AGENT_KEY, SUMMARY_UPSTREAM_KEY } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId, menuAgents, offeredAgents } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
@@ -61,7 +61,7 @@ import { nextNeedsYou } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, rulesBlock, TERMINAL, withoutFailed, type Copies, type Seat, type Shape } from "./launch/seats";
+import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -128,7 +128,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
   // the grid stays mounted (hidden) behind it.
   // SET-028: Model routing opens the same way until Settings > Agents exists.
-  const [page, setPage] = useState<Page | null>(null);
+  const [page, setPage] = useState<Page | null>(() => openPageAt(initial)); // VIEW-011: the page open at quit
   const [scmOpen, setScmOpen] = useState(false);
   // GIT-004: a half-written commit message per worktree, kept through closing the panel.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -607,18 +607,27 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // opens there. Shown only when the sidebar says the user has not moved on.
   const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string) => {
     try {
-      await pretrust(agent.id, [dir]);
-      const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
-      const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined }]);
-      if (show) {
-        setActiveDir(dir);
-        setFocused(key);
-      }
+      await openIn(agent, dir, branch, prompt, show, extra, title);
     } catch (err) {
       setNotice(String(err));
     }
   };
+  // The start itself; it throws when the start line or the folder's trust cannot be set up, so a
+  // caller that reports its own failure (VIEW-069) can say what did not start.
+  const openIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string) => {
+    await pretrust(agent.id, [dir]);
+    const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
+    const key = nextKey.current++;
+    setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined }]);
+    if (show) {
+      setActiveDir(dir);
+      setFocused(key);
+    }
+  };
+  // VIEW-011: the open page is written down, so it is shown again after a restart.
+  useEffect(() => {
+    if ((settings[OPEN_PAGE_FIELD] ?? null) !== page) saveSetting(OPEN_PAGE_FIELD, page);
+  }, [page]);
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
@@ -804,7 +813,22 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   });
   return (
     <div className="app">
-      <TopBar appName={chromeShown(settings, "titleBarAppName")} screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
+      <TopBar
+        appName={chromeShown(settings, "titleBarAppName")}
+        automations={
+          titleBarButton(settings, "automations")
+            ? {
+                open: terminals && page === "automations",
+                onToggle: () => {
+                  setScreen("terminals");
+                  setPage((p) => (terminals && p === "automations" ? null : "automations"));
+                },
+              }
+            : undefined
+        }
+        screen={screen}
+        classic={classic}
+        onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
       <div className="body">
         {asking && (
           <CloseAsk
@@ -860,6 +884,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           <SignInNotice />
           {terminals && page === "automations" && (
             <AutomationsPage
+              onClose={() => setPage(null)}
               projects={projects}
               agents={agents}
               settings={settings}
@@ -1042,6 +1067,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     busy={launching}
                     closable
                     onClose={() => closePane(p.key)}
+                    saved={Array.isArray(settings[SAVED_SHAPES_KEY]) ? (settings[SAVED_SHAPES_KEY] as SavedShape[]) : []}
+                    onSaved={(list) => saveSetting(SAVED_SHAPES_KEY, list)}
+                    onPickSaved={(t) => setChooser(p.key, { shape: "custom", seats: restoreShape(t, installedIds), task: t.task ?? "", copies: t.copies })}
                   />
                 ) : (
                   <TerminalPane
@@ -1087,7 +1115,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           </div>
         </div>
         {terminals && scmOpen && (
-          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
+          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} onAgentAction={async (a, prompt) => {
+            if (activeDir === null) return "Open a workspace first.";
+            try {
+              await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
+              return null;
+            } catch (err) {
+              return `${a.name} did not start, so the conflicts were not handed over: ${String(err)}`;
+            }
+          }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
         {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
       </div>

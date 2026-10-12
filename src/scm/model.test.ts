@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, emptyStatus, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 
@@ -101,4 +101,17 @@ test("EDIT-040: the note says how long since it last changed", () => {
   expect(sinceText(now - 5 * 60_000, now)).toBe("Changed 5 min ago");
   expect(sinceText(now - 3 * 3_600_000, now)).toBe("Changed 3 h ago");
   expect(sinceText(now - 2 * 86_400_000, now)).toBe("Changed 2 d ago");
+});
+
+test("VIEW-069: the resolve-conflicts prompt names the files, and a saved agent is used only while it is installed", () => {
+  const p = conflictPrompt([{ path: "a.txt", status: "U", from: null }, { path: "src/b.rs", status: "U", from: null }]);
+  expect(p).toContain("a.txt");
+  expect(p).toContain("src/b.rs");
+  expect(p.toLowerCase()).toContain("conflict");
+  const claude = { id: "claude", name: "Claude", program: "claude", args: [], installed: true, path: "c" };
+  const codex = { id: "codex", name: "Codex", program: "codex", args: [], installed: false, path: null };
+  expect(savedFixAgent([claude, codex], "claude")).toBe(claude);
+  expect(savedFixAgent([claude, codex], "codex")).toBe(null);
+  expect(savedFixAgent([claude, codex], undefined)).toBe(null);
+  expect(savedFixAgent([claude, codex], 7)).toBe(null);
 });

@@ -3,18 +3,24 @@
 // live preview of the timetable that shows the checker's message when the line will not do. The
 // back end checks everything again on save; one request id per opening means a double click or a
 // repeated save leaves one automation. Create and edit on the command line (CLI-029) are T-197.
+// The clock time is an hour box, a minute box and AM or PM (AUTO-003); Custom shows the line, its
+// five field chips and a status line that reads it back in words (AUTO-002); the header and the
+// empty page offer the starter templates (AUTO-006).
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { folderName, type Project, type Worktree } from "../projects/model";
 import { defaultForm, findNext, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
+import { clampBox, cronWords, fieldNames, from12, nudge, templates, to12, toPreset, weekdayNames, type Template } from "./timetable";
 
 type Props = {
   projects: Project[];
   agents: AgentInfo[];
   /** The latest saved copy when editing (the page fetches it first), or null for a new one. */
   editing: Automation | null;
+  /** AUTO-006: a new automation's starting point; it only fills the form. */
+  template?: Template | null;
   onClose: () => void;
   onSaved: (a: Automation) => void;
 };
@@ -31,19 +37,66 @@ const presets: Array<{ value: Preset; label: string }> = [
   { value: "weekly", label: "Once a week" },
   { value: "custom", label: "Custom (cron or RRULE)" },
 ];
-const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+/** The interface language: the window's own, which follows the system's. */
+const locale = () => (typeof navigator !== "undefined" && navigator.language) || "en-US";
 const localZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
-export default function AutomationDialog({ projects, agents, editing, onClose, onSaved }: Props) {
+/** The four starting points and a blank one, on the empty page and from the dialog's header. */
+export function TemplateCards({ onPick, disabled }: { onPick: (t: Template | null) => void; disabled?: boolean }) {
+  return (
+    <div className="auto-templates">
+      {templates.map((t) => (
+        <button key={t.id} className="auto-template" disabled={disabled} onClick={() => onPick(t)}>
+          <b>{t.name}</b>
+          <span>{t.blurb}</span>
+        </button>
+      ))}
+      <button className="auto-template" disabled={disabled} onClick={() => onPick(null)}>
+        <b>Start from blank</b>
+        <span>An empty form</span>
+      </button>
+    </div>
+  );
+}
+
+/** One number box: typing is free, leaving it snaps into range, the arrow keys nudge it. */
+function TimeBox({ label, value, lo, hi, twoDigits, onValue }: { label: string; value: number; lo: number; hi: number; twoDigits?: boolean; onValue: (n: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = (n: number) => {
+    setDraft(null);
+    onValue(n);
+  };
+  return (
+    <input
+      className="field auto-box"
+      inputMode="numeric"
+      aria-label={label}
+      value={draft ?? (twoDigits ? String(value).padStart(2, "0") : String(value))}
+      onChange={(e) => setDraft(e.target.value.replace(/\D/g, "").slice(0, 2))}
+      onBlur={() => draft !== null && commit(clampBox(draft, lo, hi))}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+        e.preventDefault();
+        commit(nudge(draft === null ? value : clampBox(draft, lo, hi), e.key === "ArrowUp" ? 1 : -1, lo, hi));
+      }}
+    />
+  );
+}
+
+export default function AutomationDialog({ projects, agents, editing, template, onClose, onSaved }: Props) {
   const [requestId] = useState(() => `req-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-  const [name, setName] = useState(editing?.name ?? "");
-  const [prompt, setPrompt] = useState(editing?.prompt ?? "");
+  const start = editing ? null : template;
+  const [name, setName] = useState(editing?.name ?? start?.name ?? "");
+  const [prompt, setPrompt] = useState(editing?.prompt ?? start?.prompt ?? "");
   const [provider, setProvider] = useState(editing?.provider ?? "claude");
   const [projectId, setProjectId] = useState(editing?.projectId ?? projects[0]?.id ?? "");
   const [mode, setMode] = useState<"existing" | "new-per-run">(editing?.workspaceMode ?? "existing");
   const [workspace, setWorkspace] = useState(editing?.workspace ?? "");
   const [base, setBase] = useState(editing?.baseBranch ?? "");
-  const [form, setForm] = useState<ScheduleForm>(editing?.form ?? defaultForm);
+  const [form, setForm] = useState<ScheduleForm>(editing?.form ?? start?.form ?? defaultForm);
+  // AUTO-002: what was typed into Custom, given back after a visit to a preset.
+  const [typed, setTyped] = useState<string | null>(editing?.form?.preset === "custom" ? editing.form.custom : null);
+  const [chooser, setChooser] = useState(false);
   const [zone, setZone] = useState((editing?.trigger?.kind === "schedule" && editing.trigger.timezone) || localZone());
   const [worktrees, setWorktrees] = useState<Worktree[] | null>(null);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -135,13 +188,29 @@ export default function AutomationDialog({ projects, agents, editing, onClose, o
         setSaving(false);
       });
   };
+  const pick = (t: Template | null) => {
+    setName(t?.name ?? "");
+    setPrompt(t?.prompt ?? "");
+    setForm(t?.form ?? defaultForm);
+    setTyped(null);
+    setChooser(false);
+  };
+  const clock = to12(form.time || "09:00");
+  const setClock = (hour: number, minute: number, pm: boolean) => setForm({ ...form, time: from12(hour, minute, pm) });
+  const lang = locale();
   const hits = findQuery ? prompt.toLowerCase().split(findQuery.toLowerCase()).length - 1 : 0;
   const choices = providers.map((p) => ({ ...p, name: agents.find((a) => a.id === p.id)?.name ?? p.name }));
 
   return (
     <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="auto-dialog" role="dialog" aria-modal="true" aria-label={editing ? `Edit ${editing.name}` : "New Automation"} onKeyDown={keys}>
-        <h2>{editing ? "Edit automation" : "New Automation"}</h2>
+        <div className="auto-dialog-head">
+          <h2>{editing ? "Edit automation" : "New Automation"}</h2>
+          <button className="btn" aria-expanded={chooser} onClick={() => setChooser(!chooser)}>
+            Templates
+          </button>
+        </div>
+        {chooser && <TemplateCards onPick={pick} />}
         <div className="auto-dialog-body">
           <div className="auto-dialog-main">
             <label className="auto-label">
@@ -217,7 +286,7 @@ export default function AutomationDialog({ projects, agents, editing, onClose, o
             </fieldset>
             <label className="auto-label">
               Timetable
-              <select className="field" value={form.preset} onChange={(e) => setForm({ ...form, preset: e.target.value as Preset })}>
+              <select className="field" value={form.preset} onChange={(e) => setForm(toPreset(form, e.target.value as Preset, typed))}>
                 {presets.map((p) => (
                   <option key={p.value} value={p.value}>
                     {p.label}
@@ -225,17 +294,11 @@ export default function AutomationDialog({ projects, agents, editing, onClose, o
                 ))}
               </select>
             </label>
-            {form.preset === "hourly" && (
-              <label className="auto-label">
-                Minutes past the hour
-                <input className="field" type="number" min={0} max={59} value={Number(form.time.split(":")[1] ?? 0)} onChange={(e) => setForm({ ...form, time: `00:${e.target.value.padStart(2, "0")}` })} />
-              </label>
-            )}
             {form.preset === "weekly" && (
               <label className="auto-label">
                 Day
                 <select className="field" value={form.day ?? 1} onChange={(e) => setForm({ ...form, day: Number(e.target.value) })}>
-                  {days.map((d, i) => (
+                  {weekdayNames(lang).map((d, i) => (
                     <option key={d} value={i}>
                       {d}
                     </option>
@@ -243,16 +306,45 @@ export default function AutomationDialog({ projects, agents, editing, onClose, o
                 </select>
               </label>
             )}
-            {(form.preset === "daily" || form.preset === "weekdays" || form.preset === "weekly") && (
-              <label className="auto-label">
-                Time
-                <input className="field" type="time" value={form.time} onChange={(e) => setForm({ ...form, time: e.target.value })} />
-              </label>
+            {form.preset !== "custom" && (
+              <div className="auto-label">
+                <span>{form.preset === "hourly" ? "Minutes past the hour" : "Time"}</span>
+                <div className="auto-time">
+                  {form.preset !== "hourly" && (
+                    <>
+                      <TimeBox label="Hour" value={clock.hour} lo={1} hi={12} onValue={(h) => setClock(h, clock.minute, clock.pm)} />
+                      <span>:</span>
+                    </>
+                  )}
+                  <TimeBox label="Minute" value={clock.minute} lo={0} hi={59} twoDigits onValue={(m) => setClock(clock.hour, m, clock.pm)} />
+                  {form.preset !== "hourly" && (
+                    <select className="field" aria-label="AM or PM" value={clock.pm ? "PM" : "AM"} onChange={(e) => setClock(clock.hour, clock.minute, e.target.value === "PM")}>
+                      <option value="AM">AM</option>
+                      <option value="PM">PM</option>
+                    </select>
+                  )}
+                </div>
+              </div>
             )}
             {form.preset === "custom" && (
               <label className="auto-label">
                 Cron line or RRULE
-                <input className="field mono" value={form.custom} onChange={(e) => setForm({ ...form, custom: e.target.value })} placeholder="0 9 * * 1-5" />
+                <input
+                  className="field mono"
+                  value={form.custom}
+                  onChange={(e) => {
+                    setTyped(e.target.value);
+                    setForm({ ...form, custom: e.target.value });
+                  }}
+                  placeholder="0 9 * * 1-5"
+                />
+                <span className="auto-chips">
+                  {fieldNames(lang).map((n) => (
+                    <span key={n} className="chip">
+                      {n}
+                    </span>
+                  ))}
+                </span>
               </label>
             )}
             <label className="auto-label">
@@ -261,12 +353,12 @@ export default function AutomationDialog({ projects, agents, editing, onClose, o
             </label>
             {previewError ? (
               <div className="note error" role="alert">
-                {previewError}
+                {form.preset === "custom" ? `Invalid: ${previewError}` : previewError}
               </div>
             ) : (
               preview && (
-                <div className="auto-preview">
-                  {preview.timetable}
+                <div className="auto-preview" role="status">
+                  {form.preset === "custom" ? `Valid: ${cronWords(form.custom, lang) ?? preview.timetable} (${zone})` : preview.timetable}
                   <br />
                   Next run: {preview.nextRunLabel}
                 </div>

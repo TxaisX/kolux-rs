@@ -41,7 +41,10 @@ fn save(store: &Store, key: &str, list: &[Value]) -> Result<(), String> {
 pub fn list(store: &Store) -> Result<Value, String> {
     let now = now_ms() as i64;
     let autos: Vec<Value> = load(store, KEY)?.into_iter().map(|a| decorate(a, now)).collect();
-    Ok(json!({ "automations": autos, "runs": load(store, RUNS_KEY)? }))
+    Ok(match load(store, RUNS_KEY) {
+        Ok(runs) => json!({ "automations": autos, "runs": runs }),
+        Err(e) => json!({ "automations": autos, "runs": [], "runsError": e.replace("automations", "runs") }),
+    })
 }
 
 fn decorate(mut a: Value, now: i64) -> Value {
@@ -420,6 +423,13 @@ mod tests {
         assert_eq!(list(&store).unwrap()["automations"], json!([]));
         store.set(KEY, "{not json").unwrap();
         assert!(list(&store).unwrap_err().contains("could not be read"));
+        // AUTO-018: history that cannot be read leaves the automations readable and says so,
+        // so the page shows the run count as unknown rather than 0.
+        store.set(KEY, "[]").unwrap();
+        store.set(RUNS_KEY, "{not json").unwrap();
+        let out = list(&store).unwrap();
+        assert_eq!((out["automations"].clone(), out["runs"].clone()), (json!([]), json!([])));
+        assert!(out["runsError"].as_str().unwrap().contains("could not be read"));
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

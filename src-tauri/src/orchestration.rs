@@ -10,6 +10,23 @@ use std::collections::BTreeMap;
 const KEY: &str = "orchestration.mail";
 pub const KINDS: &[&str] = &["status", "dispatch", "worker_done", "merge_ready", "escalation", "handoff", "decision_gate", "question", "heartbeat"];
 
+/// ORCH-004: an open terminal as a group send sees it: the agent Kolux detected in it (none for
+/// a shell or an agent of unknown kind), whether it is quiet, and the folder it runs in.
+#[derive(Clone, Debug)]
+pub struct Peer {
+    pub handle: String,
+    pub agent: Option<String>,
+    pub idle: bool,
+    pub dir: String,
+}
+
+/// Do two folder spellings name the same place (slashes, a trailing slash and letter case aside)?
+// ponytail: text compare, no disk lookup; links and short names count as different folders.
+fn same_path(a: &str, b: &str) -> bool {
+    let n = |s: &str| s.trim().replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+    n(a) == n(b)
+}
+
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Mail {
@@ -19,6 +36,22 @@ pub struct Mail {
     pub deliveries: Vec<Delivery>,
     pub answers: BTreeMap<String, Value>,
     pub seq: u64,
+    pub gates: Vec<Gate>,
+}
+
+/// ORCH-028: a decision the coordinator still has to make, holding one task blocked meanwhile.
+#[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Gate {
+    pub id: String,
+    pub run: Option<String>,
+    pub task: String,
+    pub question: String,
+    pub options: Vec<String>,
+    pub status: String,
+    pub resolution: Option<String>,
+    pub created: u64,
+    pub resolved: Option<u64>,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -77,16 +110,24 @@ fn args(message: impl Into<String>) -> Fail {
     Fail::new("invalid_arguments", message)
 }
 
-/// Who is calling (ORCH-001): `--from` names an open Kolux terminal; otherwise the handle and
-/// secret pane key every Kolux terminal carries must match a pane the runtime started itself. A
-/// shell outside Kolux (or a guessed key) is nobody: `None`.
-/// The pane key decides: a handle the environment still names after it went stale is worked out
-/// again from the key (CLI-034); a key the runtime never gave is no one.
-pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, by_key: &dyn Fn(&str) -> Option<String>, live: &dyn Fn(&str) -> bool) -> Result<Option<String>, Fail> {
-    if let Some(h) = from.map(str::trim).filter(|h| !h.is_empty()) {
-        return if live(h) { Ok(Some(h.to_string())) } else { Err(Fail::new("not_found", format!("no open Kolux terminal is called {h}"))) };
+/// Who is calling (ORCH-001, CLI-039): the handle and secret pane key every Kolux terminal carries
+/// must match a pane the runtime started itself. A shell outside Kolux (or a guessed key) is
+/// nobody: `None`. The pane key decides: a handle the environment still names after it went stale
+/// is worked out again from the key (CLI-034); a key the runtime never gave is no one.
+/// `--from` may only name the calling terminal itself: another handle is refused, and so is any
+/// handle from a shell whose own identity cannot be proven (fail closed).
+pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, by_key: &dyn Fn(&str) -> Option<String>) -> Result<Option<String>, Fail> {
+    let me = pane.and_then(|(_, k)| by_key(k));
+    let Some(h) = from.map(str::trim).filter(|h| !h.is_empty()) else { return Ok(me) };
+    match me {
+        Some(me) if me == h => Ok(Some(me)),
+        Some(me) => Err(Fail::new("caller_mismatch", format!("this command runs in {me}, so it cannot act as {h}: drop --from {h}, or run the command in {h} itself"))),
+        None => Err(Fail {
+            code: "unbound_caller",
+            message: format!("--from {h} cannot be proven here: this shell is not a terminal Kolux started, so it has no identity to check it against"),
+            data: json!({ "hint": "run the command inside a Kolux terminal; its KOLUX_TERMINAL_HANDLE and KOLUX_PANE_KEY say who is calling" }),
+        }),
     }
-    Ok(pane.and_then(|(_, k)| by_key(k)))
 }
 
 fn finished(d: &Value) -> bool {
@@ -100,6 +141,82 @@ fn terminal_of(d: &Value) -> Option<String> {
         return None;
     }
     d["terminal"].as_u64().map(|t| crate::terminal::handle_of(t as u32))
+}
+
+/// The open dispatch whose worker runs in `pane`, if any.
+fn own_dispatch<'a>(pane: &str, dispatches: &'a [Value]) -> Option<&'a Value> {
+    dispatches.iter().rev().find(|d| !finished(d) && terminal_of(d).as_deref() == Some(pane))
+}
+
+/// ORCH-032: the nesting cap when nothing raises it: the coordinator plus one level of workers.
+pub const DEFAULT_MAX_DEPTH: u32 = 1;
+
+/// ORCH-032: the depth and cap a worker started from `pane` gets, or the refusal that tells the
+/// caller to do the work itself. A coordinator (no dispatch of its own) takes the cap asked for
+/// (`--max-depth`), else the configured one, else 1. A worker keeps the cap its coordinator gave it
+/// and can only lower it. A dispatch stored before depth was recorded counts as one level down.
+pub fn nest(pane: Option<&str>, dispatches: &[Value], asked: Option<u32>, configured: Option<u32>) -> Result<(u32, u32), Fail> {
+    let own = pane.and_then(|p| own_dispatch(p, dispatches));
+    let depth = own.map(|d| d["depth"].as_u64().unwrap_or(1) as u32).unwrap_or(0);
+    let cap = match own {
+        Some(d) => {
+            let given = d["maxDepth"].as_u64().map(|c| c as u32).unwrap_or(DEFAULT_MAX_DEPTH);
+            asked.map_or(given, |a| a.min(given))
+        }
+        None => asked.or(configured).unwrap_or(DEFAULT_MAX_DEPTH),
+    };
+    if depth + 1 > cap {
+        return Err(Fail {
+            code: "nesting_limit",
+            message: format!("you are a worker {depth} level{} down and the nesting cap is {cap} level{} of workers: do this task yourself instead of starting another worker", if depth == 1 { "" } else { "s" }, if cap == 1 { "" } else { "s" }),
+            data: json!({ "depth": depth, "maxDepth": cap }),
+        });
+    }
+    Ok((depth + 1, cap))
+}
+
+/// ORCH-033: task `id` as Run `run` sees it. A task of another Run reads exactly as a missing one,
+/// so Runs cannot be mapped from outside.
+pub fn task_in(tasks: &[Value], id: &str, run: Option<&str>) -> Result<usize, Fail> {
+    tasks.iter().position(|t| t["id"] == id && t["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no task {id}")))
+}
+
+/// ORCH-023: fences dispatch `id` off. Its worker can no longer report on it, and its task can be
+/// handed on again; no process is stopped, no pane closes and nothing on disk changes. A dispatch
+/// of another Run reads as missing. Abandoning twice answers the same.
+pub fn abandon(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option<&str>, now: u64) -> Result<Value, Fail> {
+    let d = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    let was = d["status"].as_str().unwrap_or_default().to_string();
+    if was != "abandoned" {
+        if finished(d) {
+            return Err(Fail::new("dispatch_finished", format!("{id} is already {was}; there is nothing to abandon")));
+        }
+        d["status"] = json!("abandoned");
+        d["abandonedAt"] = json!(now);
+    }
+    let task = d["taskId"].as_str().unwrap_or_default().to_string();
+    if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task.as_str() && t["dispatchId"] == id && status(t) == "dispatched") {
+        t["status"] = json!("ready");
+        if let Some(o) = t.as_object_mut() {
+            o.remove("dispatchId");
+        }
+    }
+    let task_status = tasks.iter().find(|t| t["id"] == task.as_str()).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+    Ok(json!({ "dispatchId": id, "taskId": task, "status": "abandoned", "terminal": terminal_of(d), "terminalKept": true, "taskStatus": task_status, "mode": d["mode"] }))
+}
+
+/// ORCH-040: the open dispatches tied to one worktree, by the folder they were started in or by a
+/// live terminal that sits there.
+pub fn workers_in(dispatches: &[Value], here: &dyn Fn(&str) -> bool, homed: &dyn Fn(&str) -> bool) -> Vec<Value> {
+    dispatches
+        .iter()
+        .filter(|d| !finished(d))
+        .filter_map(|d| {
+            let t = terminal_of(d);
+            let mine = d["worktree"].as_str().is_some_and(here) || t.as_deref().is_some_and(homed);
+            mine.then(|| json!({ "dispatchId": d["id"], "taskId": d["taskId"], "runId": d["runId"], "status": d["status"], "agent": d["agent"], "terminal": t }))
+        })
+        .collect()
 }
 
 impl Mail {
@@ -119,6 +236,12 @@ impl Mail {
 
     pub fn bound(&self, pane: &str) -> Option<&str> {
         self.bindings.get(pane).and_then(|b| b.run.as_deref())
+    }
+
+    /// ORCH-033: the Run a pane acts in: the one it is tied to, else the Run of the dispatch its
+    /// worker is on. A worker that makes a Run of its own acts in that one from then on.
+    pub fn run_of(&self, pane: &str, dispatches: &[Value]) -> Option<String> {
+        self.bound(pane).map(str::to_string).or_else(|| own_dispatch(pane, dispatches).and_then(|d| d["runId"].as_str().map(str::to_string)))
     }
 
     /// Goes up every time the pane is tied to a Run, so a check that started waiting before can
@@ -153,7 +276,7 @@ impl Mail {
     }
 
     /// ORCH-001: a Run is a namespace with a home mailbox; making one schedules nothing.
-    // ponytail: nesting depth (ORCH-032) is T-155; a new Run leaves it alone because there is none.
+    // ORCH-032: a worker's depth comes from its dispatch, so a Run made here leaves it as it was.
     pub fn run_create(&mut self, pane: &str, objective: &str, now: u64) -> Value {
         let id = self.next("run");
         self.runs.push(Run { id: id.clone(), objective: objective.to_string(), home: pane.to_string(), created: now });
@@ -232,6 +355,23 @@ impl Mail {
         if kind == "worker_done" && outcome.is_none() {
             return Err(args("a done report must say how it ended: --outcome succeeded or failed"));
         }
+        // ORCH-023: a dispatch that was abandoned (or has otherwise finished) takes no more reports.
+        if kind == "worker_done" || kind == "heartbeat" {
+            if let Some(d) = text("dispatchId").and_then(|id| dispatches.iter().find(|d| d["id"] == id.as_str())).filter(|d| finished(d)) {
+                let id = d["id"].as_str().unwrap_or_default();
+                return Err(Fail::new("dispatch_finished", format!("{id} was {}: Kolux takes no more reports on it", d["status"].as_str().unwrap_or_default())));
+            }
+            // CLI-039: a report on a dispatch comes only from the terminal its worker runs in, so
+            // another pane can never settle someone else's task.
+            if let Some(d) = text("dispatchId").and_then(|id| dispatches.iter().find(|d| d["id"] == id.as_str())) {
+                let id = d["id"].as_str().unwrap_or_default();
+                match terminal_of(d) {
+                    Some(t) if t == from => {}
+                    Some(t) => return Err(Fail::new("not_your_dispatch", format!("{id} runs in {t}; a report on it must come from {t} itself, not from {from}"))),
+                    None => return Err(Fail::new("not_your_dispatch", format!("{id}'s worker terminal is from an earlier start of Kolux, so a report on it cannot be vouched for"))),
+                }
+            }
+        }
         let payload = text("payload").map(|p| serde_json::from_str::<Value>(&p)).transpose().map_err(|_| args("--payload takes JSON"))?;
         let named = text("run");
         if let Some(r) = &named {
@@ -245,8 +385,8 @@ impl Mail {
                 if kind == "worker_done" || kind == "heartbeat" {
                     return Err(args("done reports and heartbeats never go to a group; send them to run:<id>"));
                 }
-                // ponytail: group addresses (ORCH-004) fan out with T-190; refused until then.
-                return Err(Fail::new("unsupported", format!("group addresses such as {t} arrive later; name a run:, dispatch: or terminal handle")));
+                // ORCH-004: groups fan out in `post`, which hands each copy here with one handle.
+                return Err(Fail::new("unsupported", format!("{t} is a group address; send it through post")));
             }
             Some(t) if t.starts_with("run:") => {
                 let id = &t[4..];
@@ -285,7 +425,7 @@ impl Mail {
             }
         }
         let mut extras = Map::new();
-        for k in ["threadId", "taskId", "dispatchId", "outcome", "reportPath", "phase"] {
+        for k in ["threadId", "taskId", "dispatchId", "outcome", "reportPath", "phase", "fromAgent"] {
             if let Some(v) = text(k) {
                 extras.insert(k.into(), json!(v));
             }
@@ -300,6 +440,67 @@ impl Mail {
         let body = a["body"].as_str().unwrap_or_default().to_string();
         self.messages.push(Message { id: id.clone(), to: to.clone(), run: run.clone(), from: from.to_string(), subject, body, kind, priority, extras, at: now });
         Ok(json!({ "messageIds": [id], "to": to, "runId": run }))
+    }
+
+    /// ORCH-004: a group address (@all, @idle, @worktree:<id>, @claude, @codex, @cursor, @droid)
+    /// becomes one copy per matching agent terminal, never the sender's own, all on one thread, or
+    /// nothing at all; any other address is one ordinary send to the open terminals in `peers`.
+    pub fn post(&mut self, from: &str, a: &Value, dispatches: &[Value], peers: &[Peer], now: u64) -> Result<Value, Fail> {
+        let live = |h: &str| peers.iter().any(|p| p.handle == h);
+        let mut a = a.clone();
+        // ORCH-009: the sender's agent, as Kolux detected it, names it in the banner.
+        let sender = peers.iter().find(|p| p.handle == from).and_then(|p| p.agent.as_deref());
+        match sender.and_then(|id| crate::agents::CATALOGUE.iter().find(|e| e.0 == id)) {
+            Some(e) => a["fromAgent"] = json!(e.1),
+            None => {
+                if let Some(o) = a.as_object_mut() {
+                    o.remove("fromAgent");
+                }
+            }
+        }
+        let Some(group) = a["to"].as_str().map(str::trim).filter(|t| t.starts_with('@')).map(str::to_string) else {
+            return self.send(from, &a, dispatches, &live, now);
+        };
+        let kind = a["type"].as_str().map(str::trim).unwrap_or("status");
+        if kind == "worker_done" || kind == "heartbeat" {
+            return Err(args("done reports and heartbeats never go to a group; send them to run:<id>"));
+        }
+        if kind == "question" {
+            return Err(args(format!("a question goes to exactly one recipient, not to the group {group}")));
+        }
+        let name = group[1..].to_ascii_lowercase();
+        let agents = peers.iter().filter(|p| p.handle != from && p.agent.is_some());
+        let to: Vec<&Peer> = match name.as_str() {
+            "all" => agents.collect(),
+            "idle" => agents.filter(|p| p.idle).collect(),
+            "claude" | "codex" | "cursor" | "droid" => agents.filter(|p| p.agent.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&name))).collect(),
+            w if w.starts_with("worktree:") && w.len() > 9 => {
+                // A worktree id is "<project id>::<path>"; the bare path is taken too.
+                let id = &group[10..];
+                let path = id.rsplit_once("::").map_or(id, |(_, p)| p);
+                agents.filter(|p| same_path(&p.dir, path)).collect()
+            }
+            _ => return Err(args(format!("Kolux knows no group {group}; use @all, @idle, @worktree:<id>, @claude, @codex, @cursor or @droid"))),
+        };
+        if to.is_empty() {
+            return Err(Fail::new("not_found", format!("{group} matches no agent terminal right now")));
+        }
+        let thread = a["threadId"].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| self.next("thread"));
+        a["threadId"] = json!(thread);
+        let keep = self.messages.len();
+        let mut made = Vec::new();
+        for p in to {
+            a["to"] = json!(p.handle);
+            match self.send(from, &a, dispatches, &live, now) {
+                Ok(r) => made.push(json!({ "id": r["messageIds"][0], "to": r["to"] })),
+                Err(e) => {
+                    self.messages.truncate(keep);
+                    return Err(e);
+                }
+            }
+        }
+        let ids: Vec<Value> = made.iter().map(|m| m["id"].clone()).collect();
+        Ok(json!({ "messageIds": ids, "messages": made, "threadId": thread, "to": group }))
     }
 
     fn acked(&self) -> std::collections::HashSet<String> {
@@ -377,8 +578,12 @@ fn cut(s: &str, n: usize) -> String {
 
 impl Mail {
     /// ORCH-006: the answer goes to whoever sent `id`, on the thread of the message it answers.
-    pub fn reply(&mut self, from: &str, id: &str, body: &str, run: Option<&str>, now: u64) -> Result<Value, Fail> {
-        let m = self.messages.iter().find(|m| m.id == id).cloned().ok_or_else(|| Fail::new("not_found", format!("no message {id}")))?;
+    /// ORCH-033: only a message the caller could read (in its mailboxes, its Run, or its own) can be
+    /// answered; any other reads as missing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reply(&mut self, from: &str, id: &str, body: &str, run: Option<&str>, boxes: &[String], mine: Option<&str>, now: u64) -> Result<Value, Fail> {
+        let seen = |m: &Message| boxes.contains(&m.to) || m.from == from || (m.run.is_some() && m.run.as_deref() == mine);
+        let m = self.messages.iter().find(|m| m.id == id && seen(m)).cloned().ok_or_else(|| Fail::new("not_found", format!("no message {id}")))?;
         if let Some(n) = run.filter(|n| m.run.as_deref() != Some(*n)) {
             return Err(Fail::new("run_mismatch", format!("{id} does not belong to the Run named with --run ({n})")));
         }
@@ -391,6 +596,118 @@ impl Mail {
         let new = self.next("msg");
         self.messages.push(Message { id: new.clone(), to: to.clone(), run: m.run.clone(), from: from.to_string(), subject, body: body.to_string(), kind: "status".into(), priority: "normal".into(), extras, at: now });
         Ok(json!({ "messageIds": [new], "to": to, "runId": m.run, "threadId": thread }))
+    }
+
+    /// ORCH-028: a gate on a task of Run `run`, which turns the task blocked. Choices are a JSON
+    /// list of strings; a task with a supervised worker still at work, or one that has finished,
+    /// cannot be held, and then nothing is made.
+    pub fn gate_create(&mut self, run: Option<&str>, tasks: &mut [Value], dispatches: &[Value], a: &Value, now: u64) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let task = text("task").ok_or_else(|| args("--task is required"))?;
+        let question = text("question").ok_or_else(|| args("--question is required: say what needs deciding"))?;
+        let options = match text("options") {
+            Some(o) => parse_deps(&o).ok_or_else(|| args("--options takes a JSON list of strings, like [\"yes\",\"no\"]"))?,
+            None => Vec::new(),
+        };
+        // CLI-037: a gate is the coordinator's, so it needs the Run this terminal is attached to.
+        if run.is_none() {
+            return Err(Fail::new("no_run", "no Run is attached to this terminal, so there is no coordinator to hold the gate: attach one with orchestration run-create --objective <text> or run-use --id <run>, or name it with --run"));
+        }
+        let i = task_in(tasks, &task, run)?;
+        if let Some(d) = dispatches.iter().find(|d| d["taskId"] == task.as_str() && !finished(d)) {
+            let id = d["id"].as_str().unwrap_or_default();
+            return Err(Fail::new("worker_active", format!("{task} has a supervised worker at work ({id}); a gate cannot hold it until that worker finishes or is abandoned")));
+        }
+        let was = status(&tasks[i]).to_string();
+        if !["pending", "ready", "blocked"].contains(&was.as_str()) {
+            return Err(Fail::new("invalid_state", format!("{task} is {was}; only a pending or ready task can be held by a gate")));
+        }
+        tasks[i]["status"] = json!("blocked");
+        let g = Gate { id: self.next("gate"), run: run.map(str::to_string), task, question, options, status: "pending".into(), resolution: None, created: now, resolved: None };
+        let mut v = json!(g);
+        v["taskStatus"] = json!("blocked");
+        self.gates.push(g);
+        Ok(v)
+    }
+
+    /// ORCH-028: settles an open gate of Run `run`; a gate of another Run reads as missing. Once no
+    /// open gate holds the task any more it goes back to pending, and so on to ready when nothing
+    /// else holds it.
+    pub fn gate_resolve(&mut self, run: Option<&str>, tasks: &mut [Value], a: &Value, now: u64) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let id = text("id").ok_or_else(|| args("--id is required"))?;
+        let resolution = text("resolution").ok_or_else(|| args("--resolution is required: say what was decided"))?;
+        let g = self.gates.iter_mut().find(|g| g.id == id && g.run.as_deref() == run).ok_or_else(|| Fail::new("not_found", format!("no gate {id}")))?;
+        if g.status != "pending" {
+            return Err(Fail::new("gate_closed", format!("{id} is already {}", g.status)));
+        }
+        g.status = "resolved".into();
+        g.resolution = Some(resolution);
+        g.resolved = Some(now);
+        let mut v = json!(g);
+        let task = g.task.clone();
+        if !self.gates.iter().any(|g| g.task == task && g.run.as_deref() == run && g.status == "pending") {
+            if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task.as_str() && t["runId"].as_str() == run && status(t) == "blocked") {
+                t["status"] = json!("pending");
+            }
+            promote(tasks);
+        }
+        v["taskStatus"] = tasks.iter().find(|t| t["id"] == task.as_str() && t["runId"].as_str() == run).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+        Ok(v)
+    }
+
+    /// ORCH-028: the gates of Run `run`, oldest first, narrowed by task and state.
+    // ponytail: no gate times out yet (gate-create takes no deadline), so "timeout" lists nothing
+    // until one does.
+    pub fn gate_list(&self, run: Option<&str>, a: &Value) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let want = text("status");
+        if want.is_some_and(|s| !["pending", "resolved", "timeout"].contains(&s)) {
+            return Err(args("--status takes pending, resolved or timeout"));
+        }
+        let gates: Vec<Value> = self.gates.iter().filter(|g| g.run.as_deref() == run && want.is_none_or(|s| g.status == s) && text("task").is_none_or(|t| g.task == t)).map(|g| json!(g)).collect();
+        Ok(json!({ "runId": run, "gates": gates }))
+    }
+
+    /// ORCH-029: a question to one recipient (by default the caller's Run), or, with `resume`, the
+    /// state of one this terminal already asked: still open, or answered by the first reply to it.
+    /// A group address is refused and nothing is made.
+    pub fn ask(&mut self, from: &str, a: &Value, dispatches: &[Value], peers: &[Peer], now: u64) -> Result<Value, Fail> {
+        let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+        let id = match (text("question"), text("resume")) {
+            (Some(_), Some(_)) => return Err(args("give --question or --resume, not both")),
+            (None, None) => return Err(args("--question is required (or --resume <message> to wait on one already asked)")),
+            (Some(q), None) => {
+                let options: Vec<String> = text("options").map(|o| o.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()).unwrap_or_default();
+                let to = text("to").or_else(|| self.run_of(from, dispatches).map(|r| format!("run:{r}")));
+                let mut q = json!({ "to": to, "run": a["run"], "subject": q, "type": "question" });
+                if !options.is_empty() {
+                    q["payload"] = json!(json!({ "options": options }).to_string());
+                }
+                let r = self.post(from, &q, dispatches, peers, now)?;
+                return Ok(json!({ "status": "open", "messageId": r["messageIds"][0], "to": r["to"], "runId": r["runId"], "options": options }));
+            }
+            (None, Some(id)) if text("options").is_some() => return Err(args(format!("--options goes with --question; {id} keeps the choices it was asked with"))),
+            (None, Some(id)) => id,
+        };
+        let q = self.messages.iter().find(|m| m.id == id && m.from == from && m.kind == "question").ok_or_else(|| Fail::new("not_found", format!("no question {id} was asked from this terminal")))?;
+        Ok(match self.messages.iter().find(|m| m.extras.get("inReplyTo").and_then(Value::as_str) == Some(id.as_str())) {
+            Some(r) => json!({ "status": "answered", "messageId": id, "answer": r.body, "answeredBy": r.from, "answerId": r.id }),
+            None => json!({ "status": "open", "messageId": id, "to": q.to, "runId": q.run }),
+        })
+    }
+
+    /// ORCH-031: clears one scope. "tasks" drops the gates (the caller drops tasks and workers),
+    /// "messages" the mail but not the delivery positions, so nothing is handed out again; "all"
+    /// everything. Ids keep counting up, so nothing cleared is ever named again.
+    pub fn reset(&mut self, scope: &str) -> Result<(), Fail> {
+        match scope {
+            "tasks" => self.gates.clear(),
+            "messages" => self.messages.clear(),
+            "all" => *self = Mail { seq: self.seq, ..Mail::default() },
+            _ => return Err(args("give exactly one of --all, --tasks or --messages")),
+        }
+        Ok(())
     }
 
     /// ORCH-006: the newest mail in `boxes`, newest first, bodies cut unless `full`; it only reads.
@@ -493,17 +810,18 @@ pub fn task_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, a: &V
 
 /// ORCH-013: may `task` go to the agent in terminal `to`? Gives the task index and the agent.
 /// The codes and messages are fixed so scripts can match on them.
-// ponytail: a context-only dispatch to the caller itself inside the nesting budget (ORCH-032,
-// T-155) is refused with the rest of own_pane until that budget exists.
-pub fn dispatch_check(tasks: &[Value], dispatches: &[Value], task: &str, to: &str, caller: Option<&str>, agent_of: &dyn Fn(&str) -> Option<String>) -> Result<(usize, String), Fail> {
-    let i = tasks.iter().position(|t| t["id"] == task).ok_or_else(|| Fail::new("not_found", format!("no task {task}")))?;
+/// The task is looked up in `run` only (ORCH-033). A context-only dispatch to the caller's own pane
+/// is allowed when `own_ok`: the caller still has nesting budget (ORCH-032).
+#[allow(clippy::too_many_arguments)]
+pub fn dispatch_check(tasks: &[Value], dispatches: &[Value], task: &str, to: &str, caller: Option<&str>, run: Option<&str>, own_ok: bool, agent_of: &dyn Fn(&str) -> Option<String>) -> Result<(usize, String), Fail> {
+    let i = task_in(tasks, task, run)?;
     match status(&tasks[i]) {
         "ready" => {}
         "pending" => return Err(Fail::new("task_waiting", format!("{task} is still waiting on its dependencies"))),
         "dispatched" => return Err(Fail::new("task_taken", format!("{task} already has a worker ({})", tasks[i]["dispatchId"].as_str().unwrap_or("?")))),
         s => return Err(Fail::new("task_not_ready", format!("{task} is {s}, not ready"))),
     }
-    if caller == Some(to) {
+    if caller == Some(to) && !own_ok {
         return Err(Fail::new("own_pane", "a coordinator cannot hand a task to its own pane"));
     }
     let agent = agent_of(to).ok_or_else(|| Fail::new("not_an_agent", format!("{to} is not running an agent Kolux recognises, or the agent has not finished starting")))?;
@@ -528,14 +846,15 @@ pub struct Brief<'a> {
     pub coordinator: Option<&'a str>,
     /// Commits the worktree is behind its base, and the base's name.
     pub behind: Option<(u32, String)>,
+    /// ORCH-032: how many more levels of workers this worker may start (0: none).
+    pub levels_left: u32,
 }
 
 /// ORCH-014: the text a worker gets: how to report done, beat, ask and look for mail, each a
 /// one-line command that runs in any shell, then the task text last. The commands need no
 /// `--from`: run in the worker's pane, its KOLUX_TERMINAL_HANDLE ties them to that pane.
 // ponytail: questions go out as mail plus `check --wait` until the ask command lands (ORCH-029,
-// T-190); the dispatch pass joins these commands with ORCH-067 (T-155); the sub-worker section,
-// shown only while nesting budget remains, comes with that budget (ORCH-032, T-155). Every worker
+// T-190); the dispatch pass joins these commands with ORCH-067 (T-155-b). Every worker
 // is an agent: dispatch turns shells away and a reused terminal must run the coordinator's own
 // agent (ORCH-016), so the bare-shell "exit after reporting" line has no worker to go to.
 pub fn brief(task: &Value, b: &Brief) -> String {
@@ -554,6 +873,10 @@ pub fn brief(task: &Value, b: &Brief) -> String {
     s += &send("question", "question", "your question");
     s += &format!("  {CLI} orchestration check --wait\n");
     s += &format!("Look for new mail between steps, at least every few minutes:\n  {CLI} orchestration check\n");
+    if b.levels_left > 0 {
+        let more = if b.levels_left == 1 { "one more level".to_string() } else { format!("{} more levels", b.levels_left) };
+        s += &format!("\nYou may hand a separate part of this task to a sub-worker ({more} allowed below you); it reports to you:\n  {CLI} orchestration worker-start --spec \"<that part>\" --tier build --worktree new-child\n");
+    }
     if let Some((n, base)) = b.behind.as_ref().filter(|(n, _)| *n > 0) {
         let commits = if *n == 1 { "commit" } else { "commits" };
         s += &format!("\nBase drift: this worktree is {n} {commits} behind {base}. Bring {base} in before you build on it, or say in your report why you did not.\n");
@@ -587,13 +910,19 @@ mod tests {
     #[test]
     fn a_pane_is_tied_only_when_the_runtime_knows_it() {
         let by_key = |k: &str| (k == "s3cret").then(|| "term-1".to_string());
-        assert_eq!(caller_of(None, Some(("term-1", "s3cret")), &by_key, &live).unwrap().as_deref(), Some("term-1"));
+        assert_eq!(caller_of(None, Some(("term-1", "s3cret")), &by_key).unwrap().as_deref(), Some("term-1"));
         // CLI-034: a stale handle is worked out again from the pane key.
-        assert_eq!(caller_of(None, Some(("term-5", "s3cret")), &by_key, &live).unwrap().as_deref(), Some("term-1"));
-        assert_eq!(caller_of(None, Some(("term-1", "guess")), &by_key, &live).unwrap(), None);
-        assert_eq!(caller_of(None, None, &by_key, &live).unwrap(), None);
-        assert_eq!(caller_of(Some("term-4"), None, &by_key, &live).unwrap().as_deref(), Some("term-4"));
-        assert_eq!(caller_of(Some("nope"), None, &by_key, &live).unwrap_err().code, "not_found");
+        assert_eq!(caller_of(None, Some(("term-5", "s3cret")), &by_key).unwrap().as_deref(), Some("term-1"));
+        assert_eq!(caller_of(None, Some(("term-1", "guess")), &by_key).unwrap(), None);
+        assert_eq!(caller_of(None, None, &by_key).unwrap(), None);
+        // CLI-039: --from may name the calling terminal itself, never another one, and never
+        // from a shell whose identity cannot be proven.
+        assert_eq!(caller_of(Some("term-1"), Some(("term-1", "s3cret")), &by_key).unwrap().as_deref(), Some("term-1"));
+        let other = caller_of(Some("term-4"), Some(("term-1", "s3cret")), &by_key).unwrap_err();
+        assert_eq!(other.code, "caller_mismatch");
+        assert!(other.message.contains("term-1") && other.message.contains("term-4"), "{}", other.message);
+        assert_eq!(caller_of(Some("term-4"), None, &by_key).unwrap_err().code, "unbound_caller");
+        assert_eq!(caller_of(Some("term-1"), Some(("term-1", "guess")), &by_key).unwrap_err().code, "unbound_caller");
     }
 
     #[test]
@@ -673,7 +1002,6 @@ mod tests {
         let refused = |m: &mut Mail, a: Value| m.send("term-2", &a, &[], &live, 2).unwrap_err();
         assert!(refused(&mut m, json!({ "to": format!("run:{run}"), "subject": "done", "type": "worker_done" })).message.contains("--outcome"));
         assert!(refused(&mut m, json!({ "to": "@all", "subject": "beat", "type": "heartbeat" })).message.contains("group"));
-        assert_eq!(refused(&mut m, json!({ "to": "@all", "subject": "hi" })).code, "unsupported");
         assert_eq!(refused(&mut m, json!({ "to": "run:run-9", "subject": "hi" })).code, "not_found");
         assert_eq!(refused(&mut m, json!({ "subject": "hi" })).code, "invalid_arguments");
         assert_eq!(refused(&mut m, json!({ "to": format!("run:{run}"), "subject": "hi", "type": "gossip" })).code, "invalid_arguments");
@@ -705,15 +1033,15 @@ mod tests {
         let boxes8 = m.boxes_of("term-8", &[]);
         let got = m.check("term-8", "term-8", &boxes8, Mode::Next, None, None, None).unwrap();
         assert_eq!(got["messages"][0]["reply"], format!("{CLI} orchestration reply --id {id} --body \"<your answer>\""));
-        let r = m.reply("term-8", &id, "on it", None, 3).unwrap();
+        let r = m.reply("term-8", &id, "on it", None, &boxes8, None, 3).unwrap();
         assert_eq!(r["to"], "term:term-1");
         let boxes1 = m.boxes_of("term-1", &[]);
         let back = m.check("term-1", "term-1", &boxes1, Mode::Next, None, None, None).unwrap();
         assert_eq!(back["messages"][0]["threadId"], id.as_str());
         assert_eq!(back["messages"][0]["subject"], "Re: go");
         assert_eq!(back["messages"][0]["body"], "on it");
-        assert_eq!(m.reply("term-8", "msg-99", "x", None, 4).unwrap_err().code, "not_found");
-        assert_eq!(m.reply("term-8", &id, "x", Some("run-9"), 4).unwrap_err().code, "run_mismatch");
+        assert_eq!(m.reply("term-8", "msg-99", "x", None, &boxes8, None, 4).unwrap_err().code, "not_found");
+        assert_eq!(m.reply("term-8", &id, "x", Some("run-9"), &boxes8, None, 4).unwrap_err().code, "run_mismatch");
         for i in 0..7 {
             m.send("term-1", &json!({ "to": "term-8", "subject": format!("n{i}"), "body": "x".repeat(300) }), &[], &live, 10 + i).unwrap();
         }
@@ -777,21 +1105,21 @@ mod tests {
         task_create(&mut tasks, &json!({ "spec": "b", "deps": "[\"task-1\"]" }), None, 2).unwrap();
         let agent = |h: &str| (h == "term-5" || h == "term-6").then(|| "claude".to_string());
         let d = vec![json!({ "id": "dispatch-1", "taskId": "task-9", "status": "running", "terminal": 6 })];
-        let code = |t: &str, to: &str| dispatch_check(&tasks, &d, t, to, Some("term-1"), &agent).unwrap_err().code;
+        let code = |t: &str, to: &str| dispatch_check(&tasks, &d, t, to, Some("term-1"), None, false, &agent).unwrap_err().code;
         assert_eq!(code("task-2", "term-5"), "task_waiting");
         assert_eq!(code("task-1", "term-1"), "own_pane");
         assert_eq!(code("task-1", "term-4"), "not_an_agent");
         assert_eq!(code("task-1", "term-6"), "busy");
         assert_eq!(code("task-7", "term-5"), "not_found");
-        assert_eq!(dispatch_check(&tasks, &d, "task-1", "term-5", Some("term-1"), &agent).unwrap(), (0, "claude".to_string()));
-        let b = brief(&tasks[0], &Brief { dispatch: "dispatch-2", run: Some("run-1"), coordinator: Some("term-1"), behind: None });
+        assert_eq!(dispatch_check(&tasks, &d, "task-1", "term-5", Some("term-1"), None, false, &agent).unwrap(), (0, "claude".to_string()));
+        let b = brief(&tasks[0], &Brief { dispatch: "dispatch-2", run: Some("run-1"), coordinator: Some("term-1"), behind: None, levels_left: 0 });
         assert!(b.contains("task-1") && b.contains("dispatch-2") && b.ends_with('a'), "{b}");
     }
 
     #[test]
     fn a_brief_says_how_to_report_ask_and_keep_in_touch() {
         let task = json!({ "id": "task-4", "spec": "Fix the login bug.\nThen run the tests." });
-        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: Some("run-2"), coordinator: Some("term-1"), behind: None });
+        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: Some("run-2"), coordinator: Some("term-1"), behind: None, levels_left: 0 });
         let line = |needle: &str| b.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle} in {b}")).to_string();
         // The done, heartbeat and question commands are one line each and carry this dispatch.
         for kind in ["--type worker_done --outcome succeeded", "--type heartbeat", "--type question"] {
@@ -807,7 +1135,7 @@ mod tests {
         assert_eq!(tail.trim_start_matches('\n'), "Fix the login bug.\nThen run the tests.");
         assert!(head.contains("worker_done"));
         // Without a Run, reports go to the coordinator's pane; drift names the base and the count.
-        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: None, coordinator: Some("term-1"), behind: Some((2, "main".into())) });
+        let b = brief(&task, &Brief { dispatch: "dispatch-7", run: None, coordinator: Some("term-1"), behind: Some((2, "main".into())), levels_left: 0 });
         assert!(line_of(&b, "worker_done").contains("--to term-1"), "{b}");
         assert!(b.contains("2 commits behind main"), "{b}");
         assert!(b.find("behind").unwrap() < b.find(DIVIDER).unwrap());
@@ -824,5 +1152,251 @@ mod tests {
         assert_eq!(tier_agent(Some("codex"), Some("codex"), "claude").unwrap(), "codex");
         assert_eq!(tier_agent(Some("codex"), None, "claude").unwrap(), "codex");
         assert_eq!(tier_agent(Some("codex"), Some("claude"), "claude").unwrap_err().code, "invalid_arguments");
+    }
+    #[test]
+    fn orch032_workers_nest_only_inside_the_cap() {
+        // A coordinator (no dispatch of its own) starts level 1 under the default cap of 1.
+        assert_eq!(nest(Some("term-1"), &[], None, None).unwrap(), (1, 1));
+        let w1 = vec![json!({ "id": "dispatch-1", "status": "running", "terminal": 2, "depth": 1, "maxDepth": 1 })];
+        let no = nest(Some("term-2"), &w1, None, None).unwrap_err();
+        assert_eq!(no.code, "nesting_limit");
+        assert!(no.message.contains("do this task yourself"), "{}", no.message);
+        // A worker cannot raise the cap it was given; a coordinator can, by flag or by setting.
+        assert_eq!(nest(Some("term-2"), &w1, Some(5), None).unwrap_err().code, "nesting_limit");
+        assert_eq!(nest(Some("term-1"), &[], Some(2), None).unwrap(), (1, 2));
+        assert_eq!(nest(Some("term-1"), &[], None, Some(3)).unwrap(), (1, 3));
+        let w2 = vec![json!({ "id": "dispatch-1", "status": "running", "terminal": 2, "depth": 1, "maxDepth": 2 }), json!({ "id": "dispatch-2", "status": "running", "terminal": 3, "depth": 2, "maxDepth": 2 })];
+        assert_eq!(nest(Some("term-2"), &w2, None, None).unwrap(), (2, 2));
+        assert_eq!(nest(Some("term-3"), &w2, None, None).unwrap_err().code, "nesting_limit");
+        // A dispatch stored before depth was recorded counts as one level down, under the default cap.
+        let old = vec![json!({ "id": "dispatch-1", "status": "running", "terminal": 2 })];
+        assert_eq!(nest(Some("term-2"), &old, None, None).unwrap_err().code, "nesting_limit");
+        // A finished dispatch no longer makes its pane a worker.
+        let done = vec![json!({ "id": "dispatch-1", "status": "abandoned", "terminal": 2, "depth": 1, "maxDepth": 1 })];
+        assert_eq!(nest(Some("term-2"), &done, None, None).unwrap(), (1, 1));
+        // The brief offers sub-workers only while levels remain.
+        let task = json!({ "id": "task-1", "spec": "x" });
+        let with = brief(&task, &Brief { dispatch: "dispatch-3", run: Some("run-1"), coordinator: Some("term-1"), behind: None, levels_left: 1 });
+        assert!(with.contains("sub-worker") && with.contains("orchestration worker-start"), "{with}");
+        let without = brief(&task, &Brief { dispatch: "dispatch-3", run: Some("run-1"), coordinator: Some("term-1"), behind: None, levels_left: 0 });
+        assert!(!without.contains("sub-worker"), "{without}");
+        // ORCH-013: a context-only dispatch to the caller's own pane is allowed inside the budget only.
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), None, 1).unwrap();
+        let agent = |_: &str| Some("claude".to_string());
+        assert!(dispatch_check(&tasks, &[], "task-1", "term-1", Some("term-1"), None, true, &agent).is_ok());
+        assert_eq!(dispatch_check(&tasks, &[], "task-1", "term-1", Some("term-1"), None, false, &agent).unwrap_err().code, "own_pane");
+    }
+
+    #[test]
+    fn orch023_an_abandoned_dispatch_takes_no_more_reports() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), Some(run.clone()), 1).unwrap();
+        tasks[0]["status"] = json!("dispatched");
+        tasks[0]["dispatchId"] = json!("dispatch-1");
+        let mut d = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "mode": "context" })];
+        // Another Run cannot abandon it: the id reads as missing.
+        assert_eq!(abandon(&mut tasks, &mut d, "dispatch-1", Some("run-9"), 5).unwrap_err().code, "not_found");
+        let r = abandon(&mut tasks, &mut d, "dispatch-1", Some(&run), 5).unwrap();
+        assert_eq!((r["status"].as_str(), r["terminal"].as_str(), r["terminalKept"].as_bool()), (Some("abandoned"), Some("term-2"), Some(true)));
+        assert_eq!(d[0]["status"], "abandoned");
+        // Its task can be handed on again.
+        assert_eq!(tasks[0]["status"], "ready");
+        assert!(tasks[0].get("dispatchId").is_none());
+        // Abandoning again answers the same; the worker's done report and heartbeat are turned away.
+        assert_eq!(abandon(&mut tasks, &mut d, "dispatch-1", Some(&run), 6).unwrap()["status"], "abandoned");
+        let to = format!("run:{run}");
+        for kind in [json!({ "type": "worker_done", "outcome": "succeeded" }), json!({ "type": "heartbeat" })] {
+            let mut a = json!({ "to": to, "subject": "task-1 done", "taskId": "task-1", "dispatchId": "dispatch-1" });
+            a.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
+            let no = m.send("term-2", &a, &d, &live, 7).unwrap_err();
+            assert_eq!(no.code, "dispatch_finished", "{}", no.message);
+            assert!(no.message.contains("abandoned"), "{}", no.message);
+        }
+        assert!(m.messages.is_empty());
+        // Ordinary mail still goes through.
+        assert!(m.send("term-2", &json!({ "to": to, "subject": "note" }), &d, &live, 8).is_ok());
+    }
+
+    #[test]
+    fn cli039_a_report_on_a_dispatch_comes_only_from_its_worker() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "work", 1)["run"]["id"].as_str().unwrap().to_string();
+        let d = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2 })];
+        let to = format!("run:{run}");
+        for kind in [json!({ "type": "worker_done", "outcome": "succeeded" }), json!({ "type": "heartbeat" })] {
+            let mut a = json!({ "to": to, "subject": "task-1 done", "taskId": "task-1", "dispatchId": "dispatch-1" });
+            a.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
+            let no = m.send("term-3", &a, &d, &live, 2).unwrap_err();
+            assert_eq!(no.code, "not_your_dispatch", "{}", no.message);
+            assert!(no.message.contains("term-2") && no.message.contains("term-3"), "{}", no.message);
+            assert!(m.send("term-2", &a, &d, &live, 3).is_ok(), "its own worker reports");
+        }
+        // A dispatch whose worker terminal belongs to an earlier start cannot be vouched for.
+        let old = vec![json!({ "id": "dispatch-1", "runId": run, "status": "running", "terminal": 2, "runtime": u64::from(std::process::id()) + 1 })];
+        let a = json!({ "to": to, "subject": "done", "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1" });
+        assert_eq!(m.send("term-2", &a, &old, &live, 4).unwrap_err().code, "not_your_dispatch");
+    }
+
+    #[test]
+    fn orch033_one_run_cannot_reach_into_another() {
+        let mut m = Mail::default();
+        let a = m.run_create("term-1", "A", 1)["run"]["id"].as_str().unwrap().to_string();
+        let b = m.run_create("term-5", "B", 2)["run"]["id"].as_str().unwrap().to_string();
+        // A worker acts in the Run of the dispatch it works on.
+        let d = vec![json!({ "id": "dispatch-1", "runId": a, "taskId": "task-1", "status": "running", "terminal": 2 })];
+        assert_eq!(m.run_of("term-2", &d).as_deref(), Some(a.as_str()));
+        assert_eq!(m.run_of("term-5", &d).as_deref(), Some(b.as_str()));
+        assert_eq!(m.run_of("term-7", &d), None);
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "A's" }), Some(a.clone()), 1).unwrap();
+        // From Run B, Run A's task reads exactly as a missing one.
+        assert_eq!(task_in(&tasks, "task-1", Some(&b)).unwrap_err(), task_in(&[], "task-1", Some(&b)).unwrap_err());
+        assert_eq!(task_in(&tasks, "task-1", Some(&a)).unwrap(), 0);
+        let agent = |_: &str| Some("claude".to_string());
+        assert_eq!(dispatch_check(&tasks, &[], "task-1", "term-6", Some("term-5"), Some(&b), false, &agent).unwrap_err().code, "not_found");
+        assert!(dispatch_check(&tasks, &[], "task-1", "term-6", Some("term-1"), Some(&a), false, &agent).is_ok());
+        // A message in Run A cannot be answered from Run B, the same as a missing one.
+        let sent = m.send("term-2", &json!({ "to": format!("run:{a}"), "subject": "q" }), &d, &live, 3).unwrap();
+        let id = sent["messageIds"][0].as_str().unwrap().to_string();
+        let boxes_b = m.boxes_of("term-5", &d);
+        let no = m.reply("term-5", &id, "x", None, &boxes_b, Some(&b), 4).unwrap_err();
+        assert_eq!((no.code, no.message.clone()), ("not_found", format!("no message {id}")));
+        let boxes_a = m.boxes_of("term-1", &d);
+        assert!(m.reply("term-1", &id, "x", None, &boxes_a, Some(&a), 4).is_ok());
+    }
+
+    fn peer(h: &str, agent: Option<&str>, idle: bool, dir: &str) -> Peer {
+        Peer { handle: h.into(), agent: agent.map(str::to_string), idle, dir: dir.into() }
+    }
+
+    #[test]
+    fn a_group_send_fans_out_on_one_thread() {
+        let mut m = Mail::default();
+        let peers = vec![
+            peer("term-1", Some("claude"), true, "G:/r"),
+            peer("term-2", Some("codex"), true, "G:/r/wt"),
+            peer("term-3", Some("claude"), false, "G:/r"),
+            peer("term-4", None, true, "G:/r"),
+        ];
+        let sent = |m: &mut Mail, to: &str| -> Vec<String> {
+            let r = m.post("term-1", &json!({ "to": to, "subject": "hi" }), &[], &peers, 2).unwrap();
+            assert!(r.get("deliveryId").is_none() && r.get("deliveries").is_none(), "a receipt carries no delivery bookkeeping");
+            let ids: Vec<String> = r["messageIds"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+            let thread = r["threadId"].as_str().unwrap();
+            let mut to: Vec<String> = m.messages.iter().filter(|x| ids.contains(&x.id)).inspect(|x| assert_eq!(x.extras["threadId"], thread)).map(|x| x.to.clone()).collect();
+            to.sort();
+            to
+        };
+        // The sender and the shell are never part of it; titles play no part, only the detected agent.
+        assert_eq!(sent(&mut m, "@all"), ["term:term-2", "term:term-3"]);
+        assert_eq!(sent(&mut m, "@idle"), ["term:term-2"], "the sender is idle but never gets its own copy");
+        assert_eq!(sent(&mut m, "@claude"), ["term:term-3"]);
+        assert_eq!(sent(&mut m, "@CODEX"), ["term:term-2"]);
+        assert_eq!(sent(&mut m, "@worktree:p-1::G:/r/wt"), ["term:term-2"]);
+        assert_eq!(sent(&mut m, "@worktree:G:/r/wt/"), ["term:term-2"]);
+        let given = m.post("term-1", &json!({ "to": "@all", "subject": "x", "threadId": "t-9" }), &[], &peers, 3).unwrap();
+        assert_eq!(given["threadId"], "t-9");
+        let no = |m: &mut Mail, a: Value| m.post("term-1", &a, &[], &peers, 4).unwrap_err();
+        let unknown = no(&mut m, json!({ "to": "@nobody", "subject": "x" }));
+        assert!(unknown.message.contains("@nobody"), "{}", unknown.message);
+        assert!(no(&mut m, json!({ "to": "@cursor", "subject": "x" })).message.contains("no agent"));
+        assert!(no(&mut m, json!({ "to": "@all", "subject": "x", "type": "question" })).message.contains("one recipient"));
+        assert!(no(&mut m, json!({ "to": "@all", "subject": "x", "type": "heartbeat" })).message.contains("group"));
+        let before = m.messages.len();
+        assert!(no(&mut m, json!({ "to": "@all", "subject": "x", "priority": "loud" })).message.contains("--priority"));
+        assert_eq!(m.messages.len(), before, "a refused group send leaves nothing behind");
+        // One-to-one sends still go through post.
+        assert!(m.post("term-1", &json!({ "to": "term-4", "subject": "x" }), &[], &peers, 5).is_ok());
+        assert_eq!(m.post("term-1", &json!({ "to": "term-7", "subject": "x" }), &[], &peers, 5).unwrap_err().code, "not_found");
+    }
+
+    #[test]
+    fn a_gate_holds_its_task_until_it_is_resolved() {
+        let mut m = Mail::default();
+        let mut tasks = vec![
+            json!({ "id": "task-1", "status": "ready", "runId": "run-1", "deps": [] }),
+            json!({ "id": "task-2", "status": "dispatched", "runId": "run-1", "deps": [] }),
+            json!({ "id": "task-3", "status": "ready", "runId": "run-2", "deps": [] }),
+            json!({ "id": "task-4", "status": "ready", "deps": [] }),
+        ];
+        let d = vec![json!({ "id": "dispatch-1", "taskId": "task-2", "status": "ready", "runId": "run-1" })];
+        let g = m.gate_create(Some("run-1"), &mut tasks, &d, &json!({ "task": "task-1", "question": "ship it?", "options": r#"["yes","no"]"# }), 1).unwrap();
+        assert_eq!(tasks[0]["status"], "blocked");
+        assert_eq!(g["options"], json!(["yes", "no"]));
+        assert_eq!(g["status"], "pending");
+        let id = g["id"].as_str().unwrap().to_string();
+        let count = |m: &Mail, run: &str, status: &str| m.gate_list(Some(run), &json!({ "status": status })).unwrap()["gates"].as_array().unwrap().len();
+        assert_eq!(count(&m, "run-1", "pending"), 1);
+        assert_eq!(count(&m, "run-2", "pending"), 0, "a gate belongs to its own Run");
+        assert_eq!(m.gate_resolve(Some("run-2"), &mut tasks, &json!({ "id": id, "resolution": "yes" }), 2).unwrap_err().code, "not_found");
+        let r = m.gate_resolve(Some("run-1"), &mut tasks, &json!({ "id": id, "resolution": "yes" }), 3).unwrap();
+        assert_eq!((r["status"].as_str(), r["resolution"].as_str()), (Some("resolved"), Some("yes")));
+        assert_eq!(tasks[0]["status"], "ready");
+        assert!(m.gate_resolve(Some("run-1"), &mut tasks, &json!({ "id": id, "resolution": "no" }), 4).unwrap_err().message.contains("already"));
+        assert_eq!(count(&m, "run-1", "resolved"), 1);
+        assert!(m.gate_list(Some("run-1"), &json!({ "status": "open" })).is_err());
+        // Nothing is left behind when the gate cannot be opened.
+        let before = (m.gates.len(), tasks.clone());
+        let no = |m: &mut Mail, tasks: &mut Vec<Value>, a: Value| m.gate_create(Some("run-1"), tasks, &d, &a, 5).unwrap_err();
+        assert!(no(&mut m, &mut tasks, json!({ "task": "task-1", "question": "q", "options": "yes,no" })).message.contains("JSON"));
+        assert!(no(&mut m, &mut tasks, json!({ "task": "task-2", "question": "q" })).message.contains("worker"));
+        assert_eq!(no(&mut m, &mut tasks, json!({ "task": "task-3", "question": "q" })).code, "not_found");
+        assert!(no(&mut m, &mut tasks, json!({ "task": "task-1" })).message.contains("--question"));
+        // CLI-037: with no Run attached, even a task that has no Run of its own is not held.
+        let lone = m.gate_create(None, &mut tasks, &d, &json!({ "task": "task-4", "question": "q" }), 5).unwrap_err();
+        assert_eq!(lone.code, "no_run");
+        assert!(lone.message.contains("run-create"), "{}", lone.message);
+        assert_eq!((m.gates.len(), tasks.clone()), before);
+    }
+
+    #[test]
+    fn a_question_waits_for_its_reply_and_can_be_resumed() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let peers = vec![peer("term-1", Some("claude"), true, "G:/r"), peer("term-2", Some("claude"), true, "G:/r/w")];
+        let q = m.ask("term-2", &json!({ "question": "tabs or spaces?", "options": "tabs, spaces", "to": format!("run:{run}") }), &[], &peers, 2).unwrap();
+        assert_eq!(q["status"], "open");
+        let id = q["messageId"].as_str().unwrap().to_string();
+        let msg = m.messages.iter().find(|x| x.id == id).unwrap();
+        assert_eq!((msg.kind.as_str(), msg.to.clone()), ("question", format!("run:{run}")));
+        assert_eq!(msg.extras["payload"]["options"], json!(["tabs", "spaces"]));
+        assert_eq!(m.ask("term-2", &json!({ "resume": id }), &[], &peers, 3).unwrap()["status"], "open");
+        let boxes = m.boxes_of("term-1", &[]);
+        m.reply("term-1", &id, "spaces", None, &boxes, Some(&run), 4).unwrap();
+        let a = m.ask("term-2", &json!({ "resume": id }), &[], &peers, 5).unwrap();
+        assert_eq!((a["status"].as_str(), a["answer"].as_str(), a["answeredBy"].as_str()), (Some("answered"), Some("spaces"), Some("term-1")));
+        let n = m.messages.len();
+        assert!(m.ask("term-2", &json!({ "question": "x", "to": "@all" }), &[], &peers, 6).unwrap_err().message.contains("one recipient"));
+        assert_eq!(m.messages.len(), n, "no question is made for a group");
+        assert!(m.ask("term-2", &json!({ "question": "x", "resume": id }), &[], &peers, 6).unwrap_err().message.contains("not both"));
+        assert!(m.ask("term-2", &json!({ "resume": id, "options": "a,b" }), &[], &peers, 6).unwrap_err().message.contains("--options"));
+        assert_eq!(m.ask("term-1", &json!({ "resume": id }), &[], &peers, 6).unwrap_err().code, "not_found", "only the asker resumes its question");
+    }
+
+    #[test]
+    fn a_reset_clears_only_its_scope() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let peers = vec![peer("term-1", Some("claude"), true, "G:/r")];
+        let mut tasks = vec![json!({ "id": "task-1", "status": "ready", "runId": run, "deps": [] })];
+        m.gate_create(Some(&run), &mut tasks, &[], &json!({ "task": "task-1", "question": "q" }), 2).unwrap();
+        m.post("term-1", &json!({ "subject": "hi", "to": format!("run:{run}") }), &[], &peers, 3).unwrap();
+        let boxes = m.boxes_of("term-1", &[]);
+        let first = m.check("term-1", "term-1", &boxes, Mode::Next, None, None, None).unwrap();
+        assert_eq!(first["messages"].as_array().unwrap().len(), 1);
+        m.reset("tasks").unwrap();
+        assert!(m.gates.is_empty());
+        assert_eq!((m.runs.len(), m.messages.len()), (1, 1), "the tasks scope keeps Runs and mail");
+        m.reset("messages").unwrap();
+        assert!(m.messages.is_empty());
+        assert_eq!((m.runs.len(), m.deliveries.len()), (1, 1), "the messages scope keeps Runs and delivery positions");
+        let seq = m.seq;
+        m.reset("all").unwrap();
+        assert_eq!((m.runs.len(), m.deliveries.len(), m.bindings.len()), (0, 0, 0));
+        assert_eq!(m.seq, seq, "ids keep counting up, so nothing cleared is named again");
+        assert!(m.reset("everything").is_err());
     }
 }

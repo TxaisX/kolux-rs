@@ -5,7 +5,7 @@
 // from the keymap (T-005), so an edit to ~/.kolux/keybindings.json changes the chips.
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ArrowLeft, ArrowRight, Bell, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
+import { ArrowLeft, ArrowRight, Bell, Clock, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
 import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import CodexPill from "../usage/CodexPill";
@@ -19,10 +19,11 @@ export const screens: Array<{ id: Screen; label: string }> = [
 ];
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
-type Props = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean };
+/** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
+export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void } };
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
-export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false }: Props) {
+export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations }: TopBarProps) {
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     const win = getCurrentWindow();
@@ -74,6 +75,11 @@ export default function TopBar({ screen, classic = false, onScreen, onSettings, 
       )}
 
       <div className="topbar-right">
+        {automations && (
+          <button className="ib" title="Automations" aria-pressed={automations.open} onClick={automations.onToggle}>
+            <Clock />
+          </button>
+        )}
         <button className="ib panel" title={rightOpen ? "Hide the right panel" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
           <PanelRight />
         </button>

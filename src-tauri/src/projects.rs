@@ -259,11 +259,63 @@ pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
 /// The workspaces of a project as the sidebar lists them (PROJ-007): Git's list with the typed
 /// names and parents laid over, and kind, source and visibility from `visibility::apply`, which
 /// also drops the scratch worktrees other coding tools keep under a dot-folder of the main checkout.
+/// PROJ-048: moves `path` under `parent` (`None` brings it to the top level). Both must be
+/// workspaces of the project other than its main checkout, and the parent may not be the
+/// workspace itself or anything nested under it.
+pub fn reparent(git: &Git, store: &Store, project: &Project, path: &str, parent: Option<&str>) -> Result<(), String> {
+    let all = list_workspaces(git, store, project)?;
+    let find = |p: &str| all.iter().find(|w| same_folder(Path::new(&w.path), Path::new(p)));
+    let gone = |p: &str| format!("{p} is no longer a workspace of {}", project.name);
+    let me = find(path).ok_or_else(|| gone(path))?;
+    if me.is_main {
+        return Err("the main checkout always sits at the top; it cannot be moved under another workspace".into());
+    }
+    let Some(parent) = parent else { return set_parent(store, &me.path, None) };
+    let to = find(parent).ok_or_else(|| gone(parent))?;
+    if to.is_main {
+        return Err("a workspace cannot be moved under the main checkout; pick No parent to put it at the top".into());
+    }
+    if to.path == me.path {
+        return Err("a workspace cannot be its own parent".into());
+    }
+    let mut up = to.parent.clone();
+    for _ in 0..all.len() {
+        let Some(p) = up else { break };
+        if same_folder(Path::new(&p), Path::new(&me.path)) {
+            return Err(format!("{} is nested under {}, so making it the parent would make a loop", to.path, me.path));
+        }
+        up = find(&p).and_then(|w| w.parent.clone());
+    }
+    set_parent(store, &me.path, Some(&to.path))
+}
+
+/// PROJ-040: records the composer's parent for a workspace just made. A parent removed in the
+/// meantime is dropped with a warning and the workspace sits at the top level.
+pub fn nest_under(git: &Git, store: &Store, project: &Project, made: &mut Created, parent: Option<&str>) -> Result<(), String> {
+    let Some(parent) = non_blank(parent) else { return Ok(()) };
+    match reparent(git, store, project, &made.worktree.path, Some(parent)) {
+        Ok(()) => made.worktree.parent = Some(parent.to_string()),
+        Err(why) => made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits at the top level")),
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn workspace_set_parent(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String, parent: Option<String>) -> Result<(), String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let project = find_project(&store, &project_id)?;
+    reparent(&git, &store, &project, &path, non_blank(parent.as_deref()))
+}
+
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
+    decorate(store, project, git.worktrees(Path::new(&project.path))?)
+}
+
+/// A repo's scanned worktrees with what Kolux keeps about them: visibility, names and parents.
+pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let hidden = load_map(store, HIDDEN_KEY);
-    let all = git.worktrees(Path::new(&project.path))?;
     Ok(crate::visibility::apply(store, project, &hidden, all)?
         .into_iter()
         .map(|mut w| {
@@ -588,10 +640,7 @@ pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project
     let store = store.lock().map_err(|e| e.to_string())?;
     set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
     note_seen(&store, &project, &made.worktree.path)?;
-    if let Some(parent) = non_blank(parent.as_deref()) {
-        set_parent(&store, &made.worktree.path, Some(parent))?;
-        made.worktree.parent = Some(parent.to_string());
-    }
+    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
     Ok(made)
 }
 
@@ -768,11 +817,10 @@ pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &st
 #[tauri::command]
 pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>) -> Result<Created, String> {
     let mut made = create_named(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref())?;
-    // SESS-037: the parent picked in the composer (PROJ-047 nests it there).
-    if let Some(parent) = non_blank(parent.as_deref()) {
-        set_parent(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path, Some(parent))?;
-        made.worktree.parent = Some(parent.to_string());
-    }
+    // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let project = find_project(&store, &project_id)?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
     Ok(made)
 }
 
@@ -1289,6 +1337,46 @@ mod tests {
         drop(store);
         for d in [profile, repo, root] {
             fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn proj040_proj048_a_parent_must_still_be_there_and_never_makes_a_loop() {
+        let git = Git::detect().unwrap();
+        let profile = temp("profile-proj048");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("repo-proj048");
+        let root = temp("root-proj048");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        let make = |n: &str| create_workspace(&git, &place, &project, n, None).unwrap();
+        let (a, kid, b) = (make("a").worktree, make("kid").worktree, make("b").worktree);
+        set_parent(&store, &kid.path, Some(&a.path)).unwrap();
+        // PROJ-048: never itself, never under its own descendant, never under the main checkout.
+        assert!(reparent(&git, &store, &project, &a.path, Some(&a.path)).unwrap_err().contains("its own parent"));
+        assert!(reparent(&git, &store, &project, &a.path, Some(&kid.path)).unwrap_err().contains("loop"));
+        assert!(reparent(&git, &store, &project, &a.path, Some(&project.path)).unwrap_err().contains("main checkout"));
+        assert!(reparent(&git, &store, &project, &project.path, Some(&a.path)).unwrap_err().contains("main checkout"));
+        assert!(reparent(&git, &store, &project, &a.path, Some("C:/nowhere")).unwrap_err().contains("no longer"));
+        reparent(&git, &store, &project, &a.path, Some(&b.path)).unwrap();
+        let parent_of = |p: &str| list_workspaces(&git, &store, &project).unwrap().into_iter().find(|w| w.path == p).unwrap().parent;
+        assert_eq!(parent_of(&a.path).as_deref(), Some(b.path.as_str()));
+        reparent(&git, &store, &project, &a.path, None).unwrap();
+        assert_eq!(parent_of(&a.path), None);
+        // PROJ-040: a parent removed while the composer was open is dropped with a warning.
+        let mut made = make("late");
+        remove_workspace(&git, &project, &b.path, false).unwrap();
+        nest_under(&git, &store, &project, &mut made, Some(&b.path)).unwrap();
+        assert_eq!(made.worktree.parent, None);
+        assert!(made.warnings.iter().any(|w| w.contains("top level")), "{:?}", made.warnings);
+        assert_eq!(parent_of(&made.worktree.path), None);
+        let mut nested_ok = make("under-a");
+        nest_under(&git, &store, &project, &mut nested_ok, Some(&a.path)).unwrap();
+        assert_eq!(parent_of(&nested_ok.worktree.path).as_deref(), Some(a.path.as_str()));
+        assert!(nested_ok.warnings.is_empty());
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
         }
     }
 

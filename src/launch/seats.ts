@@ -175,3 +175,39 @@ export function withoutRules(text: string): string {
   const at = text.indexOf(RULES_MARK);
   return at < 0 ? text : text.slice(0, at).trimEnd();
 }
+
+/** SESS-020: a lineup saved under a name to pick again: each seat's AI, model, role, job title and
+ * opening prompt, where the AIs work, and the shared task. */
+export type SavedShape = { name: string; seats: Seat[]; copies: Copies; task?: string };
+export const SAVED_SHAPES_KEY = "savedShapes";
+export const SHAPE_LIMITS = { shapes: 40, name: 60, seats: 12, prompt: 4000 };
+
+/** A name not taken by another saved shape (compared without case), with a rising number when it is. */
+function freeName(list: SavedShape[], name: string, skip = -1): string {
+  const taken = new Set(list.filter((_, i) => i !== skip).map((s) => s.name.toLowerCase()));
+  for (let n = 1; ; n++) {
+    const tail = n === 1 ? "" : ` ${n}`;
+    const out = name.slice(0, SHAPE_LIMITS.name - tail.length).trimEnd() + tail;
+    if (!taken.has(out.toLowerCase())) return out;
+  }
+}
+
+/** SESS-020: adds the lineup to the saved shapes, or says why it cannot. */
+export function saveShape(list: SavedShape[], name: string, seats: Seat[], copies: Copies, task: string): { list: SavedShape[] } | { error: string } {
+  if (!allReady(seats)) return { error: "Pick an AI and a model (or Terminal) for every seat before saving" };
+  if (!name.trim()) return { error: "Give the shape a name" };
+  if (seats.length > SHAPE_LIMITS.seats) return { error: `A saved shape holds at most ${SHAPE_LIMITS.seats} seats` };
+  if (list.length >= SHAPE_LIMITS.shapes) return { error: `There are already ${SHAPE_LIMITS.shapes} saved shapes; delete one first` };
+  const cut = (p: string) => p.slice(0, SHAPE_LIMITS.prompt);
+  const shape: SavedShape = { name: freeName(list, name.trim()), seats: seats.map((s) => (s.prompt ? { ...s, prompt: cut(s.prompt) } : s)), copies, task: cut(task) };
+  return { list: [...list, shape] };
+}
+
+/** SESS-020: a blank name changes nothing; only shape `i` is touched. */
+export function renameShape(list: SavedShape[], i: number, name: string): SavedShape[] {
+  if (!name.trim() || !list[i]) return list;
+  return list.map((s, j) => (j === i ? { ...s, name: freeName(list, name.trim(), i) } : s));
+}
+
+/** SESS-020: the seats back as saved; a seat whose agent is no longer installed comes back blank. */
+export const restoreShape = (shape: SavedShape, installedIds: string[]): Seat[] => clearMissing(shape.seats.map((s) => ({ ...s })), installedIds);

@@ -17,6 +17,7 @@ mod git;
 mod include;
 mod keybindings;
 mod names;
+mod notifications;
 mod orchestration;
 mod procs;
 mod resources;
@@ -126,6 +127,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            notifications::notification_test,
+            notifications::open_notification_settings,
             get_settings,
             save_settings,
             sysmem::process_memory,
@@ -141,6 +144,7 @@ pub fn run() {
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,
+            projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,
             projects::workspace_unseen,

@@ -5,12 +5,15 @@
 // keyboard and screen-reader behaviour. The close button is absent when this is the grid's only
 // pane. A shape row (SESS-012) gives the seats roles, each shown on its seat, and one task box
 // holds the task every seat shares, so the whole lineup is in view before Start. Start sits in a
-// footer below the scrolling choices, so in a small pane it stays in view after a pick.
-import { Close } from "../chrome/icons";
+// footer below the scrolling choices, so in a small pane it stays in view after a pick. Saved shapes
+// (SESS-020) sit after the built-in ones; each has a menu to rename or delete it, and a delete can
+// be undone from the note it leaves.
+import { useEffect, useRef, useState } from "react";
+import { Close, Dots } from "../chrome/icons";
 import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
-import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, resizeLineup, sameForAll, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
+import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape } from "./seats";
 
 type Props = {
   /** The session's number, shown in the header. */
@@ -37,14 +40,38 @@ type Props = {
   closable: boolean;
   onClose: () => void;
   onFocus?: () => void;
+  /** SESS-020: the saved shapes, the new list after a save, rename, delete or undo, and a pick. */
+  saved: SavedShape[];
+  onSaved: (list: SavedShape[]) => void;
+  onPickSaved: (shape: SavedShape) => void;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved }: Props) {
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const ready = allReady(seats) && !busy;
   const anyReady = seats.some(seatReady);
   // SESS-022: a line per provider near its limit, above Start; it never disables Start.
   const warnings = launchWarnings(seats.map((s) => s.agent), useLaunchUsage());
+  const [naming, setNaming] = useState<string | null>(null); // the Save as team name field, open when set
+  const [menu, setMenu] = useState<{ i: number; name: string } | null>(null); // a saved shape's rename/delete menu
+  const [undo, setUndo] = useState<{ list: SavedShape[]; name: string } | null>(null); // the list before a delete
+  const [problem, setProblem] = useState<string | null>(null);
+  const undoTimer = useRef<number | null>(null);
+  useEffect(() => () => void (undoTimer.current !== null && window.clearTimeout(undoTimer.current)), []);
+  const save = () => {
+    const out = saveShape(saved, naming ?? "", seats, copies, task);
+    if ("error" in out) return setProblem(out.error);
+    setProblem(null);
+    setNaming(null);
+    onSaved(out.list);
+  };
+  const remove = (i: number) => {
+    setMenu(null);
+    setUndo({ list: saved, name: saved[i].name });
+    onSaved(saved.filter((_, j) => j !== i));
+    if (undoTimer.current !== null) window.clearTimeout(undoTimer.current);
+    undoTimer.current = window.setTimeout(() => setUndo(null), 8000);
+  };
   // The free field applies on Enter or blur, not per keystroke: typing "15" must not pass
   // through a one-seat moment that drops the picks of seats 2 and up.
   const recount = (n: number) => {
@@ -78,7 +105,55 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
               {s.label}
             </button>
           ))}
+          {saved.map((t, i) => (
+            <span key={i} className="saved-shape" data-saved-shape={t.name}>
+              <button className="btn" title={`${t.seats.length} seat${t.seats.length === 1 ? "" : "s"}: ${t.seats.map((x) => x.role ?? x.agent).join(", ")}`} onClick={() => onPickSaved(t)}>
+                {t.name}
+              </button>
+              <button className="ib" title={`Rename or delete ${t.name}`} aria-expanded={menu?.i === i} onClick={() => setMenu(menu?.i === i ? null : { i, name: t.name })}>
+                <Dots size={11} />
+              </button>
+            </span>
+          ))}
+          <button className="btn" disabled={!ready} title={ready ? "Save this lineup to pick again later" : "Pick an AI and a model (or Terminal) for every seat first"} onClick={() => setNaming(naming === null ? "" : null)}>
+            Save as team
+          </button>
         </div>
+        {naming !== null && (
+          <div className="count-row" role="group" aria-label="Save as team">
+            <input className="seat-job" autoFocus type="text" maxLength={60} placeholder="Team name" aria-label="Team name" value={naming} onChange={(e) => setNaming(e.currentTarget.value)} onKeyDown={(e) => (e.key === "Enter" ? save() : e.key === "Escape" && setNaming(null))} />
+            <button className="btn primary" disabled={!naming.trim()} onClick={save}>
+              Save
+            </button>
+            <button className="btn" onClick={() => setNaming(null)}>
+              Cancel
+            </button>
+          </div>
+        )}
+        {menu && saved[menu.i] && (
+          <div className="count-row" role="group" aria-label={`Saved shape ${saved[menu.i].name}`}>
+            <input className="seat-job" autoFocus type="text" maxLength={60} aria-label="New name" value={menu.name} onChange={(e) => setMenu({ ...menu, name: e.currentTarget.value })} onKeyDown={(e) => e.key === "Enter" && (onSaved(renameShape(saved, menu.i, menu.name)), setMenu(null))} />
+            <button className="btn" onClick={() => (onSaved(renameShape(saved, menu.i, menu.name)), setMenu(null))}>
+              Rename
+            </button>
+            <button className="btn danger" onClick={() => remove(menu.i)}>
+              Delete
+            </button>
+          </div>
+        )}
+        {problem && (
+          <div className="note warn" role="alert">
+            {problem}
+          </div>
+        )}
+        {undo && (
+          <div className="note" role="status">
+            Deleted {undo.name}.{" "}
+            <button className="btn" onClick={() => (onSaved(undo.list), setUndo(null))}>
+              Undo
+            </button>
+          </div>
+        )}
         <div className="count-row" role="group" aria-label="How many sessions">
           <span className="label">Sessions</span>
           {QUICK_COUNTS.map((n) => (

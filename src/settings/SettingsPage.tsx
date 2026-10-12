@@ -16,11 +16,11 @@ import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget }
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
 const AppearancePage = lazy(() => import("./AppearancePage"));
 const GeneralPage = lazy(() => import("./GeneralPage"));
+const NotificationsPage = lazy(() => import("./NotificationsPage"));
 const ShortcutsPage = lazy(() => import("./ShortcutsPage"));
 const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
 const AgentsPage = lazy(() => import("./AgentsPage"));
-const NotificationsPage = lazy(() => import("./NotificationsPage"));
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);

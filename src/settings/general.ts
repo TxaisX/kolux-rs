@@ -1,5 +1,6 @@
 // SET-037: the Classic or New look and the workspace screen that opens first. Both live in General.
 import type { Screen } from "../chrome/TopBar";
+import type { Page } from "../projects/ProjectsPanel";
 
 export type Look = "classic" | "new";
 export const LOOK_FIELD = "uiLook";
@@ -24,3 +25,14 @@ export function savedFirst(s: Record<string, unknown>): Screen {
 
 /** The screen the window opens on: under Classic always Terminals. */
 export const startScreen = (s: Record<string, unknown>): Screen => (readLook(s) === "classic" ? "terminals" : savedFirst(s));
+
+/** VIEW-011: a title-bar page button, off until it is turned on in Settings > Appearance. */
+export const TITLE_BAR_FIELD = { automations: "titleBarAutomations" } as const;
+export const titleBarButton = (s: Record<string, unknown>, which: keyof typeof TITLE_BAR_FIELD): boolean => s[TITLE_BAR_FIELD[which]] === true;
+
+/** VIEW-011: the page that was open at quit, shown again at start (none when unset or unknown). */
+export const OPEN_PAGE_FIELD = "openPage";
+export function openPageAt(s: Record<string, unknown>): Page | null {
+  const v = s[OPEN_PAGE_FIELD];
+  return v === "automations" || v === "routing" ? v : null;
+}

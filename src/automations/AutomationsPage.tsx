@@ -2,26 +2,34 @@
 // and search, a quick-actions menu on each row (Run now, pause / resume, Edit, Delete), and the
 // selected automation's prompt and numbered runs below. The page reloads itself whenever the
 // back end says an automation or a run changed, so a run's status moves without a refresh.
-// New Automation and Edit open the dialog of AUTO-005; Runs opens the dashboard of AUTO-015
-// (T-130) and is present and disabled until then.
+// New Automation and Edit open the dialog of AUTO-005; Runs opens the dashboard of AUTO-015.
+// AUTO-017: Up and Down move the selection, Enter opens the automation as its own page, Left and
+// Right switch Overview and Runs, Escape steps back to the list and then closes the page.
+// AUTO-018: the Overview tab, with a long prompt folded behind an expand control.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Dots, Plus, Refresh, Search } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import type { Project } from "../projects/model";
-import AutomationDialog from "./AutomationDialog";
-import { ago, CONFIRM_DELETE_KEY, confirmDelete, lastRun, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
+import AutomationDialog, { TemplateCards } from "./AutomationDialog";
+import type { Template } from "./timetable";
+import RunsDashboard, { Breadcrumb, RunPage } from "./RunsDashboard";
+import { folderName } from "../projects/model";
+import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
-export type Data = { automations: Automation[]; runs: Run[] };
+/** `runsError` says the history could not be read (AUTO-018: the run count then reads unknown). */
+export type Data = { automations: Automation[]; runs: Run[]; runsError?: string };
 
 type Props = {
   projects: Project[];
   agents: AgentInfo[];
   settings: Record<string, unknown>;
   onSettings: (next: Record<string, unknown>) => void;
-  /** Seeds the page without asking the back end (tests render it to HTML). */
-  initial?: { data?: Data; error?: string };
+  /** Escape on the list closes the page (AUTO-017). */
+  onClose?: () => void;
+  /** Seeds the page without asking the back end (tests render it to HTML); `open` opens one automation. */
+  initial?: { data?: Data; error?: string; runs?: boolean; open?: string };
 };
 
 const columns: Array<{ key: SortKey; label: string }> = [
@@ -43,13 +51,19 @@ const results: Array<{ value: Filters["result"]; label: string }> = [
   { value: "failed", label: "Failed to start" },
 ];
 
-export default function AutomationsPage({ projects, agents, settings, onSettings, initial }: Props) {
+export default function AutomationsPage({ projects, agents, settings, onSettings, onClose, initial }: Props) {
   const [data, setData] = useState<Data | null>(initial?.data ?? null);
   const [error, setError] = useState<string | null>(initial?.error ?? null);
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<Filters>(noFilters);
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "name", desc: false });
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initial?.open ?? null);
+  // AUTO-017: the automation opened as its own page, and the detail's tab.
+  const [opened, setOpened] = useState<string | null>(initial?.open ?? null);
+  const [tab, setTab] = useState<"overview" | "runs">("overview");
+  const root = useRef<HTMLDivElement>(null);
+  const lastIndex = useRef(0);
+  const keyRef = useRef<(e: globalThis.KeyboardEvent) => void>(() => {});
   const [menu, setMenu] = useState<string | null>(null);
   const [asking, setAsking] = useState<string | null>(null); // the automation whose delete waits for a yes
   const [dontAsk, setDontAsk] = useState(false);
@@ -57,7 +71,15 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   const [now, setNow] = useState(() => Date.now());
   // The dialog: undefined shut, null a new automation, else the latest saved copy being edited.
   const [dialog, setDialog] = useState<Automation | null | undefined>(undefined);
+  const [template, setTemplate] = useState<Template | null>(null);
+  const open = (t: Template | null) => {
+    setTemplate(t);
+    setDialog(null);
+  };
   const search = useRef<HTMLInputElement>(null);
+  // AUTO-015: the Runs dashboard, and the run opened from it as a full page.
+  const [runsView, setRunsView] = useState(initial?.runs ?? false);
+  const [openRun, setOpenRun] = useState<string | null>(null);
 
   const load = () =>
     invoke<Data>("automations_list")
@@ -86,8 +108,55 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   const all = data?.automations ?? [];
   const runs = data?.runs ?? [];
   const rows = q === null ? [] : sortRows(all.filter((a) => passes(a, filters, runs) && matches(a, q, names)), runs, sort.key, sort.desc, names);
-  // Opening the page selects the first automation; a selection that left the list moves on.
-  const current = rows.find((a) => a.id === selected) ?? rows[0] ?? null;
+  // Opening the page selects the first automation; a selection that left the list moves to the row
+  // now in its place (AUTO-017).
+  const currentId = keepSelection(
+    rows.map((a) => a.id),
+    selected,
+    lastIndex.current,
+  );
+  const current = rows.find((a) => a.id === currentId) ?? null;
+  lastIndex.current = Math.max(0, rows.findIndex((a) => a.id === currentId));
+  const openedA = opened === null ? undefined : all.find((a) => a.id === opened);
+  const rowEl = (id: string) => root.current?.querySelector<HTMLElement>(`tr[data-id="${id}"]`);
+  // A row that vanished took the focus with it; the row now selected gets it.
+  useEffect(() => {
+    if (currentId && (document.activeElement === document.body || document.activeElement === null)) rowEl(currentId)?.focus();
+  }, [currentId]);
+  keyRef.current = (e) => {
+    const t = e.target as HTMLElement;
+    if (runsView || (t !== document.body && !root.current?.contains(t))) return;
+    const overlay = dialog !== undefined || asking !== null || menu !== null || t.closest('[role="dialog"],[role="menu"],[role="listbox"],[role="alertdialog"]') !== null || document.querySelector('[aria-modal="true"]') !== null;
+    const control = t.closest("input,textarea,select,button,a,[contenteditable]") !== null;
+    const what = pageKey({ key: e.key, mods: e.altKey || e.ctrlKey || e.metaKey || e.shiftKey, control, search: t === search.current, row: t.tagName === "TR", overlay, opened: openedA !== undefined });
+    if (!what) return;
+    if (what === "close") {
+      if (onClose) onClose();
+      return;
+    }
+    e.preventDefault();
+    if (what === "back") {
+      setOpened(null);
+      window.setTimeout(() => currentId && rowEl(currentId)?.focus(), 0);
+    } else if (what === "tab") setTab((x) => (x === "overview" ? "runs" : "overview"));
+    else if (what === "open") {
+      if (current) setOpened(current.id);
+    } else if (!openedA && rows.length > 0) {
+      const at = Math.min(rows.length - 1, Math.max(0, lastIndex.current + (what === "down" ? 1 : -1)));
+      const id = rows[at].id;
+      setSelected(id);
+      window.setTimeout(() => {
+        const el = rowEl(id);
+        el?.scrollIntoView({ block: "nearest" });
+        if (t.tagName === "TR") el?.focus();
+      }, 0);
+    }
+  };
+  useEffect(() => {
+    const on = (e: globalThis.KeyboardEvent) => keyRef.current(e);
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, []);
   const agentIds = [...new Set(all.map((a) => a.provider))];
 
   const act = (p: Promise<unknown>) => p.then(() => load()).catch((e) => setNote(String(e)));
@@ -127,11 +196,50 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
     setNote(`Saved ${a.name}`);
     void load();
   };
+  // A failed refresh keeps the rows already shown and says so, rather than emptying the dashboard.
+  const refreshRuns = () =>
+    invoke<Data>("automations_list")
+      .then((d) => {
+        setData(d);
+        setNote(null);
+      })
+      .catch((e) => setNote(`Refresh failed: ${String(e)}`));
+  if (runsView) {
+    const shown = runs.find((r) => r.id === openRun);
+    const toAutomations = () => {
+      setOpenRun(null);
+      setRunsView(false);
+      setNote(null);
+    };
+    return (
+      <div className="autos">
+        {note && (
+          <div className="note warn" role="status">
+            {note}
+          </div>
+        )}
+        <RunsDashboard runs={runs} automations={all} now={now} onRefresh={() => void refreshRuns()} onAutomations={toAutomations} onOpen={(r) => setOpenRun(r.id)} hidden={shown !== undefined} />
+        {shown && <RunPage run={shown} automation={all.find((a) => a.id === shown.automationId)} now={now} onRuns={() => setOpenRun(null)} onAutomations={toAutomations} />}
+      </div>
+    );
+  }
   const sortBy = (key: SortKey) => setSort((s) => ({ key, desc: s.key === key ? !s.desc : false }));
   const filtered = filters.state !== "all" || filters.result !== "all" || filters.agents.length > 0 || (q ?? "") !== "";
 
+  if (openedA) {
+    return (
+      <div className="autos" ref={root}>
+        <div className="autos-bar">
+          <Breadcrumb onAutomations={() => setOpened(null)} last={openedA.name} />
+        </div>
+        <Detail key={openedA.id} a={openedA} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(openedA.provider)} tab={tab} onTab={setTab} onRun={() => runNow(openedA)} onToggle={() => toggle(openedA)} />
+        {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} template={template} onClose={() => setDialog(undefined)} onSaved={saved} />}
+      </div>
+    );
+  }
+
   return (
-    <div className="autos">
+    <div className="autos" ref={root}>
       <div className="autos-bar">
         <h2>Automations</h2>
         <label className="autos-search">
@@ -163,10 +271,10 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
         <button className="ib" title="Refresh" onClick={() => void load()}>
           <Refresh />
         </button>
-        <button className="btn" disabled title="The runs dashboard comes with T-130">
+        <button className="btn" title="Every automation's runs in one place" onClick={() => setRunsView(true)}>
           Runs
         </button>
-        <button className="btn primary" disabled={projects.length === 0} title={projects.length === 0 ? "Add a project first" : undefined} onClick={() => setDialog(null)}>
+        <button className="btn primary" disabled={projects.length === 0} title={projects.length === 0 ? "Add a project first" : undefined} onClick={() => open(null)}>
           <Plus size={12} />
           New Automation
         </button>
@@ -206,7 +314,8 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
       ) : all.length === 0 ? (
         <div className="empty">
           <h2>No automations yet</h2>
-          <p>An automation starts an agent with a saved prompt on a timetable or when something happens in a project.</p>
+          <p>An automation starts an agent with a saved prompt on a timetable or when something happens in a project. Start from one of these, or from blank:</p>
+          <TemplateCards onPick={open} disabled={projects.length === 0} />
         </div>
       ) : rows.length === 0 ? (
         <div className="empty">
@@ -245,7 +354,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
                 {rows.map((a) => {
                   const last = lastRun(a.id, runs);
                   return (
-                    <tr key={a.id} aria-selected={current?.id === a.id} onClick={() => setSelected(a.id)}>
+                    <tr key={a.id} data-id={a.id} tabIndex={current?.id === a.id ? 0 : -1} aria-selected={current?.id === a.id} onClick={() => setSelected(a.id)} onDoubleClick={() => setOpened(a.id)}>
                       <td>
                         <span className={`dot${a.enabled ? " live" : ""}`} title={a.enabled ? "On" : "Paused"} />
                         {a.name}
@@ -290,20 +399,36 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
               </tbody>
             </table>
           </div>
-          {current && <Detail a={current} runs={runs} now={now} onRun={() => runNow(current)} onToggle={() => toggle(current)} />}
+          {current && <Detail key={current.id} a={current} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(current.provider)} tab={tab} onTab={setTab} onRun={() => runNow(current)} onToggle={() => toggle(current)} />}
         </>
       )}
-      {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} onClose={() => setDialog(undefined)} onSaved={saved} />}
+      {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} template={template} onClose={() => setDialog(undefined)} onSaved={saved} />}
     </div>
   );
 }
 
-function Detail({ a, runs, now, onRun, onToggle }: { a: Automation; runs: Run[]; now: number; onRun: () => void; onToggle: () => void }) {
+type DetailProps = { a: Automation; runs: Run[]; runsError?: string; now: number; agent: string; tab: "overview" | "runs"; onTab: (t: "overview" | "runs") => void; onRun: () => void; onToggle: () => void };
+function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }: DetailProps) {
   const mine = runs.filter((r) => r.automationId === a.id).sort((x, y) => y.number - x.number);
+  // AUTO-018: a prompt that does not fit is folded; the guess holds until the box is measured, and
+  // a narrower window brings the control up. The control stays put when used, so focus stays on it.
+  const [unfolded, setUnfolded] = useState(false);
+  const [overflows, setOverflows] = useState(() => a.prompt.split("\n").length > 6 || a.prompt.length > 600);
+  const box = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || unfolded || typeof ResizeObserver === "undefined") return;
+    const check = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [a.prompt, unfolded]);
   return (
     <section className="autos-detail" aria-label={`${a.name} overview`}>
       <div className="autos-detail-head">
         <h3>{a.name}</h3>
+        {!a.enabled && <span className="chip">Paused</span>}
         <label className="autos-switch">
           <input type="checkbox" role="switch" checked={a.enabled} onChange={onToggle} /> {a.enabled ? "On" : "Paused"}
         </label>
@@ -311,9 +436,40 @@ function Detail({ a, runs, now, onRun, onToggle }: { a: Automation; runs: Run[];
           Run now
         </button>
       </div>
-      <pre className="autos-prompt">{a.prompt}</pre>
-      <h4>Runs</h4>
-      {mine.length === 0 ? (
+      <div className="autos-tabs" role="tablist" aria-label="Automation views">
+        {(["overview", "runs"] as const).map((t) => (
+          <button key={t} role="tab" aria-selected={tab === t} className="btn" onClick={() => onTab(t)}>
+            {t === "overview" ? "Overview" : "Runs"}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" aria-label="Overview" hidden={tab !== "overview"}>
+        <dl className="autos-facts">
+          <dt>Timetable or trigger</dt>
+          <dd>{triggerLabel(a)}</dd>
+          <dt>Upcoming</dt>
+          <dd>{upcoming(a, now)}</dd>
+          <dt>Worktree</dt>
+          <dd>{a.workspaceMode === "new-per-run" ? "A new one for every run" : a.workspace ? folderName(a.workspace) : "Not chosen"}</dd>
+          <dt>Agent</dt>
+          <dd>{agent}</dd>
+          <dt>Runs</dt>
+          <dd>{runsError ? "unknown" : mine.length}</dd>
+          <dt>Usage</dt>
+          <dd>Not recorded yet</dd>
+        </dl>
+        {runsError && <div className="note warn">The run history could not be read: {runsError}</div>}
+        <pre ref={box} className={`autos-prompt${unfolded ? "" : " folded"}`}>{a.prompt}</pre>
+        {(overflows || unfolded) && (
+          <button className="btn link autos-fold" aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)}>
+            {unfolded ? "Fold the prompt" : "Show the whole prompt"}
+          </button>
+        )}
+      </div>
+      <div role="tabpanel" aria-label="Runs" hidden={tab !== "runs"}>
+      {runsError ? (
+        <p className="autos-none">The run history could not be read.</p>
+      ) : mine.length === 0 ? (
         <p className="autos-none">No runs yet.</p>
       ) : (
         <ol className="autos-runs">
@@ -329,6 +485,7 @@ function Detail({ a, runs, now, onRun, onToggle }: { a: Automation; runs: Run[];
           ))}
         </ol>
       )}
+      </div>
     </section>
   );
 }

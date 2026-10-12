@@ -6,7 +6,7 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import AutomationsPage, { type Data } from "./AutomationsPage";
 
-const render = (initial: { data?: Data; error?: string }) =>
+const render = (initial: { data?: Data; error?: string; runs?: boolean; open?: string }) =>
   renderToString(createElement(AutomationsPage, { projects: [{ id: "p1", name: "shop", path: "C:\\src\\shop" }], agents: [], settings: {}, onSettings: () => {}, initial }));
 
 test("a failed load is an error with Retry, not a nothing-created message", () => {
@@ -39,4 +39,72 @@ test("opening the page selects the first automation in sort order and shows its 
   expect(html).toContain("#<!-- -->1");
   expect(html).toContain("by hand");
   expect(html).not.toContain('role="menu"'); // no row's menu is open
+});
+
+const many: Data = {
+  automations: [
+    { id: "auto-1", name: "Nightly checks", prompt: "", provider: "claude", projectId: "p1", enabled: true },
+    { id: "auto-2", name: "On new PR", prompt: "", provider: "claude", projectId: "p1", enabled: true, trigger: { kind: "event", event: "pr-opened" } },
+  ],
+  runs: [
+    { id: "run-1", automationId: "auto-1", number: 1, trigger: "manual", status: "failed", at: Date.now() - 60000, detail: "claude did not start" },
+    { id: "run-2", automationId: "auto-2", number: 1, trigger: "event", status: "completed", at: Date.now() - 120000 },
+  ],
+};
+
+test("AUTO-015: Runs opens one table of every automation's runs, with tiles and the event named on hover", () => {
+  const html = render({ data: many, runs: true });
+  expect(html).toContain("Nightly checks");
+  expect(html).toContain("On new PR");
+  expect(html).toContain('title="When a pull request opens"');
+  expect(html).toMatch(/<b>1<\/b> succeeded in 24 h/);
+  expect(html).toMatch(/<b>1<\/b> failed in 7 days/);
+  expect(html).toContain("Automations</button>");
+  expect(html).not.toContain("New Automation");
+});
+
+test("AUTO-015: with no runs at all the dashboard says so plainly", () => {
+  const html = render({ data: { automations: many.automations, runs: [] }, runs: true });
+  expect(html).toContain("No runs yet");
+});
+
+test("AUTO-015: the Runs button is live on the Automations page", () => {
+  const html = render({ data: many });
+  expect(html).toMatch(/<button class="btn" title="Every automation&#x27;s runs in one place">Runs<\/button>/);
+});
+
+test("with no automations yet, four template cards and a blank choice appear (AUTO-006)", () => {
+  const html = render({ data: { automations: [], runs: [] } });
+  for (const name of ["Weekday repo audit", "Weekly release check", "Daily review", "Hourly upkeep", "Start from blank"]) expect(html).toContain(name);
+});
+
+test("the overview: timetable, upcoming, worktree, agent, run count and a paused marker, with Runs as a second tab (AUTO-018)", () => {
+  const data: Data = {
+    automations: [{ id: "auto-1", name: "Nightly", prompt: "audit", provider: "claude", projectId: "p1", enabled: false, workspaceMode: "existing", workspace: "C:/src/shop", trigger: { kind: "schedule", cron: "0 2 * * *" }, timetable: "Every day at 02:00 (UTC)" }],
+    runs: [{ id: "run-1", automationId: "auto-1", number: 1, trigger: "manual", status: "completed", at: Date.now() }],
+  };
+  const html = render({ data });
+  expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Overview/);
+  expect(html).toMatch(/role="tab" aria-selected="false"[^>]*>Runs/);
+  expect(html).toContain("Every day at 02:00 (UTC)");
+  expect(html).toMatch(/Runs<\/dt><dd>1<\/dd>/);
+  expect(html).toContain(">Paused<");
+  expect(html).toContain(">shop<");
+});
+
+test("history that failed to load reads unknown, never 0; an opened automation has its breadcrumb (AUTO-017, AUTO-018)", () => {
+  const data: Data = { automations: [{ id: "auto-1", name: "Nightly", prompt: "audit", provider: "claude", projectId: "p1", enabled: true }], runs: [], runsError: "the saved runs could not be read" };
+  const html = render({ data, open: "auto-1" });
+  expect(html).toMatch(/Runs<\/dt><dd>unknown<\/dd>/);
+  expect(html).toMatch(/<nav[^>]*aria-label="Breadcrumb"/);
+  expect(html).toMatch(/aria-current="page"[^>]*>Nightly/);
+  expect(html).not.toContain("autos-table"); // the opened automation fills the page
+});
+
+test("a long prompt starts folded behind an expand control; a short one is shown whole (AUTO-018)", () => {
+  const long = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
+  const html = render({ data: { automations: [{ id: "auto-1", name: "Long", prompt: long, provider: "claude", projectId: "p1", enabled: true }], runs: [] } });
+  expect(html).toContain("Show the whole prompt");
+  expect(html).toMatch(/class="autos-prompt folded"/);
+  expect(render({ data: { automations: [{ id: "auto-1", name: "Short", prompt: "audit", provider: "claude", projectId: "p1", enabled: true }], runs: [] } })).not.toContain("Show the whole prompt");
 });

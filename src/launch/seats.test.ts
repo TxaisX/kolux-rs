@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, type Seat } from "./seats";
+import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, saveShape, renameShape, restoreShape, SHAPE_LIMITS, type SavedShape, type Seat } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -113,4 +113,29 @@ test("SESS-025: the rules block follows the task, names the note, and is cut off
   expect(withoutRules(full)).toBe(`${ROLE_BRIEFS.builder}\n\nFix the login page`);
   expect(withoutRules("Fix it")).toBe("Fix it");
   expect(openingPrompt(claude, "", rules)).toBe("");
+});
+
+test("SESS-020: a saved lineup keeps every seat, numbers a clashing name and keeps to its limits", () => {
+  const pair = pickShape("pair", [claude, { agent: "codex", model: "default", title: "Checker", prompt: "look hard" }]);
+  expect(saveShape([], "Review crew", [claude, emptySeat()], "separate", "")).toEqual({ error: expect.stringContaining("every seat") });
+  expect(saveShape([], "   ", pair, "separate", "")).toEqual({ error: expect.stringContaining("name") });
+  const one = saveShape([], "  Review crew ", pair, "separate", "fix the login");
+  if (!("list" in one)) throw new Error("not saved");
+  expect(one.list).toEqual([{ name: "Review crew", seats: pair, copies: "separate", task: "fix the login" }]);
+  const two = saveShape(one.list, "REVIEW CREW", pair, "shared", "");
+  const three = "list" in two ? saveShape(two.list, "review crew", pair, "shared", "") : two;
+  expect("list" in three && three.list.map((x) => x.name)).toEqual(["Review crew", "REVIEW CREW 2", "review crew 3"]);
+  const long = saveShape([], "x".repeat(80), pair, "shared", "p".repeat(5000));
+  expect("list" in long && [long.list[0].name.length, long.list[0].task?.length]).toEqual([SHAPE_LIMITS.name, SHAPE_LIMITS.prompt]);
+  expect(saveShape([], "big", Array.from({ length: 13 }, () => claude), "shared", "")).toEqual({ error: expect.stringContaining("12") });
+  const full: SavedShape[] = Array.from({ length: 40 }, (_, i) => ({ name: "s" + i, seats: [claude], copies: "shared" }));
+  expect(saveShape(full, "one more", [claude], "shared", "")).toEqual({ error: expect.stringContaining("40") });
+  // renaming: blank does nothing, a clash with another gets a number, only that shape changes
+  const list = "list" in three ? three.list : [];
+  expect(renameShape(list, 1, "  ")).toBe(list);
+  expect(renameShape(list, 1, "review CREW").map((x) => x.name)).toEqual(["Review crew", "review CREW 2", "review crew 3"]);
+  expect(renameShape(list, 0, "Review Crew").map((x) => x.name)).toEqual(["Review Crew", "REVIEW CREW 2", "review crew 3"]);
+  // restoring never swaps an AI: a seat whose agent is gone comes back blank
+  expect(restoreShape(list[0], ["claude", "codex"])).toEqual(pair);
+  expect(restoreShape(list[0], ["claude"])).toEqual([pair[0], emptySeat()]);
 });
