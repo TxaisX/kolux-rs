@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -54,6 +54,11 @@ test("a loop of parents is listed flat rather than lost", () => {
 
 test("nesting keeps the order it is handed when the list is sorted elsewhere (PROJ-050)", () => {
   expect(shape(nestRows([zeta, child, p], true, new Set(), (ws) => ws))).toEqual(["zeta", "p+", "-child"]);
+});
+
+test("New workspace with no project yet opens the add-project form instead of a dead name field (T-013-fix-a)", () => {
+  expect(createOpens("")).toBe("add");
+  expect(createOpens("app-1")).toBe("name");
 });
 
 test("the workspaces-folder field saves on Enter, reverts on Escape and ignores keys mid-composition (SET-032)", () => {

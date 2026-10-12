@@ -51,6 +51,9 @@ export const classic = {
   warn: "#fdc030",
   danger: "#f0a07a",
   "danger-line": "#7a3b1e",
+  /** Not measured (nothing in the capture was past 90%): the meter's red, USAGE-002. Its own name, as
+   *  `danger` above is the error-text colour. */
+  "meter-danger": "#e5484d",
 } as const;
 
 export type Theme = Record<keyof typeof classic, string>;

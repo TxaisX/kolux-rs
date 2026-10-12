@@ -4,6 +4,9 @@
 // is connected it wins for new panes, and the section says so. T-138 (ACCT-016..018): a System
 // default row comes first; clicking a row picks the account for new Claude panes (panes already
 // running keep theirs); Remove asks first and hands back to the system default.
+// The upkeep switch (ACCT-006, on by default under OD-01) leaves sign-in upkeep to Claude Code;
+// off, Kolux asks Claude Code whether the active account is still signed in (ACCT-012) and shows
+// the lapsed warnings. Kolux never renews a sign-in itself (DT-C16).
 import { useCallback, useEffect, useState } from "react";
 import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
@@ -21,7 +24,10 @@ export type AccountsView = {
   upkeepLeftToClaude: boolean;
 };
 
-export type AccountAction = { kind: "add" } | { kind: "again"; id: string } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "cancel" } | { kind: "key" } | { kind: "install" };
+export type AccountAction = { kind: "add" } | { kind: "again"; id: string } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "cancel" } | { kind: "key" } | { kind: "install" } | { kind: "upkeep"; on: boolean };
+
+/** Settings field of the upkeep switch: absent or true = Claude Code looks after sign-ins. */
+export const UPKEEP_FIELD = "claudeSignInUpkeepByClaudeCode";
 
 export function ClaudeAccountsView({ view, error, confirming = null, onAction }: { view: AccountsView | null; error?: string | null; confirming?: string | null; onAction: (a: AccountAction) => void }) {
   if (!view) return null;
@@ -59,7 +65,7 @@ export function ClaudeAccountsView({ view, error, confirming = null, onAction }:
             detail={`${a.organization ?? "No organisation"} · Last signed in ${signedInAt(a.lastSignIn)}`}
             active={view.active === a.id}
             busy={busy}
-            trouble={a.stale ? "Needs re-auth" : null}
+            trouble={a.stale && !view.upkeepLeftToClaude ? "Needs re-auth" : null}
             onPick={() => onAction({ kind: "activate", id: a.id })}
             manage={{
               againLabel: "Re-authenticate",
@@ -86,9 +92,28 @@ export function ClaudeAccountsView({ view, error, confirming = null, onAction }:
           {error}
         </p>
       )}
-      {view.upkeepLeftToClaude && view.accounts.length > 0 && <p className="conn-detail">Claude Code keeps these sign-ins fresh in its own panes; Kolux sends nothing to Anthropic's sign-in service.</p>}
+      {view.accounts.length > 0 && (
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={view.upkeepLeftToClaude} disabled={busy} onChange={(e) => onAction({ kind: "upkeep", on: e.target.checked })} />
+          <span>
+            Leave sign-in upkeep to Claude Code
+            <small>
+              {view.upkeepLeftToClaude
+                ? "On unless you turn it off. Claude Code keeps these sign-ins fresh in its own panes; Kolux sends nothing to Anthropic's sign-in service and shows no sign-in warnings."
+                : "Kolux asks Claude Code whether the active account is still signed in, at start and when you switch this off, and flags one that has lapsed here and in the main window. Kolux still sends nothing to Anthropic's sign-in service."}
+            </small>
+          </span>
+        </label>
+      )}
     </section>
   );
+}
+
+/** Writes the upkeep switch; switching it off asks Claude Code at once whether the active account is still signed in. */
+function setUpkeep(on: boolean): Promise<void> {
+  return invoke<Record<string, unknown>>("get_settings")
+    .then((s) => invoke("save_settings", { value: { ...s, [UPKEEP_FIELD]: on } }))
+    .then(() => (on ? undefined : invoke<void>("claude_account_check")));
 }
 
 /** Starts a sign-in for a new account; the Claude card's "Use my Claude account instead". */
@@ -130,7 +155,9 @@ export default function ClaudeAccounts() {
               ? invoke("claude_key_connect")
               : a.kind === "install"
                 ? openInstallPage("claude")
-                : invoke("claude_account_cancel");
+                : a.kind === "upkeep"
+                  ? setUpkeep(a.on)
+                  : invoke("claude_account_cancel");
     call.catch((e) => setError(String(e))).finally(read);
   };
   return <ClaudeAccountsView view={view} error={error} confirming={confirming} onAction={act} />;

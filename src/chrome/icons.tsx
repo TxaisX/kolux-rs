@@ -1,6 +1,6 @@
 // Kolux RS's own line glyphs: 16-unit grid, 1.5 px strokes, drawn in the current text colour.
 // None is a vendor mark (DECISIONS.md: agents get a neutral glyph or their name as text).
-import type { SVGProps } from "react";
+import { useEffect, useRef, type SVGProps } from "react";
 
 type P = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -190,11 +190,36 @@ export const CheckCircle = (p: P) => (
     <path d="m5.25 8.25 1.75 1.75 3.75-4" />
   </Glyph>
 );
-export const Spinner = (p: P) => (
-  <Glyph {...p} strokeWidth={2}>
-    <path d="M8 2a6 6 0 0 1 6 6" />
-  </Glyph>
-);
+/** STAT-052: the working spinner, 12 frames a second (`.spin` in styles.css), every one on
+ * screen in step: each joins the document's clock at time zero instead of its own mount time.
+ * Under reduced motion the stylesheet stops it and there is nothing to align. */
+export const Spinner = ({ children, ...p }: P) => {
+  const ref = useRef<SVGSVGElement>(null);
+  useEffect(() => {
+    for (const a of ref.current?.getAnimations() ?? []) a.startTime = 0;
+  }, []);
+  return (
+    <Glyph {...p} ref={ref} className="spin" strokeWidth={2}>
+      <path d="M8 2a6 6 0 0 1 6 6" />
+      {children}
+    </Glyph>
+  );
+};
+export type GlyphName = "spinner" | "background" | "attention" | "interrupted" | "failed" | "check" | "idle" | "stale";
+/** STAT-052: one glyph per status; the attention look is the question mark every needs-you state shares. */
+export const StatusGlyph = ({ glyph, ...p }: P & { glyph: GlyphName }) => {
+  if (glyph === "spinner") return <Spinner {...p} />;
+  if (glyph === "background") return <Spinner {...p}><circle cx="8" cy="8" r="1.25" fill="currentColor" stroke="none" /></Spinner>;
+  if (glyph === "attention") return <Help {...p} />;
+  if (glyph === "check") return <CheckCircle {...p} />;
+  return (
+    <Glyph {...p}>
+      <circle cx="8" cy="8" r="6" strokeDasharray={glyph === "stale" ? "2 2.2" : undefined} />
+      {glyph === "interrupted" && <path d="M5.5 8h5" />}
+      {glyph === "failed" && <path d="m6 6 4 4M10 6l-4 4" />}
+    </Glyph>
+  );
+};
 export const SplitRight = (p: P) => (
   <Glyph {...p}>
     <rect x="2" y="3" width="12" height="10" rx="1.5" />

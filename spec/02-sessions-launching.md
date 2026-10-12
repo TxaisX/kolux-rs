@@ -45,6 +45,9 @@ Rules: an agent counts as installed only when a program that can actually run is
   21 Codebuff · 22 Command Code · 23 Continue · 24 Cursor · 25 Droid · 26 Kimi · 27 Mistral Vibe ·
   28 Qwen Code · 29 Rovo Dev · 30 Hermes · 31 OpenClaw · 32 GitHub Copilot · 33 Grok ·
   34 Devin; a hidden 35th entry, Claude Agent Teams (SESS-042), sits right after Claude Code.
+  (Kolux RS, T-007-a-fix: on Windows "the search path the user's shell would use" is the machine
+  Path then the user Path from the registry, expanded; on macOS and Linux the process PATH plus
+  the usual install folders stand for it, DT-C10.)
 Acceptance:
   - [ ] Install only Claude Code and Codex, open the plus menu → exactly those two agents are offered.
   - [ ] Launch Kolux from the Start menu while an agent exists only in its default install location → that agent is still offered.
@@ -303,6 +306,9 @@ Rules: one program name per agent decides that it is installed and also marks it
   this route on purpose, since Ante's own prompt option runs once and quits and Devin's start-up
   prompt submits instantly; a blank or spaces-only prompt counts as none, and the agent starts on
   its plain start line with nothing added.
+  (Kolux RS, T-008-b-fix: "while its program is in front" is decided without a foreground poll:
+  an agent Kolux starts is the pane's own program and is credited for its whole run; an agent
+  typed into a shell is credited through its hooks when it has them, else not at all; DT-C11.)
 Acceptance:
   - [ ] Install Antigravity, Continue and Cursor only under agy, cn and cursor-agent → all three are offered; a program called plain kiro does not make Kiro count.
   - [ ] Launch Grok with a prompt that begins with a double dash → Grok works on it as the task instead of reading it as an option.

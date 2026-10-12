@@ -27,7 +27,7 @@ pub fn claude_key(path: &Path) -> Result<String, String> {
 }
 
 /// The folder's real path on disk (letter case included), without the `\\?\` prefix.
-fn real_path(path: &Path) -> Result<String, String> {
+pub(crate) fn real_path(path: &Path) -> Result<String, String> {
     let real = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
     let s = real.to_string_lossy();
     Ok(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
@@ -49,7 +49,7 @@ fn checked_keys(paths: &[PathBuf], key: fn(&Path) -> Result<String, String>) -> 
 }
 
 /// Whole file at once, then a rename: a crash mid-write can never leave an agent half a file.
-fn write_whole(file: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn write_whole(file: &Path, text: &str) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -146,7 +146,7 @@ pub fn trust_codex(file: &Path, paths: &[PathBuf]) -> Result<usize, String> {
 
 /// Every folder a launch will use, trusted for `agent` in one write before it starts.
 /// ponytail: Claude and Codex; Cursor and Copilot keep their trust in files whose shape no public
-/// source describes (T-017-c).
+/// source describes, so they get nothing and their own prompt stays with the user (DT-C17).
 pub fn trust_folders(claude_config: &Path, agent: &str, paths: &[PathBuf]) -> Result<usize, String> {
     match agent {
         "claude" => trust_claude(claude_config, paths),

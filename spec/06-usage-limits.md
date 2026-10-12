@@ -29,10 +29,13 @@ Rules: the context bar shows up only after the session has reported its context,
   nothing but a weekly limit shows the weekly figure alone; with neither a context reading nor plan
   figures, the meter is left off the card instead of being drawn empty; the bar goes yellow at 70%
   and red past 90%, on the same scale as the pane header.
+  (Kolux RS, T-040-a: the meter sits under the card's chip row and reads `84k / 200k` then
+  `5-hour 38% · Weekly 63%` as used percentages; hovering gives the same words with the fill
+  percentage; the yellow is the attention colour and the red a new `danger` token.)
 Acceptance:
-  - [ ] A Claude card partway through a session → a context bar plus 5-hour and weekly percentages.
-  - [ ] A new card before its first turn → plan figures only; a card whose agent has no usage source
-        → no meter at all.
+  - [x] A Claude card partway through a session → a context bar plus 5-hour and weekly percentages. (T-040-a)
+  - [x] A new card before its first turn → plan figures only; a card whose agent has no usage source
+        → no meter at all. (T-040-a)
 Compat: —
 Source: D-06-002
 
@@ -44,10 +47,13 @@ User sees: a tiny ring on every agent tab that fills with that session's context
 Rules: when a tab holds several panes, the ring follows whichever pane reported last; the ring stays
   hidden until a context reading exists, even when plan figures are already known; the percentage
   lives only in the pane header, never on the tab.
+  (Kolux RS, T-040-a: a tab is one pane, so the ring is that pane's; the strip only shows when a
+  cell holds more than one tab, as before. The ring is `src/usage/Ring.tsx`, shared with the pane
+  header's gauge, and turns yellow and red on the card bar's scale.)
 Acceptance:
-  - [ ] Run Claude in a tab → a ring appears after the first reply and fills as the session goes on;
-        hovering shows the context and plan wording.
-  - [ ] A Codex tab that has plan figures but no context reading → no ring.
+  - [x] Run Claude in a tab → a ring appears after the first reply and fills as the session goes on;
+        hovering shows the context and plan wording. (T-040-a, by a posted report)
+  - [x] A Codex tab that has plan figures but no context reading → no ring. (T-040-a)
 Compat: —
 Source: D-06-003
 
@@ -83,11 +89,15 @@ Rules: context fill is measured against the effective window: 200k while the cap
   each rounded to a whole percent; a window of any other length is left out rather than shown under
   the wrong name; plan data that failed, is unavailable or is missing shows nothing at all, never an
   old or a zero figure; thousands are written with k and millions with M.
+  (Kolux RS, T-040-a: `src/usage/meter.ts`; the status line's `context_window` gives
+  `total_input_tokens`, else `current_usage.input_tokens` + `cache_creation_input_tokens` +
+  `cache_read_input_tokens`, else `used_percentage` of `context_window_size`; the cap is always on
+  until T-041 wires the switch through `contextFill`'s argument; millions keep one decimal, 1.3M.)
 Acceptance:
-  - [ ] Cap on, Claude session at 100k tokens on a model whose window is 1M → the meter reads 50%,
-        not 10%.
-  - [ ] Switch the cap off → the same session is measured against the model's full window.
-  - [ ] Make the plan read fail → the plan figures vanish from the meter instead of reading 0%.
+  - [x] Cap on, Claude session at 100k tokens on a model whose window is 1M → the meter reads 50%,
+        not 10%. (T-040-a, unit test)
+  - [x] Switch the cap off → the same session is measured against the model's full window. (T-041-a)
+  - [x] Make the plan read fail → the plan figures vanish from the meter instead of reading 0%. (T-040-a, unit test)
 Compat: —
 Source: D-06-005
 
@@ -110,11 +120,15 @@ Rules: on out of the box, and a setting that was never saved counts as on; switc
   stays free of the cap; the cap is put back exactly once when a saved command runs again, when a
   session resumes, and for draft launches; adding the cap a second time has the same effect as
   adding it once.
+  (Kolux RS, T-041-a: setting key `contextCap200k`; the cap is added in Rust as the pane starts,
+  on the arguments and environment handed to the PTY, never on the start line Kolux keeps, which
+  is how a rerun gets it exactly once. The switch lives on Settings > Agents. Claude Agent Teams
+  is a skipped agent in Kolux RS, so only Claude Code and Codex are capped.)
 Acceptance:
-  - [ ] Launch Claude with default settings → its process environment holds a 200k auto-compact
-        window.
-  - [ ] Launch Codex with its own profile option → no cap overrides are added.
-  - [ ] Switch the cap off and relaunch → neither Claude nor Codex is capped; Grok never is.
+  - [x] Launch Claude with default settings → its process environment holds a 200k auto-compact
+        window. (T-041-a, unit test on the environment handed to the PTY)
+  - [x] Launch Codex with its own profile option → no cap overrides are added. (T-041-a, unit test)
+  - [x] Switch the cap off and relaunch → neither Claude nor Codex is capped; Grok never is. (T-041-a, Codex live, Claude by unit test)
 Compat: Claude and Agent Teams get Claude Code's auto-compact window environment variable set to
   200,000; Codex gets per-run config overrides for its model context window (200,000) and its
   auto-compact token limit (180,000); the switch is on unless the user turned it off.
@@ -146,11 +160,16 @@ Rules: off out of the box; switching it off discards anything waiting, switching
   by while Kolux was closed, and is never typed into twice; if the terminal refuses the text Kolux
   does not try again, and notes the refusal in its log a single time; the timer runs only while at
   least one resume is waiting.
+  (Kolux RS, T-041-b: `src-tauri/src/resume.rs`. "Claude in the foreground" is the `claude` program
+  Kolux started for the pane, from its start until its exit; a pane running a shell cannot tell,
+  so it waits and gives up half an hour after the due time. A restored wait settles two minutes.
+  The 15-second check thread idles rather than stopping while nothing waits. Waits live under
+  kv `claudeResumeWaiting`; the refusal note goes to `logs/kolux.log`.)
 Acceptance:
-  - [ ] Switch it on and let a Claude pane stop on a limit that has a reset time → about a minute
-        after the reset the continue prompt appears once and Claude resumes.
-  - [ ] Type a draft into the stopped pane → nothing is sent at the reset.
-  - [ ] Exit Claude so that only a shell is left → nothing is typed and the waiting resume expires.
+  - [x] Switch it on and let a Claude pane stop on a limit that has a reset time → about a minute
+        after the reset the continue prompt appears once and Claude resumes. (T-041-b: typed into a real Claude Code pane whose input held a `/`, so no request went out)
+  - [x] Type a draft into the stopped pane → nothing is sent at the reset. (T-041-b)
+  - [x] Exit Claude so that only a shell is left → nothing is typed and the waiting resume expires. (T-041-b: in Kolux RS the pane's terminal ends with the program, so the wait drops)
   - [ ] Leave the switch off → nothing is ever typed.
 Compat: A saved on/off choice that stays off unless the user turns it on.
 Source: D-06-007
@@ -167,11 +186,14 @@ Rules: only the weekly window ever appears here, never the 5-hour one; a provide
   its tint follows the same 70/90 scale of percentage used as the session meters; with no known
   reset time the hover says so instead of counting down; the pill is for reading only and does
   nothing when clicked.
+  (Kolux RS, T-041-a: the hover reads `Weekly limit: N% left, resets in 2d 4h`; Codex's refused
+  sign-in keeps its yellow "sign in again" part, as its own card asks; the status-bar item list
+  is not built yet, so every installed provider counts as switched on until it is.)
 Acceptance:
-  - [ ] Claude and Codex both signed in → both listed with percent left; Claude at 85% used shows
-        15% left in yellow.
-  - [ ] Switch off the Codex usage item → Codex drops out of the pill.
-  - [ ] Hover → the weekly limit and a countdown to its reset.
+  - [x] Claude and Codex both signed in → both listed with percent left; Claude at 85% used shows
+        15% left in yellow. (T-041-a, Claude by a posted report, Codex by unit test)
+  - [ ] Switch off the Codex usage item → Codex drops out of the pill. (the item list is T-148)
+  - [x] Hover → the weekly limit and a countdown to its reset. (T-041-a)
 Compat: —
 Source: D-06-008
 
@@ -205,11 +227,17 @@ Rules: while a Claude session runs, the updates its statusline sends drive the f
   figure, only that missing figure is taken from Claude's usage screen and the service's own figures
   are kept.
 Acceptance:
-  - [ ] Run a Claude session → the figures change within a turn without any background check.
-  - [ ] Set the Claude account to use a token → no usage request goes out and the figures read
-        unavailable.
+  (Kolux RS, T-041-a: the status line is the only source; no usage request ever goes out, and the
+  hidden-terminal usage screen is not read (DT-C14). The status script sends the session's config
+  folder as `X-Kolux-Config`; a report from a folder other than the active account's, or from a
+  managed folder while the computer's default sign-in is active, is dropped; a report with one
+  window is merged over the stored windows.)
+Acceptance:
+  - [x] Run a Claude session → the figures change within a turn without any background check. (T-041-a, by a posted report)
+  - [x] Set the Claude account to use a token → no usage request goes out and the figures read
+        unavailable. (T-041-a: nothing is requested in any mode)
   - [ ] Make the service answer with a slow-down and a retry time → Kolux waits until then unless
-        the user presses refresh.
+        the user presses refresh. (no service is asked, DT-C14)
 Compat: Reads the status updates that Claude Code's statusline sends through the script Kolux
   installs for it: the plan windows with their reset times, the context window, and the config
   folder the session runs under.
@@ -232,6 +260,11 @@ Rules: Kolux tries Codex's own usage service first, then a background Codex proc
   still knows the 5-hour one, the 5-hour figure is taken from the service; whether the user is
   signed in is checked first in the account's own Codex home, then in the folder named by Codex's
   home environment variable, then in the default Codex folder under the user's home.
+  (Kolux RS, T-042-b, DT-C15: only the background process route is built. Codex's usage service
+  is not public documentation, and the hidden-terminal status screen is Codex's interactive
+  `/status` card, which needs a session open and has no documented layout; it shows the same
+  figures the background read returns, reset credits included, so nothing is ever taken "from
+  the service".)
 Acceptance:
   - [ ] Signed in on a weekly-only plan → only the weekly figure shows, with its reset time.
   - [ ] Revoke the Codex sign-in → the figures go, a sign-in-again warning shows, and no Codex

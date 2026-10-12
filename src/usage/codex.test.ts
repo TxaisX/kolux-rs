@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { pillDetail, pillText, type CodexUsage } from "./codex";
+import { pillDetail, pillText, resetWords, type CodexUsage } from "./codex";
 import { CodexPillView } from "./CodexPill";
 
 const base: CodexUsage = { state: "ok", fiveHour: null, weekly: null, resetCredits: null, plan: null, message: null };
@@ -11,21 +11,28 @@ const at = (h: number, dayOffset = 0) => new Date(2026, 9, 9 + dayOffset, h, 30)
 const clock = (s: number) => new Date(s * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const day = (s: number) => new Date(s * 1000).toLocaleDateString([], { weekday: "short" });
 
-test("a weekly-only plan shows only the weekly figure, with its reset time", () => {
+test("the pill is the weekly window alone, with a countdown to its reset (USAGE-008)", () => {
   const u = { ...base, weekly: { usedPercent: 37, resetsAt: at(9, 3), windowMins: 10080 } };
   expect(pillText(u)).toBe("Codex 63% left");
   const d = pillDetail(u, now);
-  expect(d).toBe(`Weekly: 63% left, resets ${day(at(9, 3))} ${clock(at(9, 3))}`);
+  expect(d).toBe("Weekly limit: 63% left, resets in 2d 21h");
   expect(d).not.toContain("5-hour");
+  expect(pillText({ ...base, fiveHour: { usedPercent: 12, resetsAt: at(14), windowMins: 300 } })).toBe("Codex · no weekly limit reported");
+  expect(renderToString(createElement(CodexPillView, { usage: { ...base, fiveHour: { usedPercent: 12, resetsAt: at(14), windowMins: 300 } } }))).toBe("");
+  expect(renderToString(createElement(CodexPillView, { usage: u, installed: false }))).toBe("");
+  expect(renderToString(createElement(CodexPillView, { usage: { ...u, weekly: { ...u.weekly, usedPercent: 92 } } }))).toContain('class="usage-part danger"');
 });
 
-test("both windows keep their own reset times, and the reset credits show", () => {
-  const u = { ...base, fiveHour: { usedPercent: 12, resetsAt: at(14), windowMins: 300 }, weekly: { usedPercent: 40, resetsAt: at(9, 2), windowMins: 10080 }, resetCredits: 2, plan: "plus" };
+test("the 5-hour window stays out of the hover; the reset credits and plan show", () => {
+  const u = { ...base, fiveHour: { usedPercent: 12, resetsAt: at(14), windowMins: 300 }, weekly: { usedPercent: 40, resetsAt: null, windowMins: 10080 }, resetCredits: 2, plan: "plus" };
   expect(pillText(u)).toBe("Codex 60% left");
   const lines = pillDetail(u, now).split("\n");
-  expect(lines[0]).toBe(`5-hour: 88% left, resets today ${clock(at(14))}`);
-  expect(lines[1]).toBe(`Weekly: 60% left, resets ${day(at(9, 2))} ${clock(at(9, 2))}`);
+  expect(lines[0]).toBe("Weekly limit: 60% left, reset time unknown");
   expect(lines).toContain("Limit-reset credits: 2");
+  expect(lines).toContain("Plan: plus");
+  expect(lines.join()).not.toContain("5-hour");
+  expect(resetWords(at(14), now)).toBe(`resets today ${clock(at(14))}`);
+  expect(resetWords(at(9, 3), now)).toBe(`resets ${day(at(9, 3))} ${clock(at(9, 3))}`);
 });
 
 test("a refused sign-in drops the figures and warns", () => {

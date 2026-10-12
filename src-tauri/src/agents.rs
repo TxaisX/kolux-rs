@@ -1,8 +1,9 @@
 //! The agents Kolux can start (SESS-001, SESS-027, SESS-051). An agent is "installed" when a
-//! program that can run is found under its program name: on the PATH first, the same lookup a
-//! shell makes, then in the usual install folders (npm's global bin, a Node version manager's
-//! current version, `~/.local/bin`, the cargo and bun bins, WinGet's links, scoop's shims), so an
-//! agent is still offered when Kolux was started from the desktop with a short PATH. A folder or a
+//! program that can run is found under its program name: on the search path a fresh shell would
+//! get first (on Windows the machine and user Path values in the registry, expanded; T-007-a-fix),
+//! then on this process's PATH, then in the usual install folders (npm's global bin, a Node version
+//! manager's current version, `~/.local/bin`, the cargo and bun bins, WinGet's links, scoop's
+//! shims), so an agent is still offered when Kolux was started from the desktop with a short PATH. A folder or a
 //! plain file bearing the name does not count. Nothing is spawned to look: the folders are walked
 //! directly, and a lookup that fails for any reason reads as "not installed".
 //!
@@ -136,16 +137,74 @@ fn runnable(file: &Path) -> bool {
     file.is_file()
 }
 
-/// Where programs are looked for: every PATH folder in order, then the usual install folders,
-/// each folder once. Folders that do not exist are kept out so nothing is walked twice.
+/// Where programs are looked for: the shell's search path, then every folder of this process's
+/// PATH in order, then the usual install folders, each folder once. Folders that do not exist are
+/// kept out so nothing is walked twice.
 pub fn search_dirs() -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    let mut dirs = shell_path_dirs();
+    dirs.extend(std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default());
     dirs.extend(usual_dirs());
     let mut seen = std::collections::HashSet::new();
     dirs.into_iter()
         .filter(|d| !d.as_os_str().is_empty() && d.is_dir())
         .filter(|d| seen.insert(d.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase()))
         .collect()
+}
+
+#[cfg(windows)]
+const MACHINE_ENVIRONMENT: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+
+/// The search path a shell opened now would get: on Windows the machine Path then the user Path
+/// from the registry, the way the system builds a new process's PATH, expanded. A read that
+/// fails gives nothing and the process PATH stands alone. Elsewhere the process PATH is it.
+fn shell_path_dirs() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+        return [(HKEY_LOCAL_MACHINE, MACHINE_ENVIRONMENT), (HKEY_CURRENT_USER, "Environment")]
+            .into_iter()
+            .filter_map(|(root, key)| registry_string(root, key, "Path"))
+            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+            .collect();
+    }
+    #[allow(unreachable_code)]
+    Vec::new()
+}
+
+/// One string value from the registry, a `%VAR%` reference expanded. `None` when the key or the
+/// value is missing, is not a string, or cannot be read.
+#[cfg(windows)]
+fn registry_string(root: windows_sys::Win32::System::Registry::HKEY, subkey: &str, value: &str) -> Option<String> {
+    use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
+    use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (key, name) = (wide(subkey), wide(value));
+    let mut bytes: u32 = 0;
+    // SAFETY: the strings are NUL-terminated and outlive the calls; the first call only asks
+    // the size, the second gets a buffer of that many bytes (the API expands %VAR%s when asked
+    // for a plain string, and reports a bigger size with ERROR_MORE_DATA if the estimate fell
+    // short, so the second call is retried once more with the size it names).
+    unsafe {
+        let ask = |buf: *mut u16, bytes: &mut u32| {
+            RegGetValueW(root, key.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buf.cast(), bytes)
+        };
+        if ask(std::ptr::null_mut(), &mut bytes) != 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; bytes as usize / 2 + 1];
+        let mut got = (buf.len() * 2) as u32;
+        let mut status = ask(buf.as_mut_ptr(), &mut got);
+        if status == ERROR_MORE_DATA {
+            buf = vec![0u16; got as usize / 2 + 1];
+            got = (buf.len() * 2) as u32;
+            status = ask(buf.as_mut_ptr(), &mut got);
+        }
+        if status != 0 {
+            return None;
+        }
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        Some(String::from_utf16_lossy(&buf[..len]))
+    }
 }
 
 fn env_dir(var: &str) -> Option<PathBuf> {
@@ -386,10 +445,11 @@ pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prom
 /// named `codex-…` / `grok-…` count; a program run through a script interpreter is credited by
 /// its entry script's name or folder. A running `claude` is always Claude Code itself.
 // ponytail: no per-agent entry-script table; under an interpreter any path part equal to a
-// program name, or a package folder such as `claude-code`, credits the agent. Widen when the
-// status cards start polling the foreground.
-// Its first caller is the foreground poll of the status cards (04-agent-status-hooks).
-#[cfg_attr(not(test), allow(dead_code))]
+// program name, or a package folder such as `claude-code`, credits the agent. Widen if a
+// foreground poll is ever built (DT-C11: there is none; the pane's own program and the hooks
+// decide who is in front).
+// Callers: the account and key variables a new pane gets (`claude_accounts`, `claude_key`,
+// `codex_accounts`), which credit the pane by the program Kolux starts in it.
 pub fn credited_agent(command_line: &str) -> Option<&'static str> {
     let line = command_line.trim_start();
     let (first, rest) = match line.strip_prefix('"').and_then(|r| r.split_once('"')) {
@@ -622,6 +682,25 @@ mod tests {
         assert!(git.file_stem().unwrap().to_string_lossy().eq_ignore_ascii_case("git"));
         assert_eq!(find_program("kolux-rs-no-such-program-7f3a"), None);
         assert!(search_dirs().iter().all(|d| d.is_dir()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_shell_search_path_comes_from_the_registry_expanded_and_is_walked() {
+        // T-007-a-fix: the machine Path is a REG_EXPAND_SZ holding %SystemRoot%\system32; it
+        // must come back expanded. A value that does not exist reads as nothing.
+        use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+        let machine = registry_string(HKEY_LOCAL_MACHINE, MACHINE_ENVIRONMENT, "Path").expect("machine Path");
+        assert!(!machine.contains('%'), "not expanded: {machine}");
+        assert!(machine.to_lowercase().contains("system32"), "{machine}");
+        assert!(registry_string(HKEY_CURRENT_USER, "Environment", "Path").is_some());
+        assert_eq!(registry_string(HKEY_CURRENT_USER, "Environment", "kolux-rs-no-such-value-7f3a"), None);
+        let shell = shell_path_dirs();
+        assert!(shell.iter().any(|d| d.to_string_lossy().to_lowercase().ends_with("system32")));
+        let walked = search_dirs();
+        for d in shell.iter().filter(|d| d.is_dir()) {
+            assert!(walked.contains(d), "{} from the shell PATH is not walked", d.display());
+        }
     }
 
     #[test]

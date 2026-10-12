@@ -72,6 +72,8 @@ Rules: every account gets a private Claude configuration folder of its own, Kolu
   when the per-account entry is absent, only a shared entry that has changed is accepted (this
   covers older Claude builds); when the keychain copy and the file copy disagree, the newer one
   wins.
+  (Kolux RS, T-043-d: the macOS keychain rules are not built yet, task T-043-e in PLAN.md; this
+  build keeps the credentials file in the account's folder on every platform.)
 Acceptance:
   - [ ] Add a Claude account → the browser opens, and after sign-in the row shows email and
         organisation within a few seconds.
@@ -96,11 +98,17 @@ Rules: renewal happens early, inside the last 5 minutes before expiry, and also 
   opt-out on, Kolux sends nothing to the token service and hides the stale-sign-in warnings; the
   opt-out starts off; renewal before a launch only ever touches managed accounts, never the
   system-default Claude login.
+  (Kolux RS, T-043-d, DT-C16: the switch "Leave sign-in upkeep to Claude Code" sits under the
+  managed accounts, settings field `claudeSignInUpkeepByClaudeCode`, absent = on. Kolux never
+  renews a sign-in itself, in either position: the token service is not public documentation.
+  Off means Kolux asks Claude Code whether the active account is still signed in, at start and
+  when the switch is turned off, and shows the Needs sign-in chip and the main-window notice; on
+  hides both and sends nothing.)
 Acceptance:
   - [ ] Default setting, no Claude pane open, a managed account's token close to expiry → it is
-        renewed before it runs out.
-  - [ ] Switch the opt-out on → no traffic reaches the token service, and the account never shows
-        Needs re-auth afterwards.
+        renewed before it runs out. (Kolux RS: not built, DT-C16; Claude Code renews in its panes)
+  - [x] Switch the opt-out on → no traffic reaches the token service, and the account never shows
+        Needs re-auth afterwards. (T-043-d: Kolux sends nothing in either position; on hides the chip and notice)
 Compat: The opt-out choice (off unless the user turned it on) carries over.
 Amended 2026-10-09 (DT-A2): ships with the opt-out on, per OD-01; the switch and Kolux-side renewal are T-043-d.
 Source: D-07-006

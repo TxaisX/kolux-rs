@@ -1,5 +1,7 @@
 // Codex plan figures as the usage pill shows them (USAGE-022). The Rust side reads them without
 // opening a session; this file only turns the reply into words.
+import { weeklyLine } from "./claude";
+
 export type UsageWindow = { usedPercent: number; resetsAt: number | null; windowMins: number | null };
 export type CodexUsage = {
   state: "ok" | "signed-out" | "sign-in-again" | "api-key" | "busy" | "error";
@@ -21,14 +23,12 @@ export function resetWords(at: number | null, now: Date = new Date()): string {
   return `resets ${sameDay ? "today" : d.toLocaleDateString([], { weekday: "short" })} ${time}`;
 }
 
-/** The pill text: the weekly figure (the pill is the weekly one, USAGE-008), else the 5-hour one. */
+/** The pill text: the weekly figure alone (USAGE-008); the 5-hour window never shows here. */
 export function pillText(u: CodexUsage | null): string {
   if (!u) return "Codex · reading";
   switch (u.state) {
-    case "ok": {
-      const w = u.weekly ?? u.fiveHour;
-      return w ? `Codex ${left(w)}` : "Codex · no limits reported";
-    }
+    case "ok":
+      return u.weekly ? `Codex ${left(u.weekly)}` : "Codex · no weekly limit reported";
     case "signed-out":
       return "Codex · not signed in";
     case "sign-in-again":
@@ -42,7 +42,7 @@ export function pillText(u: CodexUsage | null): string {
   }
 }
 
-/** The hover text: each window on its own line with its own reset time, then the reset credits. */
+/** The hover text: the weekly limit with a countdown to its reset, then the reset credits and plan. */
 export function pillDetail(u: CodexUsage | null, now: Date = new Date()): string {
   if (!u || u.state === "busy") return "Reading Codex usage";
   if (u.state === "sign-in-again") return `Codex needs you to sign in again. ${u.message ?? ""}`.trim();
@@ -50,9 +50,8 @@ export function pillDetail(u: CodexUsage | null, now: Date = new Date()): string
   if (u.state === "api-key") return "Codex is signed in with an API key; keys have no plan limits to show";
   if (u.state !== "ok") return u.message ?? "Codex usage could not be read";
   const lines: string[] = [];
-  if (u.fiveHour) lines.push(`5-hour: ${left(u.fiveHour)}, ${resetWords(u.fiveHour.resetsAt, now)}`);
-  if (u.weekly) lines.push(`Weekly: ${left(u.weekly)}, ${resetWords(u.weekly.resetsAt, now)}`);
+  if (u.weekly) lines.push(weeklyLine(u.weekly.usedPercent, u.weekly.resetsAt && u.weekly.resetsAt * 1000, now.getTime()));
   if (u.resetCredits != null) lines.push(`Limit-reset credits: ${u.resetCredits}`);
   if (u.plan) lines.push(`Plan: ${u.plan}`);
-  return lines.join("\n") || "Codex reported no limits";
+  return lines.join("\n") || "Codex reported no weekly limit";
 }

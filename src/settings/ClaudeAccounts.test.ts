@@ -60,7 +60,8 @@ test("ACCT-016: with no managed accounts the section says Kolux uses the system-
 });
 
 test("ACCT-016: managed rows show last sign-in, Re-authenticate, Remove and a Needs re-auth warning when stale", () => {
-  const h = html({ ...empty, accounts: [sam, { ...kim, stale: true }], active: "a1" });
+  // The warning shows while Kolux, not Claude Code, looks after sign-ins (ACCT-006, T-043-d).
+  const h = html({ ...empty, accounts: [sam, { ...kim, stale: true }], active: "a1", upkeepLeftToClaude: false });
   expect(h).toContain("Last signed in");
   expect(h.match(/Re-authenticate/g)?.length).toBe(2);
   expect(h.match(/>Remove</g)?.length).toBe(2);
@@ -73,4 +74,23 @@ test("ACCT-016: Remove asks first, and says the system default takes over when t
   expect(h).toContain("System default");
   expect(h).toContain("Keep");
   expect(htmlAsking({ ...empty, accounts: [sam, kim], active: "a1" }, "a2")).not.toContain("takes over");
+});
+
+test("the upkeep switch is on by default and reflects the setting (ACCT-006, T-043-d)", () => {
+  const h = html({ ...empty, accounts: [sam], active: "a1" });
+  expect(h).toContain('role="switch"');
+  expect(h).toContain('checked=""');
+  expect(h).toContain("Claude Code keeps these sign-ins fresh");
+  const off = html({ ...empty, accounts: [sam], active: "a1", upkeepLeftToClaude: false });
+  expect(off).toContain('role="switch"');
+  expect(off).not.toContain('checked=""');
+  expect(off).toContain("Kolux asks Claude Code");
+  // Nothing to switch while no account is managed.
+  expect(html(empty)).not.toContain('role="switch"');
+});
+
+test("a lapsed account is flagged only while Kolux, not Claude Code, looks after sign-ins", () => {
+  const stale = { ...sam, stale: true };
+  expect(html({ ...empty, accounts: [stale], active: "a1" })).not.toContain("Needs re-auth");
+  expect(html({ ...empty, accounts: [stale], active: "a1", upkeepLeftToClaude: false })).toContain("Needs re-auth");
 });

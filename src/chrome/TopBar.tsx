@@ -6,12 +6,15 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ArrowLeft, ArrowRight, Bell, Clock, Close, Dots, Mark, Maximize, Minimize, PanelLeft, PanelRight, Restore, Search } from "./icons";
-import VendorMark from "./VendorMark";
 import { Kbd } from "../keys/KeymapContext";
 import CodexPill from "../usage/CodexPill";
+import ClaudePill from "../usage/ClaudePill";
+import { weeklyOf } from "../usage/claude";
+import { usePlan } from "../usage/plan";
 
 /** Artifacts is reached from the sidebar only, so it is not in the top bar's cycle. */
-export type Screen = "agents" | "board" | "terminals" | "artifacts";
+/** The three switcher screens, and the Inbox behind the bell (STAT-050: its own top-level view). */
+export type Screen = "agents" | "board" | "terminals" | "artifacts" | "inbox";
 export const screens: Array<{ id: Screen; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "board", label: "Board" },
@@ -20,11 +23,18 @@ export const screens: Array<{ id: Screen; label: string }> = [
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
 /** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
-export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void } };
+export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[] };
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
-export default function TopBar({ screen, classic = false, onScreen, onSettings, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations }: TopBarProps) {
+export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [] }: TopBarProps) {
   const [maximized, setMaximized] = useState(false);
+  // USAGE-008 / VIEW-008: a pill per provider, only with a weekly figure (or Codex's refused
+  // sign-in) and an installed CLI; with neither, nothing is drawn. It is read-only: Settings
+  // opens with Ctrl+, (app.settings).
+  const plan = usePlan();
+  const claudeOn = installed.includes("claude");
+  const codexOn = installed.includes("codex");
+  const anyPill = (claudeOn && !!weeklyOf(plan.claude)) || (codexOn && !!(plan.codex?.weekly || plan.codex?.state === "sign-in-again"));
   useEffect(() => {
     const win = getCurrentWindow();
     let stop = () => {};
@@ -88,14 +98,13 @@ export default function TopBar({ screen, classic = false, onScreen, onSettings, 
           <span className="ph">Search</span>
           <Kbd id="worktree.palette" />
         </button>
-        <button className="ib bell" title="Inbox (not built yet)">
+        <button className="ib bell" aria-label="Notifications" title="Inbox" aria-pressed={screen === "inbox"} onClick={() => onScreen(screen === "inbox" ? "terminals" : "inbox")}>
           <Bell />
         </button>
-        <button className="usage" title="Claude usage is read from running sessions once T-041 is built. Click for AI connections." onClick={onSettings}>
-          <VendorMark agent="claude" size={13} />
-          <span>Claude · unknown</span>
-          <CodexPill />
-        </button>
+        <span className="usage" hidden={!anyPill}>
+          <ClaudePill installed={claudeOn} />
+          <CodexPill installed={codexOn} />
+        </span>
         <div className="wc">
           <button title="Minimize" onClick={() => win().minimize()}>
             <Minimize size={16} />

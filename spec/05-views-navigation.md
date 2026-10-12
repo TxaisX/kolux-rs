@@ -64,6 +64,8 @@ Acceptance:
   - [ ] Agent waiting on a file-edit approval → line names that approval.
   - [ ] Agent idle 12 minutes → line says idle with the duration.
 Compat: —
+  (Kolux RS, T-028-a: built as the chip line of the Board card, `src/board/chip.ts`; the Agents
+  screen reuses it when T-050 lands.)
 Source: D-05-016
 
 ### VIEW-017 · Fixed status words on the Agents screen
@@ -97,6 +99,8 @@ Acceptance:
   - [ ] Agent finished → chip shows first line of its last message.
   - [ ] Agent writes file A, then file B, then finishes → the card links to file B.
 Compat: —
+  (Kolux RS, T-028-a: built; Setup needed and Can't reach wait for the chooser and remote work;
+  the file link is the file's name with the full path as tooltip until an editor exists.)
 Source: D-05-023
 
 ### VIEW-025 · Approve or deny from a Board card
@@ -109,6 +113,8 @@ Acceptance:
   - [ ] Agent asks to run a command → card shows both buttons; approve → agent proceeds.
   - [ ] Deny on a card → the agent receives the refusal and the card leaves needs-you.
 Compat: —
+  (Kolux RS, T-028-a: built through `agent_answer`, which types the agent's own keys into its
+  terminal: Enter / Esc for Claude Code, y / n for Codex.)
 Source: D-05-025
 
 ### VIEW-040 · Palette rows show live agent state and age
@@ -123,6 +129,7 @@ Acceptance:
   - [ ] Agent waiting on approval with unread output → row shows the permission mark.
   - [ ] Agent finished 50 minutes ago → age reads 50m; one finished three days ago → 3d.
 Compat: —
+  (Kolux RS, T-029 deferred: waits for the palette, T-098.)
 Source: D-05-040
 
 ### VIEW-047 · Jump to the next session that needs you
@@ -148,9 +155,11 @@ Rules: only the weekly window counts; the 5-hour window is ignored; providers th
   ever gets one; a provider shows only while its usage item is ticked in the status-bar item list
   and its agent CLI is installed; hovering a pill shows a countdown to the weekly reset, or says the
   reset time is unknown.
+  (Kolux RS, T-041-a: `src/chrome/TopBar.tsx` hides the pill's container when no provider has a
+  part to show; the installed list comes from the agent scan; the status-bar item list is T-148.)
 Acceptance:
-  - [ ] Signed-in Claude with weekly data → a pill with a remaining percentage.
-  - [ ] No provider data → no pill and no empty placeholder.
+  - [x] Signed-in Claude with weekly data → a pill with a remaining percentage. (T-041-a, by a posted report)
+  - [x] No provider data → no pill and no empty placeholder. (T-041-a)
 Compat: —
 Source: D-05-008
 

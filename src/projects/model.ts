@@ -108,6 +108,11 @@ export function openedWorktree(list: Worktree[], path: string): Worktree | undef
   return list.find((w) => norm(w.path) === norm(path)) ?? list.find((w) => w.isMain);
 }
 
+/** PROJ-020: New workspace works before any project exists, by opening the add-project form first. */
+export function createOpens(projectId: string): "name" | "add" {
+  return projectId ? "name" : "add";
+}
+
 /** The sentence under the name field: where the branch and folder will go, or why it is refused. */
 export function previewSentence(typed: string, preview: Preview | null, project: Project | null): string {
   if (!project) return "Add a project first.";

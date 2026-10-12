@@ -1,6 +1,6 @@
 // The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040, VIEW-026), pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./grid";
+import { blocking, cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./grid";
 
 const started = (key: number) => ({ key, started: true });
 const empty = (key: number) => ({ key, started: false });
@@ -29,6 +29,18 @@ test("TERM-001: 6 to 4 with 2 unstarted panes removes those 2, newest first, and
   expect(resizePlan(six, 6)).toEqual({ add: 0, drop: [] });
 });
 
+test("TERM-001: the started sessions that keep a shrink from reaching its count, newest first (T-009-fix-b; asking first is T-151)", () => {
+  const shown = [
+    { key: 1, started: true },
+    { key: 2, started: true },
+    { key: 3, started: false },
+  ];
+  expect(blocking(shown, 1)).toEqual([2]);
+  expect(blocking(shown, 2)).toEqual([]);
+  expect(blocking(shown, 4)).toEqual([]);
+  expect(blocking(shown.slice(0, 2), 1)).toEqual([2]);
+});
+
 test("TERM-004: balanced rows for one, two, four, six, nine and twelve panes", () => {
   const shape = (n: number) => [columnsFor(n), rowsFor(n)];
   expect(shape(1)).toEqual([1, 1]);
@@ -48,6 +60,18 @@ test("TERM-006: split right lands next to the pane, split down in the cell below
   expect(splitIndex(keys, 6, "right", 3)).toBe(6);
   expect(splitIndex(keys, 6, "down", 3)).toBe(6);
   expect(splitIndex(keys, 99, "right", 3)).toBe(6);
+});
+
+test("TERM-006: split down from one pane stacks two rows; from four panes the new pane lands below (T-009-fix-a)", () => {
+  // one pane, split down: the grid turns into one column of two rows and the new pane is the lower one
+  expect(columnsFor(2, true)).toBe(1);
+  expect(rowsFor(2, true)).toBe(2);
+  expect(splitIndex([1], 1, "down", columnsFor(2, true))).toBe(1);
+  // split right from a stacked pair goes back to columns
+  expect([columnsFor(2, false), columnsFor(3, true)]).toEqual([2, 2]);
+  // four panes (2x2) become five (3 wide): the pane split down from the first lands in row 2, column 1
+  expect(splitIndex([1, 2, 3, 4], 1, "down", columnsFor(5))).toBe(3);
+  expect(splitIndex([1, 2, 3, 4], 4, "down", columnsFor(5))).toBe(4);
 });
 
 test("TERM-004/006: inserting before a pane keeps every other pane in place", () => {

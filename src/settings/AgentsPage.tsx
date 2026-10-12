@@ -6,6 +6,7 @@ import type { AgentInfo } from "../launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
 import { Segmented } from "./GeneralPage";
 import { useSettings } from "./useSettings";
+import { CAP_FIELD, capOn } from "../usage/meter";
 
 const OPTIONS_FIELD = "agentOptions";
 const PERMISSIONS_FIELD = "agentPermissions";
@@ -24,6 +25,25 @@ function Draft({ label, value, multi, placeholder, onSave }: { label: string; va
       <span>{label}</span>
       {multi ? <textarea {...props} rows={3} onChange={(e) => setDraft(e.target.value)} /> : <input {...props} onChange={(e) => setDraft(e.target.value)} />}
     </label>
+  );
+}
+
+// Settings > Agents: the 200k context cap switch (USAGE-006, on by default). A plain settings
+// key; the cap itself is applied in Rust when a Claude or Codex pane starts.
+export function AgentsPageView({ cap, onCap }: { cap: boolean; onCap: (on: boolean) => void }) {
+  return (
+    <section className="conn-card" aria-label="Agents">
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={cap} onChange={(e) => onCap(e.target.checked)} />
+        <span>
+          Hold Claude and Codex to a 200k context window
+          <small>
+            On unless you turn it off; sessions started from now on follow it. Claude Code compacts at 200k and Codex is given a 200k window that compacts at 180k. A session you set up yourself (the
+            variable, or Codex options, a profile or OSS mode on the start line) is left alone, and the meters measure against the same 200k while this is on.
+          </small>
+        </span>
+      </label>
+    </section>
   );
 }
 
@@ -117,6 +137,7 @@ export default function AgentsPage() {
           );
         })}
       </section>
+      <AgentsPageView cap={capOn(settings ?? {})} onCap={(on) => void save({ [CAP_FIELD]: on })} />
     </>
   );
 }

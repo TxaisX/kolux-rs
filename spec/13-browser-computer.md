@@ -72,6 +72,9 @@ Rules: searches go to the chosen engine, one of Google, Duck Duck Go, Bing or Ka
   in the pane but is never handed to the operating system to open; pasted paths containing spaces
   or reserved characters are turned into valid file addresses; Mod+L reaches the bar even while
   focus is inside the page, and only in the focused split.
+  (Kolux RS, T-012-b-fix: inside the page a script of ours takes the chord and hands it to the
+  app as a cancelled `kolux-chord:` navigation; the split the page sits in becomes the focused
+  one as the chord arrives.)
 Acceptance:
   - [ ] Type rust ownership and press Enter → results from the configured search engine.
   - [ ] Type example.com → the HTTPS site loads; type localhost:3000 → it loads over HTTP.
@@ -93,6 +96,10 @@ Rules: only the toolbar button halts a load in progress, while the shortcut and 
   goes through crash recovery (BROW-009); during an automatic retry of a failed page the button
   offers Stop rather than Retry; the button's label always names what a press will do; hard reload skips the
   cache.
+  (Kolux RS, T-012-b-fix: Alt+Left / Alt+Right, Mod+R and the mouse's back and forward buttons
+  pressed inside the page are taken from the web view and run by the toolbar, so its history
+  never drifts from the page's; a page's own back or forward to a neighbouring entry moves the
+  toolbar's cursor too.)
 Acceptance:
   - [ ] Open a slow page → Stop with a spinner; press it → loading halts; after a normal load the
         button reads Reload.

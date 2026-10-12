@@ -129,6 +129,8 @@ Acceptance:
   - [ ] Switching to another pane while the clipboard is still being read cancels the paste instead
       of typing into the new pane.
 Compat: keybinding id terminal.paste.
+  (Kolux RS, T-010-fix: the pane-only and wait-for-the-prompt rules are tested in
+  `src/terminal/paste.test.ts` and proved live in `evidence/T-010-fix-paste.png`.)
 Source: D-03-068
 
 ### TERM-020 · Pane header identity: agent, name, program, status

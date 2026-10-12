@@ -3,7 +3,9 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { headerOf } from "./status";
+import { crewLabel, crewLine, headerOf, type Crew } from "./status";
+import type { Chip } from "../board/chip";
+import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Terminal } from "@xterm/xterm";
@@ -18,11 +20,15 @@ import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
 import { openSettings } from "../settings/pages";
-import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
+import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
+import Ring from "../usage/Ring";
+import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
+import { attachPaste } from "./paste";
+import { stopLine, type StopInfo } from "./notify";
 
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
@@ -41,6 +47,14 @@ type Props = {
   onRunning?: (running: boolean) => void;
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
+  /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
+  hook?: AgentState;
+  /** STAT-026: the sub-agents and teammates under this session, shown beside the status word. */
+  crew?: Crew;
+  /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */
+  stop?: StopInfo;
+  /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report. */
+  context?: number;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -68,10 +82,21 @@ type Props = {
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
   onSplit?: () => void;
   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
-  card?: { expanded: boolean; onToggle: () => void };
+  card?: {
+    expanded: boolean;
+    onToggle: () => void;
+    /** VIEW-023: the card's chip: the word, the line and the newest file written; null for a plain shell. */
+    chip?: Chip | null;
+    /** VIEW-025: approve or deny from the card. */
+    onAnswer?: (approve: boolean) => void;
+    /** VIEW-023: the Board column (status lane) this card sits in. */
+    column?: number;
+    /** USAGE-002: the compact session meter; null when there is nothing to measure. */
+    meter?: Meter | null;
+  };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -152,23 +177,11 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         if (pending === null || !alive) return;
         write(pending + "\r");
         pending = null;
-        for (const text of queued.splice(0)) term.paste(text);
+        pasting.flush();
       }, 1500);
     };
-    // TERM-068: a paste arrives through this pane's own text area, so it can only land in the
-    // pane that has focus, and the browser hands over the clipboard in the same tick, so there is
-    // no moment in which the target could change. A paste made while the opening prompt is still
-    // owed waits for it. The paste chords are left to the browser instead of xterm.
-    const queued: string[] = [];
-    const onPaste = (e: ClipboardEvent) => {
-      const text = e.clipboardData?.getData("text") ?? "";
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      if (!text) return;
-      if (pending !== null) queued.push(text);
-      else term.paste(text);
-    };
-    term.textarea?.addEventListener("paste", onPaste, true);
+    // TERM-068 lives in paste.ts (tested there); the paste chords are left to the browser instead of xterm.
+    const pasting = attachPaste(term.textarea, (text) => term.paste(text), () => pending !== null);
     term.attachCustomKeyEventHandler((e) => !(e.type === "keydown" && matchEvent(keys.current, e, ["terminal"])?.id === "terminal.paste"));
 
     (async () => {
@@ -193,7 +206,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null });
+        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
@@ -234,6 +247,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       const id = idRef.current;
       if (id !== null) invoke("terminal_kill", { id }).catch(() => {});
       choice.dispose();
+      pasting.detach();
       term.dispose();
     };
   }, []);
@@ -244,8 +258,14 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
   // TERM-020/021: a plain shell reads as a terminal with a neutral status; an agent reads
   // Working (working tone) while its program is up, Done (done tone, with its age) after it
-  // ends well. What it needs (permission, waiting, blocked) comes from the status hooks (T-025).
-  const { word, tone, icon, age, needsYou } = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now);
+  // ends well or when its hook says the turn is over; what it needs comes from the hooks (T-025).
+  useEffect(() => {
+    if (hook === "done") setFinishedAt((t) => t ?? Date.now());
+    else if (hook === "working") setFinishedAt(null);
+  }, [hook]);
+  const header = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  const { word, tone, glyph, age, needsYou } = header;
+  const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;
   const needs = useRef(onNeedsYou);
   needs.current = onNeedsYou;
   useEffect(() => {
@@ -260,10 +280,10 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const model = agent === "shell" ? null : modelOf(args);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent}>
+    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
       <header className="pane-head">
-        <span className={`st ${icon}`} role="img" aria-label={`status: ${word}`} title={[word, drawing].filter(Boolean).join(" · ")}>
-          {icon === "working" ? <Spinner size={11} /> : <CheckCircle size={12} />}
+        <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
+          <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>
         <span className="agent-mark" title={agentLabel}>
           <VendorMark agent={agent} size={13} />
@@ -281,18 +301,23 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           {programWord(agent)}
           {model && ` · ${model}`}
         </span>
-        <span className={`status ${tone}`}>{word}</span>
+        <span className={`status ${tone}`} data-tip={explain}>
+          {word}
+        </span>
+        {crew && crew.length > 0 && (
+          <span className="crew" title={crew.map(crewLine).join("\n")}>
+            {crewLabel(crew)}
+          </span>
+        )}
         {age && (
           <span className="age" title="when the agent finished">
             {age}
           </span>
         )}
         <span className="right">
-          <span className="gauge" title="Context used (agents only)">
-            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
-              <circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--gauge-track)" strokeWidth="2" />
-            </svg>
-            0%
+          <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
+            <Ring percent={context ?? 0} />
+            {Math.round(context ?? 0)}%
           </span>
           <button className="ib" title="Pane menu (not built yet)">
             <Dots size={12} />
@@ -358,6 +383,46 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             onLaunch?.(a);
           }}
         />
+      )}
+      {card?.chip && (
+        <div className={`chip-row ${card.chip.lane}`}>
+          <span className="chip-word">{card.chip.word}</span>
+          {card.chip.line && (
+            <span className="chip-line" title={card.chip.line}>
+              {card.chip.line}
+            </span>
+          )}
+          {card.chip.file && (
+            <span className="chip-file" title={card.chip.file} data-path={card.chip.file}>
+              {folderName(card.chip.file)}
+            </span>
+          )}
+          {card.chip.answer && card.onAnswer && (
+            <span className="chip-actions">
+              <button className="btn primary" onClick={() => card.onAnswer?.(true)} title="Approve: the agent carries on">
+                Approve
+              </button>
+              <button className="btn" onClick={() => card.onAnswer?.(false)} title="Deny: the agent is told no">
+                Deny
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+      {card?.meter && (
+        <div className="meter" title={meterText(card.meter)}>
+          {card.meter.context && (
+            <>
+              <span className="meter-bar">
+                <span className={`meter-fill ${toneOf(card.meter.context.percent)}`.trim()} style={{ width: `${card.meter.context.percent}%` }} />
+              </span>
+              <span className="meter-ctx">
+                {shortTokens(card.meter.context.tokens)} / {shortTokens(card.meter.context.window)}
+              </span>
+            </>
+          )}
+          {card.meter.plan && <span className="meter-plan">{meterText({ plan: card.meter.plan })}</span>}
+        </div>
       )}
       <div ref={host} className="pane-body" />
     </section>

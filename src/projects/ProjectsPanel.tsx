@@ -22,12 +22,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
-import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
+import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
 import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
 import { chromeShown } from "../chrome/chromeItems";
+import { VOCAB } from "../terminal/status";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 
@@ -67,7 +68,7 @@ type Props = {
   /** Bump to reload the list after something outside the sidebar made a workspace. */
   refresh: number;
   /** Hands the window the project list and which project owns each workspace folder. */
-  onIndex: (projects: Project[], owner: Record<string, string>) => void;
+  onIndex: (projects: Project[], owner: Record<string, string>, names: Record<string, string>) => void;
   /** Bumped by Mod+N (workspace.create): opens the name field for the project in front. */
   createRequest: number;
   /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
@@ -206,9 +207,14 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
     setFresh(unseen);
     const owner: Record<string, string> = {};
-    for (const p of list) for (const w of next[p.id] ?? []) owner[w.path] = p.id;
-    const key = JSON.stringify([list, owner]);
-    if (key !== indexed.current) index.current(list, owner);
+    const names: Record<string, string> = {};
+    for (const p of list)
+      for (const w of next[p.id] ?? []) {
+        owner[w.path] = p.id;
+        if (w.name) names[w.path] = w.name;
+      }
+    const key = JSON.stringify([list, owner, names]);
+    if (key !== indexed.current) index.current(list, owner, names);
     indexed.current = key;
   }, []);
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
@@ -342,7 +348,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   // PROJ-020: a stand-in row at once, then the workspace opens with a shell of its own; if the
   // user moved to another workspace meanwhile the create finishes without pulling focus back.
   // ponytail: one create at a time (the field is disabled while Git works); cancelling an
-  // overtaken create and removing its half-made checkout waits for a card that needs it.
+  // overtaken create and removing its half-made checkout, and the stand-in tab, are T-013-c.
   // PROJ-038: with a prompt and no agent picked, the default agent runs it, else the first installed.
   const installed = agents.filter((a) => a.installed);
   const fallbackAgent = installed.find((a) => a.id === defaultId) ?? installed[0] ?? null;
@@ -392,8 +398,13 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
 
   // The project in front: the one whose workspace is shown, else the first; "" with none yet.
   const projectInFront = () => projects.find((p) => (worktrees[p.id] ?? []).some((w) => activeDir !== null && same(activeDir, w.path)))?.id ?? projects[0]?.id ?? "";
+  const openCreate = () => {
+    const id = projectInFront();
+    if (createOpens(id) === "add") setShowAdd(true);
+    else setCreating(id);
+  };
   useEffect(() => {
-    if (createRequest > 0) setCreating(projectInFront());
+    if (createRequest > 0) openCreate();
   }, [createRequest]);
   useEffect(() => {
     // VIEW-048: the row under the pointer, read at key time so a row that just went away never counts
@@ -778,7 +789,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               <ChevronDown size={12} />
             </button>
           )}
-          <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} />
+          <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
           <span className="name">{worktreeLabel(w)}</span>
           {w.kind === "external" && (
             <span className="hint" title="Made outside Kolux (plain Git or another tool); Kolux has no record of making it">
@@ -926,7 +937,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             <button className="ib" title="Add a project: choose folders that hold a Git repository" onClick={browse} disabled={busy !== ""}>
               <FolderPlus size={13} />
             </button>
-            <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => setCreating(creating === null ? projectInFront() : null)}>
+            <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => (creating === null ? openCreate() : setCreating(null))}>
               <Plus size={13} />
             </button>
             <button className="ib" title="Launch (not built yet)">
@@ -1047,7 +1058,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   </div>
                   {main && (
                     <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
-                      <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} />
+                      <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
                       <span className="name">{worktreeLabel(main)}</span>
                       {isActive(main) && <span className="count">{openCount(main)}</span>}
                       <span className="chev">

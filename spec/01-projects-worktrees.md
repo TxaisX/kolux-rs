@@ -78,6 +78,8 @@ Acceptance:
   - [ ] Start a create and move to another workspace → the create finishes in the background without
         taking focus.
 Compat: Keybinding id workspace.create.
+  (Kolux RS, T-013-fix-a: with no project, Mod+N and the New workspace button open the add-project
+  form; the overtaken-create and stand-in tab rules are T-013-c.)
 Source: D-01-020
 
 ### PROJ-021 · Workspace names become safe branch and folder names
@@ -95,6 +97,8 @@ Acceptance:
         unchanged.
   - [ ] Create a name made only of characters Git rejects → refused with a message.
 Compat: —
+  (Kolux RS, T-013-fix-b: emoji outside the short-word table become their Unicode name in words,
+  DT-C9; the pane header shows the typed name, `evidence/T-013-fix-b-header.png`.)
 Source: D-01-021
 
 ### PROJ-025 · Choose where workspace folders live
@@ -145,6 +149,9 @@ User does: chooses an agent and types a prompt while creating a workspace, or pa
 User sees: the workspace opens with that agent already working on the prompt in its first tab.
 Rules: the agent runs in the startup tab made for it, not in an extra default tab; when no agent is
   chosen, the fallback order follows the catalog of installed agents.
+  (Kolux RS, T-014-b-fix: on the command line the fallback is the settings' default agent when it
+  is installed, else the first installed agent in catalogue order, and only when a prompt was
+  given; a create with no prompt and no agent makes the worktree and opens no agent tab.)
 Acceptance:
   - [ ] Create with Claude and the prompt hello → the first tab runs Claude with that prompt.
   - [ ] Create with an agent and a prompt → no additional empty default tab is opened.

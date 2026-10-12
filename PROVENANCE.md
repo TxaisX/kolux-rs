@@ -399,3 +399,40 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-096-a · rules from the SET-008 and SET-010 cards and the T-054 keymap; no outside source needed; no old Kolux source read
 
 > 2026-10-12 · T-096-b · rules from the SET-009 card and COMPAT.md 4.1 (Writing) and 4.2; no outside source needed; no old Kolux source read
+
+> 2026-10-09 · T-025-a · Claude Code's public hooks reference (code.claude.com/docs/en/hooks, through context7): the event names, the payload fields (hook_event_name, source, trigger, tool_name, tool_input, agent_id, prompt) and the settings.json hooks format; Txais's own `G:\Dev\claude-config\settings.json` read once for the shape of its existing hook entries (the old app's and his memory guard), nothing copied and nothing written.
+
+> 2026-10-09 · T-025-b · Codex's public source through context7 (hook config and schema, the trust discovery and command runner, the app-server `hooks/list` call) for the hooks.json format, the event payloads and the trust-key shape; the installed codex-cli 0.156.1's own `app-server` answers on a scratch `CODEX_HOME` for the live keys and hashes; Txais's own `~/.codex/config.toml` and the ponytail plugin's `claude-codex-hooks.json` read once for the shape of existing trust entries, nothing copied and nothing written.
+
+> 2026-10-09 · T-025-c · Claude Code's public hook input types through context7 (SubagentStart, SubagentStop, Stop with `last_assistant_message` and `background_tasks`, the `agent_id` rule, the teammate task events) and Codex's public source (SubagentStop and Stop inputs) for the field names; nothing else read.
+
+> 2026-10-11 · T-026-a · The Tauri notification plugin's public docs through context7 (`NotificationExt`, builder, `init`) and crates.io for the crate itself (2.5.1); nothing else read.
+
+> 2026-10-11 · T-026-b · Nothing read outside the repo: the vocabulary, glyphs, spinner timing and tooltip come from the card and the lane's own code; the browser's Web Animations `startTime` and CSS `steps()` are platform features.
+
+> 2026-10-11 · T-026-c · Nothing read outside the repo: the Inbox's groups, rules and keys come from the card and COMPAT; the data is the lane's own hook state, `scm_status` and `agent_history`.
+
+> 2026-10-11 · T-028-a · context7 /openai/codex `codex-rs/tui/src/keymap.rs` for the approval modal's default keys (y approves, n declines); Claude Code's dialog keys (Enter / Esc) from general knowledge of its public UI; nothing else outside the repo. T-027 read nothing outside the repo.
+
+> 2026-10-11 · T-029, T-030 · deferred; nothing read outside the repo.
+
+> 2026-10-12 · T-010-fix · Nothing read outside the repo.
+
+> 2026-10-12 · T-013-fix-a · Nothing read outside the repo.
+
+> 2026-10-12 · T-013-fix-b · crates.io for `unicode_names2` 4.0.0 (index entry, licence, repository; added as a dependency); nothing else outside the repo.
+
+> 2026-10-12 · T-003b-fix-b · Nothing read outside the repo; the measurements are from the lane app's own window.
+> 2026-10-12 · T-007-a-fix · The vendored `windows-sys` 0.61.2 source in the cargo registry (the RegGetValueW declaration, the RRF and HKEY constants and the feature list) and the machine's own registry Path value through PowerShell, to see it holds %SystemRoot% unexpanded. Nothing else outside the repo.
+> 2026-10-12 · T-008-b-fix · Nothing read outside the repo beyond the 2026-10-09 review note's item 4 wording.
+> 2026-10-12 · T-012-b-fix · context7 Tauri docs (WebviewBuilder on_navigation, on_page_load); the vendored `wry` 0.57.0 WebView2 source (NavigationStarting cancels before ContentLoading, so a cancelled navigation never counts as a page load) and `tauri` 2.12.1 webview builder (initialization_script is main-frame only); the lane app loaded example.com and iana.org over the network for the live proof. Nothing else outside the repo.
+> 2026-10-12 · T-014-b-fix · Nothing read outside the repo beyond the 2026-10-09 review note's item 7 wording.
+> 2026-10-12 · T-039-a · context7 `/anthropics/claude-code` hooks reference: the StopFailure hook input (`error` values, `error_details`) and the status-line JSON shape; the lane app's own `agent-hooks-endpoint.txt` for the live post. Nothing else outside the repo.
+> 2026-10-12 · T-039-b · context7 `/anthropics/claude-code`: the status line's input shape from `mods/types/claude-code.d.ts` (`SessionContextUsage`, `SessionRateLimit` kind/percentUsed/resetsAt), `session.measure` timing, the `refreshInterval` changelog note and the hook-development skill's input docs; Txais's own `G:/Dev/claude-config/settings.json` for the `statusLine` settings shape (type command + a command string run through a POSIX shell). Nothing else outside the repo.
+> 2026-10-12 · T-040-a · context7 `/anthropics/claude-code`: `mods/types/claude-code.d.ts` `ContextApiUsage` (input_tokens, cache_creation_input_tokens, cache_read_input_tokens) and the note that the status line's `current_usage` appears in the changelog. Nothing else outside the repo.
+> 2026-10-12 · T-041-a · context7 `/openai/codex`: the `-c`/`--config key=value` override flag (`codex-rs/utils/cli/src/config_override.rs`) and the `--profile`/`-p` and `--oss` options (`shared_options.rs`). COMPAT.md 5.7 for the cap's variable and keys. Nothing else outside the repo.
+> 2026-10-12 · T-041-b · Nothing outside the repo: the card (USAGE-007), COMPAT.md and the repo's own status, hooks and terminal modules.
+> 2026-10-12 · T-042-b · Context7 `/openai/codex`: the TUI `/status` slash command (slash_dispatch.rs, status_controls.rs) and the app-server `account/rateLimits/read` response shape (`RateLimitSnapshot`, `rateLimitResetCredits`). Nothing else outside the repo.
+> 2026-10-12 · T-043-d · Context7 `/anthropics/claude-code` (one query: the `claude auth` subcommands and where credentials are stored; nothing documents a renewal command or the keychain entry). The Claude Code CLI installed on this PC, used as a user would: `claude auth status --json` against an empty configuration folder (`loggedIn: false`).
+> 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
+> 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.

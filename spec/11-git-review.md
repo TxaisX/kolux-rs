@@ -27,6 +27,9 @@ Rules: acting on a folder covers every file beneath it; paths are matched exactl
   wildcard characters never drags in other files; a huge selection reaches git in several batches so
   no command line grows too long; staging touches only this worktree's index, never another
   workspace's; a path that resolves outside the selected worktree is rejected.
+  (Kolux RS, T-018-c: rows select on click, Ctrl adds or removes, Shift spans in list order, Esc
+  clears; the bulk bar reads N selected · Stage k · Unstage m; a file with staged and unstaged
+  parts is one selection counted on both sides. Folder rows come with the tree view, T-033.)
 Acceptance:
   - [ ] Stage a folder holding three changed files → all three show as staged.
   - [ ] Select 2,000 files and stage them → every one is staged and no error appears.

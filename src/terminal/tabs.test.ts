@@ -20,3 +20,11 @@ test("a finish or bell marks the pane unread unless it is in view in a focused w
   expect(marksUnread(3, known, new Set(), false, true)).toBe(false); // the pane is gone
   expect(marksUnread(2, known, new Set([2]), false, true)).toBe(false); // already marked
 });
+
+test("a running agent whose hook says done shows the check, or the bell when unread; a question wins (STAT-001)", () => {
+  expect(tabBadge("claude", true, false, false, "done")).toBe("done");
+  expect(tabBadge("claude", true, false, true, "done")).toBe("unread");
+  expect(tabBadge("claude", true, true, false, "done")).toBe("permission");
+  expect(tabBadge("claude", true, false, false, "working")).toBe("working");
+  expect(tabBadge("claude", true, false, false, "permission")).toBe("working");
+});

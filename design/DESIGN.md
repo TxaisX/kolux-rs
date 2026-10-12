@@ -81,6 +81,7 @@ strip, pane grid, status bar); **6 px** between panes.
 | `--button-border` | `#232323` | "New session" button outline |
 | `--seg-active` | `#404040` | Active segment: "Terminals" in the top bar, "4" in the layout control |
 | `--gauge-track` | `#1e1e1e` | Unfilled part of the context ring in pane headers |
+| `--danger` | `#e5484d` | (Kolux RS, T-040-a) the meter bar, ring and gauge past 90%; not measured, nothing in the capture was that full; the 70% yellow is `--working-icon` |
 
 ### Text
 
@@ -174,6 +175,10 @@ minus 1 px.
 
 Content is vertically centred on y 17-18. Left to right:
 
+(Kolux RS, T-003b-fix-a: the bar is a three-column grid; the switcher is centred on the window
+while the right group fits in its half, and gives way to the left below about 1540 px so it never
+covers the search box.)
+
 | Item | x range | Notes |
 |---|---|---|
 | App mark | 10..23 (14 px) | Six-spoke asterisk, `#c5c5c5` |
@@ -215,6 +220,9 @@ Inner content runs from about x 13 to x 291. Top to bottom:
   `#2f2f2f` dividers between buttons at x 393, 426. Four buttons: "1" (x 364..392), "2"
   (394..425), "4" (427..459, **active: fill `#404040`**), "6" (460..490). Numbers 13 px 600 white.
 - The rest of the strip is empty.
+  (Kolux RS, T-003b-fix-b: the strip's right end carries a "+ New tab" button, 86 x 28 at
+  x 1302..1388 in a 1400 px window, 12 px from the window's right edge, same border, radius and
+  type as the layout group; it opens the tab menu of the new-terminal-tab card, Ctrl+T for a shell.)
 
 ## 7. Panes
 
@@ -251,6 +259,7 @@ Right group (top-left pane), right-aligned, icons on a **26-27 px pitch**:
 | More "..." | 1002..1011 | `#a1a1a1` |
 | Expand / maximize pane | 1028..1037 | diagonal two-way arrow |
 | Add / split "+" | 1055..1062 | |
+| Split right (Kolux RS addition) | between Expand and "+" | two-column glyph, 24 px hit target; splits the pane with a shell in the same folder (Ctrl+Shift+D); not in the captures, added by T-003b |
 | Close "x" | 1081..1088 | about 15 px from the pane's inner right edge |
 
 Icons are 8-10 px glyphs, `#a1a1a1` (they antialias to about `#383838` at the edges);

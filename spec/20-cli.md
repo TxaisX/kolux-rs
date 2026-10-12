@@ -328,6 +328,8 @@ Rules: repo selectors: id:, name: and path:; worktree selectors: identity:, id:<
   than one target never quietly picks one; from a WSL shell, a path on a Windows drive mounted into
   Linux resolves without needing the caller's distro, and when two distros write the same path the
   caller's own distro wins.
+  (Kolux RS, T-014-b-fix: `issue:` matches the issue number recorded when the command line made the
+  worktree; `identity:` and `active` are refused with the accepted forms listed, DT-C12.)
 Acceptance:
   - [ ] Inside a worktree's folder, `kolux worktree current` shows that worktree.
   - [ ] `kolux worktree show --worktree 42` fails and lists the selector forms.

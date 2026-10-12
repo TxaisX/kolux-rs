@@ -2,12 +2,43 @@
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
-Next task: T-017-c · Pre-trust for Cursor and Copilot in their own configuration files (the rest of the card on T-017-a; their file formats are not public)
-Done: 110 / 395 tasks  ·  P0 parity: 0/228 cards
+Next task: T-013-c · The two rules of the create-workspace card that T-013 left out (a creation overtaken by a newer one is cancelled and its half-made checkout removed; a stand-in tab while Git works)
+Done: 138 / 419 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 395 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 419 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
+
+What works today (2026-10-11; the paragraphs below this one are the task-by-task record): a
+Windows desktop app (Tauri 2, Rust + React) with its own 36 px top bar: the Kolux mark, a sidebar
+toggle, the Agents / Board / Terminals switcher, a search box showing the palette chord, a bell
+that opens the Inbox, a usage pill with live Claude and Codex figures (it opens Settings > AI
+connections), and the window controls. Terminals is a grid of 1 to 12 panes per workspace (the
+Layout 1 / 2 / 4 / 6 strip, split right / down, close, tabs per cell, browser tabs beside the
+terminals), each pane a PowerShell, Claude Code, Codex or other installed agent through a Rust
+PTY and xterm.js (WebGL when the GPU allows). Board shows the same panes as cards in lanes (Needs
+you, Working, Done, Stopped, Idle) with a chip saying what each agent is doing, Approve / Deny on
+a card that waits for permission, and the live terminal inside an expanded card. Agents still
+shows only its name (T-050). The Inbox lists what needs you, what is running and what finished
+today. Agents report their own state through hooks Kolux installs for Claude Code and Codex
+(permission, question, working, done, blocked, interrupted; subagents under their lead), with
+one status vocabulary for every dot, chip and label, desktop notifications on finish and
+permission, a quiet-terminal alert, tab and workspace unread marks, and a pane header with the
+agent mark, name, branch, program, status word and gauge.
+
+The sidebar lists projects (Git repositories, added by typing or browsing; nothing else is pulled
+in) with their main checkout and workspaces (worktrees), grouped by project, status or pull
+request and smart-sorted; each row carries the strongest live agent state. Mod+N or the plus
+opens the name field with a live preview of the branch and folder; Create makes the worktree and
+opens it with a shell; Remove asks first and deletes folder and branch. Clicking a row switches
+workspaces instantly, each keeping its panes as they were. The plus menu lists only agents that
+are really installed and starts one in a fresh pre-trusted worktree or as a tab; empty panes ask
+what to run. Where workspaces live, how a new one starts (nested or flat, base branch) and the
+shortcuts (`~\.kolux\keybindings.json`, 127 command ids) are the user's own and remembered. A
+Source Control panel stages, commits, pushes and pulls. `kolux-dev worktree create / rm` and
+`kolux-dev orchestration worker-start` (flag checking only) drive it from a terminal. Settings has
+AI connections: Claude keys and managed accounts, Codex sign-in, sealed secrets, lapsed sign-ins
+flagged in the main window. A 24 px status bar shows On, memory use, shell and plug counts.
 
 What works today: the window has no Windows title bar; Kolux draws its own 36 px top bar with the
 six-spoke mark, a sidebar toggle, the centred Agents / Board / Terminals switcher (Terminals is the
@@ -142,8 +173,9 @@ The layout strip's 1 / 2 / 4 / 6 buttons set the count of the workspace in front
 button is the current count (none at 3, 5 or above 6): growing adds empty chooser panes, nothing
 starts on its own; shrinking removes unstarted panes newest first and never a started session (a
 toast says to close one instead). Every pane header has a split button that opens a shell beside
-it in the same folder; Ctrl+Shift+D (split right), Alt+Shift+D (split down: the cell below) and
-Ctrl+W (close the focused pane) go through the shortcuts file. Closing a pane ends its program and
+it in the same folder; Ctrl+Shift+D (split right), Alt+Shift+D (split down: the cell below; from a
+single pane the pair is stacked, one column of two rows, until a split right makes it side by
+side again, T-009-fix-a) and Ctrl+W (close the focused pane) go through the shortcuts file. Closing a pane ends its program and
 the neighbours take the space; closing the last one leaves the workspace's empty placeholder.
 
 T-010 gives every grid cell tabs (TERM-040, TERM-041, TERM-068). The strip's "New tab" menu (and
@@ -293,7 +325,8 @@ repository are written to Codex's own `config.toml` (under `CODEX_HOME`, else `~
 itself writes. The file is edited with `toml_edit`, so every other line, comment and the key
 order stay byte for byte; an already-trusted folder changes nothing; a file that is not valid
 TOML is left alone. Same batch rules and the same one lock as Claude (`checked_keys`,
-`write_whole` shared by both). Cursor and Copilot still get nothing (T-017-c).
+`write_whole` shared by both). Cursor and Copilot get nothing (DT-C17, T-017-c, [core]):
+neither documents where its trust decision lives, so their own prompt stays with the user.
 
 T-130 (orchestration lane) adds the Runs dashboard (AUTO-015): Runs in the Automations toolbar
 opens one table of every automation's runs, newest first (automation, run number, how it started,
@@ -596,8 +629,10 @@ and switching workspaces. Back end `scm.rs`: `scm_status` (porcelain v2, `--untr
 NUL-separated), `scm_stage` (one `git add` / `git restore --staged` fed NUL-separated paths on
 stdin with `--literal-pathspecs`, paths checked to stay inside the worktree, 2 000 files in one
 call), `scm_commit` (`-F -`). The list refreshes after each action and every 4 s while the card
-is open; the watcher is GIT-001's (T-033), the multi-row bulk bar is T-018-c and folder rows are
-T-033's tree view. A branch summary sits on top (T-111-a, VIEW-068): the branch, commits ahead and
+is open; the watcher is GIT-001's (T-033) and folder rows are T-033's tree view. Rows select on
+click (Ctrl adds, Shift spans, Esc clears) and a bulk bar above the list reads N selected · Stage k
+· Unstage m, each button feeding the whole selection to one `scm_stage` call ([core], T-018-c).
+A branch summary sits on top (T-111-a, VIEW-068): the branch, commits ahead and
 behind the base, and the lines its commits added and removed since they parted from it, in full
 with grouped digits (+11,012); opened, it splits them into Source, Tests and Generated rows that add
 up (Non-generated when no test file changed; no Generated row when there is none), and a screen
@@ -721,6 +756,192 @@ Windows has app notifications switched off the page says so instead of sending, 
 opens the system's own notification settings. Nothing sends notifications on these choices yet:
 that is T-026.
 
+[core] T-025-a (STAT-001, STAT-007): agents report their own state through hooks. At start Kolux
+opens a loopback listener (port and token in `agent-hooks-endpoint.txt` in the profile folder,
+removed at exit), writes `~/.kolux-rs/agent-hooks/claude.cmd` and puts one Kolux RS entry under
+each of Claude Code's twelve hook events in the user's Claude settings file (`settings.json`
+beside `.claude.json`, `CLAUDE_CONFIG_DIR` honoured; every other entry stays, a file that is
+not JSON is left alone, the file keeps its indent). Every pane's programs see
+`KOLUX_AGENT_HOOK_PORT`, `KOLUX_AGENT_HOOK_TOKEN`, `KOLUX_PANE_KEY`, `KOLUX_TERMINAL_HANDLE`,
+`KOLUX_HOOK_ENDPOINT` and `KOLUX_HOOK_IDENTITY`. The script guards on those, reads the endpoint
+file, posts the event with the system curl inside 1.5 s and always exits 0. The listener maps
+Claude's events (SessionStart from startup, resume or clear and a manual PostCompact: done with
+a boundary; UserPromptSubmit and PostToolUse: working; PreToolUse: working with the tool, or
+waiting for AskUserQuestion and ExitPlanMode; PermissionRequest: permission; Stop: done;
+StopFailure: blocked; a sub-agent's events are ignored) and raises `agent-status` to the
+window. The pane header shows Needs you, Blocked, Interrupted or Done (with its age) while the
+program still runs, the tab badge shows the check when the turn is over, the workspace row's
+dot takes the hook state over the guess, Ctrl+J visits every pane the hooks say is waiting, and
+a turn ending out of view is noticed like an exit. The hooks are always on (the switch is
+T-120); Codex and the sub-agent roster are T-025-b and T-025-c. Proved with events sent
+through the real script; a real Claude Code session is T-025-d.
+
+[core] T-025-b (STAT-008): Codex reports through the same listener. Kolux writes
+`~/.kolux-rs/agent-hooks/codex.cmd` (the Claude script posting to Codex's path) and, at start,
+puts one Kolux RS group under each of Codex's eight hook events in the user's `hooks.json`
+(`CODEX_HOME` or `~/.codex`), after the user's own groups, replacing a stale one where it
+stands; a file that is not JSON is left alone. The trust entries come from Codex itself (DT-C3):
+Kolux starts `codex app-server` hidden on that home, asks `hooks/list`, and writes each of its
+own entries' key and hash to `[hooks.state."<key>"] trusted_hash` in that home's `config.toml`;
+the user's own entries are never marked. An unchanged file whose entries are all in the table
+costs nothing on later launches; when Codex is missing or does not answer, `hooks.json` goes
+back exactly as it was (or away, when Kolux created it) and stderr says so. A managed Codex
+account's home gets the same install when its pane spawns. Events: SessionStart working with a
+boundary, UserPromptSubmit working with the prompt, PreToolUse working with the tool (waiting
+for `request_user_input`), PermissionRequest permission (no decision returned), PostToolUse
+working, Stop done; a sub-agent's events are ignored until the roster (T-025-c). Proved with
+Codex 0.156.1's own listing on a scratch home (`evidence/T-025-b-trust.txt`: Kolux's eight
+entries trusted, the user's own Stop hook left untrusted) and events sent through the real
+script to a Codex pane (`T-025-b-needs.png`, `-done.png`). Open: Codex's source clears the
+hook's environment on Windows before running it; whether the pane's variables survive is
+unverified, and if they do not the script exits silently (a real Codex session is T-025-e). The
+Devin-variable skip is not built (DT-C4).
+
+[core] T-025-c (STAT-026 and the rest of the stored status): `src-tauri/src/status.rs` keeps a
+session per pane between hook events: the lead's own state, the tool it waits on a permission
+for, the roster of sub-agents and teammates (id, role, model, state, start time; 32 at most), whether
+Claude's background tasks were still in flight at the last Stop, the interrupted flag, the last
+reply and the last twenty states with their prompt and start time (`agent_history` command). The
+state the window sees is resolved from all of it: a child waiting on Txais comes first (needs you
+on the lead), then the lead's own needs, then working while the lead, any child or background
+work is busy, else the lead's last state. Sub-agent events (an `agent_id` on them, or
+SubagentStart/SubagentStop/TeammateIdle) move the child only; a child's permission clears when
+that same tool resumes in the child, when the teammate goes idle or when it stops, never on the
+lead's unrelated progress; a child already gone never comes back; a child's Stop carries its own
+reply and name so it can be announced on its own. The lead's permission clears only when the same
+tool carries on, a new prompt arrives or the turn ends. Ctrl+C or Escape typed into the pane while
+the lead itself works (no child or background work live) marks the coming Stop interrupted, and
+late tool events cannot bring the turn back to working until the next prompt. The prompt Claude
+re-submits after an automatic compact is not a turn. The pane header shows "N agents, M waiting"
+beside the status word with the roster as hover text. Proved with events through the real script
+on a Claude pane: lead Stop with a child live stays Working with "1 agent", a child's permission
+reads Needs you "1 agent, 1 waiting" and survives the lead's unrelated tool step, the teammate
+going idle clears it, Escape then Stop reads Interrupted and a late PostToolUse leaves it there
+(`evidence/T-025-c-lead-working.png`, `-child-needs.png`, `-done.png`, `-interrupted.png`). Not
+built: the queued state (not a hook state, DT-C5), the partial mark on a cut-short background list
+(DT-C6), and the interrupted conclusion when the agent sends no Stop at all (a timer; the rest of
+that card).
+
+[core] T-026-a (STAT-041 desktop notification, STAT-045 quiet alert): the window's finish-and-bell
+note (`noticed` in `App.tsx`) now also raises a Windows notification through `tauri-plugin-
+notification` (a `notify` command) whenever the pane is out of view or the window is not focused,
+unless the 'Agent Task Complete' switch is off; the unread mark and the in-window toast keep
+T-024's one-mark-until-viewed rule, the desktop notification does not (every finish, permission
+request, block, interrupt and sub-agent turn is one of its own). `src/terminal/notify.ts` words
+the note: "Claude finished" with a one-line preview of the reply, "needs permission", "is
+blocked", "was interrupted", "code-reviewer finished" for a sub-agent's turn (the roster now
+announces the child's role, not its id), and "repo · Claude finished" when more than one
+repository has agents running; session boundaries and replayed events say nothing. The quiet
+alert is judged in Rust by the terminal's own output (`Terminals::silence`, from the output marks
+programs already carry), every 15 s, against the `quietMinutes` setting (10 by default, 0 off):
+a working pane past the threshold fires one `agent-quiet` event per silent spell
+(`Session::quiet`, re-armed by fresh output or by leaving the working state); the window shows
+the toast and a desktop notification for it regardless of view or switch, since the minutes are
+its own switch. Settings gained a Notifications page (the switch and the minutes, saved over a
+fresh read). Proved on the lane app with events through the real script: a permission request,
+a finish with its reply preview and the one-minute quiet alert each raised a Windows toast
+(`evidence/T-026-a-permission-toast.png`, `-finished-toast.png`, `-quiet-toast.png`), the quiet
+alert also as the in-window toast (`-quiet-window.png`), and the alert fired once in eight
+minutes of further silence; the settings page in `-settings.png`. In a dev build Windows names
+the sender "Windows PowerShell" (the plugin's debug app id); an installed build carries Kolux's
+own identifier. Not built: the "quiet 12m" tag on agent-dashboard drawer rows (the drawer is a
+later view; `Terminals::silence` is what it will read), and nothing is sent for Cursor Agent
+shell steps or Grok prompts because neither agent is wired yet. The status vocabulary and the
+Inbox are split off as T-026-b and T-026-c.
+
+[core] T-026-b (STAT-052 one status vocabulary): `VOCAB` in `src/terminal/status.ts` is the one
+table every status surface reads: a word, a glyph, a tone and a hover explanation for working,
+background, blocked, waiting, permission, interrupted, failed, done, idle, no recent update
+(`stale`), plus the Agents view's starting, cannot-reach (`unreachable`) and stopped
+(`stoppedLabel(cause)` says what caused it) and Kolux's queued. Blocked and waiting borrow the
+permission look (the question-mark glyph TERM-055 already gave the tab badge, amber). The pane
+header (`headerOf` now returns the vocabulary entry plus `state`), the tab badge (`TabBadge`) and
+the sidebar dot (`ProjectsPanel`) all draw from it; `StatusGlyph` in `icons.tsx` is the glyph set
+(spinner, spinner with a centre dot for background, question mark, circle with a bar for
+interrupted, circle with a cross for failed, check, hollow circle for idle, dotted circle for no
+recent update). A shell keeps its neutral words (Ready, Ended (code)) over the idle and stopped
+entries (TERM-020). Every `Spinner` turns 12 frames a second (`.spin`, `steps(12)`) and joins the
+document's clock at time zero on mount, so all spinners on screen step together; under
+`prefers-reduced-motion: reduce` the stylesheet stops it and the glyph still reads as working.
+`src/chrome/Tip.tsx` is one tooltip for the window: any element with `data-tip` explains itself
+about 200 ms after the pointer settles, kept inside the window edge; the status glyph, the status
+word, the tab badge and the sidebar dot carry it. Proved on the lane app with hook events through
+the real script: the header glyph, the tab badge and the sidebar dot each showed their explanation
+on hover (`evidence/T-026-b-working.png`, `-tab-badge.png`, `-sidebar-dot.png`); the pane moved
+working → needs you → done with the glyph and text changing each time (`-needs-you.png`,
+`-done.png`); both spinners on screen reported `startTime 0`, `steps(12)`, `1s`; with reduced
+motion emulated over the debugging port the animation read `none` and the word stayed Working
+(`-reduced-motion.png`). Not lit yet: the `background` entry (the hooks fold background work into
+working until T-123 reports it), `stale` (needs a surface that knows the last update time: the
+Inbox, T-026-c, or the Agents view) and the Agents view's own labels (that view is later; it reads
+the same table).
+
+[core] T-026-c (STAT-050 Inbox): the bell in the top bar (labelled Notifications) and the
+`view.inbox` shortcut (unbound, as COMPAT says) open the Inbox, a top-level screen of its own
+beside the Agents / Board / Terminals switcher. `src/inbox/inbox.ts` builds it from the panes the
+window already tracks (each pane's hook state, whether its program is up, and a stamp of when its
+state last moved, now kept in `App.tsx`): needs you holds permissions ("Permission"), questions
+("Question", a waiting state) and blocked agents, newest first; waiting on agent holds running
+sessions; done today holds finishes of the last 30 minutes, newest first, 20 at most, never an
+interrupted turn. Up and Down walk the three groups in order (nothing selected: Down picks the
+first row, Up the last; both ends stop; a vanished selection falls back to the first row), Enter
+or the detail's button opens the pane in Terminals with its workspace selected; the all-clear
+line shows when nothing needs you. The detail shows the agent, branch, workspace, the worktree's
+changed-file count (through `scm_status`) and the turn's prompt (through `agent_history`).
+Proved on the lane app: three Claude panes with no events gave the all-clear line over three
+Running rows (`evidence/T-026-c-all-clear.png`); a permission request, an AskUserQuestion and a
+finished turn through the real hook script gave two needs-you rows and one done-today row
+(`-groups.png`); Down selected the first row and showed its detail (`-detail.png`); Up at the
+top stayed, five Downs stopped at the last row, and Enter left the Inbox with that pane focused
+(`-opened.png`). The 40-minute, 20-row and interrupted rules are unit-tested (`inbox.test.ts`).
+Not built: line counts in the detail (no numstat command yet; the change count stands in), the
+host line (every session is local today), stale rows under waiting on agent (no last-update time
+yet, see T-026-b), and the Code view the card's buttons name (DT-C8: Open / Answer go to the
+terminal pane until that view exists).
+
+[core] T-027 (STAT-053 Thought rows): deferred, not built. The rows live in a transcript on the
+Agents screen; the repo has no transcript reader (T-325), no chat rendering of reasoning
+(T-326, whose card says its folded reasoning rows are these Thought rows) and no Agents screen
+(T-050). Building the fold on its own would be a component nothing renders, so the rules moved
+onto the T-326 line and T-027 stays unticked with a note.
+
+[core] T-028-a (VIEW-016 one line per session, VIEW-023 Board lanes and chips, VIEW-025 approve
+or deny from a card): `src/board/chip.ts` is the pure model: from a pane's hook state, whether
+its program is up, the STAT-045 quiet flag, the last turn's tool / detail / reply / newest file
+written and the stamp of when the state last moved, it gives a lane, a word and one line (a
+permission reads Needs you with "Tool: detail" and offers the answer; a question reads Needs
+you; working reads Working with how long and the step; a quiet working pane reads No recent
+update, never Working; a limit or sign-in stop reads Stopped with the cause, never Done; a finish
+reads Done with the first line of the last message and the newest file written; an ended
+program reads Stopped / Exited; no process yet reads Starting; a plain shell has no chip; with no
+evidence the line is empty). The Board is now a CSS grid whose columns are the lanes that have a
+card (Needs you, Working, Done, Stopped, Idle, in that order), each card carries a chip row under
+its header, and the file link shows the file's name with the full path as its tooltip. Approve
+and Deny call the new `agent_answer` command, which types the agent's own answer keys into its
+terminal (Claude: Enter for the highlighted Yes, Esc for No; Codex: y / n from its public keymap)
+and clears the pending permission, so the card leaves needs you at once. `PostToolUse` for
+Claude's Write / Edit / MultiEdit / NotebookEdit now carries the file path (`Change.wrote`).
+Proved on the lane app with the real hook script: a permission ask, two edits plus a finish, and
+a failed stop gave four lanes with "Needs you · Write: C:/x/hello.txt · Approve Deny", "Done ·
+All three tests pass. · b.ts" (full path in the tooltip) and "Stopped · rate limit reached"
+(`evidence/T-028-a-board.png`); Approve moved the first card to Working with no buttons
+(`-approved.png`); a Bash ask on the done pane came back as Needs you (`-deny-ask.png`) and Deny
+moved it to Working (`-denied.png`); after the one-minute scratch quiet window the approved pane
+read "No recent update · 2m without output". Unit tests in `chip.test.ts` cover the word and lane
+rules, `status.rs` the answer keys and the cleared permission, `hooks.rs` the written file.
+Not built: the Setup needed (chooser) and Can't reach (remote) chips, a real file opener (text
+with the full path until the editor lands), Codex write-tool names for the file link (only
+Claude's are known), and the Agents-screen words of T-028-b. The Claude answer keys are not yet
+proved against a live prompt (no Claude prompt is typed in a build pass); the real-session proof
+is for Txais, like the hook installs.
+
+[core] T-029 (VIEW-040 palette row marks and ages) and T-030 (ORCH-007 mail pointer, ORCH-015
+done reports and heartbeats, ORCH-020 worker-show, ORCH-021 worker-read): deferred, not built.
+The palette (T-098) does not exist, and the orchestration store (Runs, mail, dispatches: T-082,
+T-083, T-089 on the orchestration lane) and the transcript reader (T-325) do not exist in this
+checkout; `cli.rs` only checks worker-start's flags. Both lines stay unticked with a note on
+what they wait for.
+
 [accounts] Secrets are sealed on disk (T-038): the Claude 1-year key and the xAI key live in
 settings.json only as Windows-sealed values (DPAPI, this user only), the window never receives
 them and cannot overwrite them, and a vault folder in the profile holds one sealed file per
@@ -737,7 +958,17 @@ background app server, in a hidden process that only reads and is closed afterwa
 plan figures. The pill reads "Codex 100% left" (weekly figure); hovering lists the 5-hour and
 weekly figures each with its own reset time, the limit-reset credits and the plan. A sign-in
 Codex no longer accepts turns it into a yellow "Codex · sign in again" with no figures. The
-Claude half still reads "unknown" until T-041.
+Claude half reads "Claude N% left" from Claude Code's own status-line reports once a Claude
+pane has produced one (T-039-b, [core]); until then it reads "unknown". Board cards carry a
+compact meter (context bar in tokens plus the agent's 5-hour and weekly plan percentages), agent
+tabs a tiny context ring, and the pane header's gauge fills and turns yellow at 70% and red past
+90% (T-040-a, [core]). Claude and Codex panes start held to a 200k context window unless
+Settings > Agents switches the cap off, and the top-right pill is a read-only weekly figure per
+provider, tinted by use, hidden until a weekly figure is known (T-041-a, [core]). With the
+Claude card's resume switch on, a Claude pane stopped on a usage limit gets a continue prompt
+typed in a minute after the limit resets (T-041-b, [core]). Codex's figures come from the
+background app-server read only; the usage service and the hidden `/status` screen are not
+built (DT-C15, T-042-b, [core]).
 
 [accounts] Settings exists with its first page, AI connections (T-043-a): click the usage pill in
 the top bar or press Ctrl+Comma; Esc or the × closes it, and the panes underneath stay as they
@@ -762,8 +993,11 @@ sign-in that quits early, keeps nothing partial; "Sign in again" that fails puts
 sign-in back and says why in yellow. Make active picks the account new Claude panes run on (they
 get that folder as CLAUDE_CONFIG_DIR); while the 1-year key is connected the key still wins, and
 the section says so. Kolux does not renew these sign-ins itself: Claude Code keeps them fresh in
-its own panes (the ACCT-006 default under OD-01). The renewal opt-out switch and Kolux-side
-renewal are T-043-d.
+its own panes (the ACCT-006 default under OD-01). The section's "Leave sign-in upkeep to Claude
+Code" switch (T-043-d, [core]) is on by default; off, Kolux asks Claude Code at once whether the
+active account is still signed in and flags a lapsed one with a Needs sign-in chip and the
+main-window notice, on hides both. Kolux never renews a sign-in itself (DT-C16); the macOS
+keychain rules are T-043-e.
 
 [accounts] The Codex card on Settings > AI connections connects Codex (T-043-c): Connect runs
 Codex's own browser sign-in out of sight, and "Sign in with a code" shows a link and a one-time
@@ -1204,8 +1438,8 @@ recorded default until told otherwise; nothing here blocks a pass.
   commit-msg or pre-merge-commit hook file exists in the repo's hooks dir; anything else reads
   "failed". The right sidebar is a bare 320 px card holding only Source Control until
   VIEW-056/057 (T-146); Mod+L toggles it too. Ctrl+Enter also accepts Cmd. Section letters:
-  U untracked, X unmerged. The multi-row bulk bar went to T-018-c and the folder rows (stage
-  everything beneath) to T-033's tree view, both named in PLAN.md. Status is polled every 4 s
+  U untracked, X unmerged. The multi-row bulk bar is built (T-018-c, [core]); the folder rows
+  (stage everything beneath) went to T-033's tree view, named in PLAN.md. Status is polled every 4 s
   while the card is open until GIT-001's watcher. The draft lives in the window per worktree,
   not on disk. Evidence note: another lane's dev app was open during this pass, so `keys.ps1`
   (first window titled "Kolux RS") captured the wrong app once; the shots were retaken with a
@@ -1359,8 +1593,9 @@ recorded default until told otherwise; nothing here blocks a pass.
   pane and Ctrl+T once by hand; the menu route and the tab strip were proven live.
 - 2026-10-09 · T-009: the strip keeps DESIGN.md's 1 / 2 / 4 / 6 presets; 3, 5 and 7..12 panes are
   reached by splitting (the limit is 12, TERM-001), and the strip then shows no pressed button.
-  Shrinking never removes a started session: TERM-003's "ask first" is T-151, so for now a toast
-  says to close one. Closing a pane whose program is still running ends it without asking; the
+  Shrinking never removes a started session: TERM-003's "ask first" is T-151 (the one owner,
+  named in `grid.ts` and `App.tsx`), so for now a toast names the newest started session in the
+  way (T-009-fix-b). Closing a pane whose program is still running ends it without asking; the
   confirmation is TERM-045 (T-057). Closing the last pane leaves the empty placeholder, since tabs
   arrive with T-010. "Split down" is an index jump in the uniform grid (`ponytail:` in grid.ts), not
   a nested split tree, so a pane split down from the bottom row lands at the end. The three chords
@@ -1755,7 +1990,349 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-096-b: Reset takes the command out of this platform's section; when the all-platforms section still overrides it, the shipped default is written into this platform's section instead so the default really returns. Removing a command's last chord leaves it disabled (null in the file), the same as Disable. A recorded chord that clashes is still saved; the resolver drops it as SET-010 says, and the row keeps a Reset button because the file still holds the override.
 
+- 2026-10-09 · [core] T-025-a: Kolux RS keeps its hook scripts in `~/.kolux-rs/agent-hooks` and
+  adds its own entries beside the old app's in Claude's settings (DT-C1), so both apps can run
+  on this PC until the old one retires; the identity header is built by Kolux into
+  `KOLUX_HOOK_IDENTITY` (DT-C2). The hooks install unconditionally at every start (STAT-002's
+  switch is T-120). The installer has NOT yet run against Txais's own
+  `G:\Dev\claude-config\settings.json`: the auto-mode classifier refused the builder a copy of
+  that file (self-modification), so the live proof used a scratch `CLAUDE_CONFIG_DIR`; the first
+  launch of Kolux RS on this PC will add twelve `.kolux-rs` entries to that file (T-025-d).
+
+- 2026-10-09 · [core] T-025-b: the Codex trust fingerprints are taken from Codex's own
+  `hooks/list` answer rather than recomputed (DT-C3); the Devin skip in the Claude script is not
+  built because no public source names the variable (DT-C4). The installer has NOT run against
+  Txais's own `~/.codex`: the classifier refused the builder that write, so the proof used a
+  scratch `CODEX_HOME`; the first launch of Kolux RS on this PC will add eight `.kolux-rs` groups
+  to `~/.codex/hooks.json` and eight trust entries to `~/.codex/config.toml` (T-025-e for the
+  real-session proof). A Kolux RS started from a shell that carries `CODEX_HOME` (a pane of the
+  old app does) installs into that home instead, as COMPAT 3.4 says.
+
+- 2026-10-09 · [core] T-025-c: "queued" is never produced by a hook event; it is the session queue's
+  state (DT-C5). Claude's background-task list carries no truncation mark in its public shape, so
+  the "partial" rule of the roster card is not built (DT-C6). The rust test
+  `projects::tests::saving_a_folder_that_cannot_be_made_fails_and_keeps_the_old_one` failed once in
+  three full runs (its `remove_dir_all` of the temp profile, a Windows file-lock race) and passed
+  alone and on the reruns; not touched, it is not this lane's file.
+
+- 2026-10-11 · [core] T-026-a: the notification settings live under Kolux RS's own keys,
+  `notifyOnFinish` (true by default) and `quietMinutes` (10 by default); the importer task maps the
+  old app's saved choices onto them (DT-C7). The desktop notification is not gated by the unread
+  mark, only the toast and the mark are (one notification per event, as the card asks).
+
+- 2026-10-11 · [core] T-026-b: the permission look is TERM-055's question mark (the card names no
+  glyph), shared by blocked and waiting; a shell's header keeps Ready / Ended (code) as its words
+  for the idle and stopped entries (TERM-020), the hover text says "Stopped: exit code N". No card
+  or COMPAT rule contradicted, so no DECISIONS row.
+
+- 2026-10-11 · [core] T-026-c: the Inbox's buttons read Open and Answer and open the terminal
+  pane, since the Code view they are named after does not exist yet (DT-C8); a blocked agent is
+  listed under needs you beside permissions and questions; the done-today stamp is the moment the
+  window saw the state move, so a finish that happened before the window was open is not listed.
+
+- 2026-10-11 · [core] T-027: deferred to T-326 (ordering, not a contradiction; no DECISIONS row).
+  The Thought-row rules were copied onto the T-326 PLAN line so they are not lost.
+
+- 2026-10-11 · [core] T-028-a: a blocked agent's chip reads Stopped (the card's word) while the
+  pane header keeps the vocabulary word Blocked; STAT-022's cause text is T-039. The answer keys
+  are Enter / Esc for Claude Code's dialog and y / n for Codex's approval modal, typed into the
+  pane through the terminal, not a protocol; the card's file link is the file's name with the
+  full path in its tooltip until an editor exists. The duration on a chip counts from the moment
+  the window saw the state move. No card or COMPAT rule contradicted, so no DECISIONS row.
+
+- 2026-10-11 · [core] T-029 and T-030: deferred to their feeders (T-098; T-082 / T-083 / T-089 /
+  T-325). Ordering, not a contradiction; no DECISIONS row.
+
+- 2026-10-11 · [core] T-003b-fix-a: the top bar is a three-column grid (left group, switcher,
+  right group) instead of an absolutely centred switcher. The switcher is centred on the window
+  while the right group fits in its half (at 1920 it sits at 855..1065, DESIGN.md's figure); below
+  about 1540 px the right group keeps its width and the switcher moves left (70 px at the 1400
+  default) instead of covering the search box. DESIGN.md section 4 notes the rule; no DECISIONS
+  row (the review named this fix).
+
+- 2026-10-12 · [core] T-010-fix: the paste rule of the paste card is now its own module,
+  `src/terminal/paste.ts` (`attachPaste(textArea, paste, held)`), so the two rules the review asked
+  for have a test without a browser: a paste into pane B's text area reaches B only, and a paste
+  made while the opening prompt is still owed waits and goes in after it, oldest first. The
+  listener is removed when the pane unmounts. Live, with two shells open, a paste event carrying
+  "echo PASTED-INTO-PANE-B" dispatched into Terminal 2 landed there and Terminal 1 stayed at its
+  prompt (`evidence/T-010-fix-paste.png`). A real Ctrl+V from the keyboard is Txais's by-hand
+  check: the driver cannot put text on the system clipboard. No DECISIONS row.
+
+- 2026-10-12 · [core] T-013-fix-a: with no project yet, Mod+N and the sidebar's New workspace
+  button open the add-project form instead of a name field that can only say "Add a project
+  first." (`createOpens()` in `src/projects/model.ts`, tested); with a project the name field opens
+  as before. Proved on a fresh state folder: Ctrl+N on the empty sidebar showed the Add project
+  form (`evidence/T-013-fix-a-no-project.png`). That reads the create-workspace card's "works even
+  before any project exists" as a door to adding the project, so no DECISIONS row. The two rules
+  T-013 left out, the overtaken create and the stand-in tab, now have an owner, T-013-c.
+
+- 2026-10-12 · [core] T-013-fix-b: `safe_name()` no longer drops an emoji it has no word for.
+  The fourteen table emoji keep their short word; any other symbol becomes its Unicode name in
+  lowercase words (crate `unicode_names2` 4.0.0, MIT / Apache-2.0 and Unicode-DFS-2016, both on
+  the deny.toml allow list), so a joined emoji names each of its parts: "ship it 🧑‍💻" cleans
+  to ship-it-adult-personal-computer. Joiners, variation selectors, emoji tags, skin tones and
+  combining marks say nothing (`silent()`), so a thumbs-up with a skin tone is thumbs-up-sign
+  and a decomposed é keeps its e. That is a Unicode name, not a shortcode, for emoji outside the
+  table: DT-C9. The pane header now shows the name exactly as typed: `ProjectsPanel` hands the
+  window a folder-to-typed-name map beside the owner map, `nameOf()` in `src/workspaces.ts`
+  (tested) looks a pane's folder up by content, and `App.tsx` passes it as the pane's title when
+  no job title is set. Proved live: typing "Ship it 🧑‍💻" previewed branch
+  ship-it-adult-personal-computer (`evidence/T-013-fix-b-preview.png`), and the created
+  workspace's pane header, sidebar row and branch chip read "Ship it 🧑‍💻" over that branch
+  (`-header.png`). The tab strip keeps its program word (TERM-040). The projects test that
+  removes its temp folder no longer panics when Windows still holds the store file for a moment
+  (it flaked once in T-025-c and once here).
+
+- 2026-10-12 · [core] T-003b-fix-b: DESIGN.md names the two additions the look got in T-003b:
+  section 6 the strip's "+ New tab" button (86 x 28 at x 1302..1388 in a 1400 px window, 12 px
+  from the right edge, the layout group's border and type) and section 7 the pane header's split
+  button (between Expand and "+", 24 px hit target). In the tab strip a browser tab now shows the
+  globe where a terminal tab shows its program's mark (`App.tsx`). The native web view cannot be
+  clipped by the pane's rounded corners, so `.pane.browser .pane-body` keeps a 1 px side margin
+  and a 12 px bottom margin: the ring and the bottom curve stay visible around the page
+  (`styles.css`; the web view follows the body's rect as before). Proved live with a shell and a
+  browser tab in one cell (`evidence/T-003b-fix-b-browser.png`: globe on the New Tab tab, the
+  page 1 px inside the ring and 13 px above the pane's bottom edge). Nothing pure to unit-test;
+  the capture is the check. The projects test flake has its real cause: two tests shared the
+  temp folder "profile4" and wiped each other when run in parallel; the second now has its own,
+  and the full suite passed three runs in a row. No DECISIONS row.
+
+- 2026-10-12 · [core] T-007-a-fix: the installed-agent scan starts from the search path a fresh
+  shell would get, not from this process's PATH. On Windows `shell_path_dirs()` in `agents.rs`
+  reads the machine Path (HKLM Session Manager\Environment) then the user Path (HKCU Environment)
+  with `RegGetValueW` asking for a plain string, which expands `%SystemRoot%` and the like on the
+  way out; a read that fails gives nothing and the process PATH stands alone. `search_dirs()` is
+  shell path, then process PATH, then the usual install folders, each folder once as before. The
+  `windows-sys` crate already in the tree got its `Win32_System_Registry` feature; no new crate.
+  The test reads the real machine Path and checks it holds `system32` with no `%` left, that a
+  missing value reads as `None`, and that every existing shell-path folder is among the walked
+  ones. On macOS and Linux the shell's path is not read (a login shell would have to be spawned):
+  the process PATH plus the install folders stand for it, recorded as DT-C10.
+
+- 2026-10-12 · [core] T-008-b-fix: the foreground half of the start-line card is closed by a
+  decision, not a poll (DT-C11). An agent Kolux starts is the pane's own program (`pty.rs`
+  `program_command`, no shell in between), so the pane is credited to it from `terminal_spawn`
+  until `terminal-exit`: exact, free, and already what the header, tab mark and account
+  variables go by. An agent typed into a shell pane is credited by its hooks when it has them
+  (the shell's children inherit `KOLUX_PANE_KEY`, T-025), and not at all when it has none; a
+  process-tree poll with command-line reads is what that last case would cost, and nothing
+  shown today depends on it. The command-line matcher is not orphaned any more: the account and
+  key variables of a new pane call it (`claude_accounts`, `claude_key`, `codex_accounts`), so
+  its stale "first caller is the poll" note and dead-code attribute went. No behaviour change,
+  no new test.
+
+- 2026-10-12 · [core] T-012-b-fix: chords pressed inside a browser page reach the app. Pages get
+  no Tauri capability (by design), so the channel is a navigation: `browser.rs` gives every tab
+  an initialization script (main frame only) that catches Mod+L, Alt+Left / Alt+Right (Mod+[ /
+  Mod+] on a Mac), Mod+R and mouse buttons 4 and 5 on the way down, stops the web view's own
+  handling, and calls `location.assign("kolux-chord:<action>")`; the tab's `on_navigation`
+  handler recognises the four actions, emits `browser-chord` {id, what} and cancels the
+  navigation (nothing reaches the network or the OS; a cancelled navigation never starts a
+  page load, so the history stays untouched). For Mod+L the back end also hands the keyboard
+  to the app's web view. `App.tsx` runs the same `browserAction` for a forwarded chord as for
+  one pressed in the app, for the tab that sent it, and makes that split the focused one (a
+  click into a page never reaches the app, so its focus could be stale). The toolbar history
+  moved to `src/browser/history.ts` (`started`, `can`): a load with nothing asked that lands on
+  the neighbouring entry is the page's own back or forward and moves the cursor instead of
+  adding an entry. Proved live on the lane app with example.com and iana.org: Alt+Left in the
+  page went back with back and forward both lit, Alt+Right went forward, the mouse back button
+  went back, Ctrl+L put the cursor in the address bar with the text selected, no dialog
+  appeared (`evidence/T-012-b-fix-chords.png`). Tests: `chord_of` and the script's contents in
+  Rust; `history.test.ts` for the entries. Still open: a page's `pushState` and app chords
+  such as Ctrl+T / Ctrl+W pressed inside a page (not browser-scope; they stay with the page).
+
+- 2026-10-12 · [core] T-014-b-fix: `kolux-dev worktree create` stops refusing a prompt with no
+  agent named. The app picks the agent the way the first-prompt card says: the settings' default
+  agent when it is installed, else the first installed one in catalogue order (`fallback_agent`
+  in `cli.rs`, sharing `default_agent` with the worker start); with no agent installed the call
+  fails and says so; a create with neither prompt nor agent still makes a bare worktree with no
+  agent tab. The flags nobody acts on yet are named instead of swallowed: `--setup run`,
+  `--run-hooks` (on create and rm) and `--comment` each add a sentence to a `warnings` list in
+  the result, and `main` prints every one as `warning: ...` on stderr whether or not `--json`
+  was asked, so a script that counts on setup scripts learns they did not run. `issue:` is a
+  working worktree selector now (it reads the issue number recorded with the worktree's origin;
+  `projects::origin` is public for it). `identity:` and `active` stay refused, with the accepted
+  forms listed, by DT-C12. Tests: the parse test accepts the prompt alone; the create-and-remove
+  test checks the fallback agent against the real catalogue, the three warnings, `issue:12`,
+  `issue:99` not found, and the two refusals. No live proof: the CLI has no window part.
+
+- 2026-10-12 · [core] T-039-a: a Claude Code session that halts says why. The StopFailure hook's
+  `error` becomes a cause (`hooks::stop_cause`: rate_limit is `limit`; authentication_failed,
+  oauth_org_not_allowed and verification_required are `signin`; everything else `error`) and
+  `error_details` rides along; `status.rs` keeps a `Stop { cause, detail, resetsAt }` on the
+  session while it is blocked, ignores further failure reports in the same episode (one history
+  line), drops it when a turn reaches done or a session boundary passes, and reads a failure after
+  a Kolux cancel as interrupted and one with no error as nothing. The Board chip's second line
+  and the pane header's tooltip read `Limit reached · 5-hour limit` (`stopLine` in
+  `terminal/notify.ts`, shared by `board/chip.ts` and `TerminalPane`). The stopped notification
+  says `stopped: limit reached` with the reset time or the details, once per episode (the state
+  does not change on the second report), behind a new 'Agent Stopped' switch (`notifyOnStopped`,
+  default on) separate from 'Agent Task Complete'. A sign-in stop calls `claude_account_check`
+  once so the existing main-window SignInNotice shows the lapsed account (STAT-046). `resetsAt`
+  is always empty until T-039-b reads the status line. Kimi and Codex report no cause (DT-C13).
+  Live: posted a rate_limit StopFailure to the lane app's hook endpoint for the Claude pane; the
+  Board card read Stopped / Limit reached · 5-hour limit and the header tooltip the same
+  (`evidence/T-039-a-stopped.png`). Not live-proven: the desktop notification and the sign-in
+  recheck (no lapsed account to hand).
+
+- 2026-10-12 · [core] T-039-b: Claude Code's status line feeds Kolux. At start the hook installer
+  also takes the `statusLine` slot in Claude's settings (`hooks::install_claude_status`, padding
+  and the rest of the object kept) with a bash command that saves the report to a temp file,
+  posts it through `~/.kolux-rs/agent-hooks/claude-status.cmd` to the endpoint's new
+  `/claude-status` route, then runs the status line the user had (written once to
+  `claude-status-prev.sh`, run only when that file exists) from the same file, so whatever they
+  had keeps drawing; a stale Kolux command from another home is replaced, not chained. The route
+  checks the token (403) and the pane identity (400), reads `context_window.used_percentage`
+  (else input tokens over window size) and the `rate_limits` windows (kind, percent used, reset
+  as ISO stamp or seconds/ms, kept as ms), writes the windows to kv `claudeRateLimits`, and when
+  a window is used up writes when it lifts to kv `claudeUsageLimitResetsAt` and raises
+  `claude-key` so the Claude card re-reads. The top-bar pill (`usage/ClaudePill.tsx`) shows
+  "Claude N% left" from a used-up window first, else the weekly one, else the 5-hour one, from
+  the last report at start (`claude_usage`) and each `claude-usage` event after; hovering lists
+  each window with its reset time. The pane header's gauge draws the pane's context fill as an
+  arc with the figure. A limit stop now carries the reset time (`status::LIMIT_RESETS_AT`) when
+  it is still ahead, so the tooltip, chip and notification say "resets at …". Live: posted a
+  report for the Claude pane → pill "Claude 63% left", hover with both windows' reset times,
+  gauge 42% (`evidence/T-039-b-usage.png`); wrong token → 403, figures unchanged; a used-up
+  5-hour window plus a rate_limit StopFailure → header "Limit reached · resets at 1:48 AM", kv
+  both keys written, Settings' Claude card "It can be used again at 1:48 AM". Not live-proven:
+  a real Claude Code session driving the command (the pane's Claude Code read the real user
+  settings, not the scratch ones, as in T-025-a), and the chained previous status line.
+
+- 2026-10-12 · [core] T-040-a: the usage meters. The status-line route now keeps the context
+  reading in tokens (`Usage.contextTokens`/`contextWindow`: the stated total, else input plus
+  cache writes plus cache reads from `current_usage`, else the stated percentage applied to the
+  window) and `src/usage/meter.ts` works the figures out: `contextFill` against the 200k cap
+  (always on until T-041 wires the USAGE-006 switch through its argument), else the model's own
+  window, past full reads 100, a zero window 0; `shortTokens` (84k, 1.3M); `planOf` gives a
+  Claude pane the Claude account's 5-hour and weekly percentages and a Codex pane Codex's, nothing
+  for other agents or a failed read; `meterOf`/`meterText` build the card meter and its hover
+  text. The two top-bar pills publish what they read into `src/usage/plan.ts` (a tiny external
+  store) so the Board needs no second read. `src/usage/Ring.tsx` is the ring: track and arc, no
+  number, coloured `warn` at 70% and `danger` past 90% (new theme token `danger` #e5484d, not
+  measured); the pane header's gauge uses it with the figure, and agent tabs show it at 10 px with
+  the meter words as its title. On the Board a card gets `.meter` under the chip row: the bar
+  (width = fill, same colours), `84k / 200k`, and `5-hour 38% · Weekly 63%`; the bar only after a
+  reading, plan figures without one, no meter with neither (shells and browser tabs never get
+  one). Live: posted two reports (84k of 200k with both windows; 190k of 1M through
+  `current_usage`) → tab rings plain and red with hover text, header gauges 42% and 95% red, Board
+  cards with bars, token counts and plan lines, the shell card bare (`evidence/T-040-a-meter.png`).
+  Not built here: the Agents view rings, footer and usage line (T-040-b, needs T-050 and T-263).
+
+- 2026-10-12 · [core] T-041-a: the 200k cap, the weekly pill, and safer Claude figures. `cap.rs`
+  holds the setting (`contextCap200k`, never saved = on, switch on the new Settings > Agents page)
+  and `apply`, run by `terminal_spawn` on the start line and environment it hands the PTY, so the
+  pane's saved start line never carries the cap and a rerun adds it exactly once: a program
+  credited as Claude gets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` unless Kolux's own environment
+  already names it (any case) or `--autocompact` is on the line; one credited as Codex gets
+  `-c model_context_window=200000 -c model_auto_compact_token_limit=180000` ahead of any `--`
+  unless its arguments already name either key, `--profile`/`-p` or `--oss`; everything else is
+  untouched and no agent's file is written. The meters (`contextFill`, `meterOf`) now take the
+  switch from settings. The top-right pill follows USAGE-008/VIEW-008: a `<span>` (the click that
+  opened Settings is gone; Ctrl+, does that), one part per provider with the weekly window alone,
+  only while that CLI is installed and a weekly figure is known (Codex's refused sign-in still
+  shows), tinted on the 70/90 scale of used, hovering `Weekly limit: N% left, resets in 2d 4h` or
+  `reset time unknown` (a past reset time reads `resets now`); with nothing to show the pill is
+  hidden. USAGE-021's status-line part: the status script sends `X-Kolux-Config:
+  %CLAUDE_CONFIG_DIR%`, a report from a folder other than the active account's (or from a managed
+  folder while the default sign-in is active) is dropped, and a report carrying one window is
+  merged over the stored windows so the other stays. Live in the lane app: a Codex pane opened with
+  the cap on runs `codex.cmd --dangerously-bypass-approvals-and-sandbox -c
+  model_context_window=200000 -c model_auto_compact_token_limit=180000` (Win32_Process command
+  line, parent the app), one opened after switching the cap off on Settings > Agents runs without
+  the overrides, and the switch writes `contextCap200k` to settings.json both ways; Claude's
+  variable is covered by the unit test only (a process's environment is not readable from outside).
+  Posted status-line reports: weekly 85% used → pill `Claude 15% left` yellow, hover `Weekly
+  limit: 15% left, resets in 2d 4h`; a five-hour-only report leaves it; one with
+  `X-Kolux-Config: C:/somewhere/else` is dropped; 95% → red (`evidence/T-041-a-cap.png`). Not
+  built: the provider's usage service and the hidden-terminal usage screen (DT-C14), the
+  status-bar usage item switch (item list is T-148), the resume after a limit (T-041-b).
+
+- 2026-10-12 · [core] T-041-b: resume after a limit (USAGE-007). New `resume.rs`: `pick_reset`
+  takes the stop's own time, else the used-up weekly window, else the used-up 5-hour window (past
+  or not-used-up ignored, a used-up weekly without a time never swapped); `Resumes` keeps one wait
+  per pane, fires it once per reset time (times a minute apart count as one) a minute after the
+  reset, only when the pane's foreground is the `claude` program Kolux started (`Terminals::program`
+  from the spawn's credited agent), expires it when a shell or another program is in front or the
+  terminal is gone, keeps waiting while the foreground cannot be told up to half an hour past the
+  due time, and persists the waits under kv `claudeResumeWaiting` so a restart restores them with a
+  two-minute settle and past resets skipped. `hooks.rs` schedules from every reported status whose
+  stop is a limit; `terminal_write` cancels the pane's wait on the user's own keystrokes;
+  `save_settings` clears on off and picks up blocked panes on on; a 15-second thread in `lib.rs`
+  types the prompt (`Terminals::write`) and logs a refusal once to `logs/kolux.log`. Live in the
+  lane app with a real Claude Code pane (a `/` pasted into its input first, so the typed line
+  became an unknown slash command and no request went out): switch on, a posted weekly-100%
+  report with a reset 75 s ahead plus a `StopFailure rate_limit` event → kv held the wait, and
+  about 2.5 min after the post Claude Code showed `Unknown command: /The ... Args from unknown
+  skill: usage limit has reset. Please continue where you left off.`, the wait gone; a second
+  reset with a keystroke pasted into the pane after the stop → the wait dropped at once; a third
+  reset with the pane closed → the wait dropped at its due time (`evidence/T-041-b-resume.png`). The rest of T-045's card (panels list only the view's
+  accounts) is moot: one active Claude account per window.
+
+- 2026-10-12 · [core] T-042-b: decision only, no code. The rest of the Codex-figures card
+  (USAGE-022) named three routes; two are dropped in DECISIONS §7 DT-C15: Codex's own usage
+  service (address, request and reply are not public documentation; the clean-room rule forbids
+  learning them from the old app) and the status screen in a hidden terminal (Codex's interactive
+  `/status` card: it needs a session open, which the card's own title rules out, its layout is
+  undocumented and would have to be scraped, and it is drawn from the same rate-limit snapshots the
+  app-server `account/rateLimits/read` call returns). The two rules that take the 5-hour figure or
+  the reset-credit count "from the service" are therefore moot: `codex_usage.rs` already reads both
+  windows and `rateLimitResetCredits.availableCount` from the background process. Card amended;
+  its acceptance boxes stay as T-042-a left them. Gates re-run clean.
+
+- 2026-10-12 · [core] T-043-d: the sign-in upkeep switch (ACCT-006). `ClaudeAccounts.tsx` shows
+  "Leave sign-in upkeep to Claude Code" under the managed accounts once one exists, bound to
+  settings field `claudeSignInUpkeepByClaudeCode` (absent = on, OD-01/DT-A2); switching it off
+  saves the field and calls `claude_account_check` (ACCT-012, `claude auth status --json` in the
+  account's folder, hidden, 20-s limit) so a lapsed account is flagged straight away; on hides the
+  Needs sign-in chip and the main-window notice (the chip now follows the switch too). Kolux-side
+  renewal is not built (DECISIONS §7 DT-C16): Anthropic's token service is not public
+  documentation and the clean-room rule forbids learning it; Claude Code refreshes its own sign-in
+  in every pane. The macOS keychain rules of the managed-account card go to T-043-e (needs a Mac).
+  Live in the lane app with a stand-in account row seeded into the lane profile's kv (config
+  folder that never signed in): switch on → no chip, no notice; off → settings file `false`, the
+  check ran, the row went `stale`, chip "Needs sign-in" and the notice "Claude account
+  fake@example.test is no longer signed in" appeared; on → both hidden, file `true`; off again →
+  flagged within 12 s (`evidence/T-043-d-upkeep.png`). The very first check in a never-used
+  folder did not flag the row: Claude Code's first run there took longer than the 20-s limit, so
+  the account stayed as it was until the next check. Seed row, folder and setting removed after.
+
+- 2026-10-12 · [core] T-017-c: decision only, no code beyond a comment. Pre-trust for Cursor and
+  Copilot (the rest of the pre-trust card) is dropped in DECISIONS §7 DT-C17: Copilot's public
+  technical reference lists `~/.copilot/config.json` as "internal state" and documents no
+  trusted-folder key; Cursor's CLI reference documents `--trust` as "headless mode only" and the
+  changelog says a trust decision is "saved" without saying where; Cursor's editor docs describe
+  workspace trust (off by default) but not its storage. The clean-room rule forbids learning
+  either shape from the old app. `trust_folders` keeps returning 0 for both agents, the launch
+  proceeds, and the agent's own trust prompt, when it appears, is the user's to answer; a pasted
+  starting prompt may then be swallowed, which is the card's stated risk. Gates re-run clean.
+
+- 2026-10-12 · [core] T-018-c: the Source Control bulk bar (the rest of GIT-002). `model.ts` gained
+  `rowOrder` (conflicts, staged, changes, untracked, each path once), `select` (plain click keeps
+  one row and clears it when it was the only one, Ctrl/Cmd toggles, Shift spans from the anchor in
+  list order, rows no longer listed drop out) and `bulk` (which of the selected rows Stage and
+  Unstage each cover); the panel marks rows `aria-selected`, shows the bar above the list while
+  anything is selected (`N selected`, `Stage k`, `Unstage m`, a close button; Esc clears), and
+  each button sends its rows to the existing `scm_stage` in one call. Six model tests first failed
+  (`select is not a function`), then passed; tsc 0. Live in the lane app on the proof worktree with
+  one staged and three untracked files: click + two Ctrl-clicks read "3 selected · Stage 2 ·
+  Unstage 1" (`evidence/T-018-c-bulk.png`); Stage 2 left `git status` with three `A` rows and the
+  bar at Stage 0 · Unstage 3; a Shift-click spanned all four rows; Esc emptied the bar; Unstage 3
+  put all four back to untracked. One fix during the proof: three clicks fired in the same tick
+  each read the stale selection, so the updater now takes the previous state. Proof files removed.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png
+- 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
+- 2026-10-12 · [core] T-043-d · done: sign-in upkeep switch, lapsed warnings follow it, check on switch-off; Kolux-side renewal dropped (DT-C16); keychain rules → T-043-e; evidence/T-043-d-upkeep.png
+- 2026-10-12 · [core] T-042-b · done, decision only: usage service and hidden /status screen dropped (DT-C15); background app-server read is the only Codex figures route
+- 2026-10-12 · [core] T-041-b · done: resume after a limit (resume.rs, timer, foreground check, cancel on typing, persisted waits); evidence/T-041-b-resume.png
+- 2026-10-12 · [core] T-041-a · done: 200k cap (env for Claude, -c overrides for Codex, Settings > Agents switch), weekly-only read-only pill with tint and countdown, config-folder guard and one-window merge on status-line reports; DT-C14 drops the usage service; evidence/T-041-a-cap.png
+- 2026-10-12 · [core] T-040-a · done: Board card meter (context bar in tokens + plan %), tab ring, header gauge colours, USAGE-005 maths against the 200k cap; Agents view parts split to T-040-b; evidence/T-040-a-meter.png
+- 2026-10-12 · [core] T-039-b · done: statusLine slot taken with a chaining bash command, /claude-status route → kv claudeRateLimits + claudeUsageLimitResetsAt, pill 'Claude N% left', header gauge, limit stop carries the reset; evidence/T-039-b-usage.png
+- 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
+- 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
 - 2026-10-12 · [accounts] Git & worktrees gear move · not done: the sidebar gear's Git & worktrees part is T-116-a (b67005e), which is on main and lane/orchestration but not on lane/accounts, and this lane may not merge; move it into src/settings/GitPage.tsx (with the one-line DESIGN.md amendment) after main is merged into this lane, or in the merge itself
 - 2026-10-12 · [accounts] T-096-b · done: `recordKey`, `editChords`, `removeChord` and the `recording` flag in src/keys/record.ts; `keybindings_write` (one command into this platform's section, through a temp file, refuses a broken file and bad ids or values, emits `keybindings-changed`) in src-tauri/src/keybindings.rs; KeymapProvider `save` and reload on change; the window's shortcuts stand aside while recording; recorder on each Shortcuts row; tests in src/keys/record.test.ts, src/settings/shortcutRows.test.ts and two Rust tests · evidence/T-096-b.txt, evidence/T-096-b-1-recording.png .. -5-clash.png
 - 2026-10-12 · [accounts] T-096-a · done: `resolve` records clashes and takes an ignore list (src/keys/keymap.ts); `shortcutRows`, `filterRows`, `MAX_QUERY` in src/settings/shortcutRows.ts; `keywords` on actions; KeymapProvider ignores disabled agents' new-tab commands; Shortcuts page rebuilt; tests in src/settings/shortcutRows.test.ts and src/keys/keymap.test.ts · evidence/T-096-a.txt, evidence/T-096-a-1.png .. -3.png

@@ -6,7 +6,7 @@ use base64::Engine as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const OUTPUT_EVENT: &str = "terminal-output";
 pub const EXIT_EVENT: &str = "terminal-exit";
@@ -52,6 +52,8 @@ struct Mark {
     last_output: Option<Instant>,
     /// The program the session runs (ORCH-013 tells agents from other programs by it).
     program: String,
+    /// The agent the program is credited as (`claude`, `codex`), none for another program.
+    agent: Option<&'static str>,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -71,7 +73,7 @@ impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Option<(&str, String)>) -> Result<u32, String> {
+    pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>) -> Result<u32, String> {
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
@@ -84,6 +86,14 @@ impl Terminals {
             Some(p) => program_command(p, &args, cwd.as_deref()),
             None => shell_command(cwd.as_deref()),
         };
+        // STAT-001: the pane's programs and their hooks know which pane to report for. Set first:
+        // the hooks find their pane by KOLUX_HOOK_IDENTITY and only check that KOLUX_PANE_KEY is set,
+        // so the command line's handle and pane key below (CLI-007, ORCH-013) take those two names.
+        if let (Some(pane), Some(hooks)) = (pane_key, exit_app.try_state::<crate::hooks::Hooks>()) {
+            for (k, v) in hooks.pane_env(pane, id) {
+                command.env(k, v);
+            }
+        }
         let key = crate::cli::secret();
         command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
         command.env("KOLUX_PANE_KEY", &key);
@@ -102,7 +112,7 @@ impl Terminals {
         for (k, v) in own_env {
             command.env(k, v);
         }
-        if let Some((k, v)) = env {
+        for (k, v) in env {
             // A pane on a managed Claude account must not be overridden by a 1-year key that
             // Kolux itself was started with (Claude Code prefers the variable).
             if k == crate::claude_accounts::CONFIG_ENV {
@@ -139,7 +149,8 @@ impl Terminals {
         inner.sessions.insert(id, session);
         inner.keys.insert(id, key);
         if is_program {
-            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string() });
+            let agent = program.as_deref().and_then(crate::agents::credited_agent);
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent });
         }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
@@ -198,6 +209,20 @@ impl Terminals {
         let inner = self.inner.lock().ok()?;
         let same = |d: &str| std::path::Path::new(d).canonicalize().ok() == dir.canonicalize().ok();
         inner.marks.iter().filter(|(id, m)| m.started >= since && inner.dirs.get(id).is_some_and(|d| same(d))).map(|(id, m)| (*id, m.last_output)).next()
+    }
+
+    /// What session `id` runs: `None` when it is gone, `Some(None)` for a shell (the foreground
+    /// cannot be told), `Some(Some(agent))` for a program Kolux started (USAGE-007).
+    pub fn program(&self, id: u32) -> Option<Option<&'static str>> {
+        let inner = self.inner.lock().ok()?;
+        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent))
+    }
+
+    /// How long the program in `id` has printed nothing (since it started, when it never has), for
+    /// the quiet alert (STAT-045). `None` for a shell or a gone session.
+    pub fn silence(&self, id: u32) -> Option<std::time::Duration> {
+        let inner = self.inner.lock().ok()?;
+        inner.marks.get(&id).map(|m| m.last_output.unwrap_or(m.started).elapsed())
     }
 
     /// Ends every session that was started in `dir` or a folder under it, and waits (briefly) for
@@ -276,23 +301,37 @@ impl Terminals {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>) -> Result<u32, String> {
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>) -> Result<u32, String> {
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
-    let env = {
+    let (env, cap): (Vec<(String, String)>, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
-        crate::claude_key::pane_env(program.as_deref(), &settings, token)
+        let env: Vec<(String, String)> = crate::claude_key::pane_env(program.as_deref(), &settings, token)
             .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
+            .map(|(k, v)| (k.to_string(), v))
+            .into_iter()
+            .collect();
+        (env, crate::cap::on(&settings))
     };
-    terminals.spawn(app, cols, rows, cwd, program, args.unwrap_or_default(), env_own, env)
+    // USAGE-006: the 200k cap, added at start so the pane's saved start line stays free of it.
+    let mut env = env;
+    let mut args = args.unwrap_or_default();
+    if cap {
+        crate::cap::apply(program.as_deref(), &mut args, &mut env, crate::cap::env_set());
+    }
+    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it.
+    if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
+        crate::hooks::install_codex_home(std::path::Path::new(home));
+    }
+    terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)
 }
 
 /// TERM-045: for each id, whether closing it would stop a live program.
@@ -302,7 +341,13 @@ pub fn terminal_busy(terminals: tauri::State<'_, Terminals>, ids: Vec<u32>) -> V
 }
 
 #[tauri::command]
-pub fn terminal_write(terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
+pub fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
+    // STAT-028: Ctrl+C or Escape on its own, while the agent works, marks the coming Stop interrupted.
+    if data == "\x03" || data == "\x1b" {
+        crate::status::cancel(id);
+    }
+    // USAGE-007: the user's own typing after a limit stop cancels the resume.
+    crate::resume::user_typed(&app, id);
     terminals.write(id, &data)
 }
 

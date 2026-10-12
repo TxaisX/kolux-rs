@@ -17,6 +17,8 @@ import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget }
 const AppearancePage = lazy(() => import("./AppearancePage"));
 const GeneralPage = lazy(() => import("./GeneralPage"));
 const NotificationsPage = lazy(() => import("./NotificationsPage"));
+// STAT-041 / STAT-045: the finish, stopped and quiet-alert switches (T-026-a, T-039-a).
+const Notifications = lazy(() => import("./NotificationSwitches"));
 const ShortcutsPage = lazy(() => import("./ShortcutsPage"));
 const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
@@ -60,7 +62,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
           <input type="checkbox" role="switch" checked={resume} onChange={(e) => onResume(e.target.checked)} />
           <span>
             Carry on by itself once a usage limit resets
-            <small>Off unless you turn it on. Kolux saves the choice now; the resume itself is not built yet.</small>
+            <small>Off unless you turn it on. A Claude pane stopped by a usage limit gets "The usage limit has reset. Please continue where you left off." typed in about a minute after the limit resets, as long as Claude is still the program in front and nothing else was typed there since.</small>
           </span>
         </label>
       )}
@@ -227,7 +229,12 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           {page === "terminal" && <TerminalPage />}
           {page === "git" && <GitPage />}
           {page === "agents" && <AgentsPage />}
-          {page === "notifications" && <NotificationsPage />}
+          {page === "notifications" && (
+            <>
+              <NotificationsPage />
+              <Notifications />
+            </>
+          )}
           {(page === "safety" || page === "usage") && later}
           {repo && <RepoPage project={repo} />}
         </Suspense>

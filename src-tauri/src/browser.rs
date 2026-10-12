@@ -9,6 +9,46 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Rect, Url
 
 pub const LOAD_EVENT: &str = "browser-load";
 pub const TITLE_EVENT: &str = "browser-title";
+pub const CHORD_EVENT: &str = "browser-chord";
+
+/// The scheme the page's script navigates to for a browser chord (`kolux-chord:back`). The
+/// navigation handler turns it into `CHORD_EVENT` and cancels it, so it never reaches the
+/// network or the operating system, and a page that has no script of ours sees nothing.
+const CHORD_SCHEME: &str = "kolux-chord:";
+
+/// Runs in every page's main frame before the page's own script (BROW-003, BROW-005): the
+/// browser chords pressed while the keyboard is inside the page, Mod+L, Alt+Left / Alt+Right
+/// (Mod+[ / Mod+] on a Mac), Mod+R and the mouse's back and forward buttons, are taken away
+/// from the web view, which would otherwise go back on its own and leave the toolbar's history
+/// behind, and handed to the app as a chord navigation. T-012-b-fix.
+pub const CHORD_SCRIPT: &str = r#"(() => {
+  if (window !== window.top) return;
+  const mac = navigator.platform.startsWith("Mac");
+  const send = (what) => location.assign("kolux-chord:" + what);
+  addEventListener("keydown", (e) => {
+    const mod = mac ? e.metaKey : e.ctrlKey;
+    const k = e.key.toLowerCase();
+    let what = null;
+    if (mod && !e.altKey && !e.shiftKey && k === "l") what = "focusAddressBar";
+    else if (mod && !e.altKey && k === "r") what = "reload";
+    else if (mac ? mod && k === "[" : e.altKey && !mod && e.key === "ArrowLeft") what = "back";
+    else if (mac ? mod && k === "]" : e.altKey && !mod && e.key === "ArrowRight") what = "forward";
+    if (!what) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    send(what);
+  }, true);
+  addEventListener("mouseup", (e) => {
+    if (e.button !== 3 && e.button !== 4) return;
+    e.preventDefault();
+    send(e.button === 3 ? "back" : "forward");
+  }, true);
+})();"#;
+
+/// The chord a navigation carries, if it is one of ours and names a browser action.
+pub fn chord_of(url: &str) -> Option<&str> {
+    url.strip_prefix(CHORD_SCHEME).filter(|what| matches!(*what, "focusAddressBar" | "back" | "forward" | "reload"))
+}
 
 #[derive(Clone, Serialize)]
 struct LoadPayload {
@@ -21,6 +61,12 @@ struct LoadPayload {
 struct TitlePayload {
     id: u32,
     title: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ChordPayload {
+    id: u32,
+    what: String,
 }
 
 /// Where a pane body is, in CSS pixels from the window's top left.
@@ -59,8 +105,21 @@ fn err(e: tauri::Error) -> String {
 pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webview, id: u32, url: String, spot: Spot) -> Result<(), String> {
     let url = parse(&url)?;
     let load_app = app.clone();
+    let chord_app = app.clone();
     let builder = WebviewBuilder::new(label(id), WebviewUrl::External(url))
         .focused(false)
+        .initialization_script(CHORD_SCRIPT)
+        .on_navigation(move |url| {
+            let Some(what) = chord_of(url.as_str()) else { return true };
+            if what == "focusAddressBar" {
+                // The keyboard is inside the page; the bar lives in the app's own web view.
+                if let Some(main) = chord_app.get_webview("main") {
+                    let _ = main.set_focus();
+                }
+            }
+            let _ = chord_app.emit(CHORD_EVENT, ChordPayload { id, what: what.to_string() });
+            false
+        })
         .on_page_load(move |_, payload| {
             let event = match payload.event() {
                 PageLoadEvent::Started => "started",
@@ -126,6 +185,21 @@ mod tests {
         assert_eq!(parse("about:blank").unwrap().as_str(), "about:blank");
         assert_eq!(parse("https://example.com").unwrap().host_str(), Some("example.com"));
         assert!(parse("not an address").unwrap_err().starts_with("invalid address"));
+    }
+
+    #[test]
+    fn chords_pressed_inside_the_page_arrive_as_a_blocked_navigation() {
+        // T-012-b-fix: the page's script navigates to `kolux-chord:<action>`; only the four
+        // browser actions count, so a site cannot smuggle anything else through the channel.
+        assert_eq!(chord_of("kolux-chord:focusAddressBar"), Some("focusAddressBar"));
+        assert_eq!(chord_of("kolux-chord:back"), Some("back"));
+        assert_eq!(chord_of("kolux-chord:forward"), Some("forward"));
+        assert_eq!(chord_of("kolux-chord:reload"), Some("reload"));
+        assert_eq!(chord_of("kolux-chord:close"), None);
+        assert_eq!(chord_of("https://example.com/kolux-chord:back"), None);
+        for needle in ["kolux-chord:", "ArrowLeft", "ArrowRight", "preventDefault", "window.top"] {
+            assert!(CHORD_SCRIPT.contains(needle), "{needle}");
+        }
     }
 
     #[test]

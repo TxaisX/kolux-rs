@@ -1612,7 +1612,7 @@ mod tests {
         let info = set_place(&store, &good.display().to_string(), true).unwrap();
         assert!(good.is_dir() && info.flat && info.dir == good.display().to_string() && info.used == vec![good.display().to_string()]);
         drop(store);
-        fs::remove_dir_all(profile).unwrap();
+        let _ = fs::remove_dir_all(profile); // Windows may still hold the store file for a moment; the folder is throwaway
     }
 
     #[test]
