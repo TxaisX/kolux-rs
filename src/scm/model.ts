@@ -20,6 +20,18 @@ export type Status = {
   conflicts: Change[];
 };
 
+/** GIT-065: whether a workspace's commits are on its remote (`scm_pushed`). */
+export type Pushed = { path: string; state: "synced" | "ahead" | "unpublished" | "unknown"; count: number };
+
+/** GIT-065: the sidebar badge; none for a detached HEAD or a new branch with nothing of its own yet. */
+export function pushBadge(p: Pushed | undefined): { text: string; tone: "good" | "warn" } | null {
+  if (!p) return null;
+  if (p.state === "synced") return { text: "synced", tone: "good" };
+  if (p.state === "ahead") return { text: `${p.count} unpushed`, tone: "warn" };
+  if (p.state === "unknown") return { text: "cannot be checked", tone: "warn" };
+  return p.count > 0 ? { text: `unpublished \u00b7 ${p.count}`, tone: "warn" } : null;
+}
+
 export const emptyStatus: Status = { branch: null, upstream: null, ahead: 0, behind: 0, rewritten: false, base: null, head: null, staged: [], changed: [], untracked: [], conflicts: [] };
 
 /** What a commit attempt came to (GIT-004): `id` when it worked, else git's words and whether a hook refused. */

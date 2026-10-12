@@ -164,6 +164,13 @@ input { font: inherit; }
 .sess .fold.shut svg { transform: rotate(-90deg); }
 .sb-form .check { display: flex; align-items: center; gap: 8px; }
 .sess .hint { font-size: 11px; color: var(--fg-muted); }
+/* GIT-065: the badge sits where the row buttons appear on hover, so it never squeezes the name. */
+.sess .hint.push { position: absolute; right: 8px; white-space: nowrap; pointer-events: none; }
+.sess:hover .hint.push,
+.sess:focus-within .hint.push { visibility: hidden; }
+.branch .hint.push { font-size: 11px; font-weight: 400; white-space: nowrap; }
+.hint.push.good { color: var(--done); }
+.hint.push.warn { color: var(--warn); }
 .sb-form { margin: 4px 4px 6px; padding: 8px; border: 1px solid var(--line-focus); border-radius: 8px; font-size: 12px; color: var(--fg-muted); display: flex; flex-direction: column; gap: 6px; }
 .sb-form.warn { border-color: #7a3b1e; }
 .del-changes { margin: 0; padding-left: 16px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }

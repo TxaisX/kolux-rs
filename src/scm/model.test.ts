@@ -1,6 +1,15 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+
+test("GIT-065: the sidebar badge says synced, unpushed, unpublished or cannot be checked", () => {
+  expect(pushBadge({ path: "a", state: "synced", count: 0 })).toEqual({ text: "synced", tone: "good" });
+  expect(pushBadge({ path: "a", state: "ahead", count: 2 })?.text).toBe("2 unpushed");
+  expect(pushBadge({ path: "a", state: "unpublished", count: 1 })).toMatchObject({ text: "unpublished \u00b7 1", tone: "warn" });
+  expect(pushBadge({ path: "a", state: "unpublished", count: 0 })).toBeNull();
+  expect(pushBadge({ path: "a", state: "unknown", count: 0 })).toMatchObject({ text: "cannot be checked", tone: "warn" });
+  expect(pushBadge(undefined)).toBeNull();
+});
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 

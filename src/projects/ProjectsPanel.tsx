@@ -21,7 +21,7 @@ import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } 
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
+import { SUMMARY_UPSTREAM_KEY, pushBadge, type Pushed } from "../scm/model";
 import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
 import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
@@ -111,6 +111,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones the sidebar shows
   const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
   const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
+  const [pushedBy, setPushedBy] = useState<Record<string, Pushed>>({}); // GIT-065: by worktree path
+  const pushTag = (w: Worktree) => {
+    const b = pushBadge(pushedBy[w.path]);
+    return b && <span className={`hint push ${b.tone}`}>{b.text}</span>;
+  };
   const [review, setReview] = useState<string | null>(null); // project id whose new-worktree review is open
   const [hiddenPage, setHiddenPage] = useState(0);
   const [visGlobal, setVisGlobal] = useState<VisSource[]>([]); // SET-032: the global choice per source
@@ -205,6 +210,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
     setFresh(unseen);
+    // GIT-065: the same poll keeps each row's unpushed badge current; a failed read keeps the last.
+    const shown = Object.values(next).flat().filter((w) => !w.hidden).map((w) => w.path);
+    invoke<Pushed[]>("scm_pushed", { worktrees: shown })
+      .then((list) => setPushedBy(Object.fromEntries(list.map((p) => [p.path, p]))))
+      .catch(() => {});
     const owner: Record<string, string> = {};
     for (const p of list) for (const w of next[p.id] ?? []) owner[w.path] = p.id;
     const key = JSON.stringify([list, owner]);
@@ -785,6 +795,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               external
             </span>
           )}
+          {pushTag(w)}
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
           {!asking && (
             <button
@@ -1049,6 +1060,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                     <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
                       <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} />
                       <span className="name">{worktreeLabel(main)}</span>
+                      {pushTag(main)}
                       {isActive(main) && <span className="count">{openCount(main)}</span>}
                       <span className="chev">
                         <ChevronDown size={12} />

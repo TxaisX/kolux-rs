@@ -37,6 +37,17 @@ fn cli_first(dir: &std::path::Path, path: Option<std::ffi::OsString>) -> std::ff
     std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(rest)).unwrap_or_else(|_| dir.as_os_str().to_os_string())
 }
 
+/// GIT-063: an agent pane (automation runs start theirs the same way) gets git's prompts turned
+/// off, so a remote that wants a password fails the command instead of stalling the agent; a shell
+/// keeps prompting. Set before the user's own variables, which can turn them back on.
+fn unattended(command: &mut portable_pty::CommandBuilder, is_program: bool) {
+    if is_program {
+        for (k, v) in crate::git::NO_PROMPT {
+            command.env(k, v);
+        }
+    }
+}
+
 /// The handle a terminal is known by on the command line (`KOLUX_TERMINAL_HANDLE`).
 pub fn handle_of(id: u32) -> String {
     format!("term-{id}")
@@ -98,6 +109,7 @@ impl Terminals {
         if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
             command.env(crate::cli::APP_DIR_ENV, dir);
         }
+        unattended(&mut command, is_program);
         // SET-027: the user's variables for this agent; Kolux's account variable below wins.
         for (k, v) in own_env {
             command.env(k, v);
@@ -322,6 +334,18 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_agent_panes_have_git_prompts_turned_off() {
+        let mut agent = crate::pty::program_command("claude", &[], None);
+        unattended(&mut agent, true);
+        assert_eq!(agent.get_env("GIT_TERMINAL_PROMPT").and_then(|v| v.to_str()), Some("0"));
+        assert_eq!(agent.get_env("GCM_INTERACTIVE").and_then(|v| v.to_str()), Some("never"));
+        let mut shell = crate::pty::shell_command(None);
+        let before = shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string());
+        unattended(&mut shell, false);
+        assert_eq!(shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string()), before, "a shell still prompts");
+    }
 
     #[test]
     fn the_bundled_cli_folder_comes_first_on_the_search_path() {

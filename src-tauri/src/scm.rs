@@ -66,6 +66,42 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
     Ok(st)
 }
 
+/// GIT-065: whether a workspace's commits are on its remote, for the sidebar badge. `state` is
+/// synced, ahead (`count` commits not pushed), unpublished (no upstream; `count` commits past the
+/// base) or unknown (the count could not be read, which is never shown as synced).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Pushed {
+    pub path: String,
+    pub state: &'static str,
+    pub count: u32,
+}
+
+/// GIT-065: None while HEAD is detached. Reads only refs git already has, never the network.
+pub fn pushed(worktree: &Path) -> Option<Pushed> {
+    run(&["symbolic-ref", "-q", "HEAD"], Some(worktree)).ok()?;
+    let count = |range: &str| run(&["rev-list", "--count", range], Some(worktree)).ok().and_then(|n| n.parse::<u32>().ok());
+    let (state, n) = if run(&["rev-parse", "--verify", "-q", "@{upstream}"], Some(worktree)).is_ok() {
+        match count("@{upstream}..HEAD") {
+            Some(0) => ("synced", Some(0)),
+            n => ("ahead", n),
+        }
+    } else {
+        ("unpublished", Git::detect().ok().and_then(|g| g.default_branch(worktree)).and_then(|b| count(&format!("{b}..HEAD"))))
+    };
+    let path = worktree.display().to_string();
+    Some(match n {
+        Some(count) => Pushed { path, state, count },
+        None => Pushed { path, state: "unknown", count: 0 },
+    })
+}
+
+/// GIT-065: the badge for each listed workspace, read off the UI thread (the sidebar asks every
+/// few seconds).
+#[tauri::command]
+pub async fn scm_pushed(worktrees: Vec<String>) -> Vec<Pushed> {
+    tauri::async_runtime::spawn_blocking(move || worktrees.iter().filter_map(|w| pushed(Path::new(w))).collect()).await.unwrap_or_default()
+}
+
 /// Lines added and removed in one row of the branch summary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Lines {
@@ -392,6 +428,39 @@ mod tests {
     fn counts(dir: &Path) -> (Option<String>, u32, u32, bool) {
         let st = status(dir).unwrap();
         (st.upstream, st.ahead, st.behind, st.rewritten)
+    }
+
+    #[test]
+    fn the_sidebar_badge_counts_unpushed_commits_and_never_calls_an_unreadable_count_synced() {
+        let state = |dir: &Path| pushed(dir).map(|p| (p.state, p.count));
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-pushed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("pushed");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        assert_eq!(state(&dir), Some(("synced", 0)));
+        commit_file(&dir, "one.txt", "1\n");
+        commit_file(&dir, "two.txt", "2\n");
+        assert_eq!(state(&dir), Some(("ahead", 2)), "two commits not pushed");
+        run(&["push", "-q"], Some(&dir)).unwrap();
+        assert_eq!(state(&dir), Some(("synced", 0)), "pushing clears it");
+
+        // A branch never published counts what it holds past the base.
+        run(&["switch", "-q", "-c", "feature"], Some(&dir)).unwrap();
+        commit_file(&dir, "three.txt", "3\n");
+        assert_eq!(state(&dir), Some(("unpublished", 1)));
+        // The base cannot be read: it cannot be checked, never synced.
+        run(&["remote", "set-head", "origin", "main"], Some(&dir)).unwrap();
+        let origin_main = dir.join(".git").join("refs").join("remotes").join("origin").join("main");
+        fs::write(&origin_main, "0123456789012345678901234567890123456789\n").unwrap();
+        assert_eq!(state(&dir), Some(("unknown", 0)));
+
+        run(&["switch", "-q", "--detach"], Some(&dir)).unwrap();
+        assert_eq!(state(&dir), None, "a detached HEAD has no branch to push");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&bare);
     }
 
     #[test]

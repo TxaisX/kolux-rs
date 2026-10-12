@@ -447,7 +447,8 @@ fn run_precheck(cmd: &str, dir: &Path, limit: std::time::Duration) -> Option<Val
     } else {
         c.args(["-c", cmd]);
     }
-    c.current_dir(dir).stdin(Stdio::null());
+    // GIT-063: a precheck runs unattended too, so git fails rather than waits on a password.
+    c.current_dir(dir).stdin(Stdio::null()).envs(crate::git::NO_PROMPT);
     if let Ok(copy) = file.try_clone() {
         c.stdout(copy).stderr(file);
     }
