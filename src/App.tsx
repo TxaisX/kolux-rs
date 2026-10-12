@@ -45,6 +45,8 @@ import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neig
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
 import UpdateCenter from "./update/UpdateCenter";
+import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
+import { chromeShown } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
@@ -63,7 +65,9 @@ import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, rules
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
+import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
+import { useUsageAlerts } from "./usage/alerts";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -172,6 +176,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
+  const [settingsRead, setSettingsRead] = useState(false); // USAGE-009: no alert before this is true
+  useUsageAlerts(settingsRead ? settings : null);
   const classic = readLook(settings) === "classic";
   // SET-027: everywhere but Settings, only agents that are switched on are offered.
   const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
@@ -210,6 +216,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       void invoke<Record<string, unknown>>("get_settings")
         .then((s) => {
           setSettings(s);
+          setSettingsRead(true);
           applyAppearance(readAppearance(s));
         })
         .catch(() => setSettings({}));
@@ -260,6 +267,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // SET-014). Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
+      if (recording.on) return;
       const kind = screen === "terminals" ? panes.find((p) => p.key === focused)?.kind : undefined;
       const inTree = !!document.activeElement?.closest(".explorer"); // the explorer's own keys (EDIT-034) come with T-094-b
       // EDIT-001: in an editor the editor shortcuts come first and terminal ones do not apply;
@@ -795,7 +804,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   });
   return (
     <div className="app">
-      <TopBar screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
+      <TopBar appName={chromeShown(settings, "titleBarAppName")} screen={screen} classic={classic} onScreen={setScreen} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
       <div className="body">
         {asking && (
           <CloseAsk
@@ -832,6 +841,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             launching={launching}
             onLaunch={launch}
             onChoose={addChooser}
+            onTerminal={() => void newTab(null)}
             page={page}
             onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}
@@ -1082,12 +1092,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
       </div>
       <UpdateCenter />
+      {readStatusBar(settings).visible && (
       <StatusBar
+        hidden={readStatusBar(settings).hidden}
+        onToggle={(id) => saveSetting(STATUS_FIELDS.hidden, toggleItem(readStatusBar(settings).hidden, id))}
+        onHideBar={() => saveSetting(STATUS_FIELDS.visible, false)}
         terminals={live.length}
         agents={live.filter((p) => p.agent !== "shell").length}
         names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
         workspaces={Object.keys(owner)}
       />
+      )}
     </div>
   );
 }

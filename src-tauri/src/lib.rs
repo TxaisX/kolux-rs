@@ -4,6 +4,7 @@ mod automations;
 mod capture;
 mod browser;
 pub mod cli;
+mod cli_accounts;
 mod claude_accounts;
 mod claude_key;
 mod codex_accounts;
@@ -11,6 +12,7 @@ mod codex_usage;
 mod creatures;
 mod files;
 mod fsops;
+mod fonts;
 mod git;
 mod include;
 mod keybindings;
@@ -30,6 +32,7 @@ mod terminal;
 mod trust;
 mod update;
 mod visibility;
+mod usage_alerts;
 
 use state::Store;
 use std::sync::Mutex;
@@ -74,6 +77,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
@@ -125,6 +129,7 @@ pub fn run() {
             get_settings,
             save_settings,
             sysmem::process_memory,
+            fonts::list_fonts,
             resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,
@@ -161,6 +166,7 @@ pub fn run() {
             scm::scm_commit, scm::scm_remote,
             terminal::terminal_busy,
             keybindings::keybindings_read,
+            keybindings::keybindings_write,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             browser::browser_open,
@@ -220,7 +226,11 @@ pub fn run() {
             update::update_mark,
             update::update_check,
             update::update_download,
-            update::update_restart
+            update::update_restart,
+            claude_accounts::claude_account_remove,
+            codex_accounts::codex_account_remove,
+            usage_alerts::usage_alerts_fired,
+            usage_alerts::usage_alert_send
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

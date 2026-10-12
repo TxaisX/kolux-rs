@@ -8,7 +8,7 @@ import { attentionText, fixFor, type Attention, type Reason } from "./Attention"
 
 const sam = { id: "a1", email: "sam@example.com", organization: null, configDir: "d", lastSignIn: 1, stale: true };
 const claude: AccountsView = { accounts: [sam], active: "a1", signingIn: null, inBrowser: false, attention: null, keyMode: false, upkeepLeftToClaude: false };
-const codex: CodexView = { accounts: [], active: null, systemDefault: "chatgpt", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [] };
+const codex: CodexView = { accounts: [], active: null, systemDefault: "chatgpt", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [] };
 
 test("a stale active Claude account is flagged with its label and Sign in again", () => {
   const l = lapsed(claude, codex);

@@ -3,9 +3,9 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-017-c · Pre-trust for Cursor and Copilot in their own configuration files (the rest of the card on T-017-a; their file formats are not public)
-Done: 78 / 373 tasks  ·  P0 parity: 0/228 cards
+Done: 93 / 383 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 373 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 383 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
@@ -743,6 +743,84 @@ offline, scripts from the usual CDNs included. Publishing the same page again up
 T-097 adds `kolux-dev open` (CLI-011, APP-056): it starts Kolux, or brings its window to the front if it is
 already open or minimised, and returns once the app takes commands, so scripts can run `open` and then
 any other command. If the app never answers it gives up after 60 s with an error.
+[accounts] Two look bugs are fixed (T-037-fix-look). The top bar's Agents / Board / Terminals
+switcher no longer covers the search box at the default window size: it stays centred while
+both sides fit and moves aside when the right-hand group is wider; below 1100 px the search box
+keeps only its icon so the window controls stay on screen down to the 900 px minimum. In a
+small pane (the 4- and 6-pane layouts) a chooser's Start button now sits in a footer below the
+scrolling choices, so after picking Terminal the button is in view; before, it was below the
+pane's edge and the pick looked like it did nothing.
+
+[accounts] The launch screen warns before starting on a nearly spent account (T-135). When a
+provider the chosen seats use has used 80 % or more of its usage window, a line above Start says
+so: "Claude has used 85% of its 5-hour window, resets today 9:05 PM. These 3 Claude sessions
+may stop early." One line per provider, the agent named for one seat and a count for several;
+Start stays usable. Codex figures come from the top-bar pill's own reading; Claude has none
+until T-041 reads them, so no Claude line shows yet.
+
+[accounts] Usage alerts (T-136-a). When an account reaches 80 % of a usage window, and again at
+95 %, Windows shows a notification: "Codex · usage alert. Codex has used 82% of its 5-hour
+window (the 80% alert), resets today 11:03 PM." Each alert comes once per window and again only
+after that window resets, and a restart does not repeat it. Settings > Notifications has the
+switch (on by default). Codex figures drive it today; Claude's arrive with T-041.
+
+[accounts] Accounts lists (T-138). Settings > Accounts & keys shows a System default row first in both the Claude accounts and the Codex lists, then each managed account with its email (and organisation for Claude) and when it last signed in. Clicking a row makes it the account new panes use; panes already running keep theirs. Stale rows say Needs re-auth; a Codex account whose sign-in file has been gone for 30 seconds says Needs sign-in. Remove asks first in the row itself, deletes the account's own folder (retrying while Windows holds it) and hands back to the system default when it was the active one. Adding a Claude account that is already listed (same email in any letter case and the same organisation) adds nothing and says so; one email in two organisations is two rows. Adding a ChatGPT Codex account is refused while the user's own Codex settings name a custom model provider. The Codex System default row says Signed in with ChatGPT / Running on an API key / ... with a custom provider / Signed out, re-read whenever Kolux gets focus.
+
+[accounts] Model step (T-139-a). The session chooser offers a model list only for Claude, Codex, Grok, Gemini and Cursor (each with Program default as an explicit pick); any other agent, like Aider, skips the model step and its seat is ready as soon as the AI is chosen.
+
+[accounts] Account commands (T-141). `kolux-dev account add` runs Claude Code's own login (or, with `--agent codex`, Codex's device-code login) right in the terminal and the account then shows in Settings > Accounts; `kolux-dev account list` prints the Claude and Codex accounts with the one new panes use marked (`--json` for both). Nothing starts when Kolux is not running; Ctrl+C part-way through leaves no credentials behind.
+
+[accounts] Terminals now use a proper light colour scheme in light mode (T-145-a): the Tango
+palette on white, while dark mode keeps Kolux's own dark colours, and Match app theme still
+follows the app. The terminal pane also knows how to answer programs that ask for its colours
+or for light/dark mode, and tells subscribed programs when the mode flips, but on Windows those
+questions are swallowed before they reach the pane, so that part is not live yet (T-145-b).
+
+[accounts] The status bar can be trimmed (T-147): right-click it to tick or untick Agent status,
+Resource Manager, Terminals running and Agents running, or to hide the whole bar; the choice is kept
+across restarts, and Settings > Appearance > Show status bar brings a hidden bar back. A right-click
+inside the Resource Manager popover stays with the popover.
+
+[accounts] Terminal colour schemes (T-148-a): Settings > Appearance > Terminal colours now has a
+search box and two scheme lists, one for dark mode and one for light mode, each row showing the
+scheme's ground and four colours. Eleven well-known schemes ship (Tango, Campbell, Solarized,
+Dracula, Nord, Gruvbox, One Half), and a scheme copied out of Windows Terminal can be pasted in;
+a bad paste says why. Removing a scheme that is in use falls back to the default.
+
+[accounts] Appearance in three foldable sections, with font pickers (T-148-b): Settings > Appearance
+now has Interface, Terminal and Window & Sidebar, all open at first; a folded one shows a one-line
+summary (for Terminal: the font and the dark / light schemes). A link to a setting in a folded section
+opens just that section. Interface gains App font and Editor font fields that suggest the fonts
+installed on this PC as you type; a font that is not installed still draws text in the default.
+
+[accounts] Window & Sidebar switches (T-148-c): Settings > Appearance > Window & Sidebar can show the
+app name beside the mark, and hide the sidebar's Tasks row, its Automations button, the status bar,
+or single status bar items. Changes show at once; the status bar's right-click menu and the
+Settings ticks always agree. The app name starts off and Automations starts on (DT-A6).
+
+[accounts] Pane dividers and dim (T-148-d): Settings > Appearance > Terminal > Panes sets the gap
+between panes (2 to 12 px), a divider colour for dark mode and one for light mode, and how far panes
+not in focus fade. Moving focus fades the pane left behind over about 140 ms. Defaults keep the
+measured look: 6 px, no colour, no dim (DT-A7).
+
+[accounts] Agent dropdown (T-143): the New session menu, from the sidebar or a pane's plus, leads
+with Claude Code, Codex and Grok; other installed agents fold behind "Show more agents", folded
+again each time it opens. A search box reaches any installed agent (aid finds Aider), typing shell
+or terminal offers a blank terminal, Enter takes the top row, and "Manage agents" opens Settings > Agents.
+
+[accounts] Settings > Shortcuts now lists all 127 commands grouped by area (General, Tabs, Terminal,
+Browser, Editor, File explorer, Settings) with their keys and Modified, Unassigned, Disabled and
+Conflicts badges (T-096-a). Filters for all, modified, unassigned and conflicting sit beside a search
+box that finds titles, areas, ids, extra words (cls finds Clear active pane) and keys however they
+are written (Mod+K, Ctrl + K, Cmd+K). When two commands share a chord, both rows say so and name the
+other command; switched-off agents' new-tab commands never count. Recording keys is T-096-b.
+
+[accounts] Shortcuts can now be changed from Settings > Shortcuts (T-096-b): click a command's keys
+and press new ones, Add a second shortcut, remove one with x, Disable or Reset. Esc stops recording
+and keeps what was there; Shift alone or a bare key is refused with a note. Each change is written
+straight into the Windows section of ~/.kolux/keybindings.json, leaving the rest of the file as it
+was, and every open window picks it up. A shortcut that clashes shows Conflicts on both rows with a
+Reset button on the one that caused it. Double-tapping a modifier and the app menu refresh are later (T-246, T-248).
 
 ## Needs Txais
 
@@ -753,6 +831,14 @@ recorded default until told otherwise; nothing here blocks a pass.
   Txais's account (stored sealed, removed with Disconnect two minutes later, never read or printed).
   Txais said the same evening that this was intended, not accidental; the key stays and no builder
   should ask for it to be revoked. Live checks still use stand-in programs and fake keys.
+
+- [accounts] 2026-10-11 · Token analytics (T-136-b's USAGE-012 / 013, T-137) read the Claude Code
+  and Codex logs on this PC. Claude Code's public docs say its transcript format "is internal
+  ... and changes between versions", and Codex documents none, so a clean-room build has nothing
+  public to parse against. Options: (a) let a builder read the shape (field names only, never the
+  text) of a few of your own `~.claudeprojects` and `~.codexsessions` files; (b) count
+  tokens only from what Kolux sees live; (c) leave token analytics out. Until you pick, T-136-b
+  and T-137 stay unbuilt. USAGE-011's activity counts also wait for the status hooks (T-025).
 
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
@@ -1424,7 +1510,74 @@ recorded default until told otherwise; nothing here blocks a pass.
   here). Console host processes belong to the app's tree on Windows, so they count under Kolux,
   not under a session. A session's tree is found by parent ids (ponytail note in resources.rs).
 
+- 2026-10-11 · [accounts] T-135 · the window checked is each provider's shortest one with a figure
+  (5-hour, else weekly, else monthly), as USAGE-010 words it; a busy week behind a quiet 5 hours
+  gives no line. The warning sits in the chooser's footer above Start. Dev builds expose
+  `window.__koluxUsage(provider, figures)` so the live check can set 85 % and 90 %; release builds
+  do not have it.
+
+- 2026-10-11 · [accounts] T-136-a · T-136 split: -a is the usage alerts (USAGE-009) and the launch
+  warning (USAGE-010, already built in T-135); -b keeps the Stats & Usage page, the analytics
+  overview and the token-tracking switches (USAGE-011..013). Alerts are sent from the Rust side
+  through the Tauri notification plugin (MIT/Apache-2.0). In dev builds Windows files them under
+  PowerShell's name; an installed build shows Kolux RS. The master notifications switch is T-026's
+  and the tray dot T-324's (noted on those lines).
+
+- 2026-10-11 · [accounts] T-138 · DT-A3: no save-aside or mirrored copies of the system login (ACCT-017, ACCT-020 amended); managed accounts live in their own folders and a switch is one locked write, so a launch can never see a half-made change.
+- 2026-10-11 · [accounts] T-138 · ACCT-018's "place the account runs": Kolux RS runs every account on this Windows install, so email + organisation decide sameness; a second runtime (WSL) would add itself to `same_account`.
+- 2026-10-11 · [accounts] T-138 · the Codex personal-vs-business label goes to T-138-b: the workspace kind is only in undocumented token claims; for now each row shows its own last sign-in time.
+- 2026-10-11 · [accounts] T-138 · Codex warnings: a missing sign-in file (after 30 s) is Needs sign-in, a failed sign-in check is Needs re-auth (the T-092 card said Needs sign-in for the latter; ACCT-019 names both).
+
+- 2026-10-11 · [accounts] T-139 split: -a is ACCT-032's built-in model step (built), -b is ACCT-023 + ACCT-064 (pane account memory and the restart prompt, PTY foreground checks: HAND TO FABLE), -c is ACCT-027 (Grok's session file and credit figures need a public source); ACCT-031 moved to T-141, which builds the same `kolux account` commands (CLI-014).
+- 2026-10-11 · [accounts] T-139-a · ACCT-032 over the earlier seats test: an agent with no built-in list now has no model step at all (it used to show only Program default).
+
+- 2026-10-11 · [accounts] T-141 · DT-A4: account commands refuse every flag they do not take (environments, pairing codes and remote targets alike) instead of ignoring remote targets as CLI-014 said; spec/20-cli.md amended.
+- 2026-10-11 · [accounts] T-141 · A Claude account added from the command line is not made active (as with Add Account in Settings); a Codex one is (as Settings does). The macOS Keychain restore is in T-043-d.
+
+- [accounts] T-145-a · Tango light uses its bright yellow (#fce94f) as is, so yellow text is pale on white; a darker yellow would read better but stops being Tango. Kept the card's palette.
+- [accounts] T-145-a · the terminal's light/dark answers follow the app's mode (System, Light, Dark), not the terminal background, so Match app theme and Kolux dark answer the same way.
+
+- [accounts] T-147 · with no menu bar yet, a status bar hidden from its right-click menu comes back from Settings > Appearance > Show status bar; the View menu item waits for the menu bar (T-248).
+- [accounts] T-147 · DT-A5: the bar has no agent items left to hide when an agent CLI is missing (the usage chips were retired), and its copy stays English until language packs; saved item lists drop ids this version does not have.
+
+- [accounts] T-148-a · catalogue palettes are the schemes' own published values, unchanged; Solarized Light's bright white equals its background, so some PowerShell input colours read faint there, as they do in other terminals.
+- [accounts] T-148-a · pasted schemes must be one Windows Terminal scheme object with a name and hex colours (purple/brightPurple/cursorColor accepted); a name already in the list is refused rather than replaced.
+
+- [accounts] T-148-b · the font fields apply when a suggestion is picked, on Enter or on leaving the field, not on every keystroke (a half-typed name would flash the whole window into the fallback font).
+- [accounts] T-148-b · App font and Editor font sit in the Interface section; the Editor font has no editor to draw yet (T-323), so for now it is only saved.
+
+- [accounts] T-148-c · DT-A6: the title bar app name is off by default (DESIGN.md draws it nowhere) and the Automations button is on by default until the command palette exists; SET-020's card says shown and hidden. Confirm or flip.
+
+- [accounts] T-148-d · DT-A7: the divider starts at 6 px with no colour and panes not in focus start undimmed; SET-023's card says 3 px and dimmed. Confirm or flip.
+
+- [accounts] T-143: a default agent outside Claude Code, Codex and Grok also leads the dropdown (SESS-004 keeps the default first), so up to four rows show before the fold; the search box shows only when more than three agents are installed; Grok and the rest draw the plain shell glyph until T-335 brings vendor marks.
+
+- [accounts] T-096-a: the shortcut search matches keys as a substring of the written or drawn chord with spaces and plus signs removed, so Cmd+D also finds Cmd+Down; no command sits behind a feature flag yet, so SET-008's flag rule has nothing to leave out today.
+
+- [accounts] T-096-b: Reset takes the command out of this platform's section; when the all-platforms section still overrides it, the shipped default is written into this platform's section instead so the default really returns. Removing a command's last chord leaves it disabled (null in the file), the same as Disable. A recorded chord that clashes is still saved; the resolver drops it as SET-010 says, and the row keeps a Reset button because the file still holds the override.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] Git & worktrees gear move · not done: the sidebar gear's Git & worktrees part is T-116-a (b67005e), which is on main and lane/orchestration but not on lane/accounts, and this lane may not merge; move it into src/settings/GitPage.tsx (with the one-line DESIGN.md amendment) after main is merged into this lane, or in the merge itself
+- 2026-10-12 · [accounts] T-096-b · done: `recordKey`, `editChords`, `removeChord` and the `recording` flag in src/keys/record.ts; `keybindings_write` (one command into this platform's section, through a temp file, refuses a broken file and bad ids or values, emits `keybindings-changed`) in src-tauri/src/keybindings.rs; KeymapProvider `save` and reload on change; the window's shortcuts stand aside while recording; recorder on each Shortcuts row; tests in src/keys/record.test.ts, src/settings/shortcutRows.test.ts and two Rust tests · evidence/T-096-b.txt, evidence/T-096-b-1-recording.png .. -5-clash.png
+- 2026-10-12 · [accounts] T-096-a · done: `resolve` records clashes and takes an ignore list (src/keys/keymap.ts); `shortcutRows`, `filterRows`, `MAX_QUERY` in src/settings/shortcutRows.ts; `keywords` on actions; KeymapProvider ignores disabled agents' new-tab commands; Shortcuts page rebuilt; tests in src/settings/shortcutRows.test.ts and src/keys/keymap.test.ts · evidence/T-096-a.txt, evidence/T-096-a-1.png .. -3.png
+- 2026-10-12 · [accounts] T-143 · done: `agentRows`, `searchAgents` (name, word start, alias, initials, command; over 40 characters ignored) and `wantsTerminal` in src/launch/agents.ts; PlusMenu search box, Show more toggle, Blank terminal row and Manage agents; sidebar row opens a shell tab, pane row splits a shell; tests in src/launch/dropdown.test.ts · evidence/T-143.txt, evidence/T-143-1-folded.png .. T-143-5-manage.png
+- 2026-10-12 · [accounts] T-148-d · done: Appearance fields `paneDividerWidth`, `paneDividerDark`, `paneDividerLight`, `paneDim` (clamped, colours #rrggbb only) as CSS vars `--divider-width`, `--divider`, `--pane-dim`; the grid gap and ground follow them, unfocused pane content fades over 140 ms; Panes card under Terminal; DT-A7 + SET-023 amendment · evidence/T-148-d.txt, evidence/T-148-d-1.png .. T-148-d-3.png
+- 2026-10-12 · [accounts] T-148-c · done: new `src/chrome/chromeItems.ts` (`titleBarAppName`, `tasksButton`, `automationsButton` with DT-A6 defaults, folded summary), Window & Sidebar switches and status bar item ticks in Settings > Appearance, TopBar app name, ProjectsPanel Tasks row and Automations button follow the switches; DT-A6 + SET-020 amendment; View-menu submenu on T-248, used/left usage on T-041 · evidence/T-148-c.txt, evidence/T-148-c-1-defaults.png .. T-148-c-5-automations-hidden.png
+- 2026-10-12 · [accounts] T-148-b · done: Appearance page in three `<details>` sections with folded summaries (SET-016), links unfold their section (SettingsPage), App font / Editor font fields with installed-font suggestions (new `src-tauri/src/fonts.rs` `list_fonts`, `src/settings/fonts.ts`), fonts kept in `appFont` / `editorFont` and cached for the first frame; icon chooser, search unfolding, terminal font and editor noted on T-300, T-246, T-247, T-323 · evidence/T-148-b.txt, evidence/T-148-b-1-sections.png .. T-148-b-7-link-unfolds-window.png
+- 2026-10-12 · [accounts] T-148-a · done: new `src/terminal/schemes.ts` (catalogue, search, Windows Terminal import, tidy on load), `src/settings/SchemePicker.tsx` (scheme lists), theme.ts dark/light picks (`terminalScheme`, `terminalSchemeLight`, `terminalCustomSchemes`), Appearance page Terminal colours rebuilt · evidence/T-148-a.txt, evidence/T-148-a-1-pickers.png .. T-148-a-5-custom-terminal.png
+- 2026-10-11 · [accounts] T-147 · done: new `src/chrome/statusItems.ts` (items, `readStatusBar` with old-list clean-up, `toggleItem`), `StatusBar.tsx` (right-click menu, popover guard, hidden items), App wiring (`statusBarVisible`, `statusBarHidden`), Settings > Appearance status bar switch; DT-A5 + VIEW-096 amendment; menu-bar item added to T-248 · evidence/T-147.txt, evidence/T-147-1-menu.png .. T-147-5-appearance-switch.png
+- 2026-10-11 · [accounts] T-145-a · done: `src/theme.ts` (Tango light scheme, `currentDark`), new `src/terminal/colourMode.ts` (DEC 2031 subscribe, CSI ? 996 n query, CSI ? 997 ; 1|2 n reports), `TerminalPane.tsx` wires it to theme changes; T-145-b split off and HAND TO FABLE: Windows ConPTY swallows OSC 4/10/11 "?" and CSI ? 996 n / ? 2031 h before xterm sees them (proved live: a cursor-position query came back, the colour and mode queries did not); custom themes moved to T-148 · evidence/T-145-a.txt, evidence/T-145-1-light-tango.png, evidence/T-145-2-dark-kolux.png
+- 2026-10-11 · [accounts] T-145-b · HAND TO FABLE: the colour and light/dark questions programs ask are swallowed by Windows ConPTY (system conhost via portable-pty) before xterm sees them; fixing it is PTY work (a pass-through console or answering in the Rust reader)
+- 2026-10-11 · [accounts] T-141 · done: new `src-tauri/src/cli_accounts.rs` (app side: `account.list`, `account.add-begin` makes a throwaway folder in the profile's `sign-in-temp`, `account.add-finish` hands it to the same `sign_in` Settings uses and deletes it, a sign-in whose throwaway copy cannot be deleted is failed and not kept; CLI side: the login runs in the user's terminal with inherited input and output, a console handler passes Ctrl+C to the login only, then the folder is removed, a closing terminal removes it on the way out; an unknown begin command reads as a Kolux too old for accounts); `cli.rs` parses `account add [--agent claude|codex]` and `account list` (Claude when left out, an empty `--agent` refused, other flags refused as "this machine"), help text; `state.rs` `Store::dir`; windows-sys Console feature; 5 new Rust tests + 1 parse test; live: stand-in claude/codex, app not running -> `app_unreachable` and no folder made, add Claude -> listed, same again -> refused, add Codex with a printed device code -> listed and active, list text and JSON, Ctrl+C sent part-way -> "Sign-in interrupted; nothing was added" and the throwaway folder empty · evidence/T-141.txt, T-141-1-settings-after-cli-add.png
+- 2026-10-11 · [accounts] T-140 · BLOCKED, not started: AUTO-014 saves a run's output when the run ends, and runs only ever reach "dispatched" until T-072 (AUTO-012, truthful end status) is built; its token and cost figures read the same unpublished Claude Code / Codex usage logs (Needs Txais, token analytics)
+- 2026-10-11 · [accounts] T-139-b · not started · HAND TO FABLE: ACCT-023 and ACCT-064 need each pane to remember the account it started on, a check of the pane's foreground program (PTY) and an in-pane restart prompt that restarts Codex once the shell is ready; terminal-pane internals of the core lane.
+- 2026-10-11 · [accounts] T-139-a · done: `modelsFor` returns nothing for an agent without a built-in list, `seatReady` counts such a seat ready once its AI is picked, the chooser hides the model group for it; seats test extended (5 listed agents end in Program default, Aider has none and is ready, Codex without a model is not); live: stand-in claude and aider on PATH, chooser opened from the pane's New session menu, Aider picked -> no model group and Start enabled, Claude picked -> model group with Start disabled · evidence/T-139-a-1-aider-no-model-step.png, T-139-a-2-claude-model-step.png. Seen: the Codex usage poller ran the real installed Codex for the system default's figures (top bar showed Codex 100% left); later live checks put a stand-in codex first on PATH.
+- 2026-10-11 · [accounts] T-138 · done: `claude_accounts.rs` (duplicate check `same_account`, `activate(None)` for the system default, `remove` deleting only folders inside Kolux's own, refused during a sign-in), `codex_accounts.rs` (system default, `remove` with `remove_dir_patiently`, 30 s `missing_now` grace, roll-back only when no sign-in file exists, custom-provider refusal, read only), shared `AccountRow.tsx` with inline Remove confirm, Codex re-read on focus; 5 new Rust tests, 8 new front-end tests; live: seeded fake accounts with stand-in claude/codex on PATH, clicked rows, removed the active Claude and Codex accounts and the System default took over, folders gone · evidence/T-138-1-lists.png, T-138-2-remove-asks.png, T-138-3-removed-system-default-active.png
+- 2026-10-11 · [accounts] T-136-b · BLOCKED, not started: USAGE-011 counts agent turns from the status hooks (T-025 unbuilt; the window only knows a program is running); USAGE-012 / 013 read Claude Code and Codex log files whose format has no public description (Needs Txais, token analytics)
+- 2026-10-11 · [accounts] T-137 · BLOCKED, not started: the Claude / Codex token panels and cost figures parse the same unpublished log formats (Needs Txais, token analytics); the Grok credits panel waits for a Grok usage source
+- 2026-10-11 · [accounts] T-136-a · done: `src/usage/alerts.ts` (`dueAlerts` 80 % and 95 % once per window and reset time, both at once when first seen over 95 %, nothing without a reset time, window wording for 5-hour / weekly / monthly / n-day / n-hour / other; `useUsageAlerts` watches the shared figures, waits for settings and the saved record) + `alerts.test.ts` (6 tests); `src-tauri/src/usage_alerts.rs` (fired record in state.db, saved before the notification shows) + tauri-plugin-notification; Settings > Notifications usage-alerts switch; live: Codex 70 % gave nothing, 82 % one toast, 84 / 90 % and a reload nothing more, 97 % the 95 % toast, a new reset time at 30 % then 81 % the 80 % toast again, Claude first seen at 97 % two toasts, no reset time none, switch off none, switch on again the one due; all read back from Windows' notification history; build / clippy / 132 Rust + 174 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-136-a.txt, evidence/T-136-a-*.png
+- 2026-10-11 · [accounts] T-135 · done: `src/usage/launchWarn.ts` (`launchWarnings` one line per provider at 80 % or more of its shortest window with a figure, seat count or the one agent named, reset time when known; the shared figures store the Codex pill now publishes to) + `launchWarn.test.ts` (4 tests: three Claude seats at 85 %, a second provider, 80 % exactly, 40 %, no figures, no usage source, the shortest-window rule); `ChooserPane.tsx` shows the lines above Start (1 more test); live: three Claude seats with 85 % set gave one line counting 3 sessions with its reset time and Start enabled, 40 % gave none, a real Codex seat (0 % used) gave none, Codex at 90 % added its own line; build / clippy / 132 Rust + 168 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-135.txt, evidence/T-135-*.png
+- 2026-10-11 · [accounts] T-037-fix-look · done: `styles.css` top bar is a three-column grid (`1fr auto 1fr`) instead of an absolutely centred switcher, a 1100 px rule that leaves the search box its icon, `.chooser-foot`; `ChooserPane.tsx` Start moved out of the scrolling body into a footer; a new test in `ChooserPane.test.ts` (Start sits in a footer after the scrolling body; failed before the move) and `scripts/evidence/overlap.mjs` (live check, exit 1 on overlap; before: switcher 595-805 over search box 771-961 at 1400 px, after: 517-727 against 771-961, and at 884 px 160-370 against 414-445 with the close button inside the window); live: Start reachable and starting a PowerShell session from a 6-pane chooser; seen, not fixed (core lane's tabs): a chooser that gets a tab beside it is named "Terminal N" on its tab · evidence/T-037-fix-look.txt, evidence/T-037-fix-look-*.png
 - 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.
 - 2026-10-09 · T-023 · done: `src/terminal/status.ts` (header word, tone, icon, age, needs-you cycle) + `status.test.ts`; `TerminalPane.tsx` finish time, minute tick, glow until focused, `onNeedsYou`; `App.tsx` Ctrl+J handler across workspaces; `styles.css` glow and age. Live: agent workspace via CLI, split shell focused, `/exit` sent to the agent → "Done · just now" with a glow, "1m ago" after a minute, glow gone on focus; Ctrl+J with nothing waiting left focus where it was. Evidence: `evidence/T-023-glow.png`, `evidence/T-023-focused.png`.
 - 2026-10-09 · T-022 · done: `src/projects/rows.ts` (states, ranks, smart order, status and PR groups, setting keys) + `rows.test.ts`; `App.tsx` derives each folder's strongest state and change time from its panes and offers `saveSetting`; `ProjectsPanel.tsx` grouping, sort, filter form, state dots, unread marks, accent bar, 5 s branch poll; `styles.css`. Live: two CLI-made agent workspaces, one agent ended → done above working under Smart; Status grouping headers; hand-marked unread on the shown row; `git checkout -b renamed` in zeta's folder showed on its row. Evidence: `evidence/T-022-status.png`, `evidence/T-022-branch.png`.

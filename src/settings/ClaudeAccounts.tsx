@@ -1,9 +1,11 @@
 // The Claude accounts section of Settings > AI connections (ACCT-005): each managed account
 // signs in through the browser into its own private Claude folder and is listed with its email
 // and organisation; one can be made active for new Claude panes. While the 1-year key (ACCT-004)
-// is connected it wins for new panes, and the section says so. The full list with the system
-// default and safe switching is T-138 (ACCT-016..018).
+// is connected it wins for new panes, and the section says so. T-138 (ACCT-016..018): a System
+// default row comes first; clicking a row picks the account for new Claude panes (panes already
+// running keep theirs); Remove asks first and hands back to the system default.
 import { useCallback, useEffect, useState } from "react";
+import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AttentionNote, openInstallPage, type Attention } from "./Attention";
@@ -19,9 +21,9 @@ export type AccountsView = {
   upkeepLeftToClaude: boolean;
 };
 
-export type AccountAction = { kind: "add" } | { kind: "again"; id: string } | { kind: "activate"; id: string } | { kind: "cancel" } | { kind: "key" } | { kind: "install" };
+export type AccountAction = { kind: "add" } | { kind: "again"; id: string } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "cancel" } | { kind: "key" } | { kind: "install" };
 
-export function ClaudeAccountsView({ view, error, onAction }: { view: AccountsView | null; error?: string | null; onAction: (a: AccountAction) => void }) {
+export function ClaudeAccountsView({ view, error, confirming = null, onAction }: { view: AccountsView | null; error?: string | null; confirming?: string | null; onAction: (a: AccountAction) => void }) {
   if (!view) return null;
   const busy = view.signingIn !== null;
   return (
@@ -42,30 +44,36 @@ export function ClaudeAccountsView({ view, error, onAction }: { view: AccountsVi
           </button>
         </div>
       )}
-      {view.accounts.length === 0 && !busy && <p className="conn-detail">No managed accounts. Add one to run Claude panes on a Claude account of its own.</p>}
-      {view.accounts.map((a) => {
-        const isActive = view.active === a.id;
-        return (
-          <div key={a.id} className="acct-row" data-active={isActive}>
-            <div className="acct-who">
-              <span className="acct-email">{a.email ?? "Claude account"}</span>
-              <span className="acct-org">{a.organization ?? "No organisation"}</span>
-            </div>
-            {a.stale && <span className="conn-chip attention">Needs sign-in</span>}
-            {isActive ? <span className="conn-chip connected">Active</span> : null}
-            <div className="btn-row">
-              {!isActive && (
-                <button className="btn" disabled={busy} onClick={() => onAction({ kind: "activate", id: a.id })}>
-                  Make active
-                </button>
-              )}
-              <button className="btn" disabled={busy} onClick={() => onAction({ kind: "again", id: a.id })}>
-                Sign in again
-              </button>
-            </div>
-          </div>
-        );
-      })}
+      <div className="acct-list">
+        <AccountRow
+          title="System default"
+          detail="Claude Code's own login, as you signed in outside Kolux"
+          active={view.active === null}
+          busy={busy}
+          onPick={() => onAction({ kind: "activate", id: null })}
+        />
+        {view.accounts.map((a) => (
+          <AccountRow
+            key={a.id}
+            title={a.email ?? "Claude account"}
+            detail={`${a.organization ?? "No organisation"} · Last signed in ${signedInAt(a.lastSignIn)}`}
+            active={view.active === a.id}
+            busy={busy}
+            trouble={a.stale ? "Needs re-auth" : null}
+            onPick={() => onAction({ kind: "activate", id: a.id })}
+            manage={{
+              againLabel: "Re-authenticate",
+              onAgain: () => onAction({ kind: "again", id: a.id }),
+              confirming: confirming === a.id,
+              activeGoes: view.active === a.id,
+              onAsk: () => onAction({ kind: "ask-remove", id: a.id }),
+              onRemove: () => onAction({ kind: "remove", id: a.id }),
+              onKeep: () => onAction({ kind: "keep" }),
+            }}
+          />
+        ))}
+      </div>
+      {view.accounts.length === 0 && !busy && <p className="conn-detail">Kolux is using the system-default login. No managed accounts yet: add one to run Claude panes on a Claude account of its own.</p>}
       {view.keyMode && view.active && <p className="conn-detail">The 1-year key is connected, so new Claude panes use the key. Disconnect it to run them on the active account.</p>}
       <AttentionNote
         attention={view.attention}
@@ -91,6 +99,7 @@ export function addClaudeAccount(): Promise<void> {
 export default function ClaudeAccounts() {
   const [view, setView] = useState<AccountsView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
   const read = useCallback(() => {
     invoke<AccountsView>("claude_accounts")
       .then(setView)
@@ -106,6 +115,8 @@ export default function ClaudeAccounts() {
   }, [read]);
   const act = (a: AccountAction) => {
     setError(null);
+    setConfirming(a.kind === "ask-remove" ? a.id : null);
+    if (a.kind === "ask-remove" || a.kind === "keep") return;
     const call =
       a.kind === "add"
         ? addClaudeAccount()
@@ -113,6 +124,8 @@ export default function ClaudeAccounts() {
           ? invoke("claude_account_sign_in", { id: a.id })
           : a.kind === "activate"
             ? invoke("claude_account_activate", { id: a.id })
+            : a.kind === "remove"
+              ? invoke("claude_account_remove", { id: a.id })
             : a.kind === "key"
               ? invoke("claude_key_connect")
               : a.kind === "install"
@@ -120,5 +133,5 @@ export default function ClaudeAccounts() {
                 : invoke("claude_account_cancel");
     call.catch((e) => setError(String(e))).finally(read);
   };
-  return <ClaudeAccountsView view={view} error={error} onAction={act} />;
+  return <ClaudeAccountsView view={view} error={error} confirming={confirming} onAction={act} />;
 }

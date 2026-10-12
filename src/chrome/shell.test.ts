@@ -27,11 +27,11 @@ test("the search box chips follow the keybindings file", () => {
   const topbar = createElement(TopBar, { screen: "terminals", onScreen: () => {}, sidebarOpen: true, onToggleSidebar: () => {}, rightOpen: false, onToggleRight: () => {} });
   const plain = renderToString(topbar);
   expect(plain).toMatch(/kbd">Ctrl<.*kbd">Shift<.*kbd">J</);
-  const custom: KeymapState = { ...resolve({ version: 1, platforms: { win32: { "worktree.palette": "Mod+Alt+P" } } }, "win32"), path: null, reload: () => {} };
+  const custom: KeymapState = { ...resolve({ version: 1, platforms: { win32: { "worktree.palette": "Mod+Alt+P" } } }, "win32"), path: null, reload: () => {}, save: async () => {} };
   const html = renderToString(createElement(KeymapContext.Provider, { value: custom }, topbar));
   expect(html).toMatch(/kbd">Ctrl<.*kbd">Alt<.*kbd">P</);
   expect(html).not.toContain('kbd">J<');
-  const unbound: KeymapState = { ...resolve({ keybindings: { "worktree.palette": null } }, "win32"), path: null, reload: () => {} };
+  const unbound: KeymapState = { ...resolve({ keybindings: { "worktree.palette": null } }, "win32"), path: null, reload: () => {}, save: async () => {} };
   expect(renderToString(createElement(KeymapContext.Provider, { value: unbound }, topbar))).toContain("Unassigned");
 });
 

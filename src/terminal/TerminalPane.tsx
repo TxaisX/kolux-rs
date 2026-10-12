@@ -12,10 +12,12 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
-import { currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
+import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
+import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
+import { openSettings } from "../settings/pages";
 import { CheckCircle, Close, Dots, Expand, Plus, Spinner , SplitRight} from "../chrome/icons";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
@@ -209,14 +211,17 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     const observer = new ResizeObserver(resize);
     observer.observe(el);
     // SET-003: open terminals follow a theme change without being reopened.
+    const mode = hookColourMode(term, write, currentDark);
     const recolour = () => {
       term.options.theme = currentTerminal();
+      mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
 
     return () => {
       alive = false;
       window.removeEventListener(TERMINAL_EVENT, recolour);
+      mode.dispose();
       clearTimeout(quiet);
       observer.disconnect();
       unlisteners.forEach((u) => u());
@@ -331,6 +336,17 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             })
           }
           onClose={() => setPlusAt(null)}
+          onTerminal={
+            onSplit &&
+            (() => {
+              setPlusAt(null);
+              onSplit();
+            })
+          }
+          onManage={() => {
+            setPlusAt(null);
+            openSettings("agents");
+          }}
           onPick={(a) => {
             setPlusAt(null);
             onLaunch?.(a);

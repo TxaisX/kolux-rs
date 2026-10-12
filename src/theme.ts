@@ -3,6 +3,8 @@
 // and feed the terminal theme, so every colour has one home. The 16 hued themes come with SET-001.
 
 import type { ITheme } from "@xterm/xterm";
+import { fontStack } from "./settings/fonts";
+import { CATALOGUE, tidySchemes, type CustomScheme } from "./terminal/schemes";
 
 export const classic = {
   // surfaces and lines
@@ -88,16 +90,19 @@ export const themeLabel = (t: ThemeName) => t[0].toUpperCase() + t.slice(1);
 /** The swatch colour shown for a theme in the picker. */
 export const swatch = (t: ThemeName) => (t === "classic" ? classic["seg-active"] : t === "graphite" ? "#6b6b6b" : hsl(HUE[t], 0.55, 0.52));
 
-/** SET-003: "default" is Kolux's own dark terminal scheme, "match" follows the app hue. */
-export type TerminalScheme = "default" | "match";
+/** SET-003: "default" is Kolux's own dark terminal scheme, "match" follows the app hue; SET-023:
+ *  a catalogue id, or "custom:<name>" for one of the user's own schemes. */
+export type TerminalScheme = string;
 /** SET-005: System follows the operating system, also while running. */
 export type Mode = "system" | "light" | "dark";
 export const MODES: Mode[] = ["system", "light", "dark"];
-/** `lightTerminal`: in light mode terminals use the light scheme; off keeps one scheme for both. */
-export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean };
+/** `lightTerminal`: in light mode terminals use `lightScheme`; off keeps `terminal` for both. */
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string; dividerWidth: number; dividerDark: string; dividerLight: string; paneDim: number };
 /** The settings fields the appearance lives in. */
-export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme" } as const;
-export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0] } as const;
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont", dividerWidth: "paneDividerWidth", dividerDark: "paneDividerDark", dividerLight: "paneDividerLight", paneDim: "paneDim" } as const;
+export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0], dividerWidth: [2, 12, 6], paneDim: [30, 100, 100] } as const;
+/** A divider colour is #rrggbb or empty (the window shows through, as DESIGN.md measured). */
+const hexOrEmpty = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim().toLowerCase() : "");
 
 /** Out of span is pulled to the nearest end; anything not a number falls back to the default. */
 function clampNum(v: unknown, [lo, hi, dflt]: readonly [number, number, number]): number {
@@ -105,16 +110,34 @@ function clampNum(v: unknown, [lo, hi, dflt]: readonly [number, number, number])
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
 }
 
+/** A saved scheme name this version can draw; anything else is `fallback`. */
+function knownScheme(v: unknown, custom: CustomScheme[], fallback: string): string {
+  if (typeof v !== "string") return fallback;
+  if (v === "default" || v === "match" || CATALOGUE.some((c) => c.id === v)) return v;
+  return v.startsWith("custom:") && custom.some((c) => c.name === v.slice(7)) ? v : fallback;
+}
+
 export function readAppearance(s: Record<string, unknown>): Appearance {
   const t = s[FIELD.theme];
+  const custom = tidySchemes(s[FIELD.custom]);
+  const terminal = knownScheme(s[FIELD.terminal], custom, "default");
   return {
     theme: typeof t === "string" && (THEMES as readonly string[]).includes(t.toLowerCase()) ? (t.toLowerCase() as ThemeName) : "classic",
     tint: clampNum(s[FIELD.tint], SPAN.tint),
     saturation: clampNum(s[FIELD.saturation], SPAN.saturation),
     depth: clampNum(s[FIELD.depth], SPAN.depth),
-    terminal: s[FIELD.terminal] === "match" ? "match" : "default",
+    terminal,
     mode: s[FIELD.mode] === "light" || s[FIELD.mode] === "dark" ? (s[FIELD.mode] as Mode) : "system",
     lightTerminal: s[FIELD.lightTerminal] !== false,
+    // Match keeps following the app in light mode until a light scheme is picked.
+    lightScheme: knownScheme(s[FIELD.lightScheme], custom, terminal === "match" ? "match" : "tango-light"),
+    custom,
+    appFont: typeof s[FIELD.appFont] === "string" ? (s[FIELD.appFont] as string).trim().slice(0, 100) : "",
+    editorFont: typeof s[FIELD.editorFont] === "string" ? (s[FIELD.editorFont] as string).trim().slice(0, 100) : "",
+    dividerWidth: Math.round(clampNum(s[FIELD.dividerWidth], SPAN.dividerWidth)),
+    dividerDark: hexOrEmpty(s[FIELD.dividerDark]),
+    dividerLight: hexOrEmpty(s[FIELD.dividerLight]),
+    paneDim: Math.round(clampNum(s[FIELD.paneDim], SPAN.paneDim)),
   };
 }
 
@@ -187,12 +210,19 @@ function mix(a: string, b: string, t: number): string {
 const ANSI = { red: 0, green: 135, yellow: 45, blue: 215, magenta: 300, cyan: 185 } as const;
 
 /** SET-003: the terminal colours for an appearance. "match" works background, text and the 16-colour
- *  palette out of the app hue; "default" is Kolux's own dark scheme whatever the app hue. SET-005: in
- *  light mode, with the light scheme on, either one becomes its light form. */
+ *  palette out of the app hue; "default" is Kolux's own dark scheme whatever the app hue. SET-023: in
+ *  light mode, with the separate light scheme on, the light pick is drawn instead (Tango Light by
+ *  default); a catalogue or custom scheme is drawn as it is. */
 export function terminalFor(a: Appearance, dark = isDark(a)): ITheme {
   const light = !dark && a.lightTerminal;
-  if (a.terminal !== "match" && !light) return terminalTheme(classic);
-  const base: Appearance = a.terminal === "match" ? a : { ...a, theme: "classic" };
+  const name = light ? a.lightScheme : a.terminal;
+  const fixed = CATALOGUE.find((c) => c.id === name)?.colours ?? a.custom.find((c) => "custom:" + c.name === name);
+  if (fixed) {
+    const { name: _, ...colours } = fixed as CustomScheme;
+    return colours;
+  }
+  if (name !== "match") return terminalTheme(classic);
+  const base = a;
   const t = buildTheme(base, !light);
   const hue = themeHue(base);
   const pull = (h: number, l: number) => (hue === null || base.theme === "graphite" ? hsl(h, 0.6, l) : mix(hsl(h, 0.6, l), hsl(hue, 0.6, l), 0.2));
@@ -214,6 +244,18 @@ let terminal = terminalFor(readAppearance({}));
 /** The terminal colours in force now; panes listen for TERMINAL_EVENT to follow changes. */
 export const currentTerminal = () => terminal;
 export const TERMINAL_EVENT = "kolux-terminal-theme";
+/** TERM-098: whether the app is in dark mode now (what a program asking the terminal is told). */
+export const currentDark = () => lastDark ?? true;
+
+/** SET-018: the chosen fonts with a safe fallback after each; an empty editor font is the terminal font.
+ *  SET-023: the gap between panes, its colour in this mode, and how far panes not in focus fade. */
+export const appearanceVars = (a: Appearance, dark = isDark(a)) => ({
+  "--ui-font": fontStack(a.appFont, uiFont),
+  "--editor-font": fontStack(a.editorFont, monoFont),
+  "--divider-width": a.dividerWidth + "px",
+  "--divider": (dark ? a.dividerDark : a.dividerLight) || "transparent",
+  "--pane-dim": String(a.paneDim / 100),
+});
 
 export function themeVars(t: Theme): Record<string, string> {
   const vars: Record<string, string> = { "--ui-font": uiFont, "--mono-font": monoFont };
@@ -245,7 +287,7 @@ export function applyAppearance(a: Appearance, root: StyleHost = document.docume
   if (lastDark !== null && lastDark !== dark && typeof document !== "undefined") holdTransitions();
   last = a;
   lastDark = dark;
-  const vars = { ...themeVars(buildTheme(a, dark)), "color-scheme": dark ? "dark" : "light" };
+  const vars = { ...themeVars(buildTheme(a, dark)), ...appearanceVars(a, dark), "color-scheme": dark ? "dark" : "light" };
   if (typeof document !== "undefined") document.documentElement.dataset.mode = dark ? "dark" : "light";
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   try {

@@ -381,3 +381,21 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-09 · T-095-a · tauri 2.12.1's documented Builder::register_uri_scheme_protocol and UriSchemeContext (read in the crate's own doc comments in the cargo registry); windows-sys 0.61.2 bindings for ShellExecuteW and GetDriveTypeW and their constants; Microsoft's public Win32 docs for those calls; MDN on iframe sandbox, Content-Security-Policy and postMessage; the public FNV-1a hash; written from scratch
 > 2026-10-09 · T-095-b · the line shape of Claude Code's own session transcripts (tool_use named Artifact, tool_result with toolUseResult url and path, timestamp, cwd, sessionId), seen in the user's own transcripts; Claude's public Artifact tool CDN allow-list; reqwest 0.13.5's crate features and docs in the cargo registry; the public days-from-civil date algorithm; written from scratch
 > 2026-10-09 · T-097 · Rust std::os::windows::process::CommandExt::creation_flags docs and Microsoft's public process creation flag values (DETACHED_PROCESS, CREATE_NEW_PROCESS_GROUP); tauri 2.12.1's WebviewWindow unminimize, show and set_focus, and tao 0.37.1's set_focus in the cargo registry (read to see when focusing is skipped); COMPAT.md's KOLUX_USER_DATA_PATH and KOLUX_APP_EXECUTABLE rows; written from scratch
+
+> 2026-10-11 · T-136-a · rules from the USAGE-009 card; the notification plugin (`tauri_plugin_notification::init`, `NotificationExt` builder `title` / `body` / `show`) from the public Tauri documentation via context7; Windows' toast history (`ToastNotificationManager.History.GetHistory`) from the public Microsoft documentation, used only by the live check; no old Kolux source read
+
+> 2026-10-11 · T-145-a · rules from the TERM-098 card; the Tango Desktop Project palette (public domain) as published in the Tango icon theme guidelines; the dark/light mode detection sequences (DEC mode 2031, CSI ? 996 n, CSI ? 997 ; 1|2 n) from the public Contour terminal specification; xterm.js `parser.registerCsiHandler` and its own OSC 4/10/11 colour reports from the public xterm.js documentation and its MIT source in node_modules; no old Kolux source read
+
+> 2026-10-12 · T-148-a · rules from the SET-023 and TERM-098 cards; scheme palettes from their public, permissively licensed projects (Solarized MIT, Dracula MIT, Nord MIT, Gruvbox MIT, One Half MIT, Campbell from Windows Terminal MIT, Tango public domain); the scheme JSON shape (name, background, foreground, cursorColor, black..brightWhite, purple for magenta) from the public Windows Terminal colour schemes documentation; no old Kolux source read
+
+> 2026-10-12 · T-148-b · rules from the SET-016 and SET-018 cards; the installed font list via `System.Drawing.Text.InstalledFontCollection` from the public .NET documentation and `fc-list : family` from the public fontconfig man page; the HTML `<details>`/`<summary>` element and its toggle event from MDN; no old Kolux source read
+
+> 2026-10-12 · T-148-c · rules from the SET-020 and VIEW-096 cards and DESIGN.md section 11; no outside source needed; no old Kolux source read
+
+> 2026-10-12 · T-148-d · rules from the SET-023 card and DESIGN.md section 1; no outside source needed; no old Kolux source read
+
+> 2026-10-12 · T-143 · rules from the SESS-009, SESS-001 and SESS-004 cards; no outside source needed; no old Kolux source read
+
+> 2026-10-12 · T-096-a · rules from the SET-008 and SET-010 cards and the T-054 keymap; no outside source needed; no old Kolux source read
+
+> 2026-10-12 · T-096-b · rules from the SET-009 card and COMPAT.md 4.1 (Writing) and 4.2; no outside source needed; no old Kolux source read

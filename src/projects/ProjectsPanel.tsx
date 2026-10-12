@@ -26,6 +26,8 @@ import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRo
 import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
+import { openSettings as openSettingsPage } from "../settings/pages";
+import { chromeShown } from "../chrome/chromeItems";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 
@@ -56,6 +58,8 @@ type Props = {
   defaultId: string;
   onSetDefault: (id: string) => void;
   onChoose: () => void;
+  /** SESS-009: the dropdown's blank-terminal row (a plain shell tab). */
+  onTerminal?: () => void;
   /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
   /** Which page (Automations, Model routing) is open over the content column, if any. */
   page: Page | null;
@@ -97,7 +101,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
@@ -844,12 +848,14 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     <div className="sidebar-wrap">
       <aside className="sidebar" aria-label="Sidebar">
         <nav className="sb-nav">
-          <button className="row" title="Tasks (not built yet)">
-            <span className="ic">
-              <List />
-            </span>
-            Tasks
-          </button>
+          {chromeShown(settings, "tasksButton") && (
+            <button className="row" title="Tasks (not built yet)">
+              <span className="ic">
+                <List />
+              </span>
+              Tasks
+            </button>
+          )}
           <button className={`row${artifactsOn ? " on" : ""}`} aria-current={artifactsOn ? "page" : undefined} onClick={onArtifacts}>
             <span className="ic">
               <FileCode />
@@ -1095,6 +1101,17 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             busy={launching}
             style={{ left: 16, bottom: 56 }}
             onClose={() => setPlusOpen(false)}
+            onTerminal={
+              onTerminal &&
+              (() => {
+                setPlusOpen(false);
+                onTerminal();
+              })
+            }
+            onManage={() => {
+              setPlusOpen(false);
+              openSettingsPage("agents");
+            }}
             onPick={(a) => {
               setPlusOpen(false);
               onLaunch(a, projects.length === 1 ? projects[0].id : null);
@@ -1113,9 +1130,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           >
             <Gear />
           </button>
-          <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
-            <Clock />
-          </button>
+          {chromeShown(settings, "automationsButton") && (
+            <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
+              <Clock />
+            </button>
+          )}
           {/* SET-028: until Settings > Agents exists (T-036, T-054), model routing opens from here. */}
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />

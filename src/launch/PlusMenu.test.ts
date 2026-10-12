@@ -18,7 +18,7 @@ function items(html: string): string[] {
 const render = (props: Partial<Parameters<typeof PlusMenu>[0]>, keybindings: Record<string, string[]> = {}) => {
   const map = resolve({ keybindings }, "win32");
   const el = createElement(PlusMenu, { agents: [claude, codex, gemini], onPick: () => {}, onClose: () => {}, ...props });
-  return renderToString(createElement(KeymapContext.Provider, { value: { ...map, path: null, reload: () => {} } }, el));
+  return renderToString(createElement(KeymapContext.Provider, { value: { ...map, path: null, reload: () => {}, save: async () => {} } }, el));
 };
 
 test("only installed agents are offered, the default first, and a missing one is not listed", () => {

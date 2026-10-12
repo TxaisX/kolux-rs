@@ -4,8 +4,10 @@
 // list with empty seats or shrinks it from the bottom. Native radios and a number field carry the
 // keyboard and screen-reader behaviour. The close button is absent when this is the grid's only
 // pane. A shape row (SESS-012) gives the seats roles, each shown on its seat, and one task box
-// holds the task every seat shares, so the whole lineup is in view before Start.
+// holds the task every seat shares, so the whole lineup is in view before Start. Start sits in a
+// footer below the scrolling choices, so in a small pane it stays in view after a pick.
 import { Close } from "../chrome/icons";
+import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, resizeLineup, sameForAll, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
@@ -41,6 +43,8 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const ready = allReady(seats) && !busy;
   const anyReady = seats.some(seatReady);
+  // SESS-022: a line per provider near its limit, above Start; it never disables Start.
+  const warnings = launchWarnings(seats.map((s) => s.agent), useLaunchUsage());
   // The free field applies on Enter or blur, not per keystroke: typing "15" must not pass
   // through a one-seat moment that drops the picks of seats 2 and up.
   const recount = (n: number) => {
@@ -164,7 +168,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                   Terminal
                 </label>
               </div>
-              {seat.agent !== null && seat.agent !== TERMINAL && (
+              {seat.agent !== null && modelsFor(seat.agent).length > 0 && (
                 <div className="choices" role="radiogroup" aria-label={`Seat ${i + 1}: which model`}>
                   <span className="label">{seat.model === null ? "Pick a model" : "Model"}</span>
                   {modelsFor(seat.agent).map((m) => (
@@ -188,12 +192,19 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
             </div>
           ))}
         </div>
+      </div>
+      <footer className="chooser-foot">
+        {warnings.map((w) => (
+          <div key={w} className="note warn" role="status">
+            {w}
+          </div>
+        ))}
         <div className="btn-row">
           <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : "Pick an AI and a model (or Terminal) for every seat first"}>
             {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
           </button>
         </div>
-      </div>
+      </footer>
     </section>
   );
 }

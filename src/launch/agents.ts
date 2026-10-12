@@ -40,3 +40,48 @@ export function menuAgents(agents: AgentInfo[], defaultId: string): AgentInfo[] 
   const first = installed.find((a) => a.id === defaultId);
   return first ? [first, ...installed.filter((a) => a !== first)] : installed;
 }
+
+/** SESS-009: the three agents the dropdown leads with, in this order. */
+export const FEATURED = ["claude", "codex", "grok"];
+/** SESS-009: a search longer than this is ignored, so the list stays quick. */
+export const MAX_SEARCH = 40;
+
+/** SESS-009: the rows shown before "Show more agents" (`top`) and the folded rest (`more`). The
+ *  default leads (SESS-004), then the installed featured agents; with none of those installed
+ *  nothing is folded. */
+export function agentRows(agents: AgentInfo[], defaultId: string): { top: AgentInfo[]; more: AgentInfo[] } {
+  const all = menuAgents(agents, defaultId);
+  if (!all.some((a) => FEATURED.includes(a.id))) return { top: all, more: [] };
+  const lead = (a: AgentInfo, i: number) => (i === 0 && a.id === defaultId) || FEATURED.includes(a.id);
+  return { top: all.filter(lead), more: all.filter((a, i) => !lead(a, i)) };
+}
+
+/** SESS-009: installed agents matching `query`, best first: the shown name (its start, then a word's
+ *  start, then anywhere), then the alias (id), then the initials, then the command name. `null`
+ *  means no search: blank, or too long to bother with. */
+export function searchAgents(agents: AgentInfo[], query: string): AgentInfo[] | null {
+  const q = query.trim().toLowerCase();
+  if (!q || q.length > MAX_SEARCH) return null;
+  const score = (a: AgentInfo) => {
+    const name = a.name.toLowerCase();
+    const words = name.split(/[\s-]+/);
+    if (name.startsWith(q)) return 0;
+    if (words.some((w) => w.startsWith(q))) return 1;
+    if (name.includes(q)) return 2;
+    if (a.id.toLowerCase().includes(q)) return 3;
+    if (words.map((w) => w[0]).join("").startsWith(q)) return 4;
+    return a.program.toLowerCase().includes(q) ? 5 : -1;
+  };
+  return agents
+    .filter((a) => a.installed)
+    .map((a, i) => ({ a, i, s: score(a) }))
+    .filter((x) => x.s >= 0)
+    .sort((x, y) => x.s - y.s || x.i - y.i)
+    .map((x) => x.a);
+}
+
+/** SESS-009: typing terminal, shell or blank brings up the blank-terminal row. */
+export const wantsTerminal = (query: string) => {
+  const q = query.trim().toLowerCase();
+  return q.length > 0 && ["terminal", "shell", "blank"].some((w) => w.startsWith(q) || q.startsWith(w));
+};

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import VendorMark from "../chrome/VendorMark";
 import { pillDetail, pillText, type CodexUsage } from "./codex";
+import { publishCodex } from "./launchWarn";
 
 const EVERY_MS = 10 * 60 * 1000;
 
@@ -28,7 +29,10 @@ export default function CodexPill() {
           if (!live) return;
           // Another read of the same Codex home is running (one at a time): ask again shortly.
           if (u.state === "busy") retry = window.setTimeout(read, 3000);
-          else setUsage(u);
+          else {
+            setUsage(u);
+            publishCodex(u);
+          }
         })
         .catch((e) => live && setUsage({ state: "error", fiveHour: null, weekly: null, resetCredits: null, plan: null, message: String(e) }));
     read();

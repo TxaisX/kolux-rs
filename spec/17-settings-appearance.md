@@ -461,6 +461,7 @@ Acceptance:
         turns off.
   - [ ] Switch Show Titlebar App Name off → the title bar shows no name.
 Compat: —
+Amended 2026-10-12 (DT-A6): the app name is off by default; the Automations button is on by default until the command palette exists.
 Source: D-17-020
 
 ### SET-023 · Terminal colour schemes for dark and for light
@@ -476,6 +477,7 @@ Acceptance:
   - [ ] Pick different dark and light schemes, then flip the app's mode → terminals swap schemes.
   - [ ] Focus another pane → the one left behind dims over about 140 ms.
 Compat: —
+Amended 2026-10-12 (DT-A7): divider width starts at 6 px with no colour, and panes not in focus start undimmed (100%).
 Source: D-17-023
 
 ### SET-035 · Settings save at once, reach every window, and hide secrets

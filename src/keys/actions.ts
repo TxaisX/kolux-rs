@@ -18,6 +18,8 @@ export type Action = {
   win32: string[];
   /** Only when macOS differs from the Windows column. */
   darwin?: string[];
+  /** SET-008: more words the Shortcuts search finds the command by. */
+  keywords?: string[];
   /** The chord's last key is a digit 1; the action covers 1 to 9. */
   index?: boolean;
 };
@@ -64,7 +66,7 @@ const a = (id: string, title: string, scope: Scope, win32: string[], extra: Part
 
 export const actions: Action[] = [
   a("worktree.quickOpen", "Go to File", "global", ["Mod+P"]),
-  a("app.settings", "Open Settings", "global", ["Mod+Comma"], { group: "menu" }),
+  a("app.settings", "Open Settings", "global", ["Mod+Comma"], { group: "menu", keywords: ["preferences", "options"] }),
   a("app.forceReload", "Force Reload", "global", ["Mod+Shift+R"], { group: "menu" }),
   a("worktree.palette", "Switch worktree", "global", ["Mod+Shift+J"], { darwin: ["Mod+J"] }),
   a("worktree.navigateUp", "Previous worktree", "global", ["Mod+Shift+ArrowUp"]),
@@ -140,7 +142,7 @@ export const actions: Action[] = [
   a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"]),
   a("terminal.paste", "Paste into terminal", "terminal", ["Ctrl+V", "Ctrl+Shift+V", "Shift+Insert"]),
   a("terminal.search", "Search active pane", "terminal", ["Mod+F"]),
-  a("terminal.clear", "Clear active pane", "terminal", ["Mod+K"]),
+  a("terminal.clear", "Clear active pane", "terminal", ["Mod+K"], { keywords: ["cls", "clear screen"] }),
   a("terminal.focusNextPane", "Focus next pane", "terminal", ["Mod+BracketRight"]),
   a("terminal.focusPreviousPane", "Focus previous pane", "terminal", ["Mod+BracketLeft"]),
   a("terminal.equalizePaneSizes", "Equalize pane sizes", "terminal", []),

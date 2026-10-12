@@ -794,6 +794,7 @@ Acceptance:
   - [ ] Right-click the bar, untick Resource Manager → it disappears and stays gone after restart.
   - [ ] An agent CLI that is not installed → its status-bar item is hidden.
 Compat: —
+Amended 2026-10-11 (DT-A5): no agent items exist on the bar to hide; copy stays English until language packs (SKILL-040).
 Source: D-05-096
 
 ### VIEW-100 · Skill and app update progress in the status bar

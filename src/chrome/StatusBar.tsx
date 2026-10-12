@@ -1,18 +1,31 @@
 // The 24 px status bar (DESIGN.md section 8): right-aligned "On" dot, the app's memory, the
 // number of terminals and the agent count. Memory is asked of the Rust side every two seconds;
-// clicking it opens the Resource Manager (APP-054).
-import { useEffect, useState } from "react";
+// clicking it opens the Resource Manager (APP-054). VIEW-096: right-click the bar to choose its
+// items or hide it; Settings > Appearance brings it back.
+import { useEffect, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { formatMemory } from "../status/memory";
 import ResourceManager from "../status/ResourceManager";
 import { Chip, Cup, Plug } from "./icons";
+import { STATUS_ITEMS } from "./statusItems";
 
-type Props = { terminals: number; agents?: number; names?: () => Record<number, string>; workspaces?: string[] };
+type Props = {
+  terminals: number;
+  agents?: number;
+  names?: () => Record<number, string>;
+  workspaces?: string[];
+  hidden?: string[];
+  onToggle?: (id: string) => void;
+  onHideBar?: () => void;
+};
 
-export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [] }: Props) {
+export default function StatusBar({ terminals, agents = 0, names = () => ({}), workspaces = [], hidden = [], onToggle, onHideBar }: Props) {
   const [memory, setMemory] = useState<number | null>(null);
   const [open, setOpen] = useState(false);
+  const [menu, setMenu] = useState<{ left: number; bottom: number } | null>(null);
+  const shows = (id: string) => !hidden.includes(id);
   useEffect(() => {
+    if (!shows("memory")) return;
     let live = true;
     const tick = () => invoke<number | null>("process_memory").then((b) => live && setMemory(b)).catch(() => {});
     tick();
@@ -21,28 +34,68 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
       live = false;
       clearInterval(t);
     };
-  }, []);
+  }, [hidden.includes("memory")]);
+  // VIEW-096: a right-click inside an item's popover belongs to the popover, not to the bar.
+  const onContextMenu = (e: MouseEvent) => {
+    if ((e.target as Element).closest?.(".menu")) return;
+    e.preventDefault();
+    setMenu({ left: Math.min(e.clientX, window.innerWidth - 240), bottom: Math.max(8, window.innerHeight - e.clientY + 4) });
+  };
   return (
-    <footer className="statusbar">
-      <span className="item" title="Agent status hooks (not built yet)">
-        <Cup size={12} />
-        On
-        <span className="on" />
-      </span>
-      <button className="item res-open" title="Memory this app holds right now. Click for every session's memory and CPU" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <Chip size={12} />
-        {formatMemory(memory)}
-      </button>
-      {open && <ResourceManager names={names} workspaces={workspaces} onClose={() => setOpen(false)} />}
-      <span className="sep">·</span>
-      <span className="item" title="Terminals running">
-        <span style={{ font: "11px var(--mono-font)" }}>&gt;_</span>
-        {terminals}
-      </span>
-      <span className="item" title="Agents running">
-        <Plug size={12} />
-        {agents}
-      </span>
+    <footer className="statusbar" onContextMenu={onContextMenu}>
+      {shows("hooks") && (
+        <span className="item" title="Agent status hooks (not built yet)">
+          <Cup size={12} />
+          On
+          <span className="on" />
+        </span>
+      )}
+      {shows("memory") && (
+        <button className="item res-open" title="Memory this app holds right now. Click for every session's memory and CPU" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          <Chip size={12} />
+          {formatMemory(memory)}
+        </button>
+      )}
+      {open && shows("memory") && <ResourceManager names={names} workspaces={workspaces} onClose={() => setOpen(false)} />}
+      {shows("memory") && (shows("terminals") || shows("agents")) && <span className="sep">·</span>}
+      {shows("terminals") && (
+        <span className="item" title="Terminals running">
+          <span style={{ font: "11px var(--mono-font)" }}>&gt;_</span>
+          {terminals}
+        </span>
+      )}
+      {shows("agents") && (
+        <span className="item" title="Agents running">
+          <Plug size={12} />
+          {agents}
+        </span>
+      )}
+      {menu && (
+        <>
+          <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} aria-hidden="true" />
+          <div className="menu status-menu" role="menu" aria-label="Status bar items" style={menu}>
+            <div className="menu-title">Status bar</div>
+            {STATUS_ITEMS.map((i) => (
+              <button key={i.id} role="menuitemcheckbox" aria-checked={shows(i.id)} className="menu-item" onClick={() => onToggle?.(i.id)}>
+                <span className="agent-mark">{shows(i.id) ? "✓" : ""}</span>
+                <span className="name">{i.label}</span>
+              </button>
+            ))}
+            <button
+              role="menuitem"
+              className="menu-item muted"
+              title="Settings > Appearance shows it again"
+              onClick={() => {
+                setMenu(null);
+                onHideBar?.();
+              }}
+            >
+              <span className="agent-mark" />
+              <span className="name">Hide status bar</span>
+            </button>
+          </div>
+        </>
+      )}
     </footer>
   );
 }

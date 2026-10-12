@@ -91,3 +91,18 @@ test("SESS-012: the lineup shows the shape row, a task for every seat, and each 
   expect(custom.split("<button").find((b) => b.includes(">Custom<"))).toContain('aria-pressed="true"');
   expect(custom).not.toContain("seat-role");
 });
+
+// In a small pane (the 4- and 6-pane grids) the choices scroll; Start must sit below them, not
+// at their end, or picking Terminal is followed by a Start the user cannot see.
+test("SESS-007: Start sits in a footer after the scrolling choices", () => {
+  const html = render([{ agent: TERMINAL, model: null }]);
+  const body = html.indexOf('class="chooser-body"');
+  const foot = html.indexOf('class="chooser-foot');
+  expect(body).toBeGreaterThan(-1);
+  expect(foot).toBeGreaterThan(body);
+  expect(html.indexOf(">Start<", foot)).toBeGreaterThan(foot);
+});
+
+test("SESS-022: no usage figures, no warning line above Start", () => {
+  expect(render([{ agent: "claude", model: "opus" }])).not.toContain("note warn");
+});

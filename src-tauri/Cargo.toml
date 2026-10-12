@@ -29,6 +29,8 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 portable-pty = "0.9"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
+# USAGE-009: usage alerts are system notifications, sent from the Rust side.
+tauri-plugin-notification = "2"
 # AUTO-001: timetables are worked out in the IANA zone saved with an automation (already in the tree via tauri).
 jiff = "0.2"
 tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "system-proxy", "zip"] }
@@ -37,7 +39,7 @@ trash = "5"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 codegen-units = 1

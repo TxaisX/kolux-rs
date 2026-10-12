@@ -51,9 +51,13 @@ test("a pick that stops being detected is cleared rather than swapped", () => {
   expect(clearMissing(seats, ["claude", "codex"])).toEqual([claude, term, emptySeat()]);
 });
 
-test("every agent gets the program default as an explicit choice; only a real model adds --model", () => {
+test("an agent with a built-in list gets the program default as an explicit choice; only a real model adds --model", () => {
   expect(modelsFor("claude").map((m) => m.id)).toEqual(["opus", "sonnet", "haiku", "default"]);
-  expect(modelsFor("aider").map((m) => m.id)).toEqual(["default"]);
+  // ACCT-032: built-in lists for Claude, Codex, Grok, Gemini and Cursor; any other agent skips the model step
+  for (const a of ["codex", "grok", "gemini", "cursor"]) expect(modelsFor(a).slice(-1)[0]?.id).toBe("default");
+  expect(modelsFor("aider")).toEqual([]);
+  expect(seatReady({ agent: "aider", model: null })).toBe(true);
+  expect(seatReady({ agent: "codex", model: null })).toBe(false);
   expect(modelArgs("opus")).toEqual(["--model", "opus"]);
   expect(modelArgs("default")).toEqual([]);
   expect(modelArgs(null)).toEqual([]);

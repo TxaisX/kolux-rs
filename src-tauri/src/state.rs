@@ -22,6 +22,11 @@ impl Store {
         Ok(Store { conn, settings_path: dir.join("settings.json") })
     }
 
+    /// The profile folder the store lives in.
+    pub fn dir(&self) -> PathBuf {
+        self.settings_path.parent().map(Path::to_path_buf).unwrap_or_default()
+    }
+
     pub fn get(&self, key: &str) -> rusqlite::Result<Option<String>> {
         self.conn
             .query_row("SELECT value FROM kv WHERE key = ?1", params![key], |r| r.get(0))

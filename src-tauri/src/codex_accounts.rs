@@ -9,7 +9,9 @@
 //! A login that fails is rolled back, but a home that already holds a working sign-in is never
 //! deleted. The newly connected account becomes the active one: new Codex panes and the usage pill
 //! run on it. Without a managed account, Codex's own system-default login is reported as it is.
-//! The accounts list with fast switching is T-138 (ACCT-019, ACCT-020).
+//! T-138 (ACCT-019, ACCT-020): the list shows the system default first, then each account; any
+//! row can be made active, an account can be removed (its home deleted, retried while Windows still
+//! holds it), and the user's own Codex folder is only ever read, never mirrored or written.
 
 use crate::claude_key::{run_hidden, Attention, Ended};
 use crate::codex_usage::{sign_in_kind, SignIn};
@@ -31,7 +33,7 @@ pub const FOLDER: &str = "codex-accounts";
 pub const EVENT: &str = "codex-accounts";
 pub const LOGIN_LIMIT: Duration = Duration::from_secs(900);
 /// Keeps the sign-in in the home's own `auth.json` rather than the system keyring.
-const HOME_CONFIG: &str = "cli_auth_credentials_store = \"file\"\n";
+pub const HOME_CONFIG: &str = "cli_auth_credentials_store = \"file\"\n";
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -190,8 +192,10 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
     let auth = home.join("auth.json");
     fs::create_dir_all(&home).map_err(|e| e.to_string())?;
     fs::write(home.join("config.toml"), HOME_CONFIG).map_err(|e| e.to_string())?;
+    // ACCT-019: only a home with no sign-in file at all is removed; one that cannot be read (a
+    // locked file) may still hold a working sign-in.
     let roll_back = || {
-        if sign_in_kind(&auth).is_none() {
+        if !auth.exists() {
             let _ = fs::remove_dir_all(&home);
         }
     };
@@ -224,6 +228,8 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
 pub struct SignIns {
     /// "browser" or "device" while a sign-in runs.
     running: Mutex<Option<String>>,
+    /// ACCT-019: when each account's sign-in file was first seen missing.
+    missing_since: Mutex<std::collections::HashMap<String, std::time::Instant>>,
     in_browser: AtomicBool,
     device: Mutex<Option<(String, String)>>,
     cancel: Mutex<Option<Arc<AtomicBool>>>,
@@ -244,6 +250,8 @@ pub struct CodexView {
     pub attention: Option<Attention>,
     /// Ids of accounts whose home's config.toml has drifted (SET-030).
     pub drifted: Vec<String>,
+    /// ACCT-019: accounts whose sign-in file has been gone for longer than the grace period.
+    pub missing: Vec<String>,
 }
 
 #[tauri::command]
@@ -255,8 +263,13 @@ pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::St
     let accounts = load(&store);
     let active = store.get(ACTIVE_KEY).ok().flatten().filter(|id| accounts.iter().any(|a| &a.id == id));
     let drifted = accounts.iter().filter(|a| config_drift(Path::new(&a.home))).map(|a| a.id.clone()).collect();
+    let missing = match sign_ins.missing_since.lock() {
+        Ok(mut seen) => accounts.iter().filter(|a| missing_now(&mut seen, &a.id, Path::new(&a.home).join("auth.json").exists(), std::time::Instant::now())).map(|a| a.id.clone()).collect(),
+        Err(_) => Vec::new(),
+    };
     Ok(CodexView {
         drifted,
+        missing,
         accounts,
         active,
         system_default: system_default(env.as_deref(), user.as_deref()).into(),
@@ -272,6 +285,13 @@ pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::St
 /// the listed account `again` in once more (ACCT-012).
 #[tauri::command]
 pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>, device: bool, again: Option<String>) -> Result<(), String> {
+    if again.is_none() {
+        let env = std::env::var(HOME_ENV).ok();
+        let user = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+        if user_custom_provider(env.as_deref(), user.as_deref()) {
+            return Err(CUSTOM_PROVIDER_REFUSAL.into());
+        }
+    }
     {
         let mut running = sign_ins.running.lock().map_err(|e| e.to_string())?;
         if running.is_some() {
@@ -363,15 +383,87 @@ pub fn codex_account_cancel(sign_ins: tauri::State<'_, SignIns>) {
     }
 }
 
-#[tauri::command]
-pub fn codex_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: String) -> Result<(), String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    if !load(&store).iter().any(|a| a.id == id) {
-        return Err("That Codex account is no longer listed.".into());
+/// ACCT-019: a sign-in file missing for a moment (Codex rewriting it) is not yet a warning.
+pub const MISSING_GRACE: Duration = Duration::from_secs(30);
+pub fn missing_now(seen: &mut std::collections::HashMap<String, std::time::Instant>, id: &str, present: bool, now: std::time::Instant) -> bool {
+    if present {
+        seen.remove(id);
+        return false;
     }
-    store.set(ACTIVE_KEY, &id).map_err(|e| e.to_string())?;
+    now.duration_since(*seen.entry(id.into()).or_insert(now)) >= MISSING_GRACE
+}
+
+pub const CUSTOM_PROVIDER_REFUSAL: &str = "Your Codex settings send Codex to a custom model provider, so a ChatGPT account cannot be added. Stay on the system default, or switch Codex's model_provider back to OpenAI first. Your settings were not changed.";
+
+/// The user's own Codex settings (CODEX_HOME, else .codex in the user's home) name a custom
+/// model provider. Read only.
+pub fn user_custom_provider(codex_home_env: Option<&str>, user_home: Option<&Path>) -> bool {
+    let home = codex_home_env.map(str::trim).filter(|h| !h.is_empty()).map(PathBuf::from).or_else(|| user_home.map(|u| u.join(".codex")));
+    home.is_some_and(|h| custom_provider(&fs::read_to_string(h.join("config.toml")).unwrap_or_default()))
+}
+
+/// Deletes a folder, retrying for about two seconds while Windows still holds a file in it.
+pub fn remove_dir_patiently(dir: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if tries >= 10 => return Err(e),
+            Err(_) => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+}
+
+/// None makes Codex's own login the one new Codex panes use.
+pub fn activate(store: &Store, id: Option<&str>) -> Result<(), String> {
+    if let Some(id) = id {
+        if !load(store).iter().any(|a| a.id == id) {
+            return Err("That Codex account is no longer listed.".into());
+        }
+    }
+    store.set(ACTIVE_KEY, id.unwrap_or("")).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn codex_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: Option<String>) -> Result<(), String> {
+    activate(&*store.lock().map_err(|e| e.to_string())?, id.as_deref())?;
     let _ = app.emit(EVENT, ());
     Ok(())
+}
+
+/// Takes the account off the list, deletes its home (only one inside Kolux's own folder) and
+/// sealed copy, and hands new panes back to the system default when it was the active one.
+pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    let mut list = load(store);
+    let Some(at) = list.iter().position(|a| a.id == id) else {
+        return Err("That Codex account is no longer listed.".into());
+    };
+    let gone = list.remove(at);
+    store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
+        store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
+    }
+    let home = PathBuf::from(&gone.home);
+    if home.starts_with(profile.join(FOLDER)) {
+        remove_dir_patiently(&home).map_err(|e| format!("The account was removed, but its Codex home could not be deleted: {e}"))?;
+    }
+    let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("codex-{id}.json")));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn codex_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
+    if sign_ins.running.lock().map_err(|e| e.to_string())?.is_some() {
+        return Err("Finish or cancel the sign-in first.".into());
+    }
+    let profile = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let result = remove(&*store.lock().map_err(|e| e.to_string())?, &profile, &id);
+    let _ = app.emit(EVENT, ());
+    result
 }
 
 #[cfg(test)]
@@ -442,6 +534,52 @@ mod tests {
         assert_eq!(system_default(None, Some(&user)), "chatgpt");
         let env = temp("default-env");
         assert_eq!(system_default(env.to_str(), Some(&user)), "signed-out", "CODEX_HOME wins over ~/.codex");
+    }
+
+    #[test]
+    fn removing_the_active_account_hands_codex_back_to_the_system_default() {
+        let profile = temp("remove");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", 2, ok("kim@example.com")).unwrap();
+        let s = store.lock().unwrap();
+        assert_eq!(load(&s).len(), 2, "one email can be two accounts (a personal and a business workspace)");
+        assert_eq!(active_account(&s).unwrap().id, "c2");
+        remove(&s, &profile, "c2").unwrap();
+        assert!(active_account(&s).is_none() && active_home(&s).is_none(), "the system default takes over");
+        assert!(!profile.join(FOLDER).join("c2").exists() && !profile.join("vault").join("codex-c2.json").exists());
+        activate(&s, Some("c1")).unwrap();
+        assert!(activate(&s, Some("c2")).is_err());
+        assert_eq!(active_account(&s).unwrap().id, "c1", "a failed change keeps the earlier choice");
+        activate(&s, None).unwrap();
+        assert!(active_account(&s).is_none());
+    }
+
+    #[test]
+    fn a_missing_sign_in_file_warns_only_after_the_grace_period() {
+        let mut seen = std::collections::HashMap::new();
+        let t0 = std::time::Instant::now();
+        assert!(!missing_now(&mut seen, "c1", false, t0));
+        assert!(!missing_now(&mut seen, "c1", false, t0 + Duration::from_secs(5)));
+        assert!(missing_now(&mut seen, "c1", false, t0 + MISSING_GRACE));
+        assert!(!missing_now(&mut seen, "c1", true, t0 + MISSING_GRACE), "back again: no warning");
+        assert!(!missing_now(&mut seen, "c1", false, t0 + MISSING_GRACE * 2), "the clock starts over");
+    }
+
+    #[test]
+    fn a_custom_model_provider_in_the_users_settings_refuses_a_chatgpt_account() {
+        let user = temp("provider");
+        fs::create_dir_all(user.join(".codex")).unwrap();
+        assert!(!user_custom_provider(None, Some(&user)));
+        fs::write(user.join(".codex").join("config.toml"), r#"model_provider = "azure""#).unwrap();
+        assert!(user_custom_provider(None, Some(&user)));
+        let before = fs::read(user.join(".codex").join("config.toml")).unwrap();
+        assert!(!user_custom_provider(Some(&user.join("elsewhere").to_string_lossy()), Some(&user)), "CODEX_HOME wins");
+        assert_eq!(fs::read(user.join(".codex").join("config.toml")).unwrap(), before, "read only");
     }
 
     #[test]

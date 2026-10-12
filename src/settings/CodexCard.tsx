@@ -1,9 +1,11 @@
 // The Codex card on Settings > AI connections (ACCT-007): Connect signs a ChatGPT account in
 // through the browser, "Sign in with a code" shows a link and a one-time code to enter on any
 // device. Each account Kolux adds runs in a private Codex home; the user's own Codex folder is
-// never touched. Without a managed account the card reports Codex's own login as it is. The full
-// Connect-card states and the accounts list are T-092 and T-138.
+// never touched. A System default row reports Codex's own login as it is, re-read whenever Kolux
+// gets focus (ACCT-020); managed rows can be picked, re-signed or removed (ACCT-019, T-138). The
+// full Connect-card states are T-092; telling a personal from a business workspace is T-138-b.
 import { useCallback, useEffect, useState } from "react";
+import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
 import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
@@ -21,8 +23,10 @@ export type CodexView = {
   attention: Attention | null;
   /** Accounts whose home's config.toml no longer agrees with what Kolux wrote (SET-030). */
   drifted: string[];
+  /** ACCT-019: accounts whose sign-in file has been gone longer than the grace period. */
+  missing: string[];
 };
-export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string } | { kind: "again"; id: string } | { kind: "install" };
+export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "again"; id: string } | { kind: "install" };
 
 const systemLabel: Record<CodexView["systemDefault"], string> = {
   chatgpt: "a ChatGPT sign-in",
@@ -30,10 +34,17 @@ const systemLabel: Record<CodexView["systemDefault"], string> = {
   "custom-provider": "an API key with a custom provider",
   "signed-out": "",
 };
+const systemRow: Record<CodexView["systemDefault"], string> = {
+  chatgpt: "Signed in with ChatGPT",
+  "api-key": "Running on an API key",
+  "custom-provider": "Running on an API key with a custom provider",
+  "signed-out": "Signed out",
+};
 
 /** SET-030: what is wrong with one account, if anything. */
 export function codexTrouble(v: CodexView, a: CodexAccount): string | null {
-  if (a.signInError) return "Needs sign-in";
+  if (v.missing.includes(a.id)) return "Needs sign-in";
+  if (a.signInError) return "Needs re-auth";
   if (v.drifted.includes(a.id)) return "Settings changed";
   return null;
 }
@@ -47,7 +58,7 @@ export function codexHeadline(v: CodexView): string {
   return "Connect with your ChatGPT plan";
 }
 
-export function CodexCardView({ view, error, onAction }: { view: CodexView | null; error?: string | null; onAction: (a: CodexAction) => void }) {
+export function CodexCardView({ view, error, confirming = null, onAction }: { view: CodexView | null; error?: string | null; confirming?: string | null; onAction: (a: CodexAction) => void }) {
   if (!view) return null;
   const busy = view.signingIn !== null;
   const connected = view.active !== null || view.systemDefault !== "signed-out";
@@ -68,27 +79,34 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
         </div>
       )}
       {view.signingIn === "browser" && view.inBrowser && <p className="conn-detail">Sign in on the ChatGPT page that opened. Kolux keeps the sign-in in a Codex home of its own.</p>}
-      {!busy && view.accounts.length > 0 && (
+      {!busy && (
         <div className="acct-list">
+          <AccountRow
+            title="System default"
+            detail={`Codex's own login · ${systemRow[view.systemDefault]}`}
+            active={view.active === null}
+            busy={busy}
+            onPick={() => onAction({ kind: "activate", id: null })}
+          />
           {view.accounts.map((a) => (
-            <div key={a.id} className="acct-row" data-active={view.active === a.id}>
-              <div className="acct-who">
-                <span className="acct-email">{a.email ?? "ChatGPT account"}</span>
-              </div>
-              {codexTrouble(view, a) && <span className="conn-chip attention">{codexTrouble(view, a)}</span>}
-              {view.active === a.id ? (
-                <span className="conn-chip connected">Active</span>
-              ) : (
-                <button className="btn" onClick={() => onAction({ kind: "activate", id: a.id })}>
-                  Make active
-                </button>
-              )}
-              {codexTrouble(view, a) && (
-                <button className="btn" onClick={() => onAction({ kind: "again", id: a.id })}>
-                  Sign in again
-                </button>
-              )}
-            </div>
+            <AccountRow
+              key={a.id}
+              title={a.email ?? "ChatGPT account"}
+              detail={`Last signed in ${signedInAt(a.lastSignIn)}`}
+              active={view.active === a.id}
+              busy={busy}
+              trouble={codexTrouble(view, a)}
+              onPick={() => onAction({ kind: "activate", id: a.id })}
+              manage={{
+                againLabel: codexTrouble(view, a) ? "Sign in again" : null,
+                onAgain: () => onAction({ kind: "again", id: a.id }),
+                confirming: confirming === a.id,
+                activeGoes: view.active === a.id,
+                onAsk: () => onAction({ kind: "ask-remove", id: a.id }),
+                onRemove: () => onAction({ kind: "remove", id: a.id }),
+                onKeep: () => onAction({ kind: "keep" }),
+              }}
+            />
           ))}
           {view.accounts.some((a) => view.drifted.includes(a.id)) && (
             <p className="conn-detail warn">Codex's settings file for a marked account was changed, so Codex may keep its sign-in where Kolux cannot see it. Sign in again puts Kolux's settings back.</p>
@@ -128,6 +146,7 @@ export function CodexCardView({ view, error, onAction }: { view: CodexView | nul
 export default function CodexCard() {
   const [view, setView] = useState<CodexView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
   const read = useCallback(() => {
     invoke<CodexView>("codex_accounts")
       .then(setView)
@@ -139,19 +158,28 @@ export default function CodexCard() {
     listen("codex-accounts", read)
       .then((un) => (stop = un))
       .catch(() => {});
-    return () => stop();
+    // ACCT-020: a sign-out made in a plain terminal shows as soon as Kolux is back in front.
+    window.addEventListener("focus", read);
+    return () => {
+      stop();
+      window.removeEventListener("focus", read);
+    };
   }, [read]);
   const act = (a: CodexAction) => {
     setError(null);
+    setConfirming(a.kind === "ask-remove" ? a.id : null);
+    if (a.kind === "ask-remove" || a.kind === "keep") return;
     const call =
       a.kind === "cancel"
         ? invoke("codex_account_cancel")
         : a.kind === "activate"
           ? invoke("codex_account_activate", { id: a.id })
+          : a.kind === "remove"
+            ? invoke("codex_account_remove", { id: a.id })
           : a.kind === "install"
             ? openInstallPage("codex")
             : invoke("codex_account_sign_in", { device: a.kind === "code", again: a.kind === "again" ? a.id : null });
     call.catch((e) => setError(String(e))).finally(read);
   };
-  return <CodexCardView view={view} error={error} onAction={act} />;
+  return <CodexCardView view={view} error={error} confirming={confirming} onAction={act} />;
 }
