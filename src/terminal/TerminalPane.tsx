@@ -179,6 +179,12 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         await listen<ExitEvent>("terminal-exit", (e) => {
           if (e.payload.id !== idRef.current) return;
           ended = true;
+          // VIEW-069 / SESS-051: a program that ends before its typed-in opening prompt could be
+          // handed over is a launch that failed, not a session that ran.
+          if (pending !== null) {
+            pending = null;
+            failed.current?.("the program ended before its opening prompt could be typed in");
+          }
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
           setStatus({ kind: "ended", code: e.payload.code });
         }),

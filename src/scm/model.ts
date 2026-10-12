@@ -132,3 +132,14 @@ export const sinceText = (updated: number, now: number): string => {
   const h = Math.floor(min / 60);
   return h < 24 ? `Changed ${h} h ago` : `Changed ${Math.floor(h / 24)} d ago`;
 };
+
+/** VIEW-069: the opening prompt for an agent asked to resolve the merge conflicts. */
+export const conflictPrompt = (files: Change[]): string =>
+  `This workspace has merge conflicts in:\n${files.map((f) => `- ${f.path}`).join("\n")}\n\nResolve each conflict, keeping what both sides meant, stage the resolved files, and finish the merge or rebase that is in progress. Where the two sides disagree, say which one you kept and why.`;
+
+/** VIEW-069: the settings key of the agent saved for agent actions. */
+export const SCM_AGENT_KEY = "scmAgent";
+
+/** VIEW-069: the agent saved for Source Control's agent actions, while it is still installed. */
+export const savedFixAgent = <A extends { id: string; installed: boolean }>(agents: A[], saved: unknown): A | null =>
+  typeof saved === "string" ? (agents.find((a) => a.id === saved && a.installed) ?? null) : null;

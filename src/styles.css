@@ -198,6 +198,10 @@ input { font: inherit; }
 .scm-out summary { cursor: pointer; font-weight: 500; }
 .scm-out pre { margin: 6px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; font: 11px var(--mono-font); color: var(--fg-muted); user-select: text; }
 .scm-out .btn { align-self: flex-start; }
+/* VIEW-069: the agent action row and its pick-and-confirm dialog. */
+[data-agent-action] { margin: 6px 8px 0; }
+.scm-ask { margin: 6px 8px 0; padding: 8px; border: 1px solid var(--line-subtle); border-radius: 8px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+.scm-ask .field.multi { min-height: 120px; }
 
 /* ---- 6. layout strip: 40 px ---- */
 .strip { flex: none; height: 40px; display: flex; align-items: center; padding-left: 12px; gap: 16px; background: var(--strip-bg); font-size: 12px; color: var(--fg-muted); }

@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { canCommit, changeCount, grouped, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -34,11 +34,46 @@ type Props = {
   /** EDIT-040: the agents found on this machine, the default first, for Hand to agent. */
   agents: AgentInfo[];
   onHand: (agent: AgentInfo, note: string) => void;
+  /** VIEW-069: the agent saved for agent actions (skips the dialog), saving or clearing it, and the
+   *  start itself, which resolves to why it failed (null once the agent has its prompt). */
+  fixAgent: unknown;
+  onFixAgent: (id: string | null) => void;
+  onAgentAction: (agent: AgentInfo, prompt: string) => Promise<string | null>;
 };
+
+type Asking = { agent: string; prompt: string; remember: boolean };
 
 type Failure = { title: string; output: string };
 
-export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand }: Props) {
+// VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
+export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction }: Props) {
+  const [asking, setAsking] = useState<Asking | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  const starting = useRef(false);
+  const [busyAgent, setBusyAgent] = useState(false);
+  const saved = savedFixAgent(agents, fixAgent);
+  const runAgent = async (agent: AgentInfo, prompt: string) => {
+    if (starting.current) return;
+    starting.current = true;
+    setBusyAgent(true);
+    setAgentError(null);
+    const why = await onAgentAction(agent, prompt);
+    starting.current = false;
+    setBusyAgent(false);
+    if (why) setAgentError(why);
+  };
+  const resolveConflicts = (files: Change[]) => {
+    const prompt = conflictPrompt(files);
+    if (saved) return void runAgent(saved, prompt);
+    setAsking({ agent: agents[0]?.id ?? "", prompt, remember: false });
+  };
+  const confirmAsk = () => {
+    const a = asking && agents.find((x) => x.id === asking.agent);
+    if (!asking || !a || !asking.prompt.trim()) return;
+    if (asking.remember) onFixAgent(a.id);
+    setAsking(null);
+    void runAgent(a, asking.prompt);
+  };
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
@@ -269,6 +304,47 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               </div>
             )}
             {error && <div className="note error">{error}</div>}
+            {status && status.conflicts.length > 0 && (
+              <div className="btn-row" data-agent-action="resolve-conflicts">
+                <button className="btn" disabled={busyAgent || agents.length === 0} title={agents.length === 0 ? "No agent was found on this computer" : undefined} onClick={() => resolveConflicts(status.conflicts)}>
+                  {saved ? `Resolve conflicts with ${saved.name}` : "Resolve conflicts with an agent…"}
+                </button>
+                {saved && (
+                  <button className="btn" title="Pick the agent and check the prompt each time" onClick={() => onFixAgent(null)}>
+                    Ask each time
+                  </button>
+                )}
+              </div>
+            )}
+            {asking && (
+              <div className="scm-ask" role="dialog" aria-label="Resolve conflicts with an agent">
+                <select aria-label="agent to start" className="field" value={asking.agent} onChange={(e) => setAsking({ ...asking, agent: e.target.value })}>
+                  {agents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+                <textarea aria-label="prompt for the agent" className="field multi" value={asking.prompt} onChange={(e) => setAsking({ ...asking, prompt: e.target.value })} />
+                <label className="conn-switch">
+                  <input type="checkbox" checked={asking.remember} onChange={(e) => setAsking({ ...asking, remember: e.target.checked })} />
+                  <span>Start this agent without asking next time</span>
+                </label>
+                <div className="btn-row">
+                  <button className="btn primary" disabled={!asking.prompt.trim()} onClick={confirmAsk}>
+                    Start
+                  </button>
+                  <button className="btn" onClick={() => setAsking(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            {agentError && (
+              <div className="note error" role="alert">
+                {agentError}
+              </div>
+            )}
             <div className="sb-list">
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}
               {status && section("Conflicts", status.conflicts, true)}
