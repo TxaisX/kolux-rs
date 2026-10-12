@@ -9,7 +9,8 @@ import { listen } from "@tauri-apps/api/event";
 import { Dots, Plus, Refresh, Search } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import type { Project } from "../projects/model";
-import AutomationDialog from "./AutomationDialog";
+import AutomationDialog, { TemplateCards } from "./AutomationDialog";
+import type { Template } from "./timetable";
 import RunsDashboard, { RunPage } from "./RunsDashboard";
 import { ago, CONFIRM_DELETE_KEY, confirmDelete, lastRun, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
@@ -57,6 +58,11 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   const [now, setNow] = useState(() => Date.now());
   // The dialog: undefined shut, null a new automation, else the latest saved copy being edited.
   const [dialog, setDialog] = useState<Automation | null | undefined>(undefined);
+  const [template, setTemplate] = useState<Template | null>(null);
+  const open = (t: Template | null) => {
+    setTemplate(t);
+    setDialog(null);
+  };
   const search = useRef<HTMLInputElement>(null);
   // AUTO-015: the Runs dashboard, and the run opened from it as a full page.
   const [runsView, setRunsView] = useState(initial?.runs ?? false);
@@ -196,7 +202,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
         <button className="btn" title="Every automation's runs in one place" onClick={() => setRunsView(true)}>
           Runs
         </button>
-        <button className="btn primary" disabled={projects.length === 0} title={projects.length === 0 ? "Add a project first" : undefined} onClick={() => setDialog(null)}>
+        <button className="btn primary" disabled={projects.length === 0} title={projects.length === 0 ? "Add a project first" : undefined} onClick={() => open(null)}>
           <Plus size={12} />
           New Automation
         </button>
@@ -236,7 +242,8 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
       ) : all.length === 0 ? (
         <div className="empty">
           <h2>No automations yet</h2>
-          <p>An automation starts an agent with a saved prompt on a timetable or when something happens in a project.</p>
+          <p>An automation starts an agent with a saved prompt on a timetable or when something happens in a project. Start from one of these, or from blank:</p>
+          <TemplateCards onPick={open} disabled={projects.length === 0} />
         </div>
       ) : rows.length === 0 ? (
         <div className="empty">
@@ -323,7 +330,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
           {current && <Detail a={current} runs={runs} now={now} onRun={() => runNow(current)} onToggle={() => toggle(current)} />}
         </>
       )}
-      {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} onClose={() => setDialog(undefined)} onSaved={saved} />}
+      {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} template={template} onClose={() => setDialog(undefined)} onSaved={saved} />}
     </div>
   );
 }

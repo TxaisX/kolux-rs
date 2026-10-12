@@ -72,3 +72,8 @@ test("AUTO-015: the Runs button is live on the Automations page", () => {
   const html = render({ data: many });
   expect(html).toMatch(/<button class="btn" title="Every automation&#x27;s runs in one place">Runs<\/button>/);
 });
+
+test("with no automations yet, four template cards and a blank choice appear (AUTO-006)", () => {
+  const html = render({ data: { automations: [], runs: [] } });
+  for (const name of ["Weekday repo audit", "Weekly release check", "Daily review", "Hourly upkeep", "Start from blank"]) expect(html).toContain(name);
+});
