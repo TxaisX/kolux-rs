@@ -256,7 +256,7 @@ impl Terminals {
         self.inner.lock().ok()?.dirs.get(&id).cloned()
     }
 
-    /// Is `handle` an open terminal? (`--from` names one explicitly.)
+    /// Is `handle` an open terminal?
     pub fn live(&self, handle: &str) -> bool {
         let Some(id) = id_of(handle) else { return false };
         self.inner.lock().map(|i| i.sessions.contains_key(&id)).unwrap_or(false)

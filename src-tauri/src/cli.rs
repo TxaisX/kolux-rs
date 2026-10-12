@@ -155,6 +155,137 @@ const TIERS: &[&str] = &["major", "deep", "build", "light"];
 const NEW_TOP: &str = "new-top-level";
 const NEW_CHILD: &str = "new-child";
 
+type Command = (&'static str, &'static str, &'static [&'static str]);
+
+/// Every command path with its wire name and flags, aliases included (CLI-003 suggests from it).
+fn commands() -> Vec<Command> {
+    let mut all: Vec<Command> = vec![
+        ("worktree create", "worktree.create", CREATE_FLAGS),
+        ("worktree rm", "worktree.rm", RM_FLAGS),
+        ("worktree remove", "worktree.rm", RM_FLAGS),
+        ("worktree delete", "worktree.rm", RM_FLAGS),
+        ("orchestration worker-start", WORKER_START, WORKER_FLAGS),
+    ];
+    all.extend(QUERY.iter().copied());
+    all.extend(MAIL.iter().copied());
+    all
+}
+/// CLI-020: the verbs a typo is never pointed at from more than one edit away.
+const DESTRUCTIVE: &[&str] = &["rm", "remove", "delete"];
+
+/// Does some command take `--name`? (The retired `--parent-workspace` still takes its value.)
+fn known_flag(name: &str) -> bool {
+    name == "parent-workspace" || commands().iter().any(|c| c.2.contains(&name))
+}
+
+/// Edits between two words, when three or fewer; words over 32 characters are not measured.
+fn near(a: &str, b: &str) -> Option<usize> {
+    if a.chars().count() > 32 {
+        return None;
+    }
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diag = row[0];
+        row[0] = i + 1;
+        for j in 0..b.len() {
+            let up = row[j + 1];
+            row[j + 1] = (diag + usize::from(ca != b[j])).min(row[j] + 1).min(up + 1);
+            diag = up;
+        }
+    }
+    Some(row[b.len()]).filter(|d| *d <= 3)
+}
+
+/// The nearest word to `typed`, the first on a tie; destructive words only from one edit away.
+fn nearest<'a>(typed: &str, from: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    from.into_iter().filter_map(|c| near(typed, c).filter(|d| *d == 1 || (*d > 1 && !DESTRUCTIVE.contains(&c))).map(|d| (d, c))).min_by_key(|(d, _)| *d).map(|(_, c)| c)
+}
+
+/// The words as one line to run again, quoting any word with a space in it.
+fn line(words: &[String]) -> String {
+    let quoted: Vec<String> = words.iter().map(|w| if w.contains(char::is_whitespace) { format!("\"{w}\"") } else { w.clone() }).collect();
+    format!("kolux-dev {}", quoted.join(" "))
+}
+
+/// CLI-003: a command path nothing answers to. A wrong group is matched against group names, a
+/// wrong verb against that group's verbs.
+fn command_typo(words: &[String], path: &[String], at: &[usize], all: &[Command]) -> Fail {
+    let joined = path.join(" ");
+    let mut groups: Vec<&str> = Vec::new();
+    for c in all {
+        let g = c.0.split(' ').next().unwrap_or_default();
+        if !groups.contains(&g) {
+            groups.push(g);
+        }
+    }
+    let verbs = |g: &str| all.iter().filter_map(|c| c.0.strip_prefix(g).and_then(|r| r.strip_prefix(' '))).collect::<Vec<_>>();
+    let (unknown, fix): (&str, Option<Vec<String>>) = if !groups.contains(&path[0].as_str()) {
+        let fix = nearest(&path[0], groups.iter().copied()).map(|g| {
+            let fits = path.get(1).is_some_and(|v| verbs(g).contains(&v.as_str()));
+            let mut p = vec![g.to_string()];
+            if fits {
+                p.push(path[1].clone());
+            }
+            p
+        });
+        (&path[0], fix)
+    } else if path.len() == 1 {
+        let mut f = Fail::args(format!("`{joined}` needs a command after it: {}", verbs(&path[0]).join(", ")));
+        f.data = json!({ "unknown": joined, "command": joined, "suggestions": [], "nextSteps": ["kolux-dev --help"] });
+        return f;
+    } else if verbs(&path[0]).contains(&path[1].as_str()) {
+        let mut f = Fail::args(format!("unknown command `{joined}`: `{}` is not part of {} {}", path[2], path[0], path[1]));
+        f.data = json!({ "unknown": path[2], "command": joined, "suggestions": [], "nextSteps": ["kolux-dev --help"] });
+        return f;
+    } else {
+        (&path[1], nearest(&path[1], verbs(&path[0])).map(|v| vec![path[0].clone(), v.to_string()]))
+    };
+    let said = fix.as_ref().map(|p| p.join(" "));
+    let next: Vec<String> = match &fix {
+        Some(p) if p.len() == 2 => {
+            let mut w = words.to_vec();
+            w[at[0]] = p[0].clone();
+            w[at[1]] = p[1].clone();
+            for &k in at.iter().skip(2).rev() {
+                w.remove(k);
+            }
+            vec![line(&w)]
+        }
+        _ => vec!["kolux-dev --help".to_string()],
+    };
+    let tail = said.as_ref().map(|p| format!("; did you mean {p}?")).unwrap_or_else(|| "; run kolux-dev --help".into());
+    let mut f = Fail::args(format!("unknown command `{joined}`: `{unknown}` is not a command word here{tail}"));
+    f.data = json!({ "unknown": unknown, "command": joined, "suggestions": said.into_iter().collect::<Vec<_>>(), "nextSteps": next });
+    f
+}
+
+/// CLI-003: a flag this command does not take: the nearest one it does, and the whole list.
+fn flag_typo(words: &[String], spots: &[(String, usize)], command: &str, allowed: &[&str], k: &str) -> Fail {
+    let mut takes: Vec<&str> = allowed.to_vec();
+    takes.push("json");
+    let listed: Vec<String> = takes.iter().map(|f| format!("--{f}")).collect();
+    // The caller flag of check was renamed; only there is --from pointed at --terminal.
+    let renamed = command == "orchestration check" && k == "from";
+    let fix = if renamed { Some("terminal") } else { nearest(k, takes.iter().copied()) };
+    let message = match fix {
+        _ if renamed => format!("--from was renamed on {command}: name the terminal with --terminal <handle>"),
+        Some(f) => format!("unknown flag --{k} for {command}; did you mean --{f}?"),
+        None => format!("unknown flag --{k} for {command}"),
+    };
+    let next: Vec<String> = fix.and_then(|f| spots.iter().find(|(n, _)| n == k).map(|&(_, i)| (f, i))).map(|(f, i)| {
+        let mut w = words.to_vec();
+        w[i] = match w[i].split_once('=') {
+            Some((_, v)) => format!("--{f}={v}"),
+            None => format!("--{f}"),
+        };
+        line(&w)
+    }).into_iter().collect();
+    let mut f = Fail::args(message);
+    f.data = json!({ "unknown": format!("--{k}"), "command": command, "suggestions": fix.map(|f| format!("--{f}")).into_iter().collect::<Vec<_>>(), "nextSteps": next, "flags": listed, "hint": format!("{command} takes: {}", listed.join(", ")) });
+    f
+}
+
 /// Parses the words after the program name. The `--json` flag is reported even when the rest is
 /// refused, so the refusal can be printed in the asked-for shape. `Ok(None)` means help was
 /// printed to stdout.
@@ -163,6 +294,8 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
     let mut help = false;
     let mut path: Vec<String> = Vec::new();
     let mut flags: Map<String, Value> = Map::new();
+    let mut spots: Vec<(String, usize)> = Vec::new();
+    let mut at: Vec<usize> = Vec::new();
     let mut i = 0;
     let inner = (|| {
         while i < words.len() {
@@ -177,7 +310,10 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                     "json" => json = true,
                     "help" => help = true,
                     _ => {
-                        let value = if SWITCHES.contains(&name.as_str()) {
+                        spots.push((name.clone(), i - 1));
+                        // CLI-003: a flag no command takes has no value to take, so a typo ahead
+                        // of the command words never swallows one of them.
+                        let value = if SWITCHES.contains(&name.as_str()) || (inline.is_none() && !known_flag(&name)) {
                             Value::Bool(true)
                         } else if let Some(v) = inline {
                             Value::String(v)
@@ -199,25 +335,26 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                 help = true;
             } else {
                 path.push(w.clone());
+                at.push(i - 1);
             }
         }
         if help || path.is_empty() {
             return Ok(None);
         }
         let joined = path.join(" ");
-        let (command, allowed) = match joined.as_str() {
-            "worktree create" => ("worktree.create", CREATE_FLAGS),
-            "worktree rm" | "worktree remove" | "worktree delete" => ("worktree.rm", RM_FLAGS),
-            "orchestration worker-start" => (WORKER_START, WORKER_FLAGS),
-            other if QUERY.iter().any(|(w, _, _)| *w == other) => QUERY.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
-            other if MAIL.iter().any(|(w, _, _)| *w == other) => MAIL.iter().find(|(w, _, _)| *w == other).map(|(_, c, f)| (*c, *f)).expect("found above"),
-            _ => return Err(Fail::args(format!("unknown command `{joined}`; run kolux-dev --help"))),
+        let all = commands();
+        // A flag no command takes left its would-be value among the words; the first two still
+        // name the command it was typed against.
+        let lead = path.iter().take(2).cloned().collect::<Vec<_>>().join(" ");
+        let stray = flags.keys().any(|k| !known_flag(k));
+        let Some(&(joined, command, allowed)) = all.iter().find(|c| c.0 == joined).or_else(|| all.iter().find(|c| stray && c.0 == lead)) else {
+            return Err(command_typo(words, &path, &at, &all));
         };
         if command == "worktree.create" && flags.contains_key("parent-workspace") {
             return Err(Fail::args("--parent-workspace was retired; use --parent-worktree <selector>"));
         }
         if let Some(k) = flags.keys().find(|k| !allowed.contains(&k.as_str())) {
-            return Err(Fail::args(format!("unknown flag --{k} for {joined}")));
+            return Err(flag_typo(words, &spots, joined, allowed, k));
         }
         let text = |k: &str| flags.get(k).and_then(Value::as_str);
         let empty = |k: &str| text(k).is_some_and(|v| v.trim().is_empty());
@@ -584,6 +721,7 @@ fn text_of(command: &str, r: &Value) -> String {
             mail_lines(&msgs, &mut out);
             out.join("\n")
         }
+        _ if r["branchKept"] == true => format!("removed {}; branch {} kept", s("path"), s("branch")),
         _ => format!("removed {}", s("path")),
     }
 }
@@ -663,6 +801,9 @@ pub fn main(words: Vec<String>) -> i32 {
             }
             (Err(f), false) => {
                 eprintln!("error: {}", f.message);
+                if let Some(h) = f.data["hint"].as_str() {
+                    eprintln!("{h}");
+                }
                 if f.code == "invalid_arguments" {
                     eprintln!("run kolux-dev --help for the usage");
                 }
@@ -885,14 +1026,15 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 return Err(Fail { code: "dirty", message: format!("{shown} has uncommitted changes"), data: json!({ "hint": "add --force to remove it anyway, changes and all" }) });
             }
             ctx.terminals.kill_under(Path::new(&w.path));
-            let keep = projects::keeps_branch(&*ctx.store.lock().map_err(|e| e.to_string())?, &w.path);
+            // CLI-020: --force forces only the checkout's removal; the branch is kept.
+            let keep = a["force"].as_bool().unwrap_or(false) || projects::keeps_branch(&*ctx.store.lock().map_err(|e| e.to_string())?, &w.path);
             projects::remove_worktree(ctx.git, &project, &w.path, true, keep)?;
             {
                 let store = ctx.store.lock().map_err(|e| e.to_string())?;
                 projects::forget_workspace(&store, &w.path)?;
             }
             (ctx.notify)(json!({ "kind": "removed", "path": w.path }));
-            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id }))
+            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": keep && w.branch.is_some() }))
         }
         WORKER_START => worker_start(ctx, req),
         c if QUERY.iter().any(|(_, w, _)| *w == c) => query(ctx, req),
@@ -1280,11 +1422,11 @@ fn now_ms() -> u64 {
 /// The pane a call came from, when the runtime can vouch for it.
 fn caller(ctx: &Ctx, req: &Request) -> Result<Option<String>, Fail> {
     let pane = req.pane.as_ref().map(|p| (p.handle.as_str(), p.key.as_str()));
-    crate::orchestration::caller_of(req.args["from"].as_str(), pane, &|k| ctx.terminals.by_key(k), &|h| ctx.terminals.live(h))
+    crate::orchestration::caller_of(req.args["from"].as_str(), pane, &|k| ctx.terminals.by_key(k))
 }
 
 fn unbound() -> Fail {
-    Fail { code: "unbound_caller", message: "this needs a Kolux terminal: run it inside one, or name one with --from <handle>".into(), data: json!({ "hint": "a shell Kolux did not start has no KOLUX_TERMINAL_HANDLE and KOLUX_PANE_KEY" }) }
+    Fail { code: "unbound_caller", message: "who is calling cannot be told: this needs the identity of a Kolux terminal, so run it inside one".into(), data: json!({ "hint": "a shell Kolux did not start has no KOLUX_TERMINAL_HANDLE and KOLUX_PANE_KEY" }) }
 }
 
 /// Runs, sends and checks. Everything that ties, sends or reads needs a pane the runtime knows;
@@ -1845,6 +1987,42 @@ mod tests {
     }
 
     #[test]
+    fn cli003_typos_get_safe_suggestions_before_the_app_is_asked() {
+        let fail = |s: &str| parse(&words(s)).1.unwrap_err();
+        // A wrong group: the nearest group, and the full path when the verb fits it.
+        let f = fail("worktre list");
+        assert!(f.message.contains("`worktre`") && f.message.contains("worktree list"), "{}", f.message);
+        assert_eq!(f.data["nextSteps"], json!(["kolux-dev worktree list"]));
+        assert_eq!(f.data["unknown"], "worktre");
+        // A wrong verb: rm only from one edit away; a harmless typo never lands on it.
+        assert!(fail("worktree rmm --worktree name:x").message.contains("did you mean worktree rm?"));
+        let lst = fail("worktree lst");
+        assert!(lst.message.contains("worktree list") && !lst.message.contains(" rm"), "{}", lst.message);
+        assert!(!fail("worktree rmx2").message.contains("rm?"), "two edits from rm");
+        assert!(fail("worktree delet --worktree name:x").message.contains("worktree delete"), "aliases are suggested too");
+        // A wrong flag: the nearest flag of that command, and the list of its flags.
+        let flag = fail("worktree show --worktre name:x");
+        assert!(flag.message.contains("unknown flag --worktre for worktree show") && flag.message.contains("did you mean --worktree?"), "{}", flag.message);
+        assert_eq!(flag.data["flags"], json!(["--worktree", "--json"]));
+        assert!(flag.data["hint"].as_str().unwrap().contains("--worktree"));
+        assert_eq!(flag.data["nextSteps"], json!(["kolux-dev worktree show --worktree name:x"]));
+        let long = fail(&format!("worktree list --{}", "x".repeat(40)));
+        assert_eq!(long.data["suggestions"], json!([]));
+        assert_eq!(long.data["flags"], json!(["--repo", "--limit", "--json"]));
+        // The renamed caller flag is pointed at --terminal, and only on check.
+        let renamed = fail("orchestration check --from term-1");
+        assert!(renamed.message.contains("--terminal") && renamed.message.contains("renamed"), "{}", renamed.message);
+        assert!(!fail("orchestration inbox --from term-1").message.contains("renamed"));
+        // A wrong flag ahead of the group is reported against the full path, and the call ends there.
+        let (json, r) = parse(&words("--jso worktree --json list"));
+        assert!(json);
+        let f = r.unwrap_err();
+        assert!(f.message.contains("--jso") && f.message.contains("worktree list"), "{}", f.message);
+        assert_eq!(f.data["command"], "worktree list");
+        assert_eq!(main(words("--jso worktree --json list")), 1);
+    }
+
+    #[test]
     fn the_command_line_is_checked_before_the_app_is_asked() {
         let (json, p) = parse(&words("worktree create --name one --agent claude --prompt=hi --json"));
         let p = p.unwrap().unwrap();
@@ -2244,13 +2422,17 @@ mod tests {
         let dirty = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "name:cli one" }))).unwrap_err();
         assert_eq!(dirty.code, "dirty");
         assert!(path.exists());
-        dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "name:cli one", "force": true }))).unwrap();
+        let forced = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "name:cli one", "force": true }))).unwrap();
         assert!(!path.exists());
+        // CLI-020: --force removes the checkout and never the branch.
+        assert_eq!(forced["branchKept"], true);
+        let branch = format!("refs/heads/{}", forced["branch"].as_str().unwrap());
+        assert!(Command::new("git").args(["rev-parse", "--verify", &branch]).current_dir(&repo).output().unwrap().status.success(), "the branch stays");
         assert_eq!(events.lock().unwrap().last().unwrap()["kind"], "removed");
 
         let two = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "two" }))).unwrap();
         let two_path = PathBuf::from(two["path"].as_str().unwrap());
-        dispatch(&ctx, &req("worktree.rm", &two_path, json!({ "worktree": "current" }))).unwrap();
+        assert_eq!(dispatch(&ctx, &req("worktree.rm", &two_path, json!({ "worktree": "current" }))).unwrap()["branchKept"], false, "a plain rm takes the branch it made");
         assert!(!two_path.exists());
         let main = dispatch(&ctx, &req("worktree.rm", &repo, json!({ "worktree": "current" }))).unwrap_err();
         assert!(main.message.contains("main checkout"));

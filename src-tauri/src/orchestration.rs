@@ -77,16 +77,24 @@ fn args(message: impl Into<String>) -> Fail {
     Fail::new("invalid_arguments", message)
 }
 
-/// Who is calling (ORCH-001): `--from` names an open Kolux terminal; otherwise the handle and
-/// secret pane key every Kolux terminal carries must match a pane the runtime started itself. A
-/// shell outside Kolux (or a guessed key) is nobody: `None`.
-/// The pane key decides: a handle the environment still names after it went stale is worked out
-/// again from the key (CLI-034); a key the runtime never gave is no one.
-pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, by_key: &dyn Fn(&str) -> Option<String>, live: &dyn Fn(&str) -> bool) -> Result<Option<String>, Fail> {
-    if let Some(h) = from.map(str::trim).filter(|h| !h.is_empty()) {
-        return if live(h) { Ok(Some(h.to_string())) } else { Err(Fail::new("not_found", format!("no open Kolux terminal is called {h}"))) };
+/// Who is calling (ORCH-001, CLI-039): the handle and secret pane key every Kolux terminal carries
+/// must match a pane the runtime started itself. A shell outside Kolux (or a guessed key) is
+/// nobody: `None`. The pane key decides: a handle the environment still names after it went stale
+/// is worked out again from the key (CLI-034); a key the runtime never gave is no one.
+/// `--from` may only name the calling terminal itself: another handle is refused, and so is any
+/// handle from a shell whose own identity cannot be proven (fail closed).
+pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, by_key: &dyn Fn(&str) -> Option<String>) -> Result<Option<String>, Fail> {
+    let me = pane.and_then(|(_, k)| by_key(k));
+    let Some(h) = from.map(str::trim).filter(|h| !h.is_empty()) else { return Ok(me) };
+    match me {
+        Some(me) if me == h => Ok(Some(me)),
+        Some(me) => Err(Fail::new("caller_mismatch", format!("this command runs in {me}, so it cannot act as {h}: drop --from {h}, or run the command in {h} itself"))),
+        None => Err(Fail {
+            code: "unbound_caller",
+            message: format!("--from {h} cannot be proven here: this shell is not a terminal Kolux started, so it has no identity to check it against"),
+            data: json!({ "hint": "run the command inside a Kolux terminal; its KOLUX_TERMINAL_HANDLE and KOLUX_PANE_KEY say who is calling" }),
+        }),
     }
-    Ok(pane.and_then(|(_, k)| by_key(k)))
 }
 
 fn finished(d: &Value) -> bool {
@@ -319,6 +327,16 @@ impl Mail {
             if let Some(d) = text("dispatchId").and_then(|id| dispatches.iter().find(|d| d["id"] == id.as_str())).filter(|d| finished(d)) {
                 let id = d["id"].as_str().unwrap_or_default();
                 return Err(Fail::new("dispatch_finished", format!("{id} was {}: Kolux takes no more reports on it", d["status"].as_str().unwrap_or_default())));
+            }
+            // CLI-039: a report on a dispatch comes only from the terminal its worker runs in, so
+            // another pane can never settle someone else's task.
+            if let Some(d) = text("dispatchId").and_then(|id| dispatches.iter().find(|d| d["id"] == id.as_str())) {
+                let id = d["id"].as_str().unwrap_or_default();
+                match terminal_of(d) {
+                    Some(t) if t == from => {}
+                    Some(t) => return Err(Fail::new("not_your_dispatch", format!("{id} runs in {t}; a report on it must come from {t} itself, not from {from}"))),
+                    None => return Err(Fail::new("not_your_dispatch", format!("{id}'s worker terminal is from an earlier start of Kolux, so a report on it cannot be vouched for"))),
+                }
             }
         }
         let payload = text("payload").map(|p| serde_json::from_str::<Value>(&p)).transpose().map_err(|_| args("--payload takes JSON"))?;
@@ -686,13 +704,19 @@ mod tests {
     #[test]
     fn a_pane_is_tied_only_when_the_runtime_knows_it() {
         let by_key = |k: &str| (k == "s3cret").then(|| "term-1".to_string());
-        assert_eq!(caller_of(None, Some(("term-1", "s3cret")), &by_key, &live).unwrap().as_deref(), Some("term-1"));
+        assert_eq!(caller_of(None, Some(("term-1", "s3cret")), &by_key).unwrap().as_deref(), Some("term-1"));
         // CLI-034: a stale handle is worked out again from the pane key.
-        assert_eq!(caller_of(None, Some(("term-5", "s3cret")), &by_key, &live).unwrap().as_deref(), Some("term-1"));
-        assert_eq!(caller_of(None, Some(("term-1", "guess")), &by_key, &live).unwrap(), None);
-        assert_eq!(caller_of(None, None, &by_key, &live).unwrap(), None);
-        assert_eq!(caller_of(Some("term-4"), None, &by_key, &live).unwrap().as_deref(), Some("term-4"));
-        assert_eq!(caller_of(Some("nope"), None, &by_key, &live).unwrap_err().code, "not_found");
+        assert_eq!(caller_of(None, Some(("term-5", "s3cret")), &by_key).unwrap().as_deref(), Some("term-1"));
+        assert_eq!(caller_of(None, Some(("term-1", "guess")), &by_key).unwrap(), None);
+        assert_eq!(caller_of(None, None, &by_key).unwrap(), None);
+        // CLI-039: --from may name the calling terminal itself, never another one, and never
+        // from a shell whose identity cannot be proven.
+        assert_eq!(caller_of(Some("term-1"), Some(("term-1", "s3cret")), &by_key).unwrap().as_deref(), Some("term-1"));
+        let other = caller_of(Some("term-4"), Some(("term-1", "s3cret")), &by_key).unwrap_err();
+        assert_eq!(other.code, "caller_mismatch");
+        assert!(other.message.contains("term-1") && other.message.contains("term-4"), "{}", other.message);
+        assert_eq!(caller_of(Some("term-4"), None, &by_key).unwrap_err().code, "unbound_caller");
+        assert_eq!(caller_of(Some("term-1"), Some(("term-1", "guess")), &by_key).unwrap_err().code, "unbound_caller");
     }
 
     #[test]
@@ -989,6 +1013,26 @@ mod tests {
         assert!(m.messages.is_empty());
         // Ordinary mail still goes through.
         assert!(m.send("term-2", &json!({ "to": to, "subject": "note" }), &d, &live, 8).is_ok());
+    }
+
+    #[test]
+    fn cli039_a_report_on_a_dispatch_comes_only_from_its_worker() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "work", 1)["run"]["id"].as_str().unwrap().to_string();
+        let d = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2 })];
+        let to = format!("run:{run}");
+        for kind in [json!({ "type": "worker_done", "outcome": "succeeded" }), json!({ "type": "heartbeat" })] {
+            let mut a = json!({ "to": to, "subject": "task-1 done", "taskId": "task-1", "dispatchId": "dispatch-1" });
+            a.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
+            let no = m.send("term-3", &a, &d, &live, 2).unwrap_err();
+            assert_eq!(no.code, "not_your_dispatch", "{}", no.message);
+            assert!(no.message.contains("term-2") && no.message.contains("term-3"), "{}", no.message);
+            assert!(m.send("term-2", &a, &d, &live, 3).is_ok(), "its own worker reports");
+        }
+        // A dispatch whose worker terminal belongs to an earlier start cannot be vouched for.
+        let old = vec![json!({ "id": "dispatch-1", "runId": run, "status": "running", "terminal": 2, "runtime": u64::from(std::process::id()) + 1 })];
+        let a = json!({ "to": to, "subject": "done", "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1" });
+        assert_eq!(m.send("term-2", &a, &old, &live, 4).unwrap_err().code, "not_your_dispatch");
     }
 
     #[test]
