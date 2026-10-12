@@ -43,3 +43,22 @@ test("the Claude card offers the account route only while the key is not connect
   expect(card(off)).toContain("Use my Claude account instead");
   expect(card({ ...off, connected: true, createdAt: 1, expiresAt: 2, daysLeft: 300 })).not.toContain("Use my Claude account instead");
 });
+
+test("the upkeep switch is on by default and reflects the setting (ACCT-006, T-043-d)", () => {
+  const h = html({ ...empty, accounts: [sam], active: "a1" });
+  expect(h).toContain('role="switch"');
+  expect(h).toContain('checked=""');
+  expect(h).toContain("Claude Code keeps these sign-ins fresh");
+  const off = html({ ...empty, accounts: [sam], active: "a1", upkeepLeftToClaude: false });
+  expect(off).toContain('role="switch"');
+  expect(off).not.toContain('checked=""');
+  expect(off).toContain("Kolux asks Claude Code");
+  // Nothing to switch while no account is managed.
+  expect(html(empty)).not.toContain('role="switch"');
+});
+
+test("a lapsed account is flagged only while Kolux, not Claude Code, looks after sign-ins", () => {
+  const stale = { ...sam, stale: true };
+  expect(html({ ...empty, accounts: [stale], active: "a1" })).not.toContain("Needs sign-in");
+  expect(html({ ...empty, accounts: [stale], active: "a1", upkeepLeftToClaude: false })).toContain("Needs sign-in");
+});

@@ -605,8 +605,11 @@ sign-in that quits early, keeps nothing partial; "Sign in again" that fails puts
 sign-in back and says why in yellow. Make active picks the account new Claude panes run on (they
 get that folder as CLAUDE_CONFIG_DIR); while the 1-year key is connected the key still wins, and
 the section says so. Kolux does not renew these sign-ins itself: Claude Code keeps them fresh in
-its own panes (the ACCT-006 default under OD-01). The renewal opt-out switch and Kolux-side
-renewal are T-043-d.
+its own panes (the ACCT-006 default under OD-01). The section's "Leave sign-in upkeep to Claude
+Code" switch (T-043-d, [core]) is on by default; off, Kolux asks Claude Code at once whether the
+active account is still signed in and flags a lapsed one with a Needs sign-in chip and the
+main-window notice, on hides both. Kolux never renews a sign-in itself (DT-C16); the macOS
+keychain rules are T-043-e.
 
 [accounts] The Codex card on Settings > AI connections connects Codex (T-043-c): Connect runs
 Codex's own browser sign-in out of sight, and "Sign in with a code" shows a link and a one-time
@@ -1469,7 +1472,25 @@ recorded default until told otherwise; nothing here blocks a pass.
   windows and `rateLimitResetCredits.availableCount` from the background process. Card amended;
   its acceptance boxes stay as T-042-a left them. Gates re-run clean.
 
+- 2026-10-12 · [core] T-043-d: the sign-in upkeep switch (ACCT-006). `ClaudeAccounts.tsx` shows
+  "Leave sign-in upkeep to Claude Code" under the managed accounts once one exists, bound to
+  settings field `claudeSignInUpkeepByClaudeCode` (absent = on, OD-01/DT-A2); switching it off
+  saves the field and calls `claude_account_check` (ACCT-012, `claude auth status --json` in the
+  account's folder, hidden, 20-s limit) so a lapsed account is flagged straight away; on hides the
+  Needs sign-in chip and the main-window notice (the chip now follows the switch too). Kolux-side
+  renewal is not built (DECISIONS §7 DT-C16): Anthropic's token service is not public
+  documentation and the clean-room rule forbids learning it; Claude Code refreshes its own sign-in
+  in every pane. The macOS keychain rules of the managed-account card go to T-043-e (needs a Mac).
+  Live in the lane app with a stand-in account row seeded into the lane profile's kv (config
+  folder that never signed in): switch on → no chip, no notice; off → settings file `false`, the
+  check ran, the row went `stale`, chip "Needs sign-in" and the notice "Claude account
+  fake@example.test is no longer signed in" appeared; on → both hidden, file `true`; off again →
+  flagged within 12 s (`evidence/T-043-d-upkeep.png`). The very first check in a never-used
+  folder did not flag the row: Claude Code's first run there took longer than the 20-s limit, so
+  the account stayed as it was until the next check. Seed row, folder and setting removed after.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-043-d · done: sign-in upkeep switch, lapsed warnings follow it, check on switch-off; Kolux-side renewal dropped (DT-C16); keychain rules → T-043-e; evidence/T-043-d-upkeep.png
 - 2026-10-12 · [core] T-042-b · done, decision only: usage service and hidden /status screen dropped (DT-C15); background app-server read is the only Codex figures route
 - 2026-10-12 · [core] T-041-b · done: resume after a limit (resume.rs, timer, foreground check, cancel on typing, persisted waits); evidence/T-041-b-resume.png
 - 2026-10-12 · [core] T-041-a · done: 200k cap (env for Claude, -c overrides for Codex, Settings > Agents switch), weekly-only read-only pill with tint and countdown, config-folder guard and one-window merge on status-line reports; DT-C14 drops the usage service; evidence/T-041-a-cap.png
@@ -1479,6 +1500,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
 - 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
 - 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
-- 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
 
 
