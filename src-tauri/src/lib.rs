@@ -59,10 +59,25 @@ fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, v
     Ok(())
 }
 
+/// A desktop notification (STAT-041). The window decides when one is due and with which words.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
+}
+
+/// The minutes of silence before a working agent is reported quiet; 10 by default, 0 is off
+/// (STAT-045, settings key `quietMinutes`).
+fn quiet_minutes(store: &Mutex<Store>) -> u64 {
+    let settings = store.lock().map(|s| s.settings()).unwrap_or_default();
+    settings.get("quietMinutes").and_then(|v| v.as_f64()).map(|m| m.max(0.0) as u64).unwrap_or(10)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
@@ -89,6 +104,18 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 secrets::sealing_pass(&handle.state::<Mutex<Store>>(), &dir);
             });
+            // STAT-045: a working agent that prints nothing for the chosen minutes is reported once
+            // per silent spell. Silence is the terminal's own output, never the hooks.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(15));
+                let minutes = quiet_minutes(&handle.state::<Mutex<Store>>());
+                let threshold = (minutes > 0).then(|| std::time::Duration::from_secs(minutes * 60));
+                let terminals = handle.state::<Terminals>();
+                for pane_key in status::quiet_check(threshold, |id| terminals.silence(id)) {
+                    let _ = tauri::Emitter::emit(&handle, "agent-quiet", status::Quiet { pane_key, minutes });
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -101,6 +128,7 @@ pub fn run() {
             app_info,
             get_settings,
             save_settings,
+            notify,
             sysmem::process_memory,
             terminal::terminal_spawn,
             terminal::terminal_write,

@@ -359,3 +359,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-09 · T-025-b · Codex's public source through context7 (hook config and schema, the trust discovery and command runner, the app-server `hooks/list` call) for the hooks.json format, the event payloads and the trust-key shape; the installed codex-cli 0.156.1's own `app-server` answers on a scratch `CODEX_HOME` for the live keys and hashes; Txais's own `~/.codex/config.toml` and the ponytail plugin's `claude-codex-hooks.json` read once for the shape of existing trust entries, nothing copied and nothing written.
 
 > 2026-10-09 · T-025-c · Claude Code's public hook input types through context7 (SubagentStart, SubagentStop, Stop with `last_assistant_message` and `background_tasks`, the `agent_id` rule, the teammate task events) and Codex's public source (SubagentStop and Stop inputs) for the field names; nothing else read.
+
+> 2026-10-11 · T-026-a · The Tauri notification plugin's public docs through context7 (`NotificationExt`, builder, `init`) and crates.io for the crate itself (2.5.1); nothing else read.

@@ -142,6 +142,13 @@ impl Terminals {
         inner.marks.iter().filter(|(id, m)| m.started >= since && inner.dirs.get(id).is_some_and(|d| same(d))).map(|(id, m)| (*id, m.last_output)).next()
     }
 
+    /// How long the program in `id` has printed nothing (since it started, when it never has), for
+    /// the quiet alert (STAT-045). `None` for a shell or a gone session.
+    pub fn silence(&self, id: u32) -> Option<std::time::Duration> {
+        let inner = self.inner.lock().ok()?;
+        inner.marks.get(&id).map(|m| m.last_output.unwrap_or(m.started).elapsed())
+    }
+
     /// Ends every session that was started in `dir` or a folder under it, and waits (briefly) for
     /// the programs to be gone, so the folder can be deleted. Returns how many were ended.
     pub fn kill_under(&self, dir: &std::path::Path) -> usize {

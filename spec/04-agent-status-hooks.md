@@ -147,7 +147,8 @@ User sees: after the chosen number of minutes with no terminal output, a single 
 Rules: the default is 10 minutes and 0 switches it off; it fires once per silent spell, any fresh
   output restarts the clock, and leaving the working state cancels it; silence is judged by terminal
   output, not by hook events; rows in the agent dashboard drawer carry a short quiet tag with the
-  silent time, such as quiet 12m or quiet 1h.
+  silent time, such as quiet 12m or quiet 1h (Kolux RS, T-026-a: the alert is built; the tag
+  waits for the drawer view and reads `Terminals::silence`).
 Acceptance:
   - [ ] Set the threshold to 1 minute and stall an agent → one alert after a minute and no more
         until output resumes and stops again.

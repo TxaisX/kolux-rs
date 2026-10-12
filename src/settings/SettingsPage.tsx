@@ -10,6 +10,7 @@ import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAc
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
+import Notifications from "./Notifications";
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
@@ -113,6 +114,7 @@ function ClaudeCard() {
 }
 
 export default function SettingsPage({ onClose }: { onClose: () => void }) {
+  const [page, setPage] = useState<"connections" | "notifications">("connections");
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -124,21 +126,33 @@ export default function SettingsPage({ onClose }: { onClose: () => void }) {
     <div className="settings" role="dialog" aria-label="Settings">
       <nav className="settings-nav" aria-label="Settings pages">
         <div className="settings-title">Settings</div>
-        <button className="settings-link" aria-current="page">
+        <button className="settings-link" aria-current={page === "connections" ? "page" : undefined} onClick={() => setPage("connections")}>
           AI connections
+        </button>
+        <button className="settings-link" aria-current={page === "notifications" ? "page" : undefined} onClick={() => setPage("notifications")}>
+          Notifications
         </button>
       </nav>
       <main className="settings-main">
         <header className="settings-head">
-          <h1>AI connections</h1>
+          <h1>{page === "connections" ? "AI connections" : "Notifications"}</h1>
           <button className="ib" title="Close Settings (Esc)" aria-label="Close Settings" onClick={onClose}>
             ×
           </button>
         </header>
-        <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
-        <ClaudeCard />
-        <ClaudeAccounts />
-        <CodexCard />
+        {page === "connections" ? (
+          <>
+            <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
+            <ClaudeCard />
+            <ClaudeAccounts />
+            <CodexCard />
+          </>
+        ) : (
+          <>
+            <p className="settings-sub">What Kolux tells you while you are away from a pane.</p>
+            <Notifications />
+          </>
+        )}
       </main>
     </div>
   );

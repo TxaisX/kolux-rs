@@ -32,6 +32,8 @@ import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { nextNeedsYou, type Crew } from "./terminal/status";
+import { noteTitle, turnNote, type Turn } from "./terminal/notify";
+import { FINISH_FIELD } from "./settings/Notifications";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, CheckCircle, Help, Spinner } from "./chrome/icons";
 import ChooserPane from "./launch/ChooserPane";
@@ -561,31 +563,59 @@ function Window() {
     if (!cell) return false;
     return board || (terminals && sameDir(cell.panes[0].cwd, activeDir) && activeOf(cell) === key);
   };
-  const noticed = (p: Pane, what: string) => {
-    if (!marksUnread(p.key, new Set(panes.map((x) => x.key)), unreadPanes, inView(p.key), winFocused)) return;
+  // STAT-041: the note names the repository when more than one has agents running.
+  const repoOf = (p: Pane): string | null => {
+    const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
+    return repos.size > 1 && p.cwd !== null ? folderName(p.cwd) : null;
+  };
+  const noticed = (p: Pane, what: string, body = "") => {
+    const known = new Set(panes.map((x) => x.key));
+    if (!known.has(p.key)) return;
+    const title = noteTitle(tabName(p, titles), repoOf(p), what);
+    // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
+    // notification unless 'Agent Task Complete' is off; the unread mark and the toast keep T-024's
+    // one-mark-until-viewed rule.
+    if (!(inView(p.key) && winFocused) && settings[FINISH_FIELD] !== false) invoke("notify", { title, body }).catch(() => {});
+    if (!marksUnread(p.key, known, unreadPanes, inView(p.key), winFocused)) return;
     setUnreadPanes((u) => new Set([...u, p.key]));
     if (p.cwd !== null) markDir(p.cwd, true);
-    setToast(`${tabName(p, titles)} ${what}`);
+    setToast(title);
   };
   const noticedRef = useRef(noticed);
   noticedRef.current = noticed;
+  // STAT-045: the quiet alert has its own switch (the minutes), so neither the view nor the finish
+  // switch gates it: a toast and a desktop notification, once per silent spell.
+  const quiet = (p: Pane, minutes: number) => {
+    const title = noteTitle(tabName(p, titles), repoOf(p), `has gone quiet for ${minutes} min`);
+    setToast(title);
+    invoke("notify", { title, body: "No terminal output since then. It may be stuck." }).catch(() => {});
+  };
+  const quietRef = useRef(quiet);
+  quietRef.current = quiet;
   const panesRef = useRef(panes);
   panesRef.current = panes;
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; state: AgentState; boundary: boolean; children: Crew }>("agent-status", (e) => {
+    const off = listen<{ paneKey: number; children: Crew } & Turn>("agent-status", (e) => {
       const { paneKey, state, children } = e.payload;
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
       const prev = hookRef.current[paneKey];
-      if (prev === state) return;
-      if (state === "done" && prev !== undefined && prev !== "done") {
+      // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
+      const note = turnNote(prev, e.payload);
+      if (note) {
         const p = panesRef.current.find((x) => x.key === paneKey);
-        if (p) noticedRef.current(p, "finished");
+        if (p) noticedRef.current(p, note.what, note.body);
       }
-      setHook((h) => ({ ...h, [paneKey]: state }));
+      if (prev !== state) setHook((h) => ({ ...h, [paneKey]: state }));
+    });
+    // STAT-045: the quiet alert comes from the terminal's own silence, judged in Rust.
+    const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
+      const p = panesRef.current.find((x) => x.key === e.payload.paneKey);
+      if (p) quietRef.current(p, e.payload.minutes);
     });
     return () => {
       off.then((f) => f());
+      offQuiet.then((f) => f());
     };
   }, []);
   useEffect(() => {

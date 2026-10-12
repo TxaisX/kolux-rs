@@ -8,6 +8,7 @@ use crate::hooks::{claude_change, codex_change, Change};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
+use std::time::Duration;
 
 /// STAT-001: no more than 32 child agents per report.
 const MAX_CHILDREN: usize = 32;
@@ -85,6 +86,16 @@ pub struct Session {
     prompt: Option<String>,
     pub reply: Option<String>,
     pub history: VecDeque<Entry>,
+    /// The quiet alert already went out for this silent spell (STAT-045).
+    quiet_fired: bool,
+}
+
+/// What the window is told when a working agent has printed nothing for too long (STAT-045).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quiet {
+    pub pane_key: u32,
+    pub minutes: u64,
 }
 
 fn now_ms() -> u64 {
@@ -115,6 +126,15 @@ impl Session {
             Some(s) => s,
             None => "working",
         }
+    }
+
+    /// One tick of the quiet alert: `silent` says the terminal has been past the threshold. Fires
+    /// once per silent spell, only while working; output or any other state re-arms it (STAT-045).
+    pub fn quiet(&mut self, silent: bool) -> bool {
+        let quiet = silent && self.resolved() == "working";
+        let fire = quiet && !self.quiet_fired;
+        self.quiet_fired = quiet;
+        fire
     }
 
     fn reset(&mut self) {
@@ -154,7 +174,8 @@ impl Session {
                 let i = self.children.iter().position(|c| c.id == id)?;
                 let gone = self.children.remove(i);
                 self.reply = str_of(event, "last_assistant_message").map(|m| trim(m, 8000));
-                announce = Some(gone.id);
+                // Announced by role (what a notification names, STAT-041); the id when there is none.
+                announce = Some(if gone.kind.is_empty() { gone.id } else { gone.kind });
             }
             ("TeammateIdle", id) => {
                 let who = str_of(event, "teammate_name").or(id).unwrap_or_default();
@@ -303,6 +324,23 @@ pub fn cancel(terminal: u32) {
     });
 }
 
+/// STAT-045: the panes whose working agent has been silent for `threshold`, each once per spell;
+/// `silence(terminal)` is how long since that terminal last wrote. `None` (the alert is off)
+/// re-arms every session and fires nothing.
+pub fn quiet_check(threshold: Option<Duration>, silence: impl Fn(u32) -> Option<Duration>) -> Vec<u32> {
+    with_sessions(|s| {
+        let mut fired = Vec::new();
+        for (key, session) in s.iter_mut() {
+            let silent = threshold.is_some_and(|t| session.terminal.and_then(&silence).is_some_and(|d| d >= t));
+            if session.quiet(silent) {
+                fired.push(*key);
+            }
+        }
+        fired
+    })
+}
+
+
 /// The pane's last twenty states, oldest first (COMPAT 3.5 stored status: History).
 #[tauri::command]
 pub fn agent_history(pane_key: u32) -> Vec<Entry> {
@@ -343,13 +381,27 @@ mod tests {
     }
 
     #[test]
+    fn the_quiet_alert_fires_once_per_silent_spell_and_only_while_working() {
+        let mut s = Session::default();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#), Some("working"));
+        assert!(s.quiet(true), "the first check over the threshold fires");
+        assert!(!s.quiet(true), "the same silent spell fires nothing more");
+        assert!(!s.quiet(false), "fresh output restarts the clock");
+        assert!(s.quiet(true), "a new spell fires again");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"done"}"#), Some("done"));
+        assert!(!s.quiet(true), "a finished agent is never quiet");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"more"}"#), Some("working"));
+        assert!(s.quiet(true), "leaving working cancelled the spell, so the next turn's silence counts anew");
+    }
+
+    #[test]
     fn a_child_stop_announces_its_own_reply_and_a_gone_child_never_returns() {
         let mut s = Session::default();
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
         state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"worker"}"#);
         state(&mut s, r#"{"hook_event_name":"Stop"}"#);
         let (c, child) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"SubagentStop","agent_id":"a1","agent_type":"worker","last_assistant_message":"child done"}"#)).unwrap();
-        assert_eq!((c.state, child.as_deref(), s.reply.as_deref()), ("done", Some("a1"), Some("child done")));
+        assert_eq!((c.state, child.as_deref(), s.reply.as_deref()), ("done", Some("worker"), Some("child done")));
         assert!(s.children.is_empty());
         // Late events from the finished child change nothing and do not re-add it.
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","agent_id":"a1","tool_name":"Bash"}"#), None);
