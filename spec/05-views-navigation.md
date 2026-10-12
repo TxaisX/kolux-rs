@@ -173,6 +173,8 @@ User does: looks at the selected session's usage line.
 User sees: a rounded percentage of the plan's 5-hour window and the local time it resets.
 Rules: follows the user's used-or-remaining display preference; never prints a not-a-number value;
   stays blank for a provider without a 5-hour window.
+  (Kolux RS, T-040-b: the line is the Agents rail's footer, "Claude 38% used · resets today 15:00",
+  in the reset words the Codex pill uses; a broken provider value reads 0.)
 Acceptance:
   - [ ] Claude at 37.6 % used, preference used → shows 38 % and a local reset time.
   - [ ] Provider with no 5-hour window → the usage line stays empty.

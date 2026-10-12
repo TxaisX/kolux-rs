@@ -70,7 +70,7 @@ import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
-import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./usage/meter";
+import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine, type ContextReading } from "./usage/meter";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape } from "./launch/seats";
@@ -921,6 +921,14 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     if (agentsScreen && selected !== agentSel) setAgentSel(selected);
   }, [agentsScreen, selected, agentSel]);
   const savedName = (p: Pane) => saved.find((a) => a.id === p.agentId)?.name;
+  // USAGE-004 / VIEW-018: the rail's rings are the tab rings; the footer is the picked session's 5-hour window.
+  const ringOf = (p: Pane) => (context[p.key] ? { percent: contextFill(context[p.key], capOn(settings)), title: meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {}) } : null);
+  const picked = panes.find((p) => p.key === selected);
+  const footer = picked ? usageLine(picked.seats ? markFor(picked.agentId ?? "") : picked.agent, plan.claude, plan.codex, readsLeft(settings)) : "";
+  const planLine = (p: Pane) => {
+    const f = planOf(p.agent, plan.claude, plan.codex);
+    return f ? meterText({ plan: f }) : undefined;
+  };
   const addPreset = (id: string) => {
     const key = nextKey.current++;
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", agentId: id, program: null, args: [], seats: [{ agent: id, model: null }] }]);
@@ -1101,6 +1109,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             selected={selected}
             classic={classic}
             statusOf={(p) => rowStatus(p, chipFor(p))}
+            ringOf={ringOf}
+            footer={footer}
             onSelect={(key) => {
               setAgentSel(key);
               setFocused(key);
@@ -1319,6 +1329,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     branch={p.branch}
                     agent={p.agent}
                     name={savedName(p)}
+                    plan={agentsScreen ? planLine(p) : undefined}
                     program={p.program}
                     args={p.args}
                     env={p.env}

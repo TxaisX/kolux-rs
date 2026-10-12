@@ -3,11 +3,12 @@
 import { Plus } from "../chrome/icons";
 import VendorMark from "../chrome/VendorMark";
 import { markFor } from "../launch/PlusMenu";
+import Ring from "../usage/Ring";
 import { OTHER, sessionLabel, type Group, type RowStatus, type Session } from "./rail";
 
-type Props<S extends Session> = { groups: Group<S>[]; selected: number | null; classic: boolean; statusOf: (p: S) => RowStatus; onSelect: (key: number) => void; onAdd: (agentId: string) => void; onSettings: () => void };
+type Props<S extends Session> = { groups: Group<S>[]; selected: number | null; classic: boolean; statusOf: (p: S) => RowStatus; ringOf: (p: S) => { percent: number; title: string } | null; footer: string; onSelect: (key: number) => void; onAdd: (agentId: string) => void; onSettings: () => void };
 
-export default function AgentsRail<S extends Session>({ groups, selected, classic, statusOf, onSelect, onAdd, onSettings }: Props<S>) {
+export default function AgentsRail<S extends Session>({ groups, selected, classic, statusOf, ringOf, footer, onSelect, onAdd, onSettings }: Props<S>) {
   const look = classic ? " classic" : "";
   return (
     <div className={`sidebar-wrap rail-wrap${look}`}>
@@ -33,10 +34,12 @@ export default function AgentsRail<S extends Session>({ groups, selected, classi
               </div>
               {g.sessions.map((p) => {
                 const st = statusOf(p);
+                const ring = ringOf(p);
                 return (
                 <div key={p.key} className={`sess${p.key === selected ? " sel" : ""}${p.seats ? " pending" : ""}`} role="button" tabIndex={0} data-session={p.key} onClick={() => onSelect(p.key)} onKeyDown={(e) => e.key === "Enter" && onSelect(p.key)}>
                   <VendorMark agent={markFor(p.agentId ?? g.id)} size={13} />
                   <span className="name">{p.seats ? "New session" : sessionLabel(p)}</span>
+                  {ring && <Ring percent={ring.percent} size={10} title={ring.title} />}
                   <span className={`status${st.tone ? ` ${st.tone}` : ""}`} data-tip={st.explain}>
                     {st.word}
                   </span>
@@ -45,6 +48,11 @@ export default function AgentsRail<S extends Session>({ groups, selected, classi
               })}
             </section>
           ))
+        )}
+        {footer && (
+          <div className="rail-foot" title="The picked session's plan: its 5-hour window and when it resets">
+            {footer}
+          </div>
         )}
       </nav>
     </div>

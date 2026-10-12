@@ -60,6 +60,8 @@ type Props = {
   stop?: StopInfo;
   /** STAT-040: how full the agent's context is, 0 to 100, from its last status-line report. */
   context?: number;
+  /** USAGE-004: the agent's plan figures beside the gauge on the Agents screen. */
+  plan?: string;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -106,7 +108,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, name, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
+export default function TerminalPane({ hidden = false, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -343,6 +345,11 @@ export default function TerminalPane({ hidden = false, name, cwd = null, branch 
           </span>
         )}
         <span className="right">
+          {plan && (
+            <span className="meter-plan" title="This agent's plan: its 5-hour and weekly windows">
+              {plan}
+            </span>
+          )}
           <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
             <Ring percent={context ?? 0} />
             {Math.round(context ?? 0)}%

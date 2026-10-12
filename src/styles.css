@@ -864,3 +864,10 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .sess .status.attention { color: var(--working-icon); }
 .sess .status.working { color: var(--dot-live); }
 .sess .status.done { color: var(--done-icon); }
+/* USAGE-004: a context ring on rail rows that have a reading; the plan footer under the groups. */
+.sess .ring { flex: none; color: var(--gauge); }
+.sess .ring.warn { color: var(--working-icon); }
+.sess .ring.danger { color: var(--meter-danger); }
+.rail-group { flex: none; }
+.rail-foot { margin-top: auto; padding: 10px 8px 4px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-head .right .meter-plan { margin-right: 8px; font-size: 11px; color: var(--fg-muted); }
