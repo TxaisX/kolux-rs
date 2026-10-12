@@ -453,10 +453,19 @@ fn gh_program() -> Result<std::path::PathBuf, String> {
     crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
 }
 
+/// GIT-028: how long one gh call may take before Kolux gives up on it.
+const GH_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Runs gh in the worktree with every prompt off; `input` goes to standard input. A failure
 /// carries what gh printed.
-// ponytail: no time limit yet; a stuck gh holds only this call. GIT-028's limits come with T-176-b.
 fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
+    gh_run_for(program, worktree, args, input, GH_LIMIT)
+}
+
+/// GIT-028: `gh_run` with a time limit; a gh that has not finished by then is stopped.
+// ponytail: stopping gh.cmd leaves a child it started running until it ends; its output is dropped.
+fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>, limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
     use std::process::Stdio;
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
@@ -477,9 +486,37 @@ fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -
     if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
         pipe.write_all(text.as_bytes()).map_err(|e| format!("could not hand gh the description: {e}"))?;
     }
-    let out = child.wait_with_output().map_err(|e| format!("gh did not finish: {e}"))?;
-    let said = format!("{}\n{}", String::from_utf8_lossy(&out.stdout).trim(), String::from_utf8_lossy(&out.stderr).trim()).trim().to_string();
-    if out.status.success() { Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()) } else { Err(plain(&said)) }
+    // The pipes are drained on their own threads so a chatty gh never blocks on a full pipe.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut text);
+            }
+            let _ = tx.send(text);
+        });
+        rx
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let code = loop {
+        if let Some(code) = child.try_wait().map_err(|e| format!("gh did not finish: {e}"))? {
+            break code;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let secs = limit.as_secs();
+            return Err(format!("gh did not answer within {secs} second{}; try again in a moment", if secs == 1 { "" } else { "s" }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = stdout.recv().unwrap_or_default();
+    let err = stderr.recv().unwrap_or_default();
+    let said = format!("{}\n{}", out.trim(), err.trim()).trim().to_string();
+    if code.success() { Ok(out.trim().to_string()) } else { Err(plain(&said)) }
 }
 
 /// GIT-023: gh's failures in the words the panel shows.
@@ -901,6 +938,27 @@ mod tests {
 
     /// A stand-in for gh: `pr view` finds nothing until `pr create` has run, every call is noted
     /// in calls.txt and the description read from standard input lands in body.txt.
+    #[test]
+    fn a_gh_call_that_hangs_gives_up_after_its_time_limit() {
+        let tools = std::env::temp_dir().join(format!("kolux-gh-hang-{}", std::process::id()));
+        fs::create_dir_all(&tools).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\nping -n 30 127.0.0.1 >nul\r\necho late\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\nsleep 30\necho late\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let started = std::time::Instant::now();
+        let err = gh_run_for(&gh, &tools, &["pr", "view"], None, std::time::Duration::from_secs(1)).unwrap_err();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
+        assert!(err.contains("did not answer within 1 second"), "{err}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
     fn stand_in_gh(dir: &Path) -> PathBuf {
         fs::create_dir_all(dir).unwrap();
         if cfg!(windows) {

@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -206,12 +206,20 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const lookable = status !== null && status.branch !== null && status.upstream !== null && status.base !== status.branch && status.base !== `origin/${status.branch}`;
   // A hand link is looked up wherever the workspace is, the default branch included.
   const lookKey = linkedPr ? `${dir}|link|${linkedPr}` : lookable ? `${dir}|${status?.branch}|${status?.upstream}` : null;
+  // GIT-027: failures in a row and when the last answer came, for the next lookup's timing.
+  const [looked, setLooked] = useState({ at: 0, fails: 0 });
   const lookUp = useCallback(() => {
     if (dir === null) return;
     setLook((l) => ({ ...l, loading: true }));
     invoke<Pr | null>("scm_pr", { worktree: dir, linked: linkedPr })
-      .then((pr) => setLook({ loading: false, pr, error: null }))
-      .catch((err) => setLook({ loading: false, pr: null, error: String(err) }));
+      .then((pr) => {
+        setLook((l) => prLooked(l, { pr }));
+        setLooked({ at: Date.now(), fails: 0 });
+      })
+      .catch((err) => {
+        setLook((l) => prLooked(l, { error: String(err) }));
+        setLooked((x) => ({ at: Date.now(), fails: x.fails + 1 }));
+      });
   }, [dir, linkedPr]);
   const [linking, setLinking] = useState<{ url: string; error: string | null } | null>(null);
   useEffect(() => setLinking(null), [dir]);
@@ -230,9 +238,26 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const mismatch = prMismatch(look.pr, status?.branch ?? null);
   useEffect(() => {
     setComposer(null);
-    if (lookKey === null) return setLook({ loading: false, pr: null, error: null });
+    setLooked({ at: 0, fails: 0 });
+    // Another workspace or branch starts blank, so its first failure never shows the last one's.
+    setLook({ loading: false, pr: null, error: null });
+    if (lookKey === null) return;
     lookUp();
   }, [lookKey, lookUp]);
+  // GIT-027: looked up again by itself while the window is in view, later after each failure;
+  // a window that comes back with an old answer looks it up at once.
+  useEffect(() => {
+    if (lookKey === null || looked.at === 0) return;
+    const timer = window.setTimeout(() => document.visibilityState === "visible" && lookUp(), prRefreshDelay(looked.fails));
+    const back = () => document.visibilityState === "visible" && Date.now() - looked.at >= PR_STALE_MS && lookUp();
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", back);
+    };
+  }, [lookKey, looked, lookUp]);
   const openPr = (pr: Pr) => void invoke("scm_open_pr", { url: pr.url }).catch((err) => setError(String(err)));
   const startPr = () => {
     if (look.pr?.state === "OPEN") return openPr(look.pr);
@@ -481,6 +506,11 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                 ) : (
                   <span className="scm-prtitle muted">{look.loading ? "Checking for a pull request\u2026" : (look.error ?? (lookKey ? "No pull request for this branch" : "Pull requests are looked up once the branch is published, off the base branch"))}</span>
                 )}
+                {lookKey && (
+                  <button className="btn" data-pr-refresh title="Look up the pull request again now" disabled={look.loading} onClick={lookUp}>
+                    Refresh
+                  </button>
+                )}
                 <button className="btn" title="Link another pull request by its link" onClick={() => setLinking({ url: "", error: null })}>
                   Link{"\u2026"}
                 </button>
@@ -489,6 +519,11 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                     Unlink
                   </button>
                 )}
+              </div>
+            )}
+            {look.pr && look.error && (
+              <div className="note warn" data-pr-stale>
+                Could not refresh the pull request: {look.error}. Showing what GitHub said last.
               </div>
             )}
             {mismatch && <div className="note warn">{mismatch}</div>}

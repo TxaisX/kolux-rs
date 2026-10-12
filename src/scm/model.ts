@@ -146,6 +146,14 @@ export const prStateWord = (pr: Pr): string => (pr.state === "OPEN" ? (pr.draft 
 /** GIT-023: what the panel knows of the branch's pull request while it looks it up. */
 export type PrLook = { loading: boolean; pr: Pr | null; error: string | null };
 
+/** GIT-027: how often the shown pull request is looked up again, and how old it may get before
+ * the window gaining focus looks it up at once. */
+export const PR_STALE_MS = 60_000;
+/** GIT-027: the wait before the next lookup; each failure in a row doubles it, up to 15 minutes. */
+export const prRefreshDelay = (failures: number): number => Math.min(PR_STALE_MS * 2 ** Math.min(failures, 10), 15 * 60_000);
+/** GIT-027: a lookup's answer; a failure keeps the pull request known last, with the reason. */
+export const prLooked = (prev: PrLook, got: { pr: Pr | null } | { error: string }): PrLook => ("error" in got ? { loading: false, pr: prev.pr, error: got.error } : { loading: false, pr: got.pr, error: null });
+
 /** GIT-023: why Create pull request cannot run yet, null when it can. Untracked files do not
  * block it; tracked changes, a missing push and a missing base do. */
 export const prReason = (s: Status | null, look: PrLook): string | null => {

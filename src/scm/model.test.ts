@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { graph, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { graph, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -29,6 +29,20 @@ test("GIT-036: Explain changes asks about that commit", () => {
   expect(p).toContain("0123456789abcdef");
   expect(p).toContain("feat: three");
   expect(p).toContain("git show 0123456789abcdef");
+});
+
+test("GIT-027: the pull request refreshes itself, backs off after failures and keeps what it knew", () => {
+  expect(prRefreshDelay(0)).toBe(PR_STALE_MS);
+  expect(prRefreshDelay(1)).toBe(2 * PR_STALE_MS);
+  expect(prRefreshDelay(2)).toBe(4 * PR_STALE_MS);
+  expect(prRefreshDelay(50)).toBe(15 * 60_000);
+  const pr = { number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN", title: "t", head: "feat", draft: false };
+  const known: PrLook = { loading: true, pr, error: null };
+  // A failed refresh leaves the last pull request showing, with the reason.
+  expect(prLooked(known, { error: "gh did not answer within 30 seconds" })).toEqual({ loading: false, pr, error: "gh did not answer within 30 seconds" });
+  // An answer replaces it, a branch with none included.
+  expect(prLooked(known, { pr: { ...pr, state: "MERGED" } })).toEqual({ loading: false, pr: { ...pr, state: "MERGED" }, error: null });
+  expect(prLooked(known, { pr: null })).toEqual({ loading: false, pr: null, error: null });
 });
 
 test("GIT-025: a hand-linked pull request is kept per workspace and flagged when its branch differs", () => {

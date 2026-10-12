@@ -185,7 +185,7 @@ input { font: inherit; }
 .btn.danger { border-color: #7a3b1e; color: #f0a07a; }
 .btn.danger:hover:not(:disabled) { background: #2a1911; }
 .btn-row { display: flex; gap: 6px; }
-.note { font-size: 12px; padding: 4px 9px; word-break: break-all; line-height: 1.4; }
+.note { font-size: 12px; padding: 4px 9px; word-break: normal; overflow-wrap: anywhere; line-height: 1.4; }
 .note.ok { color: var(--done); }
 .note.warn { color: #e2c06a; }
 .note.error { color: #f0a07a; }
