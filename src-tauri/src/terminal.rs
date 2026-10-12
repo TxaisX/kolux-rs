@@ -6,7 +6,7 @@ use base64::Engine as _;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub const OUTPUT_EVENT: &str = "terminal-output";
 pub const EXIT_EVENT: &str = "terminal-exit";
@@ -126,12 +126,20 @@ impl Terminals {
                 }
             },
             move |code| {
-                // Drop the session so the PTY closes and the reader thread can finish.
+                // Drop the session so the PTY closes and the reader thread can finish. A session
+                // still listed ended by itself: Kolux's own kills take it off the list first.
+                let mut by_itself = false;
                 if let Ok(mut inner) = registry.lock() {
-                    inner.sessions.remove(&id);
+                    by_itself = inner.sessions.remove(&id).is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
                     inner.keys.remove(&id);
+                }
+                // ORCH-027: a worker's agent that died mid-task tells its coordinator.
+                if by_itself && is_program {
+                    if let Ok(store) = exit_app.state::<Mutex<crate::state::Store>>().lock() {
+                        let _ = crate::cli::worker_exited(&store, id, code, crate::automations::now_ms());
+                    }
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },

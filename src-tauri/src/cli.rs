@@ -1989,6 +1989,39 @@ fn save_list(store: &Store, key: &str, list: &[Value]) -> Result<(), Fail> {
     store.set(key, &Value::Array(list.to_vec()).to_string()).map_err(|e| Fail::new("failed", e.to_string()))
 }
 
+/// ORCH-027: a worker's own terminal ended by itself (not closed by Kolux) before the worker
+/// reported done: one high-priority escalation to its Run, its subject naming the task by title
+/// (or id), so the coordinator can retry or reassign it. The dispatch is stamped so it never sends
+/// twice. A dispatch with no Run, from an earlier start of Kolux, or already settled sends nothing.
+pub(crate) fn worker_exited(store: &Store, terminal: u32, code: Option<u32>, now: u64) -> Option<Value> {
+    let me = u64::from(std::process::id());
+    let mut dispatches = load_list(store, DISPATCHES_KEY);
+    let d = dispatches.iter_mut().rev().find(|d| d["terminal"].as_u64() == Some(u64::from(terminal)) && d["runtime"].as_u64() == Some(me))?;
+    let (id, task_id) = (d["id"].as_str()?.to_string(), d["taskId"].as_str().unwrap_or_default().to_string());
+    let run = d["runId"].as_str()?.to_string();
+    if !d["exitedAt"].is_null() || crate::orchestration::finished(d) {
+        return None;
+    }
+    let mut mail = crate::orchestration::Mail::load(store);
+    if mail.messages.iter().any(|m| m.kind == "worker_done" && m.extras.get("dispatchId").and_then(Value::as_str) == Some(id.as_str())) {
+        return None;
+    }
+    d["exitedAt"] = json!(now);
+    let worktree = d["worktree"].as_str().unwrap_or_default().to_string();
+    let tasks = load_list(store, TASKS_KEY);
+    let title = tasks.iter().find(|t| t["id"] == task_id.as_str()).and_then(|t| t["title"].as_str()).filter(|t| !t.trim().is_empty()).unwrap_or(&task_id).to_string();
+    let how = code.map(|c| format!("with exit code {c}")).unwrap_or_else(|| "without an exit code".into());
+    let body = format!(
+        "The worker on {task_id} ({id}, in {worktree}) ended {how} before it reported done. Retry it with `{cli} orchestration worker-start --retry-of {id} --task {task_id}`, or hand the task to someone else.",
+        cli = crate::orchestration::CLI
+    );
+    let a = json!({ "to": format!("run:{run}"), "subject": format!("Worker ended: {title}"), "body": body, "type": "escalation", "priority": "high", "taskId": task_id, "dispatchId": id });
+    let sent = mail.send(&crate::terminal::handle_of(terminal), &a, &dispatches, &|_| false, now).ok()?;
+    mail.save(store).ok()?;
+    save_list(store, DISPATCHES_KEY, &dispatches).ok()?;
+    Some(json!({ "dispatchId": id, "messageIds": sent["messageIds"] }))
+}
+
 pub(crate) fn next_id(list: &[Value], prefix: &str) -> String {
     let n = list.iter().filter_map(|t| t["id"].as_str()?.strip_prefix(prefix)?.parse::<u64>().ok()).max().unwrap_or(0);
     format!("{prefix}{}", n + 1)
@@ -2990,5 +3023,48 @@ mod tests {
         assert!(text.contains("[URGENT]") && text.contains("Claude Code (term-2)") && text.contains("payload: {\"n\":1}"), "{text}");
         assert!(text.contains("--id msg-3") && text.contains("from term-5") && !text.contains("[NORMAL]"), "{text}");
         assert_eq!(out.iter().filter(|l| l.starts_with("----")).count(), 2, "each message ends with its own divider");
+    }
+
+    #[test]
+    fn a_worker_whose_terminal_dies_mid_task_escalates_once_to_its_run() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli172-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("data")).unwrap();
+        let mut mail = crate::orchestration::Mail::default();
+        let run = mail.run_create("term-1", "ship it", 1)["binding"]["runId"].as_str().unwrap().to_string();
+        let me = u64::from(std::process::id());
+        let tasks = vec![json!({ "id": "task-1", "title": "Fix the login page", "status": "dispatched" }), json!({ "id": "task-2", "status": "dispatched" }), json!({ "id": "task-3", "title": "Done already", "status": "dispatched" })];
+        let ds = vec![
+            json!({ "id": "dispatch-1", "runtime": me, "runId": run, "taskId": "task-1", "status": "ready", "terminal": 7, "worktree": "w1" }),
+            json!({ "id": "dispatch-2", "runtime": me, "runId": run, "taskId": "task-2", "status": "ready", "terminal": 8, "worktree": "w2" }),
+            json!({ "id": "dispatch-3", "runtime": me, "runId": run, "taskId": "task-3", "status": "ready", "terminal": 9, "worktree": "w3" }),
+            json!({ "id": "dispatch-old", "runtime": me + 1, "runId": run, "taskId": "task-1", "status": "ready", "terminal": 7, "worktree": "w1" }),
+        ];
+        save_list(&store, TASKS_KEY, &tasks).unwrap();
+        save_list(&store, DISPATCHES_KEY, &ds).unwrap();
+        mail.send(&crate::terminal::handle_of(9), &json!({ "to": format!("run:{run}"), "subject": "done", "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-3" }), &ds, &|_| true, 2).unwrap();
+        mail.save(&store).unwrap();
+
+        // The terminal ends by itself: one escalation to the Run, named by the task title.
+        let sent = worker_exited(&store, 7, Some(1), 5).unwrap();
+        assert_eq!(sent["dispatchId"], "dispatch-1");
+        assert!(worker_exited(&store, 7, Some(1), 6).is_none(), "one escalation per worker exit");
+        // No title: the task id. A worker that already reported done, or an unknown terminal: nothing.
+        worker_exited(&store, 8, None, 7).unwrap();
+        assert!(worker_exited(&store, 9, Some(0), 8).is_none());
+        assert!(worker_exited(&store, 42, Some(0), 8).is_none());
+
+        let mail = crate::orchestration::Mail::load(&store);
+        let esc: Vec<_> = mail.messages.iter().filter(|x| x.kind == "escalation").collect();
+        assert_eq!(esc.len(), 2);
+        assert_eq!((esc[0].to.clone(), esc[0].priority.as_str()), (format!("run:{run}"), "high"));
+        assert!(esc[0].subject.contains("Fix the login page"), "{}", esc[0].subject);
+        assert!(esc[0].body.contains("exit code 1") && esc[0].body.contains("--retry-of dispatch-1 --task task-1"), "{}", esc[0].body);
+        assert!(esc[1].subject.contains("task-2"), "{}", esc[1].subject);
+        let after = load_list(&store, DISPATCHES_KEY);
+        assert!(after[0]["exitedAt"].is_u64() && after[3]["exitedAt"].is_null(), "an earlier start's dispatch on the same number is left alone");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

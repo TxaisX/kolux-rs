@@ -130,7 +130,7 @@ pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, by_key: &dyn Fn
     }
 }
 
-fn finished(d: &Value) -> bool {
+pub(crate) fn finished(d: &Value) -> bool {
     FINISHED.contains(&d["status"].as_str().unwrap_or_default())
 }
 
