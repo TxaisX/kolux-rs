@@ -24,6 +24,7 @@ mod state;
 mod sysmem;
 mod terminal;
 mod trust;
+mod visibility;
 
 use state::Store;
 use std::sync::Mutex;
@@ -123,6 +124,18 @@ pub fn run() {
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,
+            projects::workspace_branches,
+            projects::workspace_open_branch,
+            projects::workspace_unseen,
+            projects::workspace_seen,
+            projects::workspace_hide,
+            projects::visibility_get,
+            projects::visibility_set,
+            projects::visibility_root_add,
+            projects::visibility_root_remove,
+            projects::workspace_note_get,
+            projects::workspace_note_save,
+            projects::branch_prefix_check,
             projects::workspace_create_fresh,
             projects::handoff_note_prepare,
             projects::workspace_remove,
@@ -131,7 +144,7 @@ pub fn run() {
             agents::agent_list,
             agents::agent_start_line,
             trust::trust_folders_cmd,
-            scm::scm_status,
+            scm::scm_status, scm::scm_summary,
             scm::scm_stage,
             scm::scm_commit, scm::scm_remote,
             terminal::terminal_busy,

@@ -33,6 +33,8 @@ pub struct Status {
     pub rewritten: bool,
     /// The branch work rebases onto (origin's HEAD, else main or master); None without one.
     pub base: Option<String>,
+    /// The commit HEAD points at; None before the first commit. VIEW-068 refreshes on a change.
+    pub head: Option<String>,
     pub staged: Vec<Change>,
     pub changed: Vec<Change>,
     pub untracked: Vec<Change>,
@@ -62,6 +64,123 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
     }
     st.base = Git::detect().ok().and_then(|g| g.default_branch(worktree));
     Ok(st)
+}
+
+/// Lines added and removed in one row of the branch summary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Lines {
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// VIEW-068: the branch against the ref it is measured with: commits ahead and behind, and the
+/// lines its commits changed since they parted, split into source, tests and generated files.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Summary {
+    pub against: String,
+    pub ahead: u32,
+    pub behind: u32,
+    pub source: Lines,
+    pub tests: Lines,
+    pub generated: Lines,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Kind {
+    Source,
+    Tests,
+    Generated,
+}
+
+/// Which row of the summary a changed path counts in.
+/// ponytail: names only (lock files, minified files, snapshots, a `generated` folder); reading
+/// `linguist-generated` from .gitattributes comes when a repository needs it.
+fn kind(path: &str) -> Kind {
+    let parts: Vec<&str> = path.split('/').collect();
+    let file = parts.last().copied().unwrap_or("");
+    const LOCKS: [&str; 10] = ["Cargo.lock", "pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb", "poetry.lock", "Gemfile.lock", "composer.lock", "go.sum", "uv.lock"];
+    if LOCKS.contains(&file) || [".min.js", ".min.css", ".map", ".snap"].iter().any(|e| file.ends_with(e)) || file.contains(".generated.") || parts.iter().any(|p| ["generated", "__generated__", "__snapshots__"].contains(p)) {
+        return Kind::Generated;
+    }
+    let dirs = &parts[..parts.len().saturating_sub(1)];
+    if dirs.iter().any(|p| ["test", "tests", "__tests__", "spec", "specs"].contains(p)) || [".test.", ".spec."].iter().any(|m| file.contains(m)) || file.starts_with("test_") || file.split('.').next().is_some_and(|stem| stem.ends_with("_test")) {
+        return Kind::Tests;
+    }
+    Kind::Source
+}
+
+/// CLI-021: every file `worktree` differs from `base` in, committed and uncommitted work together
+/// (untracked files as `U`). Committed work counts from where the branch parted from the base, or
+/// from the base itself when they share no history; with no base, only the uncommitted work.
+pub fn changes(worktree: &Path, base: Option<&str>) -> Result<Vec<Change>, String> {
+    let since = match base {
+        Some(b) => run(&["merge-base", b, "HEAD"], Some(worktree)).unwrap_or_else(|_| b.to_string()),
+        None => "HEAD".to_string(),
+    };
+    let mut out = Vec::new();
+    let diff = run(&["diff", "--name-status", "--no-renames", "-z", &since, "--"], Some(worktree))?;
+    let mut parts = diff.split('\0').filter(|s| !s.is_empty());
+    while let (Some(st), Some(path)) = (parts.next(), parts.next()) {
+        out.push(Change { path: path.to_string(), status: st.chars().take(1).collect(), from: None });
+    }
+    for path in run(&["ls-files", "--others", "--exclude-standard", "-z"], Some(worktree))?.split('\0').filter(|s| !s.is_empty()) {
+        out.push(Change { path: path.to_string(), status: "U".into(), from: None });
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+/// CLI-021: would two committed tips merge cleanly? Never "clean" unless Git said so.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Clash {
+    Clean,
+    Conflict(Vec<String>),
+    Unverifiable(String),
+}
+
+pub fn clash(repo: &Path, a: &str, b: &str) -> Clash {
+    match command(&["merge-tree", "--write-tree", "--name-only", "--no-messages", a, b], Some(repo)).output() {
+        Err(e) => Clash::Unverifiable(format!("could not run git: {e}")),
+        Ok(o) => clash_of(o.status.code(), &String::from_utf8_lossy(&o.stdout), &String::from_utf8_lossy(&o.stderr)),
+    }
+}
+
+/// `git merge-tree --write-tree`: 0 merges cleanly, 1 conflicts (the tree id, then the files);
+/// anything else (an old Git, unrelated histories, a missing commit) cannot be checked.
+fn clash_of(code: Option<i32>, out: &str, err: &str) -> Clash {
+    match code {
+        Some(0) => Clash::Clean,
+        Some(1) => Clash::Conflict(out.lines().skip(1).take_while(|l| !l.is_empty()).map(String::from).collect()),
+        _ => Clash::Unverifiable(err.lines().next().map(str::trim).filter(|l| !l.is_empty()).unwrap_or("git could not check the merge").to_string()),
+    }
+}
+
+/// VIEW-068: a base pinned for the repository wins; otherwise the branch's upstream when
+/// `upstream` is on and there is one, else the default branch. Lines count the commits since the
+/// branch parted from that ref, so the ref's own new commits show only as "behind".
+pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<Summary, String> {
+    let st = status(worktree)?;
+    let pinned = pinned.map(str::trim).filter(|p| !p.is_empty() && run(&["rev-parse", "--verify", "-q", &format!("{p}^{{commit}}")], Some(worktree)).is_ok());
+    let against = pinned.map(String::from).or(if upstream { st.upstream.clone() } else { None }).or(st.base.clone()).ok_or("no base branch to compare with")?;
+    let range = format!("{against}...HEAD");
+    let counts = run(&["rev-list", "--left-right", "--count", &range], Some(worktree))?;
+    let mut n = counts.split_whitespace().map(|x| x.parse::<u32>().unwrap_or(0));
+    let (behind, ahead) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
+    let mut s = Summary { against, ahead, behind, ..Summary::default() };
+    for line in run(&["diff", "--numstat", "--no-renames", "-z", &range], Some(worktree))?.split('\0').filter(|l| !l.is_empty()) {
+        let mut f = line.splitn(3, '\t');
+        let (Some(a), Some(r), Some(path)) = (f.next(), f.next(), f.next()) else { continue };
+        // A binary file shows "-" for both counts and adds no lines.
+        let row = match kind(path) {
+            Kind::Source => &mut s.source,
+            Kind::Tests => &mut s.tests,
+            Kind::Generated => &mut s.generated,
+        };
+        row.added += a.parse().unwrap_or(0);
+        row.removed += r.parse().unwrap_or(0);
+    }
+    Ok(s)
 }
 
 /// What a remote action came to: `ok`, and everything git printed either way.
@@ -114,6 +233,7 @@ pub fn parse_status(text: &str) -> Status {
     while let Some(item) = items.next() {
         if let Some(rest) = item.strip_prefix("# ") {
             match rest.split_once(' ') {
+                Some(("branch.oid", oid)) if oid != "(initial)" => st.head = Some(oid.to_string()),
                 Some(("branch.head", head)) if head != "(detached)" => st.branch = Some(head.to_string()),
                 Some(("branch.upstream", up)) => st.upstream = Some(up.to_string()),
                 Some(("branch.ab", ab)) => {
@@ -217,6 +337,11 @@ fn has_commit_hook(worktree: &Path) -> bool {
 #[tauri::command]
 pub fn scm_status(worktree: String) -> Result<Status, String> {
     status(Path::new(&worktree))
+}
+
+#[tauri::command]
+pub fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
+    summary(Path::new(&worktree), pinned.as_deref(), upstream)
 }
 
 #[tauri::command]
@@ -356,7 +481,8 @@ mod tests {
         assert_eq!(paths(&st.untracked), ["a[1].txt", "sub/ünï \"q\".txt"]);
         assert_eq!(paths(&st.conflicts), ["both.txt"]);
         let detached = parse_status("# branch.oid e2b3\0# branch.head (detached)\0");
-        assert_eq!(detached, Status::default());
+        assert_eq!(detached, Status { head: Some("e2b3".into()), ..Status::default() });
+        assert_eq!(parse_status("# branch.oid (initial)\0# branch.head main\0").head, None);
     }
 
     #[test]
@@ -433,5 +559,62 @@ mod tests {
         assert!(refused.output.contains("nope, said the hook"), "{}", refused.output);
         assert_eq!(run(&["log", "--format=%s"], Some(&repo)).unwrap(), "Say world\nfirst", "nothing was committed");
         fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn the_branch_summary_counts_lines_against_the_base_split_into_source_tests_and_generated() {
+        let repo = temp_repo("summary");
+        run(&["checkout", "-q", "-b", "feat"], Some(&repo)).unwrap();
+        // VIEW-068: commit 10 added lines and the total shows +10.
+        fs::create_dir_all(repo.join("src")).unwrap();
+        commit_file(&repo, "src/a.rs", &"line\n".repeat(10));
+        let s = summary(&repo, None, false).unwrap();
+        assert_eq!((s.against.as_str(), s.ahead, s.behind), ("main", 1, 0));
+        assert_eq!((s.source, s.tests, s.generated), (Lines { added: 10, removed: 0 }, Lines::default(), Lines::default()));
+        // Tests and generated files are their own rows, and the rows add up to the total.
+        fs::create_dir_all(repo.join("tests")).unwrap();
+        commit_file(&repo, "tests/it.rs", "a\nb\n");
+        commit_file(&repo, "src/a.test.ts", "c\n");
+        commit_file(&repo, "Cargo.lock", &"x\n".repeat(1500));
+        fs::write(repo.join("src/a.rs"), "line\n".repeat(7)).unwrap();
+        commit_file(&repo, "README.md", "hello\nworld\n");
+        let s = summary(&repo, None, false).unwrap();
+        assert_eq!(s.ahead, 5);
+        assert_eq!(s.source, Lines { added: 8, removed: 0 }, "README +1, src/a.rs a new file of 7 lines against main");
+        assert_eq!(s.tests, Lines { added: 3, removed: 0 });
+        assert_eq!(s.generated, Lines { added: 1500, removed: 0 });
+        // Main moving on shows as behind; the comparison is against the merge base, so main's
+        // own new lines are not counted as this branch's.
+        run(&["checkout", "-q", "main"], Some(&repo)).unwrap();
+        commit_file(&repo, "other.txt", "o\n");
+        run(&["checkout", "-q", "feat"], Some(&repo)).unwrap();
+        let s = summary(&repo, None, false).unwrap();
+        assert_eq!((s.ahead, s.behind, s.source.added), (5, 1, 8));
+        // A pinned base wins, even with the upstream setting on; without an upstream the base is used.
+        let first = run(&["rev-list", "--max-parents=0", "HEAD"], Some(&repo)).unwrap();
+        run(&["branch", "pinned", first.trim()], Some(&repo)).unwrap();
+        assert_eq!(summary(&repo, Some("pinned"), true).unwrap().against, "pinned");
+        assert_eq!(summary(&repo, None, true).unwrap().against, "main");
+        // With an upstream and the setting on, the summary measures against the upstream.
+        run(&["remote", "add", "origin", &repo.display().to_string()], Some(&repo)).unwrap();
+        run(&["update-ref", "refs/remotes/origin/feat", "HEAD~1"], Some(&repo)).unwrap();
+        run(&["branch", "-q", "--set-upstream-to=origin/feat"], Some(&repo)).unwrap();
+        let s = summary(&repo, None, true).unwrap();
+        assert_eq!((s.against.as_str(), s.ahead, s.behind, s.source), ("origin/feat", 1, 0, Lines { added: 1, removed: 3 }));
+        assert_eq!(status(&repo).unwrap().head, Some(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap().trim().to_string()));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn paths_are_sorted_into_tests_generated_or_source() {
+        for p in ["tests/a.rs", "src/__tests__/x.ts", "a/spec/b.rb", "src/x.test.tsx", "src/x.spec.js", "pkg/x_test.go", "py/test_x.py"] {
+            assert_eq!(kind(p), Kind::Tests, "{p}");
+        }
+        for p in ["Cargo.lock", "web/pnpm-lock.yaml", "package-lock.json", "yarn.lock", "go.sum", "a/b.min.js", "x/__snapshots__/a.snap", "src/generated/api.ts"] {
+            assert_eq!(kind(p), Kind::Generated, "{p}");
+        }
+        for p in ["src/main.rs", "README.md", "src/contest.ts", "testing.md", "latest/x.rs"] {
+            assert_eq!(kind(p), Kind::Source, "{p}");
+        }
     }
 }

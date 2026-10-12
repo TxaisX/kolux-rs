@@ -6,8 +6,9 @@
 //! are dropped, duplicates and trailing slashes go, and wildcard or negation lines in the
 //! include file are skipped with a warning. Nothing here fails the create: trouble comes back as
 //! warnings the user reads.
-//! ponytail: the copy budget (about 2 GB / 50 000 entries) and the interrupted-copy warning are
-//! PROJ-032 (T-106); the rest of kolux.yaml and its legacy twin come with PROJ-034 (T-149) and
+//! PROJ-032: the copies keep to a budget of about 2 GB and 50,000 entries per worktree; what
+//! would go over is left out and named (up to five), and a copy that stops part-way says partial
+//! files may be left behind. The rest of kolux.yaml and its legacy twin come with PROJ-034 (T-149) and
 //! HID-037, so the shared-folders list is read with a small line scanner, not a YAML parser.
 use crate::git::run;
 use std::path::{Path, PathBuf};
@@ -119,6 +120,52 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
 }
 
+/// PROJ-032: the most one worktree receives from the include file.
+pub const BUDGET_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const BUDGET_ENTRIES: u64 = 50_000;
+
+/// Bytes and entries (files and folders) under `p`; stops counting once past either cap.
+fn measure(p: &Path, cap_bytes: u64, cap_entries: u64) -> (u64, u64) {
+    let (mut bytes, mut entries) = (0u64, 0u64);
+    let mut stack = vec![p.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        let Ok(meta) = std::fs::symlink_metadata(&next) else { continue };
+        entries += 1;
+        if meta.is_dir() {
+            stack.extend(std::fs::read_dir(&next).into_iter().flatten().flatten().map(|e| e.path()));
+        } else {
+            bytes += meta.len();
+        }
+        if bytes > cap_bytes || entries > cap_entries {
+            break;
+        }
+    }
+    (bytes, entries)
+}
+
+/// Copies each of `rels` from `repo` into `dest` while the budget lasts, in list order; an
+/// entry that would go over it is left out. Returns the warnings.
+fn copy_within(repo: &Path, dest: &Path, rels: &[String], mut bytes: u64, mut entries: u64) -> Vec<String> {
+    let (mut warnings, mut skipped) = (Vec::new(), Vec::new());
+    for rel in rels {
+        let (b, e) = measure(&repo.join(rel), bytes, entries);
+        if b > bytes || e > entries {
+            skipped.push(rel.as_str());
+            continue;
+        }
+        (bytes, entries) = (bytes - b, entries - e);
+        if let Err(err) = copy_tree(&repo.join(rel), &dest.join(rel)) {
+            warnings.push(format!("{INCLUDE_FILE}: copying `{rel}` stopped part-way ({err}); partial files may be left behind in the new worktree"));
+        }
+    }
+    if !skipped.is_empty() {
+        let more = if skipped.len() > 5 { format!(" and {} more", skipped.len() - 5) } else { String::new() };
+        let names = skipped.iter().take(5).map(|s| format!("`{s}`")).collect::<Vec<_>>().join(", ");
+        warnings.push(format!("{INCLUDE_FILE}: left out to stay within the copy budget (about 2 GB and 50,000 entries): {names}{more}"));
+    }
+    warnings
+}
+
 /// A folder link `link` → `target`. On Windows a junction: it needs no privilege (symlinks do,
 /// on most accounts) and git sees it as a folder, so a `node_modules/` ignore line still matches
 /// it; a symlink is the fallback when `mklink` is not there.
@@ -145,16 +192,15 @@ pub fn bring_along(repo: &Path, dest: &Path) -> Vec<String> {
     if let Ok(text) = std::fs::read_to_string(repo.join(INCLUDE_FILE)) {
         let (paths, warned) = include_lines(&text);
         warnings.extend(warned);
+        let mut copy = Vec::new();
         for rel in paths {
-            let src = repo.join(&rel);
-            if !src.exists() {
+            if !repo.join(&rel).exists() {
                 warnings.push(format!("{INCLUDE_FILE}: `{rel}` is not in the main checkout"));
             } else if ignored(repo, &rel) {
-                if let Err(e) = copy_tree(&src, &dest.join(&rel)) {
-                    warnings.push(format!("{INCLUDE_FILE}: `{rel}` could not be copied: {e}"));
-                }
+                copy.push(rel);
             }
         }
+        warnings.extend(copy_within(repo, dest, &copy, BUDGET_BYTES, BUDGET_ENTRIES));
     }
     if let Ok(yaml) = std::fs::read_to_string(repo.join(CONFIG_FILE)) {
         for rel in shared_dirs(&yaml) {
@@ -188,6 +234,34 @@ pub fn unlink_shared(repo: &Path, dest: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copies_keep_to_the_budget_and_a_stopped_copy_says_so() {
+        let root = std::env::temp_dir().join(format!("kolux-rs-budget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (repo, dest) = (root.join("repo"), root.join("dest"));
+        std::fs::create_dir_all(repo.join("deps/pkg")).unwrap();
+        std::fs::write(repo.join(".env"), "KEY=1").unwrap();
+        std::fs::write(repo.join("deps/pkg/big.bin"), vec![0u8; 4000]).unwrap();
+        for i in 0..7 {
+            std::fs::write(repo.join(format!("x{i}")), vec![0u8; 900]).unwrap();
+        }
+        let rels: Vec<String> = [".env", "deps"].iter().map(|s| s.to_string()).chain((0..7).map(|i| format!("x{i}"))).collect();
+        // 1,000 bytes: the env file fits, the dependency folder and six of the seven others do not.
+        let w = copy_within(&repo, &dest, &rels, 1000, 100);
+        assert_eq!(std::fs::read_to_string(dest.join(".env")).unwrap(), "KEY=1");
+        assert!(!dest.join("deps").exists() && dest.join("x0").exists() && !dest.join("x1").exists());
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("`deps`, `x1`, `x2`, `x3`, `x4` and 2 more"), "{}", w[0]);
+        // The entry cap counts too: the folder is three entries.
+        assert!(copy_within(&repo, &root.join("d2"), &["deps".into()], u64::MAX, 2)[0].contains("`deps`"));
+        // A copy that cannot finish (a file stands where a folder must go) warns about leftovers.
+        std::fs::create_dir_all(root.join("d3/deps")).unwrap();
+        std::fs::write(root.join("d3/deps/pkg"), "in the way").unwrap();
+        let w = copy_within(&repo, &root.join("d3"), &["deps".into()], u64::MAX, u64::MAX);
+        assert!(w.len() == 1 && w[0].contains("stopped part-way") && w[0].contains("partial files may be left behind"), "{w:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn entries_are_tidied_and_unsafe_ones_dropped() {

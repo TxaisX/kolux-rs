@@ -2,10 +2,10 @@
 Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
-Next task: T-025 · STAT-001 / STAT-007 / STAT-008 … (status hooks)
-Done: 55 / 353 tasks  ·  P0 parity: 0/228 cards
+Next task: T-017-c · Pre-trust for Cursor and Copilot in their own configuration files (the rest of the card on T-017-a; their file formats are not public)
+Done: 65 / 366 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 353 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 366 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
@@ -26,11 +26,34 @@ Closing the window kills every shell it started.
 
 A sidebar on the left lists projects. Add one by typing or browsing to a folder that holds a Git
 repository (anything else is refused with a plain message; the same repository is never added
-twice). Each project lists its main checkout and its workspaces (Git worktrees). Type a name such
-as "Fix login" and the sidebar shows the branch and folder it will get (`fix-login`, under the
-workspaces folder, inside a folder named after the project); Create makes the branch and folder.
-Shell restarts the terminal pane inside that folder. Remove asks first, then deletes the folder and
-the branch, closing any pane still sitting in that folder. The workspaces folder can be changed and
+twice; picking a linked worktree of a repository already added selects that project, and otherwise
+adds the worktree folder itself). Each project lists its main checkout and its workspaces (Git
+worktrees). Type a name such as "Fix login" and the sidebar shows the branch and folder it will get
+(`txais-xiong/fix-login` by default: the branch begins with the Git user name, or custom text, or
+nothing, picked in the sidebar gear's Git & worktrees part, which shows the next branch name as you
+type and says when Git refuses the prefix or it is only slashes, so new branches get none, T-116-a;
+there too Default compare base picks the repository default or the branch upstream for the branch
+summary; the folder is `fix-login` under the workspaces folder, inside a
+folder named after the project); Create makes the branch and folder and copies the ignored files
+`.worktreeinclude` lists, within about 2 GB and 50,000 entries, naming what it left out. The new
+workspace composer picks the project from a search list (Recent first, matching letters marked, a
+path hint for projects sharing a name, Add project at the end), suggests the project's branches in the
+name field (a name that is an existing branch opens that branch), turns shortcodes such as `:bug:` into
+emoji, and calls a name with nothing usable `workspace`; it has a parent picker (No parent by default),
+an Advanced part (branch name, reuse an existing branch, start from) and Create more, which keeps it
+open for the next one. Shell restarts the terminal pane
+inside that folder. Remove asks first, then deletes the folder and the branch (a branch that existed
+before stays), closing any pane still sitting in that folder. Worktrees made outside Kolux (plain
+`git worktree add`, another tool, the CLI) show up within about 5 seconds as one count line, for
+example "3 new worktrees", which opens a review to hide or show each; any worktree row has a hide
+button, and the project gear lists the hidden ones (10 a page, paths relative to the project) to show
+again. A scan that fails (git missing, slow or the repository broken) removes nothing: the
+worktrees already known stay listed under a yellow "Could not list the worktrees of <project>, so the
+last known list stays" line (T-113-a). Worktrees Kolux made count as its own wherever they sit; the rest carry an "external" tag and
+follow a show/hide choice per source (made by Claude Code, elsewhere on disk, up to 32 extra folders
+the user lists): a global default in the sidebar gear (hidden for new projects) and a per-project
+choice in the project gear that names the global value and resets to it. Projects added before this
+keep showing them. The workspaces folder can be changed and
 is remembered; projects are remembered across restarts.
 
 T-004 adds the first agent launch: "+ New session" in the sidebar and the "+" in any pane header open
@@ -170,7 +193,7 @@ project, whichever worktree was picked, registers its main checkout, opens that 
 shell and lists its worktrees, minus a coding tool's scratch worktrees (any worktree under a
 dot-folder inside the checkout, such as Claude Code's `.claude/worktrees/`). Mod+N or the
 header's plus opens the name field for the project in front; the preview shows the branch and
-folder the name becomes, a name with no usable letters is refused in the field, and a taken
+folder the name becomes, a name with no usable letters becomes `workspace` (T-109-a), and a taken
 branch or folder name gets `-2`, `-3`, counting local and remote branches. Create shows a
 stand-in row at once; the new workspace then opens with its own shell unless the user moved to
 another workspace meanwhile. The row shows the name as typed (emoji included), the branch and
@@ -198,6 +221,27 @@ branch:, path: or id:, refuses a checkout with uncommitted changes unless `--for
 panes and removes it. `--json` prints the envelope (request id, success, result or error with
 code, message and data, runtime id); exit 0 worked, 1 any error; help works with the app closed,
 and a closed app answers "Kolux is not running; start it first".
+T-117-a adds the lookups (CLI-009, CLI-015..017): `repo list`, `repo add --path` (relative to the
+shell's folder; the sidebar shows it at once), `repo show`, `repo set-base-ref --ref` (checked
+against Git first; new worktrees then start there), `repo search-refs [--query] [--limit]`
+(branches, remotes and tags, case-insensitive), `project list` (the sidebar's projects in its
+order), and `worktree list | ps | show | current`: each row carries its selector
+`id:<repo-id>::<path>`, repo, branch, parent and children, lists say which hosts they covered
+(local; none left out) and whether `--limit` cut them short, and `ps` shows only worktrees with an
+open terminal, with each terminal's handle and program. Selectors: `--repo id:|name:|path:`;
+`--worktree active|current` (the innermost worktree around the shell's folder; outside one it
+says how to name one), `id:` or `identity:` `<repo-id>::<path>`, `name:`, `branch:`, `issue:`
+(the issue it was made for) or `path:`; a bare value such as `42` is refused with the accepted
+forms, two matches are refused as ambiguous, and `folder:` says folder workspaces are not built.
+T-118 adds `worktree changes` and `worktree overlap` (CLI-021), both read-only and for the
+worktree of the shell's folder unless `--worktree` names one. changes lists every file that
+differs from the base (the repo's saved base, else its default branch; nothing is fetched),
+committed and uncommitted together, untracked files as U. overlap names each sibling worktree of
+the same repo, hidden ones included, that touches the same files, and predicts from the
+committed tips whether they would conflict (and in which files); when Git cannot check the
+merge (unrelated histories, an old Git) it says unverifiable, never clean. A sibling whose
+changes cannot be read (its folder is gone) is listed apart, and the text then says the scan was
+incomplete instead of claiming no overlap.
 
 T-015 gives the chooser a "Folders" row (SESS-014): "Separate copy for each AI" or "Same folder
 for all". With two or more seats in a Git project the separate copy is picked for you; one seat,
@@ -387,7 +431,19 @@ NUL-separated), `scm_stage` (one `git add` / `git restore --staged` fed NUL-sepa
 stdin with `--literal-pathspecs`, paths checked to stay inside the worktree, 2 000 files in one
 call), `scm_commit` (`-F -`). The list refreshes after each action and every 4 s while the card
 is open; the watcher is GIT-001's (T-033), the multi-row bulk bar is T-018-c and folder rows are
-T-033's tree view.
+T-033's tree view. A branch summary sits on top (T-111-a, VIEW-068): the branch, commits ahead and
+behind the base, and the lines its commits added and removed since they parted from it, in full
+with grouped digits (+11,012); opened, it splits them into Source, Tests and Generated rows that add
+up (Non-generated when no test file changed; no Generated row when there is none), and a screen
+reader hears the split even while it is closed. It is measured again when HEAD moves and every 30 s,
+the last one staying up meanwhile. "Compare with the upstream" (off by default, the settings key
+`scmSummaryUpstream`) measures against the branch's upstream instead; a base pinned for the project
+still wins. A folded Handoff note sits at the foot of the card (T-115-a, EDIT-040): one note per
+workspace folder, saved 0.7 s after typing stops and when focus leaves, its state shown as Saving…,
+Saved, Not saved: <why> (over 256 KB) or Changed N min ago; it survives a restart, a damaged one
+reads as empty, and removing the workspace forgets it. Hand to agent… starts the chosen installed
+agent (the default first) in a new pane of that workspace with the note as its first prompt and adds
+"— Handed to <agent> on <date time>" to the note.
 
 **Main button and remote menu (T-018-b, GIT-006 / GIT-007).** The large button under the commit
 box always names the next step: Stage all while edits wait with nothing staged; Commit once
@@ -1098,7 +1154,40 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [orchestration] T-089 split: T-089-a (CLI-034, CLI-035) done; T-089-b (CLI-033 ask, CLI-036 worker list/show/read/stop/abandon/release/retain) waits for the ask flow (T-190), live worker state and transcripts (T-030), stop (T-071) and abandon (T-155). `task-update` waits for the task-state guards (ORCH-012, T-071). A reused terminal must already run an agent Kolux recognises, in the worktree named with `--worktree` (new worktrees are refused with `--terminal`); if the caller's pane runs a different agent, or `--agent` names one, it is refused. When `--spec` made a task and the hand-off then fails, the error names the task and the dispatch command that finishes it. Because a reused terminal must run the coordinator's agent and dispatch turns shells away, no worker can be a bare shell, so ORCH-014's "exit after reporting" line is not written anywhere. The pane key alone now identifies the caller (the handle in the environment is only a label). Structured chat sessions and older app versions (CLI-035's refusal and quiet-drop rules) do not exist in this build.
 
+- [orchestration] T-106-a: new branches begin with the Git user name by default (`txais-xiong/fix-login`), as PROJ-022 says; earlier passes made the bare name. Setting fields `branchPrefix` ("user" when absent, "custom", "none") and `branchPrefixCustom`. A custom prefix Git refuses is a warning on create and the bare name is used (DT-O1, PROJ-022 amended). The control sits in the sidebar gear form until T-116 builds the Git & worktrees page.
+
+- [orchestration] T-106-a: a workspace opened on an existing branch is marked `existingBranch` in its origin record and keeps that branch when removed, from the app and from `kolux worktree rm`; the remove confirmation now says the branch goes unless it already existed. The copy budget counts every file and folder under a listed path; over-budget entries are skipped whole.
+
+- [orchestration] T-107-a: new worktrees are found by the sidebar's 5 s poll of Git's worktree list (DT-O2, PROJ-041 amended), not a folder watcher. The first look at a project takes everything already there as seen, so adding a project never shows a notice; a worktree removed and made again counts as new. Hidden worktrees are remembered per folder in the setting `worktreesHidden`; T-108-a adds the per-source defaults.
+
+- [orchestration] T-108-a: "existing projects keep their earlier behaviour" (PROJ-042) is read as: the first time the visibility choices are used, every project already in Kolux gets its own choice "elsewhere on disk: shown" (what it showed before), and projects added afterwards follow the global default, which starts hidden for every source. Changing a global default then never touches a project that has its own choice; Reset puts a project back on the global one. Claude Code's `.claude/worktrees` folder is a source of its own (hidden by default, as before); other dot-folders inside the main checkout stay unlisted scratch, unless the workspaces folder the user chose is there.
+
+- [orchestration] T-108-a: a worktree counts as Kolux's own when Kolux has a record of making it (app, CLI or open-existing-branch); workspaces made by earlier builds before this record existed show as external. Its only visible effect today is the "external" tag and the visibility rules; the global defaults sit in the sidebar gear form until T-116 builds the Git & worktrees page. The failed-to-save error ("could not save the visibility choice: ...") was not forced live.
+
+- [orchestration] T-108-b for Txais: GSD's worktree folder is not in any public doc I could find, so worktrees GSD makes count as "elsewhere on disk" until someone names the folder.
+
+- [orchestration] T-109-a: "Recent" in the composer's project list is read as the projects the composer last made a workspace in (up to 5, this computer only); before any, every project is under Projects in the sidebar's order. A name typed in the name field that equals one of the project's branches opens that branch as it is (the preview says so) instead of making a numbered new one. The optional note is the agent's first prompt. The Advanced branch name replaces the name the branch is made from but still gets the branch prefix. The main checkout cannot be a parent. With Create more ticked the new workspace does not take the front (an agent with a prompt still starts there), so the next name can be typed at once.
+
+- [orchestration] T-111-a: the branch summary counts what the branch's commits changed since they parted from the base (`base...HEAD`), not uncommitted edits, so "commit 10 lines, +10" holds and the base's own new commits show only as behind. "Without a test count" is read as no test file changed: the one row is then Non-generated. Tests are files under a test / tests / __tests__ / spec / specs folder or named *.test.*, *.spec.*, *_test.*, test_*; generated are lock files, minified files, source maps, snapshots and anything under a generated folder (not yet .gitattributes). The upstream setting is a checkbox inside the opened summary until the Settings pages (T-116) can hold it. "A base pinned for the worktree" has nothing to read yet; the project's saved base is the pinned one.
+- [orchestration] T-115-a: the Handoff note is the last section of the Source Control card, the right sidebar's only card so far. No setting disables an agent yet, so the agent list is every agent found on this computer with the default first; hosts are local only, so the note is keyed by folder path alone (a folder workspace and a worktree have different folders, so they never share one). "A new tab" is read as a new pane in the workspace's grid, the way New tab adds one. Removing a workspace forgets its note.
+- [orchestration] T-116-a: the Git & worktrees settings are a titled part of the sidebar gear form until the Settings page (T-054) exists, as the gear already held the prefix. The sample uses the global Git user name (a repository can set its own; its branches then follow that one). The custom prefix is saved when the field loses focus or Enter is pressed, the sample follows each keystroke. Default compare base and the summary's checkbox are one setting, so either changes both.
+- [orchestration] T-117-a: worktrees carry no identity record of their own yet, so `identity:` takes the same `<repo-id>::<path>` form as `id:`; `active` means the same as `current` (the command line has no focused-worktree notion); `folder:` is refused until folder workspaces exist (PROJ-086, T-218). `project list` is the registered repos in sidebar order (a project is a repo today). The row's board status is left for CLI-019 (T-117-b). Hosts are local only, so every list says covered: local, left out: none. `worktree ps` counts a terminal under the innermost worktree its starting folder is in.
+- [orchestration] T-118: the base for changes and overlap is the repo's saved base while it exists, else its default branch, with no fetch (both commands only read); `repo show` now reports the same base without fetching. Untracked files count as changes. A sibling with no history in common with the base counts its changes from the base itself, so it can still be compared; its merge check then reports unverifiable. Only siblings that share a file are listed; their clash check uses the committed tips, as the card says, so shared uncommitted edits can show next to a clean prediction. The "plain folder workspace is not supported" rule has nothing to act on until folder workspaces exist (PROJ-086, T-218); `folder:` selectors are already refused.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-10 · [orchestration] T-118 · done: `scm.rs` `changes` (diff from the merge base plus untracked) and `clash` (`git merge-tree --write-tree`: 0 clean, 1 conflict, else unverifiable); `cli.rs` `worktree changes` / `worktree overlap`, `base_of` (saved base else default branch, no fetch; `repo show` uses it too); 1 new cargo test · evidence/T-118-overlap.png (signup also touches app.txt and would conflict), T-118-unverifiable.png (an unrelated-history sibling: merge unverifiable; a sibling with its folder gone: could not read, scan incomplete), T-118-cli-transcript.txt (the --json results)
+- 2026-10-09 · [orchestration] T-117-a · done (T-117 split; T-117-b keeps CLI-019 worktree set, which needs the Board's status, plus the WSL path and folder: parent parts of CLI-009): `cli.rs` QUERY table (repo list/add/show/set-base-ref/search-refs, project list, worktree list/ps/show/current), `selector()` refuses bare values, `pick_in` with active/current innermost, issue:, identity:, worktree: for parents, ambiguous repos; `projects.rs` `set_base`; `terminal.rs` `sessions()`; 1 new cargo test · evidence/T-117-repo-added.png (a repo added from the CLI in the sidebar at once), T-117-in-a-pane.png (current, list, ps and the refused `42` run in a Kolux pane, with the project added in the app listed), T-117-cli-transcript.txt (every command and its exit code)
+- 2026-10-09 · [orchestration] T-116-a · done (T-116 split; T-116-b keeps the rest of SET-031, T-116-c SET-033, which needs the Settings page T-054 and a setup run, T-107-b / T-156): `projects.rs` `branch_prefix_check` (the draft through `branch_prefix`, `git_accepts` shared with `place_for`); `projects/model.ts` `prefixSample`; the gear form's Git & worktrees part: live sample, notes, Default compare base select (the `scmSummaryUpstream` key the summary's checkbox uses); 1 new vitest case · evidence/T-116-sample-tx.png (custom tx: Next branch tx/<name>), T-116-space-warning.png ("a b": Git does not accept it; a workspace then made got the bare branch spaced-prefix with the create warning), T-116-only-slashes.png, T-116-compare-upstream.png (Branch upstream: the summary's Compare with the upstream ticks)
+- 2026-10-09 · [orchestration] T-115-a · done (T-115 split; T-115-b, EDIT-047, waits for the worktree palette on T-098): `projects.rs` `workspace_note_get` / `workspace_note_save` (settings key `workspaceNote:<folder>`, 256 KB cap, one atomic settings write), forgotten with the workspace; `scm/HandoffNote.tsx` at the foot of Source Control; `model.ts` `handedLine`, `sinceText`; 1 new cargo test, 2 new vitest cases · evidence/T-115-saved.png, T-115-after-restart.png (the note back after closing and relaunching), T-115-other-empty.png (note-two's note empty), T-115-handed.png (Claude Code started in a new pane with the note as its prompt; the note gained the handed-to line), T-115-too-long.png (282 KB: Not saved)
+- 2026-10-09 · [orchestration] T-114 · not built, left unticked. AUTO-010 chooses whether each per-run worktree runs the project setup, and there is no setup step yet: a setup script saved in the project (PROJ-033 on T-107-b, its field SET-033 on T-116), the kolux.yaml setup (PROJ-034 on T-149) and the prompt before a repository script runs (SAFE-025 on T-156) all come first; an option that runs nothing would mislead · no evidence (nothing built)
+- 2026-10-09 · [orchestration] T-113-a · done (T-113 split; T-113-b, the cleanup half, waits for the cleanup dialog on T-162, since nothing removes worktrees by itself yet): `model.ts` `afterScan`; `ProjectsPanel.tsx` keeps each project's last scanned list and shows it, with a warning, when `workspace_list` fails, instead of an empty project; 1 new vitest case · evidence/T-113-scan-failed.png (the repository's .git moved aside: alpha and beta still listed under the warning; with .git back the list carries on unchanged)
+- 2026-10-09 · [orchestration] T-112 · not built, left unticked. VIEW-076 needs folder workspaces, which do not exist yet (PROJ-086 on T-218), and its PR Checks tab rolls up the checks panel of T-127 (VIEW-073). VIEW-112 imports setup and teardown commands into the project's setup script, which has no home yet: the per-repository setup field is SET-033 on T-116 and running it is PROJ-033 on T-107-b; a reader with nothing to import into would be scaffolding, so it waits for one of them · no evidence (nothing built)
+- 2026-10-09 · [orchestration] T-111-a · done (T-111 split; T-111-b keeps VIEW-038 / VIEW-041 / VIEW-042, which need the worktree palette on T-098, and VIEW-048, which needs a tab-rename field and workspace delete on T-055): `scm.rs` `summary` / `scm_summary` (rev-list --left-right --count and diff --numstat against `<ref>...HEAD`, paths sorted into source, tests and generated), `Status.head` from `branch.oid`; `model.ts` `grouped` / `summaryTotal` / `summaryRows` / `summaryLabel`; the summary on top of `SourceControlPanel.tsx`; App passes the project's pinned base and the setting; 2 new Rust tests, 1 changed, 3 new vitest cases · evidence/T-111-ten-lines.png and T-111-ten-lines-open.png (10 lines committed: +10, one Non-generated row), T-111-grouped-split.png (+11,012 = Source +8,312, Tests +1,200, Generated +1,500, refreshed on the new commit without a click), T-111-upstream.png (setting on: ↑1 against origin/t/summary, +1)
+- 2026-10-09 · [orchestration] T-110 · not built, left unticked. STAT-039 HAND TO FABLE: renaming a worktree on the agent's first real work needs the agent status hooks (core lane, T-025..T-030) to tell when real work begins and what the task text is. STAT-055 waits on two unbuilt tasks: T-156 (SAFE-025, the prompt before running a repository's kolux.yaml scripts; shared scripts must not run unasked) and T-107-b (PROJ-033, the Setup tab that runs a setup script); the archive script comes from kolux.yaml only (OD-14), so neither acceptance line can be met before them · no evidence (nothing built)
+- 2026-10-09 · [orchestration] T-109-a · done (T-109 split; T-109-b, the GitHub half, and T-109-c, retry and cancel mid-submit, left; the setup options went onto T-107-b): `src/projects/Picker.tsx` (new: search list behind a button, Enter / arrows / Escape closes only the list), composer in `ProjectsPanel.tsx` (project picker with Recent kept in local storage, parent picker, Advanced, Create more, Enter only from the name and branch fields and never mid-composition), `model.ts` `matchLetters` / `rankProjects` / `pathHints` / `middle` / `shortcodes`; `workspace_create` takes `branch` and `parent`, `workspace_open_branch` takes `parent`, `workspace_preview` takes `branch`, a name that cleans up to nothing becomes `workspace`; 1 new Rust test, 1 changed, 3 new vitest cases · evidence/T-109-project-search.png (two api projects with one\client and two\client hints, "api" marked, best match first), T-109-branch-name.png (feat/login typed: "uses the existing branch"), T-109-branch-used.png (the workspace is on feat/login), T-109-advanced.png (Parent: No parent; branch name, reuse, start from), T-109-parent-chosen.png, T-109-parent-reset.png (empty search + Enter: No parent), T-109-create-more.png (composer still open, name cleared, the new one nested under its parent), T-109-recent.png (Recent: the api just used)
+- 2026-10-09 · [orchestration] T-108-a · done (T-108 split; T-108-b, the made-by-GSD source, left; T-107-e's visibility defaults folded into T-108-a and its line removed): new `src-tauri/src/visibility.rs` (`apply` sets `Worktree.kind` main/managed/external and `source`, drops other tools' scratch folders unless the user's own workspaces folder holds them; `ensure` keeps earlier projects showing; `sources`, `set_choice`, `add_root` / `remove_root` with 32 cap and separate errors), `note_seen` writes a `madeBy: app` record, `set_hidden` keeps show-by-hand, commands `visibility_get` / `visibility_set` / `visibility_root_add` / `visibility_root_remove`; global defaults in the sidebar gear, per-project choices with Reset and a Global defaults link in the project gear, "external" row tag; 1 new Rust test, 2 older ones updated for hidden-by-default · evidence/T-108.png (project override Shown with Reset; away and hand tagged external, Kolux made not), T-108-project-defaults.png (new project: Claude Code, away and by-hand hidden), T-108-moved-folder-still-managed.png (workspaces folder moved to ws2: Kolux made still untagged, by-hand inside the old folder external), T-108-root-invalid.png, T-108-root-repeated.png, T-108-root-over-limit.png (33rd folder: "at most 32"), T-108-reset.png (global flipped Shown then Hidden: hand stayed shown on the project's own choice; Reset: hidden)
+- 2026-10-09 · [orchestration] T-107-a · done (T-107 split; T-107-b setup script, T-107-c issue/PR create, T-107-d branch rename, T-107-e visibility defaults left): `worktreesSeen` / `worktreesHidden` stores with `unseen` (first scan seeds, gone worktrees forgotten), `mark_all_seen`, `note_seen` on every Kolux create, `set_hidden` and `Worktree.hidden` (main never hidden) in projects.rs/git.rs, commands `workspace_unseen` / `workspace_seen` / `workspace_hide`; count line, review form, row hide button and paged hidden list in ProjectsPanel.tsx; `relPath` in model.ts; 1 new Rust test + 1 vitest; DT-O2 (5 s poll of Git's list, no folder watcher) · evidence/T-107-a.png (three `git worktree add` in one go: one "3 new worktrees" line, no restart), T-107-a-review.png (b hidden from the review), T-107-a-hidden.png (project gear: Hidden worktrees (1) ../ext/b), T-107-a-row-hide.png (b shown again, a hidden from its row)
+- 2026-10-09 · [orchestration] T-106-a · done (T-106 split; T-106-b, the pull-request half of PROJ-030, left): `branch_prefix` + `Place.prefix` in projects.rs (user name / custom / none, Git-checked), `add_project` adds the picked linked worktree when its repository is not a project, `open_branch_workspace` / `workspace_branches` / `workspace_open_branch` and `keeps_branch` on remove (app and CLI), scratch-worktree filter against the main checkout; `copy_within` budget (2 GiB / 50,000 entries, five named + "and N more", part-way warning) in include.rs; `openedWorktree` in model.ts; existing-branch mode and Branch prefix select in ProjectsPanel.tsx; 4 new Rust tests + 1 vitest; PROJ-026 already built in T-020 (live: `KOLUX_WORKSPACES_DIR` on G: used with no folder setting); fixed a pre-existing clash where two tests shared one temp folder · evidence/T-106-a.png, T-106-a-linked-added.png, T-106-a-linked-selects-repo.png, T-106-a-prefix-setting.png, T-106-a-prefix-and-include.png, T-106-a-include-warning.png, T-106-a-existing-branch-form.png (feat/x removed through the app: `git branch` still shows feat/x d0381e5)
 - 2026-10-09 · [orchestration] T-089-a · done (T-089 split; T-089-b left): `reuse` for `worker-start --terminal`, dispatch dry run without `--to` (always returns the opening text), `parse_deps`, `Terminals::by_key` and key-only `caller_of`, task creator recorded and required, `launch`/`reveal` on receipts, reply hint uses the build's CLI name (1 new test plus extended ones, 82 Rust); live: a PowerShell coordinator made run-1, task-1 and task-2 (deps typed as '["task-1"]'), `task-list --ready` showed only task-1, `dispatch --dry-run` printed the opening text and task-1 stayed ready, `--effort high` without `--model` was refused, `worker-start --task task-1 --terminal term-2 --worktree current` typed the brief into the open Claude tab ("worker ready ... reused"), Claude answered and its done report reached the lane app through kolux-dev (CLI-007 end to end) · evidence/T-089-a-tasks-reuse.png, T-089-a-done-report.png
 - 2026-10-09 · [orchestration] T-088 · done: `cli_first` and the PATH/`KOLUX_APP_DIR` setup in terminal.rs spawn, `data_dir_of` and `APP_DIR_ENV` in cli.rs, send refusals for group heartbeats/done reports and flags-plus-`--payload` at parse time (2 new tests, 81 Rust); live: a fresh PowerShell pane with no alias and no APPDATA override showed KOLUX_APP_DIR set to the lane's own folder, target\debug first on PATH, `Get-Command kolux-dev` resolving there, run-create and run-current answered by the lane app, and both refusals printed · evidence/T-088-cli-path.png
 - 2026-10-09 · [orchestration] T-084 · done: `Brief`, `brief`, `CLI`, `DIVIDER` and `tier_agent` in orchestration.rs (2 new tests), `Git::behind`, `Terminals::dir_of`, `pane_agent` and `drift` in cli.rs, worker-start sends the brief and stores it on the dispatch; live: `--tier light --agent codex` from a Claude pane refused, `--tier deep --model opus` refused, `--tier light` on a worktree 2 commits behind master started Claude on haiku (effort null), dispatch-show --preamble printed the done, heartbeat and question commands with dispatch-1 and run-1, the drift line and the task last; the worker's own screen showed the same brief · evidence/T-084-tier.png, T-084-brief-drift.png, T-084-worker-brief.png

@@ -81,6 +81,15 @@ input { font: inherit; }
 .sb-list::-webkit-scrollbar { width: 6px; }
 .sb-list::-webkit-scrollbar-thumb { background: var(--line-focus); border-radius: 3px; }
 .sb-hint { padding: 8px 9px; font-size: 12px; color: var(--fg-label); line-height: 1.4; }
+/* PROJ-041 / PROJ-042: the new-worktree count line and the show / hide rows. */
+.sb-notice { display: block; width: calc(100% - 8px); margin: 2px 4px; padding: 5px 9px; border: 1px solid var(--line-focus); border-radius: 6px; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.sb-notice:hover { color: var(--fg); }
+.vis-row { display: flex; align-items: center; gap: 6px; }
+.vis-row .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vis-row .field { flex: 1; min-width: 0; }
+.preview.warn { color: #f0a07a; word-break: normal; }
+.sb-form .link { align-self: flex-start; padding: 0; border: none; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; }
+.sb-form .link:hover { color: var(--fg); }
 .proj { display: flex; align-items: center; height: 32px; padding: 0 4px 0 8px; font-size: 14px; font-weight: 500; color: var(--fg-row); white-space: nowrap; }
 .proj .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .proj .ib { opacity: 0; }
@@ -465,3 +474,40 @@ input { font: inherit; }
 .res-group { margin-top: 6px; }
 .res-label { padding: 4px 8px 2px; font-size: 11px; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .res-ask { display: flex; flex-direction: column; gap: 8px; padding: 8px; margin: 2px 0; border: 1px solid var(--line-focus); border-radius: 8px; }
+/* SESS-035 / SESS-037: the new workspace composer's pickers */
+.picker { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field.pick { display: flex; align-items: center; gap: 4px; text-align: left; cursor: pointer; min-width: 0; }
+.pick-name { color: var(--fg-muted); flex: none; }
+.pick-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pick-list { max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+.pick-group { padding: 4px 6px 2px; font-size: 11px; color: var(--fg-faint); }
+.pick-item { display: flex; gap: 8px; align-items: baseline; padding: 3px 6px; border-radius: 4px; cursor: pointer; color: var(--fg); min-width: 0; }
+.pick-item[aria-selected="true"] { background: var(--input-bg); outline: 1px solid var(--line-focus); }
+.pick-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.pick-item .hint { margin-left: auto; flex: none; font-size: 11px; color: var(--fg-muted); }
+.pick-item mark { background: none; color: var(--fg); font-weight: 700; text-decoration: underline; }
+.composer-advanced { display: flex; flex-direction: column; gap: 6px; }
+.field.multi.grow { field-sizing: content; max-height: 160px; resize: none; }
+.composer .btn-row { flex-wrap: wrap; align-items: center; }
+/* VIEW-068: the branch summary at the top of Source Control. */
+.scm-summary { margin: 8px 8px 0; padding: 6px 8px; border: 1px solid var(--line-subtle); border-radius: 8px; font-size: 12px; color: var(--fg-muted); }
+.scm-summary summary { display: flex; align-items: center; gap: 8px; cursor: pointer; min-width: 0; }
+.scm-summary .branch { color: var(--fg); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.scm-summary .ab { white-space: nowrap; }
+.scm-summary .lines { margin-left: auto; white-space: nowrap; font: 11.5px var(--mono-font); }
+.scm-summary .add { color: #73c991; }
+.scm-summary .del { color: #f0a07a; }
+.scm-sum-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 3px 0 0 16px; font: 11.5px var(--mono-font); }
+.scm-sum-row span:first-child { font-family: var(--ui-font); }
+.scm-summary .check { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+/* EDIT-040: the Handoff note at the foot of the right sidebar. */
+.scm-handoff { margin: 0 8px 8px; padding: 6px 8px; border: 1px solid var(--line-subtle); border-radius: 8px; font-size: 12px; color: var(--fg-muted); display: flex; flex-direction: column; gap: 6px; }
+.scm-handoff summary { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--fg-label); font-weight: 500; }
+.scm-handoff summary .state { margin-left: auto; font-weight: 400; color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.scm-handoff summary .state.error { color: #f0a07a; }
+.scm-handoff .field.multi { min-height: 96px; margin-top: 6px; }
+.scm-handoff .btn-row { display: flex; gap: 6px; margin-top: 6px; }
+.scm-handoff .btn-row select { flex: 1; min-width: 0; }
+/* SET-031: the Git & worktrees part of the sidebar gear form, until the Settings page holds it. */
+.sb-form-head { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line-subtle); font-weight: 600; color: var(--fg); }
+.sb-form [data-prefix-sample] code { color: var(--fg); }

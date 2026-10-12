@@ -35,8 +35,9 @@ import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
 import SourceControlPanel from "./scm/SourceControlPanel";
+import { SUMMARY_UPSTREAM_KEY } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
-import { DEFAULT_AGENT_KEY, defaultAgentId, offeredAgents } from "./launch/agents";
+import { DEFAULT_AGENT_KEY, defaultAgentId, menuAgents, offeredAgents } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { nextNeedsYou } from "./terminal/status";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
@@ -875,7 +876,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           </div>
         </div>
         {terminals && scmOpen && (
-          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} />
+          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
       </div>
       <StatusBar

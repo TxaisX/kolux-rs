@@ -21,8 +21,10 @@ import { blocker, shownChanges, skipsQuestion, type RemoveCheck } from "./deleti
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { nestRows, orderWorktrees, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type Worktree } from "./model";
-import { Bell, ChevronDown, Clock, Close, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
+import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree } from "./model";
+import { Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import Picker, { type PickItem } from "./Picker";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { KeyText } from "../keys/KeymapContext";
 
@@ -72,13 +74,40 @@ type Props = {
   onNest: (on: boolean) => void;
 };
 
+// SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
+const RECENT_KEY = "kolux.composer.recentProjects";
+const ADD_ITEM = "+add";
+const readRecent = (): string[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+};
+const noteRecent = (id: string) => {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...readRecent().filter((x) => x !== id)].slice(0, 5)));
+  } catch {
+    // a remembered order is a convenience; without storage the list keeps its own order
+  }
+};
+
 export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest }: Props) {
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
-  const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({});
+  const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones the sidebar shows
+  const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
+  const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
+  const [review, setReview] = useState<string | null>(null); // project id whose new-worktree review is open
+  const [hiddenPage, setHiddenPage] = useState(0);
+  const [visGlobal, setVisGlobal] = useState<VisSource[]>([]); // SET-032: the global choice per source
+  const [visOwn, setVisOwn] = useState<VisSource[]>([]); // PROJ-042: the open project's own, over the global
+  const [rootPath, setRootPath] = useState("");
+  const [rootError, setRootError] = useState("");
   const [place, setPlace] = useState<PlaceInfo>({ dir: "", flat: false, used: [], fromEnv: false });
   const [rootDraft, setRootDraft] = useState("");
   const [flatDraft, setFlatDraft] = useState(false);
@@ -95,6 +124,13 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const shown = useRef(activeDir); // the workspace in front, read when a create finishes
   shown.current = activeDir;
   const [name, setName] = useState("");
+  const [existing, setExisting] = useState(false); // PROJ-030: open a branch that already exists instead of making one
+  const [branchList, setBranchList] = useState<string[]>([]);
+  const [branchDraft, setBranchDraft] = useState(""); // SESS-037: Advanced branch name (the branch to reuse with existing)
+  const [parentDraft, setParentDraft] = useState<string | null>(null); // SESS-037: the parent worktree, none by default
+  const [advanced, setAdvanced] = useState(false);
+  const [more, setMore] = useState(false); // SESS-038: Create more
+  const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
@@ -106,6 +142,22 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
   const sortBy = sortFromSetting(settings[SORT_SETTING]);
+  // PROJ-022: how new branches begin; read by the backend at create time. T-116 moves it to the Git page.
+  const prefixMode = typeof settings.branchPrefix === "string" ? settings.branchPrefix : "user";
+  // SET-031: the custom prefix as typed (saved on blur) and what the back end makes of it, for the sample.
+  const [prefixDraft, setPrefixDraft] = useState(String(settings.branchPrefixCustom ?? ""));
+  const [prefixCheck, setPrefixCheck] = useState<PrefixCheck | null>(null);
+  useEffect(() => {
+    if (!showAdd) return;
+    let live = true;
+    invoke<PrefixCheck>("branch_prefix_check", { mode: prefixMode, custom: prefixDraft })
+      .then((c) => live && setPrefixCheck(c))
+      .catch(() => live && setPrefixCheck(null));
+    return () => {
+      live = false;
+    };
+  }, [showAdd, prefixMode, prefixDraft]);
+  const sample = prefixSample(prefixMode, prefixDraft, prefixCheck);
   // PROJ-050: an old "Recent" choice is moved to Smart once and saved that way.
   useEffect(() => {
     if (settings[SORT_SETTING] === "recent") onSetting(SORT_SETTING, "smart");
@@ -126,17 +178,24 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   const fail = (err: unknown) => say("error", String(err));
 
+  const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
   const refreshWorktrees = useCallback(async (list: Project[]) => {
     const next: Record<string, Worktree[]> = {};
+    const unseen: Record<string, Worktree[]> = {};
     for (const p of list) {
       try {
         next[p.id] = await invoke<Worktree[]>("workspace_list", { projectId: p.id });
+        unseen[p.id] = await invoke<Worktree[]>("workspace_unseen", { projectId: p.id });
       } catch (err) {
-        next[p.id] = [];
-        fail(err);
+        // ACCT-056: a failed scan removes nothing; the worktrees already known stay listed.
+        next[p.id] = afterScan(scanned.current[p.id], null);
+        say("warn", `Could not list the worktrees of ${p.name}, so the last known list stays: ${String(err)}`);
       }
     }
-    setWorktrees(next);
+    scanned.current = next;
+    setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
+    setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
+    setFresh(unseen);
     const owner: Record<string, string> = {};
     for (const p of list) for (const w of next[p.id] ?? []) owner[w.path] = p.id;
     const key = JSON.stringify([list, owner]);
@@ -144,7 +203,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     indexed.current = key;
   }, []);
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
-  // ponytail: a 5 s poll while the window is visible; watching the folders is PROJ-041 (T-107).
+  // PROJ-041: the same poll notices worktrees made outside Kolux, in both layouts (DT-O2).
   useEffect(() => {
     const t = window.setInterval(() => document.visibilityState === "visible" && refreshWorktrees(projects).catch(fail), 5000);
     return () => window.clearInterval(t);
@@ -176,11 +235,21 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       return;
     }
     let live = true;
-    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null }).then((s) => live && setPreview(s)).catch(fail);
+    invoke<Preview | null>("workspace_preview", { name, projectId: creating || null, branch: existing ? null : branchDraft.trim() || null }).then((s) => live && setPreview(s)).catch(fail);
     return () => {
       live = false;
     };
-  }, [name, creating]);
+  }, [name, creating, branchDraft, existing]);
+
+  useEffect(() => {
+    // SESS-036: the name field suggests the project's branches too.
+    if (!creating) return;
+    let live = true;
+    invoke<string[]>("workspace_branches", { projectId: creating }).then((b) => live && setBranchList(b)).catch(fail);
+    return () => {
+      live = false;
+    };
+  }, [creating]);
 
   // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
   const addPath = async (path: string) => {
@@ -192,8 +261,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       setPathDraft("");
       setShowAdd(false);
       await reload();
-      const main = (await invoke<Worktree[]>("workspace_list", { projectId: p.id })).find((w) => w.isMain);
-      if (main) onSelect(main.path, main.branch);
+      const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
+      if (open) onSelect(open.path, open.branch);
     } catch (err) {
       fail(err);
     } finally {
@@ -245,6 +314,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   // (empty: the default branch Git reports).
   const openSettings = (p: Project) => {
     setSettingsFor(p.id);
+    loadVis(p.id);
     setDirDraft(p.workspacesDir ?? "");
     setProjectBaseDraft(p.base ?? "");
   };
@@ -268,30 +338,46 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const installed = agents.filter((a) => a.installed);
   const fallbackAgent = installed.find((a) => a.id === defaultId) ?? installed[0] ?? null;
   const create = async (project: Project) => {
-    if (!name.trim() || preview === null) return;
+    const base = baseDraft.trim();
+    const branch = branchDraft.trim();
+    // SESS-036: a name that is an existing branch opens that branch rather than making a new one.
+    const reuse = existing ? branch : branchList.includes(name.trim()) ? name.trim() : "";
+    if (existing ? !reuse : !name.trim() || preview === null) return;
+    const keepOpen = more; // SESS-038: Create more keeps the composer open for the next one
+    const typed = name.trim();
+    const parent = parentDraft;
     const from = shown.current;
     const prompt = promptDraft.trim();
     const agent = agentDraft ? (installed.find((a) => a.id === agentDraft) ?? null) : prompt ? fallbackAgent : null;
-    const base = baseDraft.trim();
     setBusy("creating");
-    setPending({ projectId: project.id, name });
+    setPending({ projectId: project.id, name: typed || reuse });
     setName("");
-    setBaseDraft("");
+    setBranchDraft("");
     setPromptDraft("");
-    setCreating(null);
+    if (!keepOpen) {
+      setCreating(null);
+      setBaseDraft("");
+      setParentDraft(null);
+    }
     try {
-      const wt = await invoke<Created>("workspace_create", { projectId: project.id, name, base: base || null });
+      const wt = reuse
+        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent })
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent });
+      noteRecent(project.id);
       const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
       say(extra ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${extra ? ` · ${extra}` : ""}`);
       await reload();
-      // The agent's tab is the workspace's first; a shell is only opened when no agent runs.
-      if (agent) onStartIn(agent, wt.path, wt.branch, prompt, shown.current === from);
-      else if (shown.current === from) onSelect(wt.path, wt.branch);
+      // The agent's tab is the workspace's first; a shell is only opened when no agent runs. With
+      // Create more the new workspace does not take the front, so the next name can be typed.
+      const front = !keepOpen && shown.current === from;
+      if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
+      else if (front) onSelect(wt.path, wt.branch);
     } catch (err) {
       fail(err);
     } finally {
       setPending(null);
       setBusy("");
+      if (keepOpen) nameRef.current?.focus();
     }
   };
 
@@ -308,11 +394,59 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     }
     say("warn", "The workspace shown is not one Kolux can delete (a main checkout, or no workspace).");
   }, [deleteRequest]);
+  // SESS-035: Recent (projects the composer made workspaces in), then the rest by match, then Add project.
+  const projectItems = (q: string): PickItem[] => {
+    const hints = pathHints(projects);
+    const r = rankProjects(projects, q, readRecent());
+    const item = (group: string) => (m: ProjectMatch<Project>): PickItem => ({ key: m.p.id, label: m.p.name, hits: m.hits, group, title: m.p.path, hint: hints[m.p.id] && middle(hints[m.p.id], 28) });
+    return [...r.recent.map(item("Recent")), ...r.rest.map(item("Projects")), { key: ADD_ITEM, label: "Add project…" }];
+  };
+  const pickProject = (id: string) => {
+    if (id === ADD_ITEM) {
+      setCreating(null);
+      setShowAdd(true);
+    } else if (id !== creating) {
+      setCreating(id);
+      setParentDraft(null); // the parent belongs to the old project
+    }
+  };
+  // SESS-037: any workspace of the project but its main checkout can be the parent.
+  const parentItems = (p: Project) => (q: string): PickItem[] => [
+    ...(q.trim() ? [] : [{ key: "", label: "No parent" }]),
+    ...(worktrees[p.id] ?? []).flatMap((w) => {
+      const hits = w.isMain ? null : q.trim() ? matchLetters(q.trim(), worktreeLabel(w)) : [];
+      return hits ? [{ key: w.path, label: worktreeLabel(w), hits, title: w.path }] : [];
+    }),
+  ];
+  const parentLabel = (p: Project) => {
+    const w = parentDraft ? (worktrees[p.id] ?? []).find((x) => same(x.path, parentDraft)) : undefined;
+    return w ? worktreeLabel(w) : "No parent";
+  };
+  // SESS-038: Enter submits from the name and branch fields only, never mid input-method composition.
+  const submitKeys = (p: Project | null) => (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "Enter" && p) create(p);
+    else if (e.key === "Escape") setCreating(null);
+  };
+  const reusing = !existing && branchList.includes(name.trim());
   const nameField = (p: Project | null) => (
-    <div className="sb-form" data-create={p?.id ?? ""}>
-      <input aria-label="workspace name" className="field" placeholder="name, e.g. Fix login" value={name} autoFocus onChange={(e) => setName(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
-      <div className="preview">{previewSentence(name, preview, p)}</div>
-      <input aria-label="start from" className="field" placeholder={p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={(e) => (e.key === "Enter" && p ? create(p) : e.key === "Escape" && setCreating(null))} />
+    <div className="sb-form composer" data-create={p?.id ?? ""}>
+      <Picker key={`project-${p?.id ?? ""}`} name="Project" value={p?.name ?? "pick a project"} items={projectItems} onPick={pickProject} startOpen={!p} />
+      <input
+        ref={nameRef}
+        aria-label="workspace name"
+        className="field"
+        list="branch-list"
+        placeholder={existing ? "folder name (optional: the branch name)" : "name, or an existing branch"}
+        value={name}
+        autoFocus={!!p}
+        onChange={(e) => setName(shortcodes(e.target.value))}
+        onKeyDown={submitKeys(p)}
+      />
+      <div className="preview">
+        {existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
+      </div>
+      {p && <Picker key={`parent-${p.id}`} name="Parent" value={parentLabel(p)} items={parentItems(p)} onPick={(k) => setParentDraft(k || null)} onEmptyEnter={() => setParentDraft(null)} />}
       <select aria-label="agent" className="field" value={agentDraft} onChange={(e) => setAgentDraft(e.target.value)}>
         <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a shell"}</option>
         {installed.map((a) => (
@@ -321,14 +455,47 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           </option>
         ))}
       </select>
-      <textarea aria-label="first prompt" className="field multi" placeholder="first prompt for the agent (optional)" value={promptDraft} onChange={(e) => setPromptDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setCreating(null)} />
+      <textarea aria-label="note" className="field multi grow" placeholder="note: the first prompt for the agent (optional)" value={promptDraft} onChange={(e) => setPromptDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setCreating(null)} />
+      <button className="link" aria-expanded={advanced || existing} onClick={() => setAdvanced(!(advanced || existing))}>
+        {advanced || existing ? "Hide advanced" : "Advanced…"}
+      </button>
+      {(advanced || existing) && (
+        <div className="composer-advanced" data-advanced>
+          <label>Branch name</label>
+          <input
+            aria-label="branch name"
+            className="field"
+            list={existing ? "branch-list" : undefined}
+            placeholder={existing ? "existing branch, e.g. feat/x" : `from the name${preview && name.trim() ? `: ${preview.branch}` : ""}`}
+            value={branchDraft}
+            onChange={(e) => setBranchDraft(e.target.value)}
+            onKeyDown={submitKeys(p)}
+          />
+          <label className="check">
+            <input type="checkbox" aria-label="reuse an existing branch" checked={existing} onChange={(e) => setExisting(e.target.checked)} />
+            Reuse an existing branch (check it out, make none)
+          </label>
+          {!existing && (
+            <input aria-label="start from" className="field" placeholder={p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={submitKeys(p)} />
+          )}
+        </div>
+      )}
+      <datalist id="branch-list">
+        {branchList.map((b) => (
+          <option key={b} value={b} />
+        ))}
+      </datalist>
       <div className="btn-row">
-        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || preview === null || !p}>
-          Create
+        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || !p || (existing ? !branchDraft.trim() : !name.trim() || preview === null)}>
+          Create workspace
         </button>
         <button className="btn" onClick={() => setCreating(null)}>
           Cancel
         </button>
+        <label className="check">
+          <input type="checkbox" aria-label="create more" checked={more} onChange={(e) => setMore(e.target.checked)} />
+          Create more
+        </label>
       </div>
     </div>
   );
@@ -372,6 +539,172 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     }
   };
 
+  // PROJ-042: hide or show one worktree; the poll shows the change, this just does not wait for it.
+  const hide = async (w: Worktree, hidden: boolean) => {
+    try {
+      await invoke("workspace_hide", { path: w.path, hidden });
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const doneReview = async (p: Project) => {
+    try {
+      await invoke("workspace_seen", { projectId: p.id });
+      setReview(null);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  // SET-032 / PROJ-042: which worktrees made outside Kolux show, per source, globally and per project.
+  const loadVis = async (projectId: string | null) => {
+    try {
+      const list = await invoke<VisSource[]>("visibility_get", { projectId });
+      if (projectId) setVisOwn(list);
+      else setVisGlobal(list);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const setVis = async (projectId: string | null, source: string, show: boolean | null) => {
+    try {
+      await invoke("visibility_set", { projectId, source, show });
+      await loadVis(projectId);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const addRoot = async () => {
+    try {
+      await invoke("visibility_root_add", { path: rootPath });
+      setRootPath("");
+      setRootError("");
+      await loadVis(null);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      setRootError(String(err));
+    }
+  };
+  const removeRoot = async (path: string) => {
+    try {
+      await invoke("visibility_root_remove", { path });
+      await loadVis(null);
+      await refreshWorktrees(projects);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const showWord = (b: boolean) => (b ? "Shown" : "Hidden");
+  const globalVis = () => (
+    <div data-visibility-defaults>
+      <label>Worktrees Kolux did not make, by default</label>
+      {visGlobal.map((s) => (
+        <div key={s.key}>
+          <div className="preview" title={s.root ?? s.label}>
+            {s.label}
+          </div>
+          <div className="vis-row">
+          <select aria-label={`default for ${s.label}`} className="field" value={s.global ? "show" : "hide"} onChange={(e) => setVis(null, s.key, e.target.value === "show")}>
+            <option value="hide">Hidden</option>
+            <option value="show">Shown</option>
+          </select>
+          {s.root && (
+            <button className="ib" title={`Stop treating ${s.root} as its own source`} onClick={() => removeRoot(s.root!)}>
+              <Close size={11} />
+            </button>
+          )}
+          </div>
+        </div>
+      ))}
+      <input
+        aria-label="extra root folder"
+        className="field"
+        placeholder="another folder that holds worktrees (starts hidden)"
+        value={rootPath}
+        onChange={(e) => {
+          setRootPath(e.target.value);
+          setRootError("");
+        }}
+        onKeyDown={(e) => e.key === "Enter" && addRoot()}
+      />
+      {rootError && <div className="preview warn">{rootError}</div>}
+      <div className="btn-row">
+        <button className="btn" onClick={addRoot} disabled={!rootPath.trim()}>
+          Add folder
+        </button>
+      </div>
+    </div>
+  );
+  const ownVis = (p: Project) => (
+    <>
+      <label>Worktrees Kolux did not make, in {p.name}</label>
+      {visOwn.map((s) => (
+        <div key={s.key}>
+          <div className="preview" title={s.root ?? s.label}>
+            {s.label}
+          </div>
+          <div className="vis-row">
+          <select aria-label={`${p.name}: ${s.label}`} className="field" value={s.own === null ? "global" : s.own ? "show" : "hide"} onChange={(e) => setVis(p.id, s.key, e.target.value === "global" ? null : e.target.value === "show")}>
+            <option value="global">As global: {showWord(s.global)}</option>
+            <option value="hide">Hidden</option>
+            <option value="show">Shown</option>
+          </select>
+          {s.own !== null && (
+            <button className="btn" title={`Back to the global choice (${showWord(s.global)})`} onClick={() => setVis(p.id, s.key, null)}>
+              Reset
+            </button>
+          )}
+          </div>
+        </div>
+      ))}
+      <button
+        className="link"
+        onClick={() => {
+          setSettingsFor(null);
+          loadVis(null);
+          setShowAdd(true);
+        }}
+      >
+        Global defaults…
+      </button>
+    </>
+  );
+  const PAGE = 10;
+  const hiddenList = (p: Project) => {
+    const all = hiddenWts[p.id] ?? [];
+    const pages = Math.max(1, Math.ceil(all.length / PAGE));
+    const at = Math.min(hiddenPage, pages - 1);
+    return (
+      <>
+        <label>Hidden worktrees ({all.length})</label>
+        {all.length === 0 && <div className="preview">None hidden.</div>}
+        {all.slice(at * PAGE, at * PAGE + PAGE).map((w) => (
+          <div className="vis-row" key={w.path}>
+            <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
+            <button className="btn" onClick={() => hide(w, false)}>
+              Show
+            </button>
+          </div>
+        ))}
+        {pages > 1 && (
+          <div className="btn-row">
+            <button className="btn" disabled={at === 0} onClick={() => setHiddenPage(at - 1)}>
+              Previous
+            </button>
+            <span className="preview">
+              page {at + 1} of {pages}
+            </span>
+            <button className="btn" disabled={at >= pages - 1} onClick={() => setHiddenPage(at + 1)}>
+              Next
+            </button>
+          </div>
+        )}
+      </>
+    );
+  };
+
   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
@@ -412,6 +745,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} />
           <span className="name">{worktreeLabel(w)}</span>
+          {w.kind === "external" && (
+            <span className="hint" title="Made outside Kolux (plain Git or another tool); Kolux has no record of making it">
+              external
+            </span>
+          )}
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
           {!asking && (
             <button
@@ -428,7 +766,19 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           {!asking && !w.isMain && (
             <button
               className="ib"
-              title="Remove this workspace: deletes its branch and folder"
+              title="Hide this worktree from the sidebar (project settings list it to show again)"
+              onClick={(e) => {
+                e.stopPropagation();
+                hide(w, true);
+              }}
+            >
+              <EyeOff size={11} />
+            </button>
+          )}
+          {!asking && !w.isMain && (
+            <button
+              className="ib"
+              title="Remove this workspace: deletes its folder, and its branch unless it was opened on an existing one"
               disabled={busy !== ""}
               onClick={(e) => {
                 e.stopPropagation();
@@ -442,7 +792,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         {asking && (
           <div className="sb-form warn">
             <span>
-              Delete branch <b>{confirm.branch}</b> and its folder?{" "}
+              Remove <b>{confirm.branch}</b> and its folder? Its branch is deleted too, unless the workspace was opened on a branch that already existed.{" "}
               {blocker(confirm.check) ?? (confirm.check.changes.length > 0 ? `${confirm.check.changes.length} uncommitted or untracked change${confirm.check.changes.length === 1 ? "" : "s"} would be lost:` : "Nothing uncommitted is there.")}
             </span>
             {confirm.check.changes.length > 0 && (
@@ -565,10 +915,32 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                   Use default
                 </button>
               </div>
+              <div className="sb-form-head">Git &amp; worktrees</div>
+              <label>Branch prefix</label>
+              <select aria-label="branch prefix" className="field" value={prefixMode} onChange={(e) => onSetting("branchPrefix", e.target.value)}>
+                <option value="user">Git user name, e.g. txais-xiong/</option>
+                <option value="custom">Custom text</option>
+                <option value="none">None: the bare name</option>
+              </select>
+              {prefixMode === "custom" && <input aria-label="custom branch prefix" className="field" placeholder="e.g. tx/" value={prefixDraft} onChange={(e) => setPrefixDraft(e.target.value)} onBlur={() => prefixDraft !== String(settings.branchPrefixCustom ?? "") && onSetting("branchPrefixCustom", prefixDraft)} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />}
+              <div className="note" data-prefix-sample>
+                Next branch: <code>{sample.sample}</code>
+              </div>
+              {sample.note && (
+                <div className="note warn" role="alert">
+                  {sample.note}
+                </div>
+              )}
+              <label>Default compare base</label>
+              <select aria-label="default compare base" className="field" value={settings[SUMMARY_UPSTREAM_KEY] === true ? "upstream" : "default"} onChange={(e) => onSetting(SUMMARY_UPSTREAM_KEY, e.target.value === "upstream")}>
+                <option value="default">Repository default</option>
+                <option value="upstream">Branch upstream</option>
+              </select>
               <label className="check">
                 <input type="checkbox" checked={nest} onChange={(e) => onNest(e.target.checked)} />
                 Nest child workspaces under their parent
               </label>
+              {globalVis()}
             </div>
           )}
 
@@ -627,6 +999,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                     <div className="sb-form" data-project-settings={p.id}>
                       <label>Workspaces folder for {p.name}</label>
                       <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+                      {hiddenList(p)}
+                      {ownVis(p)}
                       <label>Base ref</label>
                       <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
                       <div className="btn-row">
@@ -635,6 +1009,29 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                         </button>
                         <button className="btn" onClick={() => setSettingsFor(null)}>
                           Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
+                    <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
+                      {fresh[p.id].length} new worktree{fresh[p.id].length === 1 ? "" : "s"}
+                    </button>
+                  )}
+                  {review === p.id && (
+                    <div className="sb-form" data-review={p.id}>
+                      <label>New worktrees in {p.name}</label>
+                      {(fresh[p.id] ?? []).map((w) => (
+                        <div className="vis-row" key={w.path}>
+                          <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
+                          <button className="btn" onClick={() => hide(w, !w.hidden)}>
+                            {w.hidden ? "Show" : "Hide"}
+                          </button>
+                        </div>
+                      ))}
+                      <div className="btn-row">
+                        <button className="btn" onClick={() => doneReview(p)}>
+                          Done
                         </button>
                       </div>
                     </div>
@@ -701,7 +1098,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           />
         )}
         <div className="sb-foot">
-          <button className="ib" title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`} aria-pressed={showAdd} onClick={() => setShowAdd((s) => !s)}>
+          <button
+            className="ib"
+            title={`Add a project by path, or change the workspaces folder${gitVersion ? ` · ${gitVersion}` : ""}`}
+            aria-pressed={showAdd}
+            onClick={() => {
+              if (!showAdd) loadVis(null);
+              setShowAdd((s) => !s);
+            }}
+          >
             <Gear />
           </button>
           <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>

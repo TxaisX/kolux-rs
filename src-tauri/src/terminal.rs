@@ -242,6 +242,14 @@ impl Terminals {
         Some(m.program.clone())
     }
 
+    /// CLI-017: every open session as (handle, the folder it started in, its program; none for a shell).
+    pub fn sessions(&self) -> Vec<(String, String, Option<String>)> {
+        let Ok(inner) = self.inner.lock() else { return Vec::new() };
+        let mut ids: Vec<u32> = inner.sessions.keys().copied().collect();
+        ids.sort_unstable();
+        ids.into_iter().filter_map(|id| Some((handle_of(id), inner.dirs.get(&id)?.clone(), inner.marks.get(&id).map(|m| m.program.clone())))).collect()
+    }
+
     /// The folder terminal `handle` was started in (ORCH-014 checks it for base drift).
     pub fn dir_of(&self, handle: &str) -> Option<String> {
         let id = id_of(handle)?;

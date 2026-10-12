@@ -95,6 +95,13 @@ export const Close = (p: P) => (
     <path d="m3.5 3.5 9 9m0-9-9 9" />
   </Glyph>
 );
+export const EyeOff = (p: P) => (
+  <Glyph {...p}>
+    <path d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4Z" />
+    <circle cx="8" cy="8" r="1.8" />
+    <path d="m3 13 10-10" />
+  </Glyph>
+);
 export const List = (p: P) => (
   <Glyph {...p}>
     <path d="M5 4h9M5 8h9M5 12h9M2 4h.01M2 8h.01M2 12h.01" />
