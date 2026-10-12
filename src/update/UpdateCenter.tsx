@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Close, Refresh, Spinner, CheckCircle } from "../chrome/icons";
 import { TICK_MS, UpdateSchedule, type Outcome } from "./schedule";
-import { cardReducer, initialCard, mainAction, tipVisible, type UpdateInfo } from "./card";
+import { cardReducer, initialCard, mainAction, tipVisible, RELEASES_PAGE, type LastLaunch, type UpdateInfo } from "./card";
 
 interface Status {
   enabled: boolean;
@@ -16,6 +16,7 @@ interface Status {
   dismissedVersion: string | null;
   tipDone: boolean;
   ready: UpdateInfo | null;
+  lastLaunch: LastLaunch | null;
 }
 
 const EVENT = "kolux-check-updates";
@@ -79,6 +80,7 @@ export default function UpdateCenter() {
       // Start from what the store remembers.
       dispatch({ type: "hydrate", dismissed: st.dismissedVersion, tipDone: st.tipDone });
       if (st.ready) dispatch({ type: "ready", info: st.ready });
+      else if (st.lastLaunch) dispatch({ type: "lastLaunch", launch: st.lastLaunch });
       if (!st.enabled) return;
       const sched = new UpdateSchedule<UpdateInfo>(
         {
@@ -148,8 +150,16 @@ export default function UpdateCenter() {
     if (s.shown && !s.collapsed && s.requested) cardEl.current?.focus();
   }, [s.shown, s.collapsed, s.requested, s.phase.kind]);
 
-  // On success the app ends here and the installer takes over; a failure means nothing is ready any more.
-  const restart = () => void invoke("update_restart").catch(() => dispatch({ type: "notReady" }));
+  // On success the app ends here and the installer takes over. APP-029: when the installer cannot
+  // start, the card says why and the update stays ready for Try again.
+  const restart = () => {
+    const info = "info" in s.phase ? s.phase.info : null;
+    void invoke("update_restart").catch((e) => {
+      const message = String(e);
+      if (message === "No update is ready.") dispatch({ type: "notReady" });
+      else dispatch({ type: "installFailed", info, message });
+    });
+  };
   const act = () => {
     const a = mainAction(s.phase);
     if (a === "close") dispatch({ type: "faded" });
@@ -172,14 +182,18 @@ export default function UpdateCenter() {
             ? `Downloading Kolux RS ${version}`
             : p.kind === "ready"
               ? `Kolux RS ${version} is ready`
+              : p.kind === "updated"
+                ? `Kolux RS was updated to ${p.version}`
               : p.kind === "error"
-                ? p.retry === "check"
+                ? p.installer || p.retry === "restart"
+                  ? `Kolux RS ${version} did not install`
+                  : p.retry === "check"
                   ? "The update check failed"
                   : `Kolux RS ${version} did not download`
                 : "";
   const pct = p.kind === "downloading" && p.total ? Math.min(100, Math.round((p.received / p.total) * 100)) : null;
   const action = mainAction(p);
-  const actionLabel = action === "restart" ? "Restart to update" : action === "download" ? "Download" : action === "retryCheck" || action === "retryDownload" ? "Try again" : action === "close" ? "OK" : null;
+  const actionLabel = action === "restart" ? (p.kind === "error" ? "Try again" : "Restart to update") : action === "download" ? "Download" : action === "retryCheck" || action === "retryDownload" ? "Try again" : action === "close" ? "OK" : null;
 
   return (
     <>
@@ -235,6 +249,7 @@ export default function UpdateCenter() {
                     <div style={{ width: `${pct ?? 0}%` }} />
                   </div>
                 )}
+                {p.kind === "updated" && <div className="upd-next">What is new in this version:</div>}
                 {s.notes.length > 0 && p.kind !== "checking" && p.kind !== "upToDate" && (
                   <ul className="upd-notes">
                     {s.notes.map((n, i) => (
@@ -248,6 +263,11 @@ export default function UpdateCenter() {
                     <button className={`btn ${action === "restart" || action === "download" ? "primary" : ""}`} onClick={act}>
                       {actionLabel}
                     </button>
+                    {p.kind === "error" && p.installer && (
+                      <button className="btn" onClick={() => void invoke("open_external", { url: RELEASES_PAGE })}>
+                        Download installer
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

@@ -437,6 +437,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
 
+> 2026-10-12 · T-199-a · the APP-028 and APP-029 spec cards, the repo's own update.rs and card.ts, and the tauri-plugin-updater 2.13.3 and tauri sources in the cargo registry (install, extract and the default pre-install hook). Nothing from the old app.
 > 2026-10-12 · T-104-b · the ACCT-065 and ACCT-047 spec cards, the T-104-b plan line and the repo's own pty.rs. Nothing from the old app.
 > 2026-10-12 · T-103-b · the VIEW-036 and SESS-008 spec cards and the T-103-b plan line. Nothing from the old app.
 > 2026-10-12 · T-101-b · the TERM-002 and TERM-009 spec cards and the T-101-b plan line. Nothing from the old app.

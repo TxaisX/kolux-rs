@@ -1,4 +1,4 @@
-//! Updates (APP-024, APP-025, APP-026, APP-027).
+//! Updates (APP-024, APP-025, APP-026, APP-027, APP-028, APP-029).
 //!
 //! The page owns the timetable (start-up, every 30 minutes, retries, offline, focus, wake: see
 //! `src/update/schedule.ts`); this module owns the feed, the signed download and the install.
@@ -13,8 +13,9 @@
 
 use crate::state::Store;
 use crate::terminal::Terminals;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -38,6 +39,13 @@ pub const NOTE_LINES: usize = 6;
 const KEY_LAST_CHECK: &str = "update.lastCheckAt";
 const KEY_DISMISSED: &str = "update.dismissedVersion";
 const KEY_TIP_DONE: &str = "update.tipDone";
+const KEY_ATTEMPT: &str = "update.attempt";
+/// APP-028: an install attempt older than this is not reported at launch.
+pub const ATTEMPT_MAX_AGE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+/// APP-029: the clean-up before the installer runs (ending the shells) gets this long.
+pub const CLEANUP_LIMIT: Duration = Duration::from_secs(3);
+/// APP-029: the old process is forced out this long after Restart to update.
+pub const EXIT_DEADLINE: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Feed {
@@ -117,6 +125,146 @@ fn info_of(u: &Update) -> Info {
 pub struct Updates {
     pending: Mutex<Option<Update>>,
     ready: Mutex<Option<(Update, Vec<u8>)>>,
+    /// APP-029: an install is under way; a second Restart to update is ignored.
+    installing: AtomicBool,
+    watchdog: Watchdog,
+    /// APP-028: what the last install attempt means at this launch, worked out once.
+    launch: OnceLock<Option<LastLaunch>>,
+}
+
+/// APP-028: one install attempt, kept in the store until the next launch reads it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attempt {
+    pub from: String,
+    pub to: String,
+    pub at: u64,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LastLaunch {
+    /// The update took: a one-time note with its notes.
+    Updated { version: String, notes: Vec<String> },
+    /// The version that was installed over is still the one running.
+    Failed { version: String, from: String },
+}
+
+/// APP-028: what an install attempt means for the version now running. Only the version that was
+/// installed over still running is a failure; any other version than the target is a deliberate
+/// move (a pinned or locally built copy) and says nothing; attempts older than seven days are ignored.
+pub fn last_launch(a: &Attempt, running: &str, now: u64) -> Option<LastLaunch> {
+    if now.saturating_sub(a.at) > ATTEMPT_MAX_AGE_MS {
+        return None;
+    }
+    if running == a.to {
+        Some(LastLaunch::Updated { version: a.to.clone(), notes: a.notes.clone() })
+    } else if running == a.from && a.from != a.to {
+        Some(LastLaunch::Failed { version: a.to.clone(), from: a.from.clone() })
+    } else {
+        None
+    }
+}
+
+/// APP-029: forces the old process out at its deadline so it never blocks the installer.
+#[derive(Default)]
+pub struct Watchdog {
+    deadline: Mutex<Option<Instant>>,
+}
+
+impl Watchdog {
+    /// Arms the watchdog for `at`; arming again never moves the deadline later. Returns the
+    /// deadline now in force.
+    pub fn arm(&self, at: Instant) -> Instant {
+        let mut d = self.deadline.lock().unwrap_or_else(|e| e.into_inner());
+        let v = d.map_or(at, |d| d.min(at));
+        *d = Some(v);
+        v
+    }
+    pub fn stand_down(&self) {
+        *self.deadline.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+    /// `None` once stood down; otherwise whether the deadline has passed.
+    pub fn due(&self, now: Instant) -> Option<bool> {
+        self.deadline.lock().unwrap_or_else(|e| e.into_inner()).map(|d| now >= d)
+    }
+}
+
+fn arm_watchdog(app: &AppHandle) {
+    app.state::<Updates>().watchdog.arm(Instant::now() + EXIT_DEADLINE);
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_millis(250));
+        match app.state::<Updates>().watchdog.due(Instant::now()) {
+            None => return,
+            Some(true) => std::process::exit(0),
+            Some(false) => {}
+        }
+    });
+}
+
+/// APP-029: the clean-up before quitting, held to `CLEANUP_LIMIT` so the restart is not held up.
+fn cleanup(app: &AppHandle) {
+    let (tx, rx) = mpsc::channel();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        app.state::<Terminals>().kill_all();
+        let _ = tx.send(());
+    });
+    let _ = rx.recv_timeout(CLEANUP_LIMIT);
+}
+
+/// APP-029: why the installer could not run, in plain words, with paths, addresses' queries and
+/// anything that looks like a secret taken out.
+pub fn clean_reason(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+    let cause = if lower.contains("os error 1223") || lower.contains("canceled by the user") || lower.contains("cancelled by the user") {
+        "Windows asked for permission to run the installer and the request was refused, so nothing changed."
+    } else if lower.contains("os error 5)") || lower.contains("access is denied") || lower.contains("permission denied") {
+        "Kolux RS does not have permission to run the installer, so nothing changed."
+    } else if lower.contains("os error 2)") || lower.contains("cannot find the file") || lower.contains("no such file") {
+        "The downloaded installer is gone; another program may have removed it."
+    } else {
+        "The installer could not start, so nothing changed."
+    };
+    // Windows fills some messages from a template whose "%1" never got its file name.
+    let raw = raw.replace("%1", "the installer");
+    let said = raw
+        .split(' ')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let bare = w.trim_matches(|c: char| "\"'()[]{},;".contains(c));
+            let path = bare.contains('\\') || bare.starts_with("~/") || (bare.starts_with('/') && bare.len() > 1) || bare.contains(":/");
+            let url = bare.starts_with("http://") || bare.starts_with("https://");
+            let secret = bare.len() >= 24 && bare.chars().any(|c| c.is_ascii_digit()) && bare.chars().all(|c| c.is_ascii_alphanumeric() || "-_.=+/".contains(c));
+            if url {
+                w.replace(bare, bare.split(['?', '#']).next().unwrap_or(""))
+            } else if path {
+                w.replace(bare, "<path>")
+            } else if secret {
+                w.replace(bare, "<hidden>")
+            } else {
+                w.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if said.is_empty() { cause.into() } else { format!("{cause} ({said})") }
+}
+
+fn record_attempt(app: &AppHandle, u: &Update) {
+    let a = Attempt { from: u.current_version.clone(), to: u.version.clone(), at: now_ms(), notes: clean_notes(u.body.as_deref()) };
+    if let (Ok(store), Ok(json)) = (app.state::<Mutex<Store>>().lock(), serde_json::to_string(&a)) {
+        let _ = store.set(KEY_ATTEMPT, &json);
+    }
+}
+
+fn clear_attempt(app: &AppHandle) {
+    if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+        let _ = store.set(KEY_ATTEMPT, "");
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -129,6 +277,7 @@ pub struct Status {
     dismissed_version: Option<String>,
     tip_done: bool,
     ready: Option<Info>,
+    last_launch: Option<LastLaunch>,
 }
 
 #[tauri::command]
@@ -136,7 +285,18 @@ pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: St
     let feed = this_feed();
     let store = store.lock().map_err(|e| e.to_string())?;
     let get = |k: &str| store.get(k).ok().flatten();
+    let current = app.package_info().version.to_string();
+    // APP-028: read once per launch, then forgotten, so the note shows on this launch only.
+    let last = updates
+        .launch
+        .get_or_init(|| {
+            let a = get(KEY_ATTEMPT).and_then(|v| serde_json::from_str::<Attempt>(&v).ok())?;
+            let _ = store.set(KEY_ATTEMPT, "");
+            last_launch(&a, &current, now_ms())
+        })
+        .clone();
     Ok(Status {
+        last_launch: last,
         enabled: feed.is_ok(),
         reason: feed.err(),
         current_version: app.package_info().version.to_string(),
@@ -173,6 +333,10 @@ pub async fn update_check(app: AppHandle) -> Result<Option<Info>, String> {
         .map_err(|e| e.to_string())?
         .pubkey(feed.pubkey)
         .timeout(CHECK_TIMEOUT)
+        // APP-029: the plugin's own hook hides every window and clears its resources before the
+        // installer starts, which leaves a hidden, broken app when the installer then cannot start.
+        // The process ends straight after a good start, so nothing needs tidying first.
+        .on_before_exit(|| {})
         .build()
         .map_err(|e| e.to_string())?
         .check()
@@ -222,21 +386,52 @@ pub async fn update_download(app: AppHandle) -> Result<Info, String> {
     Ok(info)
 }
 
-/// Restart to update: the shells end, the installer runs and starts the new version.
+/// Restart to update: the shells end, the installer runs and starts the new version (APP-029).
+/// The attempt is recorded for the next launch (APP-028) and a watchdog forces this process out
+/// at its deadline. When the installer cannot start, the watchdog stands down, the update stays
+/// ready and the real reason comes back; a second click while an install is under way is ignored.
 #[tauri::command]
 pub fn update_restart(app: AppHandle) -> Result<(), String> {
-    let ready = app.state::<Updates>().ready.lock().map_err(|e| e.to_string())?.take();
-    let Some((update, bytes)) = ready else { return Err("No update is ready.".into()) };
-    app.state::<Terminals>().kill_all();
-    // On Windows this starts the installer and ends this process.
-    update.install(&bytes).map_err(|e| e.to_string())?;
-    app.restart();
+    let updates = app.state::<Updates>();
+    if updates.installing.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let ready = updates.ready.lock().map_err(|e| e.to_string())?.take();
+    let Some((update, bytes)) = ready else {
+        updates.installing.store(false, Ordering::SeqCst);
+        return Err("No update is ready.".into());
+    };
+    record_attempt(&app, &update);
+    arm_watchdog(&app);
+    // On Windows this starts the installer and ends this process, which ends its shells with it;
+    // the shells are not ended first, so an installer that cannot start leaves every pane running.
+    match update.install(&bytes) {
+        Ok(()) => {
+            cleanup(&app);
+            app.restart()
+        }
+        Err(e) => {
+            updates.watchdog.stand_down();
+            clear_attempt(&app);
+            if let Ok(mut r) = updates.ready.lock() {
+                *r = Some((update, bytes));
+            }
+            updates.installing.store(false, Ordering::SeqCst);
+            Err(clean_reason(&e.to_string()))
+        }
+    }
 }
 
-/// Called as the app quits: a downloaded update installs now and does not reopen the app.
+/// Called as the app quits: a downloaded update installs now and does not reopen the app. The
+/// attempt is recorded so the next launch can tell whether it took (APP-028).
 pub fn install_on_quit(app: &AppHandle) {
-    let ready = app.state::<Updates>().ready.lock().ok().and_then(|mut r| r.take());
+    let updates = app.state::<Updates>();
+    if updates.installing.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let ready = updates.ready.lock().ok().and_then(|mut r| r.take());
     if let Some((update, bytes)) = ready {
+        record_attempt(app, &update);
         let _ = update.restart_after_install(false).install(&bytes);
     }
 }
@@ -274,6 +469,48 @@ mod tests {
             Ok(f) => assert_eq!(f.endpoint, RELEASE_ENDPOINT, "a release build must never read the test feed"),
             Err(e) => assert!(e.contains("signing key"), "{e}"),
         }
+    }
+
+    #[test]
+    fn app028_the_next_launch_tells_a_failed_install_from_a_good_one() {
+        let a = Attempt { from: "0.1.4".into(), to: "0.1.5".into(), at: 1_000, notes: vec!["New".into()] };
+        assert_eq!(last_launch(&a, "0.1.5", 2_000), Some(LastLaunch::Updated { version: "0.1.5".into(), notes: vec!["New".into()] }));
+        assert_eq!(last_launch(&a, "0.1.4", 2_000), Some(LastLaunch::Failed { version: "0.1.5".into(), from: "0.1.4".into() }));
+        // A move to a pinned or locally built version is never a failure.
+        assert_eq!(last_launch(&a, "0.1.3", 2_000), None);
+        assert_eq!(last_launch(&a, "0.2.0-local", 2_000), None);
+        // Older than seven days: ignored; just inside: reported.
+        assert_eq!(last_launch(&a, "0.1.4", 1_000 + ATTEMPT_MAX_AGE_MS + 1), None);
+        assert!(last_launch(&a, "0.1.4", 1_000 + ATTEMPT_MAX_AGE_MS).is_some());
+        let round: Attempt = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(round, a);
+    }
+
+    #[test]
+    fn app029_arming_the_watchdog_again_never_moves_its_deadline_later() {
+        let w = Watchdog::default();
+        let t = Instant::now();
+        assert_eq!(w.due(t), None);
+        assert_eq!(w.arm(t + Duration::from_secs(10)), t + Duration::from_secs(10));
+        assert_eq!(w.arm(t + Duration::from_secs(30)), t + Duration::from_secs(10));
+        assert_eq!(w.arm(t + Duration::from_secs(5)), t + Duration::from_secs(5));
+        assert_eq!(w.due(t + Duration::from_secs(4)), Some(false));
+        assert_eq!(w.due(t + Duration::from_secs(5)), Some(true));
+        w.stand_down();
+        assert_eq!(w.due(t + Duration::from_secs(60)), None);
+    }
+
+    #[test]
+    fn app029_the_reason_names_the_permission_problem_without_paths_or_secrets() {
+        let r = clean_reason("The operation was canceled by the user. (os error 1223)");
+        assert!(r.starts_with("Windows asked for permission"), "{r}");
+        let r = clean_reason("Access is denied. (os error 5) C:\\Users\\Xiong T\\AppData\\Local\\Temp\\kolux-rs-setup.exe");
+        assert!(r.starts_with("Kolux RS does not have permission"), "{r}");
+        assert!(!r.contains("Users") && !r.contains("Temp") && r.contains("<path>"), "{r}");
+        let r = clean_reason("request to https://example.com/latest.json?token=abc failed, key ghp_0123456789abcdefABCDEF0123");
+        assert!(r.contains("https://example.com/latest.json") && !r.contains("token=abc") && !r.contains("ghp_0123") && r.contains("<hidden>"), "{r}");
+        assert!(clean_reason("invalid updater binary format").starts_with("The installer could not start"));
+        assert!(!clean_reason("This version of %1 is not compatible (os error 216)").contains("%1"));
     }
 
     #[test]

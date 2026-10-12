@@ -380,7 +380,9 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme 8 · Release, update and CI pipeline (4 cards)
 
-- [ ] T-199 · APP-028 A failed update install is reported at the next launch, with a retry · APP-029 Restart to update either installs or explains why it could not · APP-031 Update download problems fix themselves or offer a fix · APP-061 Packaged builds are smoke-tested before they are published
+- [x] T-199-a · APP-028 A failed update install is reported at the next launch, with a retry · APP-029 Restart to update either installs or explains why it could not
+- [ ] T-199-b · APP-031 Update download problems fix themselves or offer a fix
+- [ ] T-199-c · APP-061 Packaged builds are smoke-tested before they are published
 
 ### P1 · theme 6 · Business-user frame (33 cards)
 

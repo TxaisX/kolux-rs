@@ -157,3 +157,38 @@ describe("ready pop-up (APP-025)", () => {
     expect(s.popup).toBeNull();
   });
 });
+
+describe("install outcome (APP-028, APP-029)", () => {
+  it("APP-028: a failed install shows at the next launch with Try again and the installer link", () => {
+    const s = run(initialCard(null, true), { type: "lastLaunch", launch: { kind: "failed", version: "0.1.5", from: "0.1.4" } });
+    expect(s.shown).toBe(true);
+    expect(s.phase.kind).toBe("error");
+    if (s.phase.kind !== "error") throw new Error("not an error");
+    expect(s.phase.installer).toBe(true);
+    expect(s.phase.info?.version).toBe("0.1.5");
+    expect(s.phase.next).toContain("0.1.4");
+    expect(mainAction(s.phase)).toBe("retryCheck");
+  });
+
+  it("APP-028: a good install shows a one-time updated note with its notes that OK closes", () => {
+    let s = run(initialCard(null, true), { type: "lastLaunch", launch: { kind: "updated", version: "0.1.5", notes: ["New thing"] } });
+    expect(s.phase).toEqual({ kind: "updated", version: "0.1.5" });
+    expect(s.notes).toEqual(["New thing"]);
+    expect(mainAction(s.phase)).toBe("close");
+    s = run(s, { type: "faded" });
+    expect(s.shown).toBe(false);
+    expect(s.phase.kind).toBe("idle");
+  });
+
+  it("APP-029: an installer that cannot start keeps the update ready behind Try again and names the reason", () => {
+    let s = run(initialCard(null, true), { type: "ready", info: info("0.1.5") });
+    expect(s.popup).toBe("0.1.5");
+    s = run(s, { type: "installFailed", info: info("0.1.5"), message: "Windows asked for permission to run the installer and the request was refused, so nothing changed." });
+    expect(s.popup).toBe(null);
+    expect(s.shown).toBe(true);
+    if (s.phase.kind !== "error") throw new Error("not an error");
+    expect(s.phase.message).toContain("permission");
+    expect(s.phase.next).toContain("stays open");
+    expect(mainAction(s.phase)).toBe("restart");
+  });
+});

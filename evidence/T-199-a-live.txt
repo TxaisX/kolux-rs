@@ -1,0 +1,45 @@
+T-199-a live proof, 2026-10-12, lane dev app (com.txaisxiong.kolux-rs.release, port 1422)
+Set-up: a stub update feed on 127.0.0.1:9333 offering 0.2.0 (the dev copy runs 0.1.0), signed
+with a throwaway minisign key (signed for version 0.2.0, as requireSignedVersion wants), pointed
+at by KOLUX_RS_UPDATE_ENDPOINT / KOLUX_RS_UPDATE_PUBKEY. Two stub installers: bad.exe (an "MZ"
+header and filler, which Windows refuses to start) and noop.exe (a copy of whoami.exe, which
+starts, ignores the installer flags and exits without installing anything). Lane profile backed
+up first and restored after (settings.json, state.db, -wal, -shm: cmp same).
+
+APP-029 Restart to update either installs or explains why it could not.
+- bad.exe: the ready pop-up's Restart to update clicked twice in a row. The app stayed open and
+  visible, both pane shells (powershell 47556, 23912) still running afterwards, and the card read:
+  "Kolux RS 0.2.0 did not install / The installer could not start, so nothing changed. (This
+  version of %1 is not compatible with the version of Windows you're running... (os error 216)) /
+  Kolux RS stays open and your work is untouched. Fix the cause, then press Try again. / Try again"
+  (T-199-a-install-failed-now.png; the "%1" left by Windows' template now reads "the installer").
+- Found on the way: the updater plugin's own pre-install hook hides every window and clears its
+  resources before the installer starts, so a failed start left an invisible app (window
+  vis=False). Kolux RS now replaces that hook; after the fix the window stayed visible.
+- noop.exe: Restart to update clicked at 11:17:24; the process was gone within 0.5 s, and the
+  four child processes (two shells, two console hosts) went with it, so the shells need no
+  separate ending first.
+- Not checked live: refusing an elevation request (the per-user installer asks for none, and the
+  Windows permission prompt cannot be driven from a script); unit test
+  update::tests::app029_the_reason_names_the_permission_problem_without_paths_or_secrets covers
+  the wording for os error 1223 / 5 and that paths, query strings and secret-like words are cut.
+  update::tests::app029_arming_the_watchdog_again_never_moves_its_deadline_later covers the watchdog.
+
+APP-028 A failed update install is reported at the next launch, with a retry.
+- After the noop.exe run, state.db held update.attempt =
+  {"from":"0.1.0","to":"0.2.0","at":1791829044646,"notes":["Faster panes","Calmer update card"]}.
+- Next launch (still 0.1.0): "Kolux RS 0.2.0 did not install / The update did not install.
+  Another program may have been using Kolux RS's files, or the installer was stopped. / You are
+  still on 0.1.0. Press Try again to fetch it once more, or download the installer. / Try again /
+  Download installer" (T-199-a-failed-at-launch.png). Try again ran a check and a download
+  (feed log: /latest.json, /noop.exe) and the card moved to "Kolux RS 0.2.0 is ready"; the record
+  was emptied on that launch (update.attempt = "").
+- Good install: with update.attempt = {"from":"0.0.9","to":"0.1.0",...} written while the app was
+  closed, the launch showed "Kolux RS was updated to 0.1.0 / What is new in this version: / Panes
+  keep running while an update fails to start / A failed install is reported at the next launch /
+  OK" (T-199-a-updated-note.png); OK closed it; the launch after that showed no card and no pop-up
+  (T-199-a-note-gone.png).
+- The locking program is never named (no clean-room way to learn it yet), so the notice uses the
+  general wording the card allows (DT-R42). Unit test
+  update::tests::app028_the_next_launch_tells_a_failed_install_from_a_good_one covers the seven-day
+  limit and that a move to any other version (pinned or local build) is not a failure.

@@ -1,4 +1,4 @@
-// APP-025 / APP-026 / APP-027: what the update card and the ready pop-up show. A pure reducer
+// APP-025 / APP-026 / APP-027 / APP-028 / APP-029: what the update card and the ready pop-up show. A pure reducer
 // (card.test.ts); UpdateCenter.tsx wires it to the timetable and the back end.
 
 export interface UpdateInfo {
@@ -15,7 +15,14 @@ export type Phase =
   | { kind: "available"; info: UpdateInfo }
   | { kind: "downloading"; info: UpdateInfo; received: number; total: number | null }
   | { kind: "ready"; info: UpdateInfo }
-  | { kind: "error"; message: string; next: string; info: UpdateInfo | null; retry: "check" | "download" };
+  | { kind: "updated"; version: string }
+  | { kind: "error"; message: string; next: string; info: UpdateInfo | null; retry: "check" | "download" | "restart"; installer?: boolean };
+
+/** APP-028: what the last install attempt means at this launch (update_status). */
+export type LastLaunch = { kind: "updated"; version: string; notes: string[] } | { kind: "failed"; version: string; from: string };
+
+/** Where the installer can be fetched by hand. */
+export const RELEASES_PAGE = "https://github.com/TxaisX/kolux-rs-releases/releases/latest";
 
 export interface CardState {
   phase: Phase;
@@ -45,6 +52,8 @@ export type Action =
   | { type: "ready"; info: UpdateInfo }
   | { type: "downloadFailed"; info: UpdateInfo; message: string; offline: boolean }
   | { type: "notReady" }
+  | { type: "installFailed"; info: UpdateInfo | null; message: string }
+  | { type: "lastLaunch"; launch: LastLaunch }
   | { type: "faded" }
   | { type: "collapse" }
   | { type: "expand" }
@@ -143,10 +152,39 @@ export function cardReducer(s: CardState, a: Action): CardState {
         phase: { kind: "error", message: plainError(a.message), next: nextStep(a.offline, "download"), info: a.info, retry: "download" },
       };
     }
+    case "installFailed":
+      // APP-029: the installer could not start; the app stays open, the update stays ready.
+      return {
+        ...s,
+        popup: null,
+        requested: true,
+        shown: true,
+        collapsed: false,
+        phase: { kind: "error", message: a.message, next: "Kolux RS stays open and your work is untouched. Fix the cause, then press Try again.", info: a.info, retry: "restart" },
+      };
+    case "lastLaunch": {
+      // APP-028: shown once, at the launch after an install attempt.
+      const l = a.launch;
+      if (l.kind === "updated") return { ...s, shown: true, collapsed: false, notes: l.notes, phase: { kind: "updated", version: l.version } };
+      return {
+        ...s,
+        shown: true,
+        collapsed: false,
+        notes: [],
+        phase: {
+          kind: "error",
+          message: "The update did not install. Another program may have been using Kolux RS's files, or the installer was stopped.",
+          next: `You are still on ${l.from}. Press Try again to fetch it once more, or download the installer.`,
+          info: { version: l.version, currentVersion: l.from, notes: [] },
+          retry: "check",
+          installer: true,
+        },
+      };
+    }
     case "notReady":
       return { ...s, popup: null, phase: s.phase.kind === "ready" ? { kind: "idle" } : s.phase };
     case "faded":
-      return s.phase.kind === "upToDate" ? { ...s, shown: false, requested: false, phase: { kind: "idle" } } : s;
+      return s.phase.kind === "upToDate" || s.phase.kind === "updated" ? { ...s, shown: false, requested: false, phase: { kind: "idle" } } : s;
     case "collapse":
       return s.shown ? { ...s, collapsed: true } : s;
     case "expand":
@@ -181,13 +219,14 @@ export function tipVisible(s: CardState): boolean {
 export function mainAction(p: Phase): "close" | "download" | "restart" | "retryCheck" | "retryDownload" | null {
   switch (p.kind) {
     case "upToDate":
+    case "updated":
       return "close";
     case "available":
       return "download";
     case "ready":
       return "restart";
     case "error":
-      return p.retry === "check" ? "retryCheck" : "retryDownload";
+      return p.retry === "check" ? "retryCheck" : p.retry === "restart" ? "restart" : "retryDownload";
     default:
       return null;
   }
