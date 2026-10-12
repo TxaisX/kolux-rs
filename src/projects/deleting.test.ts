@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { asksBeforeDelete, blocker, isClean, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, deleteTarget, isClean, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 
 const clean: RemoveCheck = { changes: [], locked: null, nested: [], stamp: "h|" };
 
@@ -25,4 +25,10 @@ test("at most five changes are listed, with a count of the rest", () => {
   const many = { ...clean, changes: ["1", "2", "3", "4", "5", "6", "7"] };
   expect(shownChanges(many)).toEqual({ lines: ["1", "2", "3", "4", "5"], more: 2 });
   expect(shownChanges(clean)).toEqual({ lines: [], more: 0 });
+});
+
+test("VIEW-048: the shortcut deletes the hovered workspace before the active one", () => {
+  expect(deleteTarget("G:/ws/b", "G:/ws/a")).toBe("G:/ws/b");
+  expect(deleteTarget(null, "G:/ws/a")).toBe("G:/ws/a");
+  expect(deleteTarget(null, null)).toBe(null);
 });

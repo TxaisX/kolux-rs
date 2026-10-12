@@ -205,7 +205,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-109-c · The rest of the Create card on T-109-a: a failed worktree creation is retried according to policy, and cancelling mid-submit leaves no half-built workspace
 - [ ] T-110 · STAT-039 The agent's first real work names a new worktree · STAT-055 [compat] Setup and archive scripts for worktrees
 - [x] T-111-a · VIEW-068 Branch summary against the base branch
-- [ ] T-111-b · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette · VIEW-048 [compat] Delete-workspace and rename-tab shortcuts (needs the worktree palette on T-098, a tab-rename field, and workspace delete on T-055)
+- [x] T-111-b · VIEW-048 [compat] Delete-workspace and rename-tab shortcuts (the delete half; its Mod+R rename of the active tab moves to the tab-rename task T-119)
+- [ ] T-111-c · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette (needs the worktree palette on T-098)
 - [ ] T-112 · VIEW-076 Folder workspaces: attached worktrees and PR checks · VIEW-112 [compat] Import setup scripts from other tools' configs
 - [x] T-113-a · ACCT-056 A failed scan never drops worktrees from the list (the sidebar half)
 - [ ] T-113-b · The cleanup half of the failed-scan card on T-113-a: cleanup offers and removes only worktrees Kolux can show it made (its origin record), and a worktree Kolux did not create is left in place; built with the cleanup dialog on T-162
@@ -221,7 +222,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme 3 · Knowing what each agent is doing (57 cards)
 
-- [ ] T-119 · TERM-027 [compat] Name a pane · TERM-029 Needs you strip above the grid · TERM-048 [compat] Rename a tab · TERM-058 Tab titles follow the running program · TERM-063 Floating button shows pending activity · also: the rest of T-036's card: the automatic tab titles switch (off by default) sits on Settings > Agents
+- [ ] T-119 · TERM-027 [compat] Name a pane · TERM-029 Needs you strip above the grid · TERM-048 [compat] Rename a tab · TERM-058 Tab titles follow the running program · TERM-063 Floating button shows pending activity · also: the rest of T-036's card: the automatic tab titles switch (off by default) sits on Settings > Agents · also: the delete-workspace and rename-tab shortcuts card's Mod+R, which makes the active chat or terminal tab's title editable (T-111-b built the delete half)
 - [ ] T-120 · STAT-002 [compat] Settings switch for agent status hooks · STAT-003 [compat] `kolux agent hooks` commands · STAT-009 [compat] Gemini CLI status · STAT-010 [compat] Antigravity status · STAT-011 [compat] Amp status through a Kolux plugin · also: the rest of T-036's card: the status hooks switch (on by default) sits on Settings > Agents
 - [ ] T-121 · STAT-012 [compat] Cursor Agent status · STAT-013 [compat] Droid status · STAT-014 [compat] Command Code status from tool events and its transcript · STAT-015 [compat] Kimi status in a marked block of its settings · STAT-016 [compat] Hermes status through a switched-on plugin
 - [ ] T-122 · STAT-017 [compat] Copilot CLI status · STAT-018 [compat] Grok status, with its hook settings removed at quit · STAT-019 [compat] Devin status in its commented settings file · STAT-020 [compat] MiMo Code status through a plugin in a separate home · STAT-021 Pi and OMP status and titles through Kolux extensions

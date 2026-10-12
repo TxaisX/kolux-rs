@@ -8,6 +8,7 @@
 //        node cdp.mjs <targetMatch> insert "<text>" [enter]   (one edit, emoji safe)
 //        node cdp.mjs <targetMatch> key <Enter|Escape|...> [mods: Alt=1 Ctrl=2 Shift=8]
 //        node cdp.mjs <targetMatch> focus "<css selector>"
+//        node cdp.mjs <targetMatch> hover "<css selector>"   (moves the pointer to its centre)
 // targetMatch is a substring of the target's url or title; "main" = the localhost dev page.
 const PORT = process.env.CDP_PORT || "9222";
 const [match, cmd, ...rest] = process.argv.slice(2);
@@ -28,7 +29,7 @@ ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id && waiting.has(
 const send = (method, params = {}) => new Promise((r) => { const i = ++id; waiting.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const KEYS = { Enter: { code: "Enter", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }, Escape: { code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 }, Tab: { code: "Tab", key: "Tab", windowsVirtualKeyCode: 9 } };
+const KEYS = { Enter: { code: "Enter", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }, Escape: { code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 }, Tab: { code: "Tab", key: "Tab", windowsVirtualKeyCode: 9 }, Backspace: { code: "Backspace", key: "Backspace", windowsVirtualKeyCode: 8 } };
 const key = async (name, mods = 0) => {
   const k = KEYS[name] || { code: "Key" + name.toUpperCase(), key: name, windowsVirtualKeyCode: name.toUpperCase().charCodeAt(0) };
   await send("Input.dispatchKeyEvent", { type: "keyDown", modifiers: mods, ...k });
@@ -58,6 +59,12 @@ if (cmd === "eval") {
   // mods: Alt=1, Ctrl=2, Meta=4, Shift=8
   await key(rest[0], Number(rest[1] || 0));
   console.log("key", rest[0], rest[1] || "");
+} else if (cmd === "hover") {
+  const r = await send("Runtime.evaluate", { expression: `(()=>{const e=document.querySelector(${JSON.stringify(rest[0])}); if(!e) return null; const b=e.getBoundingClientRect(); return [b.x+b.width/2,b.y+b.height/2];})()`, returnByValue: true });
+  const at = r.result?.result?.value;
+  if (!at) { console.error("missing", rest[0]); process.exit(1); }
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] });
+  console.log("hover", at.join(","));
 } else {
   console.error("unknown cmd", cmd); process.exit(2);
 }

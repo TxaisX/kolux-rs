@@ -25,3 +25,6 @@ export const skipsQuestion = (c: RemoveCheck, settings: Record<string, unknown>)
 export function shownChanges(c: RemoveCheck, max = 5): { lines: string[]; more: number } {
   return { lines: c.changes.slice(0, max), more: Math.max(0, c.changes.length - max) };
 }
+
+/** VIEW-048: the workspace the delete shortcut acts on; the row under the pointer wins over the one shown. */
+export const deleteTarget = (hovered: string | null, active: string | null) => hovered ?? active;

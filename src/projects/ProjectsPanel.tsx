@@ -17,7 +17,7 @@
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { blocker, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
@@ -387,12 +387,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     if (createRequest > 0) setCreating(projectInFront());
   }, [createRequest]);
   useEffect(() => {
-    if (deleteRequest === 0 || activeDir === null) return;
+    // VIEW-048: the row under the pointer, read at key time so a row that just went away never counts
+    const hovered = [...document.querySelectorAll<HTMLElement>("[data-path]:hover")].pop()?.dataset.path ?? null;
+    const target = deleteTarget(hovered, activeDir);
+    if (deleteRequest === 0 || target === null) return;
     for (const p of projects) {
-      const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(activeDir, x.path));
+      const w = (worktrees[p.id] ?? []).find((x) => !x.isMain && same(target, x.path));
       if (w) return void ask(p.id, w.path, worktreeLabel(w));
     }
-    say("warn", "The workspace shown is not one Kolux can delete (a main checkout, or no workspace).");
+    say("warn", `The workspace ${hovered === null ? "shown" : "under the pointer"} is not one Kolux can delete (a main checkout, or no workspace).`);
   }, [deleteRequest]);
   // SESS-035: Recent (projects the composer made workspaces in), then the rest by match, then Add project.
   const projectItems = (q: string): PickItem[] => {
@@ -728,7 +731,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const un = isUnread(w);
     const shut = shutKids.has(w.path);
     return (
-      <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth}>
+      <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
         <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
