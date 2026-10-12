@@ -25,6 +25,10 @@ pub const GRACE_MINUTES: [u64; 7] = [0, 30, 60, 180, 720, 1440, 2880];
 const KEEP_RUNS: usize = 100;
 /// A due time older than this was missed, not merely caught late by the half-minute clock.
 const ON_TIME_MS: i64 = 120_000;
+/// AUTO-008: how long a precheck may take, in seconds; the first is the default.
+pub const PRECHECK_SECONDS: [u64; 4] = [60, 120, 300, 600];
+/// The end of a precheck's output kept with its skipped run.
+const KEEP_OUTPUT: usize = 4000;
 
 pub fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
@@ -167,6 +171,16 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         position(&all, &id)?
     };
     let grace = grace.unwrap_or_else(|| all[i]["missedRunGraceMinutes"].as_u64().unwrap_or(0));
+    let t = &input["precheckTimeoutSeconds"];
+    let limit = match t.is_null() {
+        true => all[i]["precheckTimeoutSeconds"].as_u64().unwrap_or(PRECHECK_SECONDS[0]),
+        false => t.as_u64().or_else(|| t.as_str()?.trim().parse().ok()).filter(|t| PRECHECK_SECONDS.contains(t)).ok_or("a precheck may take 1, 2, 5 or 10 minutes")?,
+    };
+    // Empty clears the precheck; left out on an edit keeps the old one.
+    let precheck = match input["precheck"].is_null() {
+        true => all[i]["precheck"].as_str().unwrap_or_default().to_string(),
+        false => text("precheck"),
+    };
     let row = &mut all[i];
     let enabled = input["enabled"].as_bool().unwrap_or(row["enabled"].as_bool().unwrap_or(true));
     for (k, v) in [
@@ -181,6 +195,8 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         ("trigger", timing["trigger"].clone()),
         ("nextRunAt", timing["nextRunAt"].clone()),
         ("missedRunGraceMinutes", json!(grace)),
+        ("precheck", json!(precheck)),
+        ("precheckTimeoutSeconds", json!(limit)),
         ("enabled", json!(enabled)),
     ] {
         row[k] = v;
@@ -356,8 +372,9 @@ pub struct Launch<'a> {
 /// placed and handed to the window as a background tab (`dispatched`, AUTO-011), or ends as
 /// skipped (`unavailable`) when its project or worktree vanishes on the way, or failed to dispatch
 /// when the agent cannot start. AUTO-022: a target that is not ready refuses Run now with the
-/// reason and leaves no run behind; a timed run is logged as skipped with it instead. The precheck
-/// (AUTO-008, T-192) is never run for a manual run.
+/// reason and leaves no run behind; a timed run is logged as skipped with it instead. AUTO-008: a
+/// timed or event-started run first runs the automation's precheck in its target folder and is
+/// skipped with the exit code and output when it fails; Run now never runs it.
 pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
     let (auto, run) = {
         let store = l.store.lock().map_err(|e| e.to_string())?;
@@ -375,6 +392,27 @@ pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
         }
         (auto, new_run(&store, id, trigger)?)
     };
+    let check = auto["precheck"].as_str().map(str::trim).unwrap_or_default();
+    if trigger != "manual" && !check.is_empty() {
+        let dir = match auto["workspaceMode"] == "new-per-run" {
+            true => {
+                let store = l.store.lock().map_err(|e| e.to_string())?;
+                projects::load_projects(&store).into_iter().find(|p| auto["projectId"] == p.id.as_str()).map(|p| p.path).unwrap_or_default()
+            }
+            false => auto["workspace"].as_str().unwrap_or_default().to_string(),
+        };
+        let limit = std::time::Duration::from_secs(auto["precheckTimeoutSeconds"].as_u64().unwrap_or(PRECHECK_SECONDS[0]));
+        // ponytail: the clock runs automations one after another, so a slow precheck holds up the
+        // next due run by up to its limit; give each run its own thread if that ever matters.
+        if let Some(fields) = run_precheck(check, Path::new(&dir), limit) {
+            let store = l.store.lock().map_err(|e| e.to_string())?;
+            reschedule(&store, id, now_ms() as i64)?;
+            let out = patch_run(&store, run["id"].as_str().unwrap_or_default(), fields)?;
+            drop(store);
+            (l.notify)(EVENT, json!({ "runId": out["id"] }));
+            return Ok(out);
+        }
+    }
     let run_id = run["id"].as_str().unwrap_or_default().to_string();
     (l.notify)(EVENT, json!({ "runId": run_id }));
     let outcome = place_and_start(l, &auto);
@@ -390,6 +428,79 @@ pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
     };
     (l.notify)(EVENT, json!({ "runId": run_id }));
     Ok(done)
+}
+
+/// AUTO-008: runs a precheck command in `dir` (PowerShell on Windows, `sh` elsewhere, never a
+/// window on screen) and stops it, with everything it started, at `limit`. None when it exits 0;
+/// otherwise the skipped run's fields, with the exit code and the end of what it printed.
+fn run_precheck(cmd: &str, dir: &Path, limit: std::time::Duration) -> Option<Value> {
+    use std::process::{Command, Stdio};
+    let log = std::env::temp_dir().join(format!("kolux-precheck-{}-{}.log", std::process::id(), now_ms()));
+    let skipped = |exit: Value, timed_out: bool, output: String, detail: String| Some(json!({ "status": "skipped", "cause": "precheck", "exitCode": exit, "timedOut": timed_out, "output": output, "detail": detail }));
+    let file = match std::fs::File::create(&log) {
+        Ok(f) => f,
+        Err(e) => return skipped(Value::Null, false, String::new(), format!("the precheck could not start: {e}")),
+    };
+    let mut c = if cfg!(windows) { Command::new("powershell.exe") } else { Command::new("sh") };
+    if cfg!(windows) {
+        c.args(["-NoProfile", "-NonInteractive", "-Command", cmd]);
+    } else {
+        c.args(["-c", cmd]);
+    }
+    c.current_dir(dir).stdin(Stdio::null());
+    if let Ok(copy) = file.try_clone() {
+        c.stdout(copy).stderr(file);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = match c.spawn() {
+        Ok(ch) => ch,
+        Err(e) => {
+            let _ = std::fs::remove_file(&log);
+            return skipped(Value::Null, false, String::new(), format!("the precheck could not start in {}: {e}", dir.display()));
+        }
+    };
+    let began = std::time::Instant::now();
+    let status = loop {
+        if let Ok(Some(s)) = child.try_wait() {
+            break Some(s);
+        }
+        if began.elapsed() >= limit {
+            #[cfg(windows)]
+            {
+                use std::os::windows::process::CommandExt;
+                let _ = Command::new("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).creation_flags(0x0800_0000).output();
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let output = keep_tail(&String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()));
+    let _ = std::fs::remove_file(&log);
+    match status {
+        Some(s) if s.success() => None,
+        Some(s) => {
+            let code = s.code();
+            let said = code.map(|c| format!("the precheck ended with exit code {c}, so the run was skipped")).unwrap_or_else(|| "the precheck was stopped, so the run was skipped".into());
+            skipped(json!(code), false, output, said)
+        }
+        None => {
+            let secs = limit.as_secs();
+            let words = if secs >= 60 { format!("{} minute{}", secs / 60, if secs >= 120 { "s" } else { "" }) } else { format!("{secs} second{}", if secs == 1 { "" } else { "s" }) };
+            skipped(Value::Null, true, output, format!("the precheck passed its {words} limit and was stopped, so the run was skipped"))
+        }
+    }
+}
+
+/// The last 4,000 characters, where a failing command's error usually is.
+fn keep_tail(s: &str) -> String {
+    let n = s.chars().count();
+    s.chars().skip(n.saturating_sub(KEEP_OUTPUT)).collect()
 }
 
 enum Stop {
@@ -683,6 +794,66 @@ mod tests {
         let runs = after["runs"].as_array().unwrap();
         assert_eq!(runs.len(), 2, "the run that began and one skipped entry for the missed time");
         assert!(runs.iter().any(|r| r["automationId"] == "missed" && r["cause"] == "missed"));
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_precheck_gates_timed_runs_never_run_now_and_has_a_limit() {
+        let dir = temp("precheck");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        {
+            let s = store.lock().unwrap();
+            seed(&s, &ws);
+            let mut f = form(&ws, json!({ "preset": "hourly", "time": "00:15", "timezone": "UTC" }));
+            f["precheck"] = json!("echo x > ran.txt; echo nope; exit 1");
+            f["precheckTimeoutSeconds"] = json!(90);
+            assert!(save_automation(&s, &f, FRI_NOON).unwrap_err().contains("10 minutes"));
+            f["precheckTimeoutSeconds"] = Value::Null;
+            let made = save_automation(&s, &f, FRI_NOON).unwrap();
+            assert_eq!((made["id"].as_str(), made["precheckTimeoutSeconds"].as_u64()), (Some("auto-3"), Some(60)), "60 seconds when none is chosen");
+        }
+        let git = Git::detect().unwrap();
+        let notify = |_: &str, _: Value| {};
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+
+        // A timed run: the precheck runs in the worktree, exits 1, and the run is skipped with its output.
+        let skipped = run(&l, "auto-3", "schedule").unwrap();
+        assert_eq!((skipped["status"].as_str(), skipped["cause"].as_str(), skipped["exitCode"].as_i64()), (Some("skipped"), Some("precheck"), Some(1)), "{skipped}");
+        assert!(skipped["output"].as_str().unwrap().contains("nope"));
+        assert!(ws.join("ran.txt").exists(), "it ran in the target worktree");
+        std::fs::remove_file(ws.join("ran.txt")).unwrap();
+
+        // Run now never runs the precheck: the agent launches.
+        assert_eq!(run(&l, "auto-3", "manual").unwrap()["status"], json!("dispatched"));
+        assert!(!ws.join("ran.txt").exists());
+
+        // Exit 0 lets the timed run go on.
+        {
+            let s = store.lock().unwrap();
+            let mut autos = load(&s, KEY).unwrap();
+            autos[2]["precheck"] = json!("exit 0");
+            save(&s, KEY, &autos).unwrap();
+        }
+        assert_eq!(run(&l, "auto-3", "schedule").unwrap()["status"], json!("dispatched"));
+
+        // Past its limit it is stopped and the run reads timed out.
+        let began = std::time::Instant::now();
+        let out = run_precheck("sleep 20", &ws, std::time::Duration::from_millis(1500)).unwrap();
+        assert!(began.elapsed() < std::time::Duration::from_secs(10), "stopped at the limit");
+        assert_eq!((out["timedOut"].as_bool(), out["cause"].as_str()), (Some(true), Some("precheck")));
+        assert!(out["detail"].as_str().unwrap().contains("limit"));
+        assert!(run_precheck("exit 0", &ws, std::time::Duration::from_secs(30)).is_none());
+
+        // Up to 4,000 characters of what it printed are kept: the end, where the error is.
+        let long = format!("{}END", "x".repeat(5000));
+        let kept = keep_tail(&long);
+        assert_eq!(kept.chars().count(), 4000);
+        assert!(kept.ends_with("END"));
         drop(l);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);

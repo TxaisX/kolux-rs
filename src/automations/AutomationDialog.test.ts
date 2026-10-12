@@ -65,4 +65,16 @@ test("a template fills the new automation's form and the header offers the templ
   expect(html).toMatch(/<option value="hourly" selected="">/);
   expect(html).toContain('value="15"');
   expect(html).toContain("Templates");
+  // T-192-b: the template's grace window is filled in too (30 minutes for hourly upkeep).
+  expect(html).toMatch(/<option value="30" selected="">Start it up to 30 minutes late/);
+});
+
+test("a precheck command and its 1, 2, 5 or 10 minute limit, run only ahead of timed runs (AUTO-008)", () => {
+  const fresh = render(null);
+  expect(fresh).toContain("Precheck command");
+  expect(fresh).toMatch(/<option value="60" selected="">1 minute/);
+  expect(fresh).toContain("never ahead of Run now");
+  const html = render({ id: "a", name: "u", prompt: "p", provider: "claude", projectId: "p1", enabled: true, precheck: "git diff --quiet", precheckTimeoutSeconds: 300, form: { preset: "hourly", time: "00:15", day: null, custom: "" } });
+  expect(html).toContain('value="git diff --quiet"');
+  expect(html).toMatch(/<option value="300" selected="">5 minutes/);
 });

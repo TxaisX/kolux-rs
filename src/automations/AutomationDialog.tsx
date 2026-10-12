@@ -11,7 +11,7 @@ import type { KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { folderName, type Project, type Worktree } from "../projects/model";
-import { defaultForm, findNext, GRACE, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
+import { defaultForm, findNext, GRACE, PRECHECK, preselect, type Automation, type Preset, type ScheduleForm } from "./model";
 import { clampBox, cronWords, fieldNames, from12, nudge, templates, to12, toPreset, weekdayNames, type Template } from "./timetable";
 
 type Props = {
@@ -93,7 +93,9 @@ export default function AutomationDialog({ projects, agents, editing, template, 
   const [mode, setMode] = useState<"existing" | "new-per-run">(editing?.workspaceMode ?? "existing");
   const [workspace, setWorkspace] = useState(editing?.workspace ?? "");
   const [base, setBase] = useState(editing?.baseBranch ?? "");
-  const [grace, setGrace] = useState(editing?.missedRunGraceMinutes ?? 0);
+  const [grace, setGrace] = useState(editing?.missedRunGraceMinutes ?? start?.graceMinutes ?? 0);
+  const [precheck, setPrecheck] = useState(editing?.precheck ?? "");
+  const [limit, setLimit] = useState(editing?.precheckTimeoutSeconds ?? 60);
   const [form, setForm] = useState<ScheduleForm>(editing?.form ?? start?.form ?? defaultForm);
   // AUTO-002: what was typed into Custom, given back after a visit to a preset.
   const [typed, setTyped] = useState<string | null>(editing?.form?.preset === "custom" ? editing.form.custom : null);
@@ -178,7 +180,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     if (saving || !ready) return;
     setSaving(true);
     setSaveError(null);
-    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", missedRunGraceMinutes: grace, schedule };
+    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule };
     invoke<Automation>("automation_save", { input })
       .then((a) => {
         onSaved(a);
@@ -193,6 +195,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     setName(t?.name ?? "");
     setPrompt(t?.prompt ?? "");
     setForm(t?.form ?? defaultForm);
+    setGrace(t?.graceMinutes ?? 0);
     setTyped(null);
     setChooser(false);
   };
@@ -357,6 +360,21 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               <select className="field" value={grace} onChange={(e) => setGrace(Number(e.target.value))}>
                 {GRACE.map(([m, word]) => (
                   <option key={m} value={m}>
+                    {word}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="auto-label">
+              Precheck command
+              <input className="field" value={precheck} placeholder="Optional, for example: git diff --quiet" onChange={(e) => setPrecheck(e.target.value)} />
+              <span className="muted">Runs in the run's folder ahead of a timed run, never ahead of Run now. Anything but exit code 0 skips the run.</span>
+            </label>
+            <label className="auto-label">
+              Precheck time limit
+              <select className="field" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
+                {PRECHECK.map(([s, word]) => (
+                  <option key={s} value={s}>
                     {word}
                   </option>
                 ))}

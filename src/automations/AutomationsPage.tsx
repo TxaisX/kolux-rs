@@ -16,7 +16,7 @@ import AutomationDialog, { TemplateCards } from "./AutomationDialog";
 import type { Template } from "./timetable";
 import RunsDashboard, { Breadcrumb, RunPage } from "./RunsDashboard";
 import { folderName } from "../projects/model";
-import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, graceWord, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
+import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, graceWord, precheckWord, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
 /** `runsError` says the history could not be read (AUTO-018: the run count then reads unknown). */
 export type Data = { automations: Automation[]; runs: Run[]; runsError?: string };
@@ -458,6 +458,14 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }:
           <dd>{a.workspaceMode === "new-per-run" ? "A new one for every run" : a.workspace ? folderName(a.workspace) : "Not chosen"}</dd>
           <dt>If Kolux was away</dt>
           <dd>{graceWord(a.missedRunGraceMinutes)}</dd>
+          {a.precheck && (
+            <>
+              <dt>Precheck</dt>
+              <dd>
+                <code>{a.precheck}</code> (up to {precheckWord(a.precheckTimeoutSeconds)}, timed runs only)
+              </dd>
+            </>
+          )}
           <dt>Agent</dt>
           <dd>{agent}</dd>
           <dt>Runs</dt>
@@ -488,6 +496,7 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }:
               <span className="muted">{ago(r.at, now)}</span>
               {r.worktreeName && <span className="chip">{r.worktreeName}</span>}
               {r.detail && <span className="muted">{r.detail}</span>}
+              {r.output && <pre className="auto-output">{r.output}</pre>}
             </li>
           ))}
         </ol>

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { confirmDelete, keepSelection, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, statusWord, triggerLabel, upcoming, GRACE, graceWord, type Automation, type Names, type Run } from "./model";
+import { confirmDelete, keepSelection, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, statusWord, triggerLabel, upcoming, GRACE, graceWord, PRECHECK, precheckWord, type Automation, type Names, type Run } from "./model";
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };
 const auto = (id: string, name: string, extra: Partial<Automation> = {}): Automation => ({ id, name, prompt: "", provider: "claude", projectId: "p1", enabled: true, ...extra });
@@ -126,4 +126,13 @@ test("AUTO-007 grace choices and why a run was skipped read in words", () => {
   expect(statusWord({ ...r, cause: "missed" })).toBe("Skipped (Kolux was away)");
   expect(statusWord({ ...r, cause: "signin" })).toBe("Skipped (sign-in needed)");
   expect(statusWord({ ...r, cause: "unavailable" })).toBe("Skipped (unavailable)");
+});
+
+test("AUTO-008 the precheck's limits and its skip read in words", () => {
+  expect(PRECHECK.map((p) => p[0])).toEqual([60, 120, 300, 600]);
+  expect(PRECHECK.map((p) => p[1])).toEqual(["1 minute", "2 minutes", "5 minutes", "10 minutes"]);
+  const r: Run = { id: "run-1", automationId: "a", number: 1, trigger: "schedule", status: "skipped", at: 0, cause: "precheck" };
+  expect(statusWord({ ...r, exitCode: 1 })).toBe("Skipped (precheck failed)");
+  expect(statusWord({ ...r, timedOut: true })).toBe("Skipped (precheck timed out)");
+  expect([precheckWord(undefined), precheckWord(300)]).toEqual(["1 minute", "5 minutes"]);
 });

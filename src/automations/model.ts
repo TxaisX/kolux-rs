@@ -19,6 +19,8 @@ export type Automation = {
   baseBranch?: string;
   /** AUTO-007: how many minutes late a missed run may still start; 0 skips it. */
   missedRunGraceMinutes?: number;
+  precheck?: string;
+  precheckTimeoutSeconds?: number;
   /** From the back end (AUTO-022): what keeps it from running (project, worktree or sign-in). */
   problem?: string | null;
   /** From the back end (AUTO-001): the timetable in words, e.g. "Monday to Friday at 09:00 (UTC)". */
@@ -36,7 +38,7 @@ export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", da
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
-export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; worktree?: string; worktreeName?: string };
+export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string };
 
 export type SortKey = "name" | "trigger" | "agent" | "project" | "lastRun" | "nextRun";
 export type Filters = { state: "all" | "on" | "paused"; result: "all" | "never" | RunStatus; agents: string[] };
@@ -117,7 +119,16 @@ export function triggerLabel(a: Automation): string {
   return cron ? `Custom: ${cron}` : "No timetable";
 }
 
-const CAUSE: Record<string, string> = { missed: "Kolux was away", signin: "sign-in needed" };
+const CAUSE: Record<string, string> = { missed: "Kolux was away", signin: "sign-in needed", precheck: "precheck failed" };
+
+/** AUTO-008: how long a precheck may take, in seconds. */
+export const PRECHECK: [number, string][] = [
+  [60, "1 minute"],
+  [120, "2 minutes"],
+  [300, "5 minutes"],
+  [600, "10 minutes"],
+];
+export const precheckWord = (s: number | undefined) => (PRECHECK.find((p) => p[0] === (s ?? 60)) ?? PRECHECK[0])[1];
 
 /** AUTO-007's choices for a run missed while Kolux was away, in minutes. */
 export const GRACE: [number, string][] = [
@@ -142,6 +153,7 @@ export function statusWord(r: Run): string {
     case "completed":
       return "Completed";
     case "skipped":
+      if (r.cause === "precheck" && r.timedOut) return "Skipped (precheck timed out)";
       return r.cause ? `Skipped (${CAUSE[r.cause] ?? r.cause})` : "Skipped";
     case "failed":
       return "Failed to start";
