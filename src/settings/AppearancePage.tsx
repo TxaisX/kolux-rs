@@ -4,6 +4,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, writeAppearance, type Appearance, type Mode, type TerminalScheme } from "../theme";
+import { useSettings } from "./useSettings";
+import { FIELDS as STATUS_FIELDS, readStatusBar } from "../chrome/statusItems";
 import { Segmented } from "./GeneralPage";
 
 const MODE_LABEL: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
@@ -91,6 +93,25 @@ export function AppearanceView({ look, onChange }: { look: Appearance; onChange:
   );
 }
 
+/** VIEW-096: the status bar hidden from its right-click menu comes back here. */
+function StatusBarSwitch() {
+  const { settings, error, save } = useSettings();
+  if (!settings) return null;
+  return (
+    <section className="conn-card" data-section="status-bar">
+      <h2 className="conn-name">Status bar</h2>
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={readStatusBar(settings).visible} onChange={(e) => void save({ [STATUS_FIELDS.visible]: e.target.checked })} />
+        <span>
+          Show status bar
+          <small>Right-click the bar to choose which items it shows.</small>
+        </span>
+      </label>
+      {error && <p className="conn-detail warn">{error}</p>}
+    </section>
+  );
+}
+
 export default function AppearancePage() {
   const [look, setLook] = useState<Appearance | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +136,7 @@ export default function AppearancePage() {
     <>
       {error && <p className="conn-detail warn">{error}</p>}
       {look && <AppearanceView look={look} onChange={change} />}
+      {look && <StatusBarSwitch />}
     </>
   );
 }

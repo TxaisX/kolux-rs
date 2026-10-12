@@ -642,6 +642,11 @@ follows the app. The terminal pane also knows how to answer programs that ask fo
 or for light/dark mode, and tells subscribed programs when the mode flips, but on Windows those
 questions are swallowed before they reach the pane, so that part is not live yet (T-145-b).
 
+[accounts] The status bar can be trimmed (T-147): right-click it to tick or untick Agent status,
+Resource Manager, Terminals running and Agents running, or to hide the whole bar; the choice is kept
+across restarts, and Settings > Appearance > Show status bar brings a hidden bar back. A right-click
+inside the Resource Manager popover stays with the popover.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1311,7 +1316,11 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-145-a · Tango light uses its bright yellow (#fce94f) as is, so yellow text is pale on white; a darker yellow would read better but stops being Tango. Kept the card's palette.
 - [accounts] T-145-a · the terminal's light/dark answers follow the app's mode (System, Light, Dark), not the terminal background, so Match app theme and Kolux dark answer the same way.
 
+- [accounts] T-147 · with no menu bar yet, a status bar hidden from its right-click menu comes back from Settings > Appearance > Show status bar; the View menu item waits for the menu bar (T-248).
+- [accounts] T-147 · DT-A5: the bar has no agent items left to hide when an agent CLI is missing (the usage chips were retired), and its copy stays English until language packs; saved item lists drop ids this version does not have.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [accounts] T-147 · done: new `src/chrome/statusItems.ts` (items, `readStatusBar` with old-list clean-up, `toggleItem`), `StatusBar.tsx` (right-click menu, popover guard, hidden items), App wiring (`statusBarVisible`, `statusBarHidden`), Settings > Appearance status bar switch; DT-A5 + VIEW-096 amendment; menu-bar item added to T-248 · evidence/T-147.txt, evidence/T-147-1-menu.png .. T-147-5-appearance-switch.png
 - 2026-10-11 · [accounts] T-145-a · done: `src/theme.ts` (Tango light scheme, `currentDark`), new `src/terminal/colourMode.ts` (DEC 2031 subscribe, CSI ? 996 n query, CSI ? 997 ; 1|2 n reports), `TerminalPane.tsx` wires it to theme changes; T-145-b split off and HAND TO FABLE: Windows ConPTY swallows OSC 4/10/11 "?" and CSI ? 996 n / ? 2031 h before xterm sees them (proved live: a cursor-position query came back, the colour and mode queries did not); custom themes moved to T-148 · evidence/T-145-a.txt, evidence/T-145-1-light-tango.png, evidence/T-145-2-dark-kolux.png
 - 2026-10-11 · [accounts] T-145-b · HAND TO FABLE: the colour and light/dark questions programs ask are swallowed by Windows ConPTY (system conhost via portable-pty) before xterm sees them; fixing it is PTY work (a pass-through console or answering in the Rust reader)
 - 2026-10-11 · [accounts] T-141 · done: new `src-tauri/src/cli_accounts.rs` (app side: `account.list`, `account.add-begin` makes a throwaway folder in the profile's `sign-in-temp`, `account.add-finish` hands it to the same `sign_in` Settings uses and deletes it, a sign-in whose throwaway copy cannot be deleted is failed and not kept; CLI side: the login runs in the user's terminal with inherited input and output, a console handler passes Ctrl+C to the login only, then the folder is removed, a closing terminal removes it on the way out; an unknown begin command reads as a Kolux too old for accounts); `cli.rs` parses `account add [--agent claude|codex]` and `account list` (Claude when left out, an empty `--agent` refused, other flags refused as "this machine"), help text; `state.rs` `Store::dir`; windows-sys Console feature; 5 new Rust tests + 1 parse test; live: stand-in claude/codex, app not running -> `app_unreachable` and no folder made, add Claude -> listed, same again -> refused, add Codex with a printed device code -> listed and active, list text and JSON, Ctrl+C sent part-way -> "Sign-in interrupted; nothing was added" and the throwaway folder empty · evidence/T-141.txt, T-141-1-settings-after-cli-add.png

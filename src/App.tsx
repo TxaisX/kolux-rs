@@ -29,6 +29,7 @@ import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
 import { cellsOf, clampCount, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
+import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
@@ -882,12 +883,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} />
         )}
       </div>
+      {readStatusBar(settings).visible && (
       <StatusBar
+        hidden={readStatusBar(settings).hidden}
+        onToggle={(id) => saveSetting(STATUS_FIELDS.hidden, toggleItem(readStatusBar(settings).hidden, id))}
+        onHideBar={() => saveSetting(STATUS_FIELDS.visible, false)}
         terminals={live.length}
         agents={live.filter((p) => p.agent !== "shell").length}
         names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
         workspaces={Object.keys(owner)}
       />
+      )}
     </div>
   );
 }
