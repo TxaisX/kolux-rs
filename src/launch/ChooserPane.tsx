@@ -7,6 +7,7 @@
 // holds the task every seat shares, so the whole lineup is in view before Start. Start sits in a
 // footer below the scrolling choices, so in a small pane it stays in view after a pick.
 import { Close } from "../chrome/icons";
+import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, resizeLineup, sameForAll, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type Seat, type Shape } from "./seats";
@@ -42,6 +43,8 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const ready = allReady(seats) && !busy;
   const anyReady = seats.some(seatReady);
+  // SESS-022: a line per provider near its limit, above Start; it never disables Start.
+  const warnings = launchWarnings(seats.map((s) => s.agent), useLaunchUsage());
   // The free field applies on Enter or blur, not per keystroke: typing "15" must not pass
   // through a one-seat moment that drops the picks of seats 2 and up.
   const recount = (n: number) => {
@@ -190,10 +193,17 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
           ))}
         </div>
       </div>
-      <footer className="chooser-foot btn-row">
-        <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : "Pick an AI and a model (or Terminal) for every seat first"}>
-          {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
-        </button>
+      <footer className="chooser-foot">
+        {warnings.map((w) => (
+          <div key={w} className="note warn" role="status">
+            {w}
+          </div>
+        ))}
+        <div className="btn-row">
+          <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : "Pick an AI and a model (or Terminal) for every seat first"}>
+            {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
+          </button>
+        </div>
       </footer>
     </section>
   );

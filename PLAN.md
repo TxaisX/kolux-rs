@@ -228,7 +228,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme 4 · Accounts, sign-in and usage limits (21 cards)
 
-- [ ] T-135 · SESS-022 Warning before launching close to a usage limit
+- [x] T-135 · SESS-022 Warning before launching close to a usage limit
 - [ ] T-136 · USAGE-009 [compat] Alerts at 80% and 95% of a usage window · USAGE-010 Launch dialogs warn when an account is nearly spent · USAGE-011 [compat] Stats & Usage page with Kolux activity counts · USAGE-012 Usage analytics opens on a combined overview · USAGE-013 Token tracking is opt-in for each provider
 - [ ] T-137 · USAGE-014 Claude and Codex token analytics panels · USAGE-015 Estimated cost from each model's published prices · USAGE-018 Grok credits panel
 - [ ] T-138 · ACCT-016 The Claude accounts list: system default and managed accounts · ACCT-017 Changing the active Claude account is safe with sessions running · ACCT-018 The same Claude account cannot be added twice · ACCT-019 [compat] The Codex accounts list for fast switching · ACCT-020 Codex's system-default login is shown truthfully

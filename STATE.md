@@ -617,6 +617,13 @@ small pane (the 4- and 6-pane layouts) a chooser's Start button now sits in a fo
 scrolling choices, so after picking Terminal the button is in view; before, it was below the
 pane's edge and the pick looked like it did nothing.
 
+[accounts] The launch screen warns before starting on a nearly spent account (T-135). When a
+provider the chosen seats use has used 80 % or more of its usage window, a line above Start says
+so: "Claude has used 85% of its 5-hour window, resets today 9:05 PM. These 3 Claude sessions
+may stop early." One line per provider, the agent named for one seat and a count for several;
+Start stays usable. Codex figures come from the top-bar pill's own reading; Claude has none
+until T-041 reads them, so no Claude line shows yet.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1251,7 +1258,14 @@ recorded default until told otherwise; nothing here blocks a pass.
   here). Console host processes belong to the app's tree on Windows, so they count under Kolux,
   not under a session. A session's tree is found by parent ids (ponytail note in resources.rs).
 
+- 2026-10-11 · [accounts] T-135 · the window checked is each provider's shortest one with a figure
+  (5-hour, else weekly, else monthly), as USAGE-010 words it; a busy week behind a quiet 5 hours
+  gives no line. The warning sits in the chooser's footer above Start. Dev builds expose
+  `window.__koluxUsage(provider, figures)` so the live check can set 85 % and 90 %; release builds
+  do not have it.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [accounts] T-135 · done: `src/usage/launchWarn.ts` (`launchWarnings` one line per provider at 80 % or more of its shortest window with a figure, seat count or the one agent named, reset time when known; the shared figures store the Codex pill now publishes to) + `launchWarn.test.ts` (4 tests: three Claude seats at 85 %, a second provider, 80 % exactly, 40 %, no figures, no usage source, the shortest-window rule); `ChooserPane.tsx` shows the lines above Start (1 more test); live: three Claude seats with 85 % set gave one line counting 3 sessions with its reset time and Start enabled, 40 % gave none, a real Codex seat (0 % used) gave none, Codex at 90 % added its own line; build / clippy / 132 Rust + 168 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-135.txt, evidence/T-135-*.png
 - 2026-10-11 · [accounts] T-037-fix-look · done: `styles.css` top bar is a three-column grid (`1fr auto 1fr`) instead of an absolutely centred switcher, a 1100 px rule that leaves the search box its icon, `.chooser-foot`; `ChooserPane.tsx` Start moved out of the scrolling body into a footer; a new test in `ChooserPane.test.ts` (Start sits in a footer after the scrolling body; failed before the move) and `scripts/evidence/overlap.mjs` (live check, exit 1 on overlap; before: switcher 595-805 over search box 771-961 at 1400 px, after: 517-727 against 771-961, and at 884 px 160-370 against 414-445 with the close button inside the window); live: Start reachable and starting a PowerShell session from a 6-pane chooser; seen, not fixed (core lane's tabs): a chooser that gets a tab beside it is named "Terminal N" on its tab · evidence/T-037-fix-look.txt, evidence/T-037-fix-look-*.png
 - 2026-10-09 · T-024 · done: `src/terminal/tabs.ts` (one badge per tab, unread rule with the late-event drop) + `tabs.test.ts`; `TerminalPane.tsx` `onBell` (xterm's bell) and the `unread` mark; `App.tsx` unread panes and rows, window focus, in-view rule, `noticed` note, tab badges; `ProjectsPanel.tsx` takes the unread set from the window; `styles.css` badges. Live: Claude workspace via CLI, Ctrl+T second tab, `/exit` sent to the hidden Claude tab → bell badge, pane glow, row unread, note "Claude finished"; clicking the tab → green check, marks gone; `[char]7` from the hidden shell tab → bell badge and "Terminal 3 rang the bell". Evidence: `evidence/T-024-unread.png`, `evidence/T-024-viewed.png`, `evidence/T-024-bell.png`.
 - 2026-10-09 · T-023 · done: `src/terminal/status.ts` (header word, tone, icon, age, needs-you cycle) + `status.test.ts`; `TerminalPane.tsx` finish time, minute tick, glow until focused, `onNeedsYou`; `App.tsx` Ctrl+J handler across workspaces; `styles.css` glow and age. Live: agent workspace via CLI, split shell focused, `/exit` sent to the agent → "Done · just now" with a glow, "1m ago" after a minute, glow gone on focus; Ctrl+J with nothing waiting left focus where it was. Evidence: `evidence/T-023-glow.png`, `evidence/T-023-focused.png`.

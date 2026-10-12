@@ -102,3 +102,7 @@ test("SESS-007: Start sits in a footer after the scrolling choices", () => {
   expect(foot).toBeGreaterThan(body);
   expect(html.indexOf(">Start<", foot)).toBeGreaterThan(foot);
 });
+
+test("SESS-022: no usage figures, no warning line above Start", () => {
+  expect(render([{ agent: "claude", model: "opus" }])).not.toContain("note warn");
+});
