@@ -29,6 +29,7 @@ mod secrets;
 mod state;
 mod sysmem;
 mod terminal;
+mod tools;
 mod trust;
 mod update;
 mod visibility;
@@ -103,8 +104,10 @@ pub fn run() {
             // Pages Claude sessions publish are kept in the library as they happen (SKILL-035).
             capture::start(app.handle().clone());
             app.manage(update::Updates::default());
-            // Git is checked once here; every project and workspace action runs through it.
-            app.manage(git::Git::detect()?);
+            // Git is checked once here; every project and workspace action runs through it. Without
+            // Git the app still opens, and the landing screen says so (APP-023).
+            app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
+            app.manage(tools::Cache::default());
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
@@ -161,6 +164,8 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::project_set,
             agents::agent_list,
+            tools::tools_check,
+            tools::tools_dismiss,
             agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_summary,

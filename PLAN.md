@@ -360,7 +360,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-209-b · ONB 036 rest: add the onboarding wizard (T-207) and the folder-without-Git dialog (T-203, on main from lane/release) to the plain-words scan once they reach this lane, and reword what it finds
 - [x] T-210-a · SET-017 [compat] Interface language, falling back to English (the choice in Appearance › Interface, saved as `language`; System resolution and English fallback; dates, relative times, weekday names and sorted lists follow it; applied as soon as settings load)
 - [ ] T-210-b · SET 017 rest: language packs for menus, settings and screens, loaded when needed with English for any text a pack lacks (with the plugin-runtime language packs, SKILL 040); the system menus switch language too; the plain-words jargon guard (T-209) holds in every language
-- [ ] T-211 · APP-023 The landing screen warns about missing or signed-out tools
+- [x] T-211 · APP-023 The landing screen warns about missing or signed-out tools
 
 ### P1 · theme 10 · Identity and originality (2 cards)
 

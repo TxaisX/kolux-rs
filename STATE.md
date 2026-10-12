@@ -879,6 +879,12 @@ falls back to English for anything else, Traditional Chinese included. Dates, re
 weekday names and sorted lists follow the pick at once and on the next start; Kolux's own words
 stay in English until the language packs arrive (T-210-b).
 
+[accounts] Missing-tool notices (T-211): the main screen now opens with a notice when Git is
+missing (the app used to refuse to start without it), when GitHub's gh program is missing or
+signed out once a GitHub project is registered, when GitLab's glab does not start once a GitLab
+project is registered, and when no AI program is installed. Each has Check again and Dismiss; a
+dismissed notice stays hidden across restarts until the set of GitHub projects changes.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1633,7 +1639,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-210-a · The saved value is a BCP-47 tag in settings field `language`: system, en, zh-CN, ko, ja, es or fr; anything else reads as system. English keeps Kolux's own short relative-time words (3h ago); other languages use the platform's relative-time wording. Mapping the old app's saved language names onto these tags (SET 017 Compat) is the settings importer's job.
 
+- [accounts] T-211 · The landing screen is the main Terminals screen with no Settings or Automations page open (the app opens a terminal straight away, so the empty state is rarely seen); the notices sit at its top beside the other main-window notices. "Agent CLIs are missing" is read as no AI program from the catalogue being installed at all. A probe that hangs past 6 s reads as unknown and shows no notice (gh's sign-in check can be slow offline), except glab, whose failed or hung version check counts as not installed; GitLab's notice follows the GitHub rule (only once a project with a GitLab remote exists). Every notice's dismissal is recorded under the GitHub project set, so Git's and the AI-program notice also come back when that set changes. Without Git the app now starts (Git::detect no longer stops the launch) and each Git action fails with its own error.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-211 · done: new `src-tauri/src/tools.rs` (time-limited probes of git, gh, gh auth status and glab, cached until Check again; GitHub/GitLab-hosted projects read fresh; dismissals in kv), `src/launch/toolChecks.ts` and `ToolNotices.tsx` on the main screen; the app starts without Git · evidence/T-211.txt, T-211-1..4 png
 - 2026-10-12 · [accounts] T-210-a · done: new `src/language.ts` (choices, System resolution, locale, apply on load) and `src/language.test.ts`; Language select in Appearance; every date, time and sort call reads `locale()` · evidence/T-210-a.txt, T-210-a-1..2 png
 - 2026-10-12 · [accounts] T-209-a · done: new `src/glossary.ts` (banned words, plain words with hover text, the Connect cards' lines) and `src/plainWords.test.ts` (TypeScript syntax scan of 13 in-scope files plus a hover check); Add Project, sidebar and toast wording changed · evidence/T-209-a.txt, T-209-a-1..2 png
 - 2026-10-12 · [accounts] T-208 · not built, left unticked · WAITS ON MERGE: ONB-006/007/008/010/012 are the leaving, progress, first-profile and grid-tour rules of the wizard T-207 builds, so it follows T-207 (which waits on the kit code from lane/release).

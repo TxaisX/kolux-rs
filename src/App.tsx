@@ -70,6 +70,7 @@ import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { useUsageAlerts } from "./usage/alerts";
+import ToolNotices from "./launch/ToolNotices";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -884,6 +885,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         <div className="content">
           <SignInNotice />
           <KeyLostNotice />
+          {terminals && page === null && <ToolNotices projects={projects.map((p) => p.id).join(",")} />}
           {terminals && page === "automations" && (
             <AutomationsPage
               projects={projects}

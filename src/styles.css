@@ -448,6 +448,9 @@ input { font: inherit; }
 .signin-notice { color: var(--fg); border-color: #7a5a1e; }
 .signin-notice span { color: #f0c27a; }
 .signin-notice .btn { margin-left: auto; }
+.tool-notices { flex: none; display: flex; flex-direction: column; gap: 6px; margin: 8px 8px 0; }
+.tool-notices .notice { margin: 0; }
+.tool-notices .notice .dismiss { margin-left: 0; }
 .key-lost .btn { flex: none; white-space: nowrap; }
 .key-lost .btn + .btn { margin-left: 0; }
 .attn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

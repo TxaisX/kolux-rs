@@ -12,13 +12,15 @@ import { createElement } from "react";
 import { BANNED, GLOSSARY, jargon, CONNECT } from "./glossary";
 import { AddProjectView } from "./projects/AddProject";
 
-/** In-scope screens: Add Project, the launcher, the sidebar, the Connect cards, error toasts. */
+/** In-scope screens: Add Project, the launcher, the landing notices, the sidebar, the Connect cards, error toasts. */
 const SOURCES = import.meta.glob(
   [
     "./projects/AddProject.tsx",
     "./projects/ProjectsPanel.tsx",
     "./launch/ChooserPane.tsx",
     "./launch/PlusMenu.tsx",
+    "./launch/ToolNotices.tsx",
+    "./launch/toolChecks.ts",
     "./settings/SettingsPage.tsx",
     "./settings/claudeKey.ts",
     "./settings/CodexCard.tsx",
@@ -77,7 +79,7 @@ function shownText(file: string): string[] {
 }
 
 test("ONB-036: no banned word in the text shown on a newcomer screen", () => {
-  expect(SCREENS).toHaveLength(13); // a renamed file must not drop out of the scan silently
+  expect(SCREENS).toHaveLength(15); // a renamed file must not drop out of the scan silently
   const found = SCREENS.flatMap((f) => shownText(f).flatMap((t) => jargon(t).map((w) => `${f}: "${w}" in "${t.trim()}"`)));
   expect(found).toEqual([]);
 });
