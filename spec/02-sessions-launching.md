@@ -306,6 +306,9 @@ Rules: one program name per agent decides that it is installed and also marks it
   this route on purpose, since Ante's own prompt option runs once and quits and Devin's start-up
   prompt submits instantly; a blank or spaces-only prompt counts as none, and the agent starts on
   its plain start line with nothing added.
+  (Kolux RS, T-008-b-fix: "while its program is in front" is decided without a foreground poll:
+  an agent Kolux starts is the pane's own program and is credited for its whole run; an agent
+  typed into a shell is credited through its hooks when it has them, else not at all; DT-C11.)
 Acceptance:
   - [ ] Install Antigravity, Continue and Cursor only under agy, cn and cursor-agent → all three are offered; a program called plain kiro does not make Kiro count.
   - [ ] Launch Grok with a prompt that begins with a double dash → Grok works on it as the task instead of reading it as an option.

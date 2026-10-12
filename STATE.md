@@ -1288,7 +1288,20 @@ recorded default until told otherwise; nothing here blocks a pass.
   ones. On macOS and Linux the shell's path is not read (a login shell would have to be spawned):
   the process PATH plus the install folders stand for it, recorded as DT-C10.
 
+- 2026-10-12 · [core] T-008-b-fix: the foreground half of the start-line card is closed by a
+  decision, not a poll (DT-C11). An agent Kolux starts is the pane's own program (`pty.rs`
+  `program_command`, no shell in between), so the pane is credited to it from `terminal_spawn`
+  until `terminal-exit`: exact, free, and already what the header, tab mark and account
+  variables go by. An agent typed into a shell pane is credited by its hooks when it has them
+  (the shell's children inherit `KOLUX_PANE_KEY`, T-025), and not at all when it has none; a
+  process-tree poll with command-line reads is what that last case would cost, and nothing
+  shown today depends on it. The command-line matcher is not orphaned any more: the account and
+  key variables of a new pane call it (`claude_accounts`, `claude_key`, `codex_accounts`), so
+  its stale "first caller is the poll" note and dead-code attribute went. No behaviour change,
+  no new test.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
 - 2026-10-12 · [core] T-007-a-fix · done: registry PATH (machine, user, expanded) ahead of the process PATH in `agents.rs` `search_dirs`; test `the_shell_search_path_comes_from_the_registry_expanded_and_is_walked`; cargo test 115
 - 2026-10-12 · [core] T-003b-fix-b · done: DESIGN.md sections 6 and 7, globe tab glyph in `App.tsx`, web view inset in `styles.css`, projects test temp-folder collision fixed; `evidence/T-003b-fix-b-browser.png`
 - 2026-10-12 · [core] T-013-fix-b · done: Unicode-name fallback in `names.rs` (+ tests, crate `unicode_names2`), `nameOf()` in `workspaces.ts` (+ test), typed names flow `ProjectsPanel` → `App` → pane header; `evidence/T-013-fix-b-preview.png`, `-header.png`
@@ -1299,6 +1312,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
 - 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
 - 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
-- 2026-10-11 · [core] T-028-a · done: `src/board/chip.ts` (+ test), Board lanes and chip rows in `App.tsx` / `TerminalPane.tsx` / `styles.css`, `agent_answer` and `Change.wrote` in `status.rs` / `hooks.rs`; `evidence/T-028-a-board.png`, `-approved.png`, `-deny-ask.png`, `-denied.png`
 
 

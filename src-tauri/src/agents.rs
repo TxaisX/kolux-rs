@@ -370,10 +370,11 @@ pub fn start_args(id: &str, extra: &[String], prompt: &str) -> Result<StartLine,
 /// named `codex-…` / `grok-…` count; a program run through a script interpreter is credited by
 /// its entry script's name or folder. A running `claude` is always Claude Code itself.
 // ponytail: no per-agent entry-script table; under an interpreter any path part equal to a
-// program name, or a package folder such as `claude-code`, credits the agent. Widen when the
-// status cards start polling the foreground.
-// Its first caller is the foreground poll of the status cards (04-agent-status-hooks).
-#[cfg_attr(not(test), allow(dead_code))]
+// program name, or a package folder such as `claude-code`, credits the agent. Widen if a
+// foreground poll is ever built (DT-C11: there is none; the pane's own program and the hooks
+// decide who is in front).
+// Callers: the account and key variables a new pane gets (`claude_accounts`, `claude_key`,
+// `codex_accounts`), which credit the pane by the program Kolux starts in it.
 pub fn credited_agent(command_line: &str) -> Option<&'static str> {
     let line = command_line.trim_start();
     let (first, rest) = match line.strip_prefix('"').and_then(|r| r.split_once('"')) {
