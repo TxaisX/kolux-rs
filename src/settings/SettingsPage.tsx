@@ -145,6 +145,8 @@ function useScrollTo(section: string | undefined, page: Page, n: number) {
     const look = () => {
       const el = document.querySelector<HTMLElement>(`.settings-main [data-section="${CSS.escape(section)}"]`);
       if (el) {
+        // SET-016: a link into a folded section unfolds it (and only it) first.
+        for (let d = el.closest("details"); d; d = d.parentElement?.closest("details") ?? null) d.open = true;
         el.scrollIntoView({ block: "start" });
         el.classList.add("settings-section-flash");
         window.setTimeout(() => el.classList.remove("settings-section-flash"), 1200);

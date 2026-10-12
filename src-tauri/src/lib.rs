@@ -8,6 +8,7 @@ mod claude_key;
 mod codex_accounts;
 mod codex_usage;
 mod creatures;
+mod fonts;
 mod git;
 mod include;
 mod keybindings;
@@ -115,6 +116,7 @@ pub fn run() {
             get_settings,
             save_settings,
             sysmem::process_memory,
+            fonts::list_fonts,
             resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,

@@ -496,3 +496,20 @@ input { font: inherit; }
 .scheme-add span { display: block; margin-bottom: 4px; color: var(--fg-muted); font-size: 12px; }
 .scheme-add textarea { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); color: var(--fg); font: 12px monospace; resize: vertical; }
 .scheme-add-btn { margin-top: 6px; }
+
+/* SET-016: foldable Appearance sections */
+.look-fold { margin-bottom: 14px; }
+.look-fold > summary { display: flex; align-items: baseline; gap: 10px; padding: 6px 2px; cursor: pointer; list-style: none; color: var(--fg); font-weight: 600; }
+.look-fold > summary::-webkit-details-marker { display: none; }
+.look-fold > summary::before { content: "▾"; width: 10px; color: var(--fg-muted); transition: transform 120ms; }
+.look-fold:not([open]) > summary::before { transform: rotate(-90deg); }
+.look-fold-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-weight: 400; font-size: 12px; }
+.look-fold > .conn-card { margin-top: 8px; }
+
+/* SET-018: font fields */
+.font-field { position: relative; display: block; margin-top: 10px; }
+.font-field > span { display: block; margin-bottom: 4px; color: var(--fg-muted); font-size: 12px; }
+.font-field input { width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--input-bg); color: var(--fg); font-size: 13px; }
+.font-list { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; max-height: 240px; overflow-y: auto; margin-top: 2px; padding: 4px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); }
+.font-list button { display: block; width: 100%; padding: 4px 6px; border: 0; border-radius: 4px; background: none; color: var(--fg); font-size: 13px; text-align: left; cursor: pointer; }
+.font-list button:hover, .font-list button[aria-selected="true"] { background: var(--row-selected); }

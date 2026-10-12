@@ -1,12 +1,13 @@
 // Settings > Appearance: the colour theme row (SET-001), its tint / saturation / depth sliders
 // (SET-002) and the terminal colours picker with "Match app theme" (SET-003). Every change shows at
 // once on the whole window; the save follows a moment later so a slider drag is one write.
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, writeAppearance, type Appearance, type Mode } from "../theme";
+import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
 import { schemeOptions, SchemeList } from "./SchemePicker";
 import { useSettings } from "./useSettings";
+import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar } from "../chrome/statusItems";
 import { Segmented } from "./GeneralPage";
 
@@ -38,12 +39,92 @@ export function ThemePreview({ look }: { look: Appearance }) {
   );
 }
 
-export function AppearanceView({ look, onChange }: { look: Appearance; onChange: (a: Appearance) => void }) {
+/** SET-016: a foldable section of the Appearance page; folded, its header sums up what it holds. */
+function Fold({ id, title, summary, open, onToggle, children }: { id: string; title: string; summary: string; open: boolean; onToggle: (open: boolean) => void; children: ReactNode }) {
+  return (
+    <details className="look-fold" data-fold={id} open={open} onToggle={(e) => onToggle(e.currentTarget.open)}>
+      <summary>
+        <span className="look-fold-title">{title}</span>
+        {!open && <span className="look-fold-sum">{summary}</span>}
+      </summary>
+      {children}
+    </details>
+  );
+}
+
+/** SET-018: a font family field; suggestions come from the installed fonts, the whole list when the
+ *  field is entered and the best matches once the user types. Applies on pick, Enter or leaving. */
+function FontField({ label, value, placeholder, onPick }: { label: string; value: string; placeholder: string; onPick: (family: string) => void }) {
+  const [text, setText] = useState(value);
+  const [fonts, setFonts] = useState<string[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState(false);
+  useEffect(() => setText(value), [value]);
+  const shown = fonts ? rankFonts(fonts, typed ? text : "") : [];
+  const commit = (f: string) => {
+    setText(f);
+    setOpen(false);
+    if (f.trim() !== value) onPick(f.trim());
+  };
+  return (
+    <label className="font-field">
+      <span>{label}</span>
+      <input
+        type="text"
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        maxLength={100}
+        spellCheck={false}
+        placeholder={placeholder}
+        value={text}
+        style={{ fontFamily: fontStack(text, "var(--ui-font)") }}
+        onFocus={() => {
+          setTyped(false);
+          setOpen(true);
+          void loadFonts().then(setFonts);
+        }}
+        onChange={(e) => {
+          setText(e.target.value);
+          setTyped(true);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit(text);
+          if (e.key === "Escape" && open) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        onBlur={() => commit(text)}
+      />
+      {open && shown.length > 0 && (
+        <div className="font-list" role="listbox" aria-label={`${label} suggestions`}>
+          {shown.map((f) => (
+            <button key={f} type="button" role="option" aria-selected={f === value} tabIndex={-1} style={{ fontFamily: fontStack(f, "var(--ui-font)") }} onMouseDown={(e) => e.preventDefault()} onClick={() => commit(f)}>
+              {f}
+            </button>
+          ))}
+        </div>
+      )}
+    </label>
+  );
+}
+
+const firstFamily = (stack: string) => stack.split(",")[0].replace(/"/g, "").trim();
+
+/** `windowPart` and `windowSummary` fill the Window & Sidebar section (they live in other settings). */
+export function AppearanceView({ look, onChange, windowPart, windowSummary = "" }: { look: Appearance; onChange: (a: Appearance) => void; windowPart?: ReactNode; windowSummary?: string }) {
   const classic = look.theme === "classic";
+  // All three sections open at first; a link into a folded one unfolds it (SettingsPage).
+  const [open, setOpen] = useState({ interface: true, terminal: true, window: true });
+  const fold = (k: keyof typeof open) => ({ open: open[k], onToggle: (o: boolean) => setOpen((p) => (p[k] === o ? p : { ...p, [k]: o })) });
+  const name = (id: string) => schemeOptions(look, true).find((o) => o.id === id)?.name ?? id;
   return (
     <>
+      <Fold id="interface" title="Interface" summary={[MODE_LABEL[look.mode], themeLabel(look.theme), look.appFont || "Default font"].join(" · ")} {...fold("interface")}>
       <section className="conn-card" data-section="interface">
-        <h2 className="conn-name">Interface</h2>
+        <h2 className="conn-name">Mode</h2>
         <div className="look-select">
           <span>Mode</span>
           <Segmented<Mode> label="Mode" options={MODES.map((m) => ({ id: m, label: MODE_LABEL[m] }))} value={look.mode} onPick={(mode) => onChange({ ...look, mode })} />
@@ -73,10 +154,22 @@ export function AppearanceView({ look, onChange }: { look: Appearance; onChange:
         ))}
         {classic && <p className="conn-detail">Classic keeps the original neutral look; pick a colour to use the sliders.</p>}
       </section>
+      <section className="conn-card" data-section="fonts">
+        <h2 className="conn-name">Fonts</h2>
+        <FontField label="App font" value={look.appFont} placeholder={`Default (${firstFamily(uiFont)})`} onPick={(appFont) => onChange({ ...look, appFont })} />
+        <FontField label="Editor font" value={look.editorFont} placeholder="Same as the terminal font" onPick={(editorFont) => onChange({ ...look, editorFont })} />
+        <p className="conn-detail">Leave a field empty for the default. A font that is not installed falls back to the default, so text always shows.</p>
+      </section>
+      </Fold>
+      <Fold id="terminal" title="Terminal" summary={[firstFamily(monoFont), look.lightTerminal ? `${name(look.terminal)} / ${name(look.lightScheme)}` : name(look.terminal)].join(" · ")} {...fold("terminal")}>
       <section className="conn-card" data-section="terminal-colours">
         <h2 className="conn-name">Terminal colours</h2>
         <TerminalColours look={look} onChange={onChange} />
       </section>
+      </Fold>
+      <Fold id="window" title="Window & Sidebar" summary={windowSummary} {...fold("window")}>
+        {windowPart}
+      </Fold>
     </>
   );
 }
@@ -131,8 +224,7 @@ function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: A
 }
 
 /** VIEW-096: the status bar hidden from its right-click menu comes back here. */
-function StatusBarSwitch() {
-  const { settings, error, save } = useSettings();
+function StatusBarSwitch({ settings, error, save }: ReturnType<typeof useSettings>) {
   if (!settings) return null;
   return (
     <section className="conn-card" data-section="status-bar">
@@ -152,6 +244,7 @@ function StatusBarSwitch() {
 export default function AppearancePage() {
   const [look, setLook] = useState<Appearance | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const status = useSettings();
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => {
     invoke<Record<string, unknown>>("get_settings")
@@ -172,8 +265,7 @@ export default function AppearancePage() {
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
-      {look && <AppearanceView look={look} onChange={change} />}
-      {look && <StatusBarSwitch />}
+      {look && <AppearanceView look={look} onChange={change} windowPart={<StatusBarSwitch {...status} />} windowSummary={status.settings && !readStatusBar(status.settings).visible ? "Status bar hidden" : "Status bar shown"} />}
     </>
   );
 }

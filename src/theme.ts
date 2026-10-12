@@ -3,6 +3,7 @@
 // and feed the terminal theme, so every colour has one home. The 16 hued themes come with SET-001.
 
 import type { ITheme } from "@xterm/xterm";
+import { fontStack } from "./settings/fonts";
 import { CATALOGUE, tidySchemes, type CustomScheme } from "./terminal/schemes";
 
 export const classic = {
@@ -95,9 +96,9 @@ export type TerminalScheme = string;
 export type Mode = "system" | "light" | "dark";
 export const MODES: Mode[] = ["system", "light", "dark"];
 /** `lightTerminal`: in light mode terminals use `lightScheme`; off keeps `terminal` for both. */
-export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[] };
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string };
 /** The settings fields the appearance lives in. */
-export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes" } as const;
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont" } as const;
 export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0] } as const;
 
 /** Out of span is pulled to the nearest end; anything not a number falls back to the default. */
@@ -128,6 +129,8 @@ export function readAppearance(s: Record<string, unknown>): Appearance {
     // Match keeps following the app in light mode until a light scheme is picked.
     lightScheme: knownScheme(s[FIELD.lightScheme], custom, terminal === "match" ? "match" : "tango-light"),
     custom,
+    appFont: typeof s[FIELD.appFont] === "string" ? (s[FIELD.appFont] as string).trim().slice(0, 100) : "",
+    editorFont: typeof s[FIELD.editorFont] === "string" ? (s[FIELD.editorFont] as string).trim().slice(0, 100) : "",
   };
 }
 
@@ -237,6 +240,9 @@ export const TERMINAL_EVENT = "kolux-terminal-theme";
 /** TERM-098: whether the app is in dark mode now (what a program asking the terminal is told). */
 export const currentDark = () => lastDark ?? true;
 
+/** SET-018: the chosen fonts with a safe fallback after each; an empty editor font is the terminal font. */
+export const appearanceVars = (a: Appearance) => ({ "--ui-font": fontStack(a.appFont, uiFont), "--editor-font": fontStack(a.editorFont, monoFont) });
+
 export function themeVars(t: Theme): Record<string, string> {
   const vars: Record<string, string> = { "--ui-font": uiFont, "--mono-font": monoFont };
   for (const [name, value] of Object.entries(t)) vars[`--${name}`] = value;
@@ -267,7 +273,7 @@ export function applyAppearance(a: Appearance, root: StyleHost = document.docume
   if (lastDark !== null && lastDark !== dark && typeof document !== "undefined") holdTransitions();
   last = a;
   lastDark = dark;
-  const vars = { ...themeVars(buildTheme(a, dark)), "color-scheme": dark ? "dark" : "light" };
+  const vars = { ...themeVars(buildTheme(a, dark)), ...appearanceVars(a), "color-scheme": dark ? "dark" : "light" };
   if (typeof document !== "undefined") document.documentElement.dataset.mode = dark ? "dark" : "light";
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   try {

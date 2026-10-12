@@ -653,6 +653,12 @@ scheme's ground and four colours. Eleven well-known schemes ship (Tango, Campbel
 Dracula, Nord, Gruvbox, One Half), and a scheme copied out of Windows Terminal can be pasted in;
 a bad paste says why. Removing a scheme that is in use falls back to the default.
 
+[accounts] Appearance in three foldable sections, with font pickers (T-148-b): Settings > Appearance
+now has Interface, Terminal and Window & Sidebar, all open at first; a folded one shows a one-line
+summary (for Terminal: the font and the dark / light schemes). A link to a setting in a folded section
+opens just that section. Interface gains App font and Editor font fields that suggest the fonts
+installed on this PC as you type; a font that is not installed still draws text in the default.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1328,7 +1334,11 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-148-a · catalogue palettes are the schemes' own published values, unchanged; Solarized Light's bright white equals its background, so some PowerShell input colours read faint there, as they do in other terminals.
 - [accounts] T-148-a · pasted schemes must be one Windows Terminal scheme object with a name and hex colours (purple/brightPurple/cursorColor accepted); a name already in the list is refused rather than replaced.
 
+- [accounts] T-148-b · the font fields apply when a suggestion is picked, on Enter or on leaving the field, not on every keystroke (a half-typed name would flash the whole window into the fallback font).
+- [accounts] T-148-b · App font and Editor font sit in the Interface section; the Editor font has no editor to draw yet (T-323), so for now it is only saved.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-148-b · done: Appearance page in three `<details>` sections with folded summaries (SET-016), links unfold their section (SettingsPage), App font / Editor font fields with installed-font suggestions (new `src-tauri/src/fonts.rs` `list_fonts`, `src/settings/fonts.ts`), fonts kept in `appFont` / `editorFont` and cached for the first frame; icon chooser, search unfolding, terminal font and editor noted on T-300, T-246, T-247, T-323 · evidence/T-148-b.txt, evidence/T-148-b-1-sections.png .. T-148-b-7-link-unfolds-window.png
 - 2026-10-12 · [accounts] T-148-a · done: new `src/terminal/schemes.ts` (catalogue, search, Windows Terminal import, tidy on load), `src/settings/SchemePicker.tsx` (scheme lists), theme.ts dark/light picks (`terminalScheme`, `terminalSchemeLight`, `terminalCustomSchemes`), Appearance page Terminal colours rebuilt · evidence/T-148-a.txt, evidence/T-148-a-1-pickers.png .. T-148-a-5-custom-terminal.png
 - 2026-10-11 · [accounts] T-147 · done: new `src/chrome/statusItems.ts` (items, `readStatusBar` with old-list clean-up, `toggleItem`), `StatusBar.tsx` (right-click menu, popover guard, hidden items), App wiring (`statusBarVisible`, `statusBarHidden`), Settings > Appearance status bar switch; DT-A5 + VIEW-096 amendment; menu-bar item added to T-248 · evidence/T-147.txt, evidence/T-147-1-menu.png .. T-147-5-appearance-switch.png
 - 2026-10-11 · [accounts] T-145-a · done: `src/theme.ts` (Tango light scheme, `currentDark`), new `src/terminal/colourMode.ts` (DEC 2031 subscribe, CSI ? 996 n query, CSI ? 997 ; 1|2 n reports), `TerminalPane.tsx` wires it to theme changes; T-145-b split off and HAND TO FABLE: Windows ConPTY swallows OSC 4/10/11 "?" and CSI ? 996 n / ? 2031 h before xterm sees them (proved live: a cursor-position query came back, the colour and mode queries did not); custom themes moved to T-148 · evidence/T-145-a.txt, evidence/T-145-1-light-tango.png, evidence/T-145-2-dark-kolux.png
