@@ -266,3 +266,40 @@ export const Clock = (p: P) => (
     <path d="M8 4.75V8l2.25 1.5" />
   </Glyph>
 );
+// SKILL-002: one glyph per starter kit, and a plain box for a kit with none of its own.
+export const Table = (p: P) => (
+  <Glyph {...p}>
+    <rect x="2.25" y="3" width="11.5" height="10" rx="1.5" />
+    <path d="M2.25 6.5h11.5M2.25 9.75h11.5M6.25 6.5V13" />
+  </Glyph>
+);
+export const Merge = (p: P) => (
+  <Glyph {...p}>
+    <path d="M3.5 2.5v2.75a3 3 0 0 0 3 3H8m4.5-5.75v2.75a3 3 0 0 1-3 3H8m0 0v5.25M5.75 11.25 8 13.5l2.25-2.25" />
+  </Glyph>
+);
+export const Megaphone = (p: P) => (
+  <Glyph {...p}>
+    <path d="M2.5 6.5v3h2l5.5 3v-9l-5.5 3h-2ZM4.5 9.5l1 3.5M12 6.25a2.5 2.5 0 0 1 0 3.5" />
+  </Glyph>
+);
+export const Book = (p: P) => (
+  <Glyph {...p}>
+    <path d="M8 4.25C6.5 3.25 4.5 3 2.5 3.25v9c2-.25 4 0 5.5 1 1.5-1 3.5-1.25 5.5-1v-9c-2-.25-4 0-5.5 1Zm0 0v9" />
+  </Glyph>
+);
+export const Funnel = (p: P) => (
+  <Glyph {...p}>
+    <path d="M2.5 3h11L9.25 8.25v4.5l-2.5 1v-5.5L2.5 3Z" />
+  </Glyph>
+);
+export const Pulse = (p: P) => (
+  <Glyph {...p}>
+    <path d="M1.75 8.5h2.5l1.5-4 3 8 1.75-4.75h3.75" />
+  </Glyph>
+);
+export const Box = (p: P) => (
+  <Glyph {...p}>
+    <path d="M8 1.75 13.5 4.5v7L8 14.25 2.5 11.5v-7L8 1.75Zm0 5.5L2.5 4.5M8 7.25l5.5-2.75M8 7.25v7" />
+  </Glyph>
+);

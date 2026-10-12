@@ -17,7 +17,10 @@ mod fonts;
 mod git;
 mod hooks;
 mod include;
+mod grok;
+mod install;
 mod keybindings;
+mod kits;
 mod names;
 mod notifications;
 mod orchestration;
@@ -124,6 +127,8 @@ pub fn run() {
             app.manage(claude_key::KeySetup::default());
             app.manage(claude_accounts::SignIns::default());
             app.manage(codex_accounts::SignIns::default());
+            app.manage(install::Installs::default());
+            app.manage(grok::GrokSignIn::default());
             app.manage(artifacts::Library::new(dir.join("artifacts")));
             // Pages Claude sessions publish are kept in the library as they happen (SKILL-035).
             capture::start(app.handle().clone());
@@ -194,6 +199,7 @@ pub fn run() {
             status::agent_answer,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            terminal::terminal_layout,
             projects::git_version,
             projects::project_list,
             projects::project_add,
@@ -219,6 +225,7 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::project_set,
             agents::agent_list,
+            pty::shell_list,
             agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_summary,
@@ -257,10 +264,27 @@ pub fn run() {
             claude_accounts::claude_account_check,
             claude_accounts::claude_own_sign_in,
             agents::open_install_page,
+            install::agent_installs,
+            install::agent_can_install,
+            install::agent_install,
+            install::agent_install_cancel,
+            install::agent_install_dismiss,
+            grok::grok_status,
+            grok::grok_sign_in,
+            grok::grok_cancel,
+            grok::grok_key_set,
             codex_accounts::codex_accounts,
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
             codex_accounts::codex_account_activate,
+            codex_accounts::codex_account_remove,
+            projects::git_first_commit_preview,
+            projects::git_start,
+            kits::kit_samples,
+            kits::kit_samples_dir,
+            kits::kit_check,
+            kits::kit_prepare,
+            kits::kit_open_results,
             files::file_read,
             files::file_write,
             files::md_list,
@@ -297,6 +321,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // ACCT-015: no sign-in or install keeps running after Kolux quits.
+                claude_key::cancel_all(std::time::Duration::from_secs(2));
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
                     let _ = std::fs::remove_file(dir.join(cli::FILE));

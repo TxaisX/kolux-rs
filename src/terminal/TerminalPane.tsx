@@ -24,7 +24,7 @@ import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/ic
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import Ring from "../usage/Ring";
 import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
-import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
+import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
@@ -65,6 +65,8 @@ type Props = {
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
   title?: string;
+  /** SESS-006: the shell picked in the create menu names itself in the header. */
+  shellName?: string;
   /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
   typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
@@ -96,9 +98,17 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const box = useRef<HTMLElement>(null);
+  // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
+  // the keyboard is already somewhere inside it (a click on its own header field).
+  useEffect(() => {
+    if (focused && !hidden && !box.current?.contains(document.activeElement)) termRef.current?.focus();
+  }, [focused, hidden]);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
+  const [started, setStarted] = useState<string | null>(null); // ACCT-046: the shell that really started
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const [glow, setGlow] = useState(false); // TERM-023: finished while not focused
   const [now, setNow] = useState(() => Date.now());
@@ -151,6 +161,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
+    termRef.current = term;
     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon());
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
@@ -158,6 +169,14 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
     let alive = true;
     let ended = false;
+    // Output can arrive before terminal_spawn hands back this pane's id (several panes starting at
+    // once); it is held and replayed, else the console's opening cursor query goes unanswered and
+    // the program never starts.
+    let early: { id: number; run: () => void }[] | null = [];
+    const mine = (id: number, run: () => void) => {
+      if (idRef.current === null) early?.push({ id, run });
+      else if (id === idRef.current) run();
+    };
     const unlisteners: UnlistenFn[] = [];
     const write = (data: string) => {
       const id = idRef.current;
@@ -186,35 +205,42 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
     (async () => {
       unlisteners.push(
-        await listen<OutputEvent>("terminal-output", (e) => {
-          if (e.payload.id !== idRef.current) return;
-          term.write(decodeOutput(e.payload.data));
-          sawOutput();
-        }),
-        await listen<ExitEvent>("terminal-exit", (e) => {
-          if (e.payload.id !== idRef.current) return;
-          ended = true;
-          // VIEW-069 / SESS-051: a program that ends before its typed-in opening prompt could be
-          // handed over is a launch that failed, not a session that ran.
-          if (pending !== null) {
-            pending = null;
-            failed.current?.("the program ended before its opening prompt could be typed in");
-          }
+        await listen<OutputEvent>("terminal-output", (e) =>
+          mine(e.payload.id, () => {
+            term.write(decodeOutput(e.payload.data));
+            sawOutput();
+          }),
+        ),
+        await listen<ExitEvent>("terminal-exit", (e) =>
+          mine(e.payload.id, () => {
+            ended = true;
+            // VIEW-069 / SESS-051: a program that ends before its typed-in opening prompt could be
+            // handed over is a launch that failed, not a session that ran.
+            if (pending !== null) {
+              pending = null;
+              failed.current?.("the program ended before its opening prompt could be typed in");
+            }
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
-          setStatus({ kind: "ended", code: e.payload.code });
-        }),
+            setStatus({ kind: "ended", code: e.payload.code });
+          }),
+        ),
       );
       if (!alive) return;
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number });
+        const { id, program: ran } = await invoke<{ id: number; program: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number });
+        setStarted(ran);
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
         }
         idRef.current = id;
         setStatus({ kind: "running", id });
+        const held = early ?? [];
+        early = null;
+        for (const h of held) if (h.id === id) h.run();
         term.focus();
       } catch (err) {
+        early = null;
         setStatus({ kind: "failed", error: String(err) });
         failed.current?.(String(err));
       }
@@ -280,7 +306,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const model = agent === "shell" ? null : modelOf(args);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
+    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
       <header className="pane-head">
         <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
@@ -298,7 +324,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
         <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
-          {programWord(agent)}
+          {shellName ?? (agent === "shell" && !program && started ? shellWord(started) : programWord(agent))}
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`} data-tip={explain}>

@@ -207,6 +207,9 @@ input { font: inherit; }
 .menu-item .name { flex: 1; }
 .menu-row { display: flex; align-items: center; gap: 4px; }
 .menu-row .menu-item { min-width: 0; }
+.menu-chip { flex: none; padding: 0 6px; border-radius: 4px; font-size: 10.5px; color: var(--fg-faint); border: 1px solid var(--line-strong); }
+.menu-hint.warn { color: #fdc030; }
+[data-mode="light"] .menu-hint.warn { color: var(--warn); }
 .menu-default { flex: none; height: 22px; padding: 0 6px; border-radius: 5px; font-size: 11px; color: var(--fg-faint); opacity: 0.6; }
 .menu-row:hover .menu-default, .menu-default:focus-visible { opacity: 1; }
 .menu-default:hover { color: var(--fg); background: var(--row-selected); }
@@ -375,6 +378,7 @@ input { font: inherit; }
 .meter-ctx { flex: none; font: 11px var(--mono-font); color: var(--fg-row); }
 .meter-plan { flex: none; }
 .pane-body { flex: 1; min-height: 0; padding: 4px; }
+.pane.chooser:focus { outline: none; } /* TERM-012: the focused border already shows where the keyboard is */
 .chooser-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 12px 14px; overflow: auto; font-size: 12px; }
 .chooser-body .label { color: var(--fg-muted); margin-right: 4px; }
 .chooser-foot { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--line-subtle); font-size: 12px; }
@@ -389,6 +393,8 @@ input { font: inherit; }
 .seat-prompt { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid var(--button-border); border-radius: 6px; background: transparent; color: var(--fg); font: inherit; resize: vertical; }
 .seat-job { flex: 1; min-width: 160px; max-width: 320px; height: 24px; padding: 0 6px; border: 1px solid var(--button-border); border-radius: 6px; background: transparent; color: var(--fg); font: inherit; }
 .caption { margin: 0; color: var(--fg-muted); }
+.caption.warn { color: #fdc030; }
+[data-mode="light"] .caption.warn { color: var(--warn); }
 .toast { flex: none; margin: 8px 8px 0; padding: 4px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; font-size: 12px; color: var(--fg-muted); }
 .choices { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; }
 .choice { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
@@ -535,6 +541,19 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .conn-headline { font-size: 13px; color: var(--fg-row); }
 .conn-detail { margin: 0; font-size: 12px; color: var(--fg-muted); }
 .conn-detail.warn { color: #fdc030; }
+/* ACCT-001 Connect grid, ACCT-003 install progress */
+.conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-items: stretch; max-width: 1100px; }
+.conn-grid .conn-card { max-width: none; height: 100%; box-sizing: border-box; }
+.conn-tagline { margin-top: -4px; }
+.conn-skeleton { height: 28px; border-radius: 6px; background: linear-gradient(90deg, var(--chip-bg) 0%, var(--line-strong) 50%, var(--chip-bg) 100%); background-size: 200% 100%; animation: conn-shimmer 1.4s linear infinite; }
+@keyframes conn-shimmer { from { background-position: 200% 0; } to { background-position: 0 0; } }
+.conn-progress { height: 6px; border-radius: 999px; background: var(--chip-bg); overflow: hidden; }
+.conn-progress-bar { height: 100%; background: var(--working); border-radius: inherit; transition: width 0.3s; }
+.conn-progress-bar[data-known="false"] { width: 30%; animation: conn-sweep 1.2s ease-in-out infinite alternate; }
+@keyframes conn-sweep { from { margin-left: 0; } to { margin-left: 70%; } }
+@media (prefers-reduced-motion: reduce) { .conn-skeleton, .conn-progress-bar[data-known="false"] { animation: none; } }
+.conn-advanced { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line-strong); max-width: 1100px; }
+.conn-advanced-head { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--fg); }
 
 /* Claude accounts (T-043-b) */
 .settings-main .conn-card + .conn-card { margin-top: 12px; }
@@ -643,6 +662,54 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .ask-title { margin: 0 0 6px; font-size: 14px; font-weight: 600; color: var(--fg); overflow-wrap: anywhere; }
 .ask-body { margin: 0 0 14px; font-size: 12px; color: var(--fg-muted); }
 .ask .btn-row { justify-content: flex-end; }
+/* GIT-061: the first-commit preview */
+.ask.start-git { width: min(520px, calc(100vw - 32px)); }
+.first-files { list-style: none; margin: 0 0 8px; padding: 6px; max-height: 18rem; overflow: auto; border: 1px solid var(--line-subtle); border-radius: 6px; font-size: 12px; }
+.first-files label { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; min-width: 0; }
+.first-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-row); }
+.first-secret { margin-left: auto; flex: none; color: var(--fg-muted); font-size: 11px; }
+/* SKILL-002..005: the starter-kit gallery and a kit's setup */
+.kits { width: min(760px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; box-sizing: border-box; padding: 16px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.kits.kit-setup { width: min(560px, calc(100vw - 32px)); }
+.kits-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.kits-head .ask-title { margin: 0; flex: 1; min-width: 0; }
+.kit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.kit-card { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px; text-align: left; font: inherit; color: var(--fg); background: var(--chip-bg); border: 1px solid var(--line-subtle); border-radius: 8px; cursor: pointer; }
+.kit-card:hover, .kit-card:focus-visible { border-color: var(--line-focus); outline: none; }
+.kit-top { display: flex; align-items: center; gap: 8px; }
+.kit-icon { display: inline-flex; color: var(--fg); }
+.kit-badge { padding: 1px 6px; border-radius: 4px; font-size: 11px; background: var(--row-selected); color: var(--fg); }
+.kit-time { margin-left: auto; font-size: 11px; color: var(--fg-muted); }
+.kit-title { font-weight: 600; font-size: 13px; }
+.kit-sum { font-size: 12px; color: var(--fg-muted); }
+.kit-roles { list-style: none; margin: 4px 0 10px; padding: 0; font-size: 12px; }
+.kit-roles li { display: flex; justify-content: space-between; gap: 8px; min-height: 20px; align-items: center; }
+.kit-ai { color: var(--fg); }
+.kit-ai.off { color: var(--fg-muted); font-style: italic; }
+.kit-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 12px; }
+.kit-row { display: flex; gap: 6px; min-width: 0; }
+.kits .kit-row .field { flex: 1; min-width: 0; margin: 0; }
+.kit-hint { font-size: 11px; color: var(--fg-muted); }
+.kit-note { margin: 0; font-size: 12px; }
+.kit-note.warn { color: var(--warn); }
+.kit-opt { color: var(--fg-muted); font-weight: normal; }
+.kit-gap { flex: 1; }
+.kits .btn-row { flex-wrap: wrap; align-items: center; }
+/* SKILL-009 / SKILL-010: the kit strip above the session grid */
+.kit-strip { margin: 0 0 8px; padding: 6px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; background: var(--pane-bg); font-size: 12px; }
+.kit-strip-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.kit-strip-title { font-weight: 600; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kit-strip-count { color: var(--fg-muted); }
+.kit-fold svg { transition: transform 0.15s; }
+.kit-fold.folded svg { transform: rotate(-90deg); }
+.kit-strip-rows { list-style: none; margin: 6px 0 0; padding: 0; }
+.kit-strip-row { display: flex; justify-content: space-between; gap: 8px; min-height: 24px; align-items: center; padding: 0 6px; border-radius: 4px; }
+.kit-strip-row.can { cursor: pointer; }
+.kit-strip-row.can:hover, .kit-strip-row.can:focus-visible { background: var(--row-selected); outline: none; }
+.kit-strip-state { color: var(--fg-muted); }
+.kit-strip-row.done .kit-strip-state { color: var(--fg); }
+.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state { color: var(--warn); }
+.first-none { color: var(--fg-muted); }
 .agent-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--chip-bg); min-width: 0; }
 .agent-on { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .agent-name { font-size: 13px; color: var(--fg-row); }
@@ -771,6 +838,9 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .picker-folder { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-faint); }
 .picker-tip { position: fixed; z-index: 60; max-width: min(640px, 70vw); padding: 4px 8px; border: 1px solid var(--line-focus); border-radius: 6px; background: var(--pane-bg); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; pointer-events: none; }
 .picker-tip-folder { color: var(--fg-muted); }
+/* PROJ-057 / VIEW-037: the worktree palette's section headings and matched letters. */
+.palette-section { padding: 6px 10px 2px; font-size: 11px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.palette mark { background: none; color: var(--fg); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
 
 /* EDIT-027: the diff tab. Its body scrolls (both columns move together in side by side). */
@@ -850,3 +920,14 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .status-tick input { accent-color: var(--done); }
 .status-tick.off { opacity: 0.5; cursor: default; }
 .topbar .app-name { margin: 0 6px 0 2px; color: var(--fg-muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+/* ACCT-002: "Other ways to connect" sits next to Connect and opens a short list under it. */
+.btn-row:has(.conn-more) { flex-wrap: wrap; align-items: flex-start; }
+.conn-more { display: inline-block; }
+.conn-more > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; }
+.conn-more > summary::-webkit-details-marker { display: none; }
+.conn-more > summary::after { content: "▾"; margin-left: 4px; text-decoration: none; }
+.conn-more[open] > summary::after { content: "▴"; }
+.conn-more-list { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: 6px; }
+.ask .field { width: 100%; box-sizing: border-box; margin: 0 0 12px; }
+.ask-backdrop[hidden] { display: none; }
+.ask input[type="password"]::-ms-reveal { display: none; } /* ACCT-008: the key never shows on screen */

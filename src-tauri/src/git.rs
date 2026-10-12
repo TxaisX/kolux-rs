@@ -52,7 +52,7 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
 }
 
 /// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
-fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
+pub(crate) fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(out.stdout)

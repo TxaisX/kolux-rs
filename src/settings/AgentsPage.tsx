@@ -1,7 +1,7 @@
 // Settings > Agents (SET-027): which agents are switched on, the default one, and how each starts.
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
 import { Segmented } from "./GeneralPage";
@@ -53,18 +53,24 @@ export default function AgentsPage() {
   const save = (patch: Record<string, unknown>) => write(patch).then(() => setWritten((n) => n + 1));
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [looking, setLooking] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null); // SESS-002: an errored search is not an empty one
   const [lines, setLines] = useState<Record<string, string>>({});
   const refresh = () => {
     setLooking(true);
     invoke<AgentInfo[]>("agent_list")
       .then((list) => {
         setAgents(list);
-        void emit("agents-changed");
+        setFailed(null);
+        void emit("agents-changed", list);
       })
-      .catch(() => setAgents([]))
+      .catch((e) => setFailed(String(e) || "the search failed"))
       .finally(() => setLooking(false));
   };
   useEffect(refresh, []);
+  useEffect(() => {
+    const off = listen<AgentInfo[] | null>("agents-changed", (e) => Array.isArray(e.payload) && setAgents(e.payload));
+    return () => void off.then((u) => u()).catch(() => {});
+  }, []);
   const installed = (agents ?? []).filter((a) => a.installed);
   // What each installed agent starts as with the saved options, read again after every save.
   useEffect(() => {
@@ -115,7 +121,13 @@ export default function AgentsPage() {
             {looking ? "Looking…" : "Refresh"}
           </button>
         </div>
-        {agents !== null && installed.length === 0 && <p className="conn-detail">No agent CLI was found. Install one, then press Refresh.</p>}
+        {failed ? (
+          <p className="conn-detail warn" role="alert">
+            Kolux could not look for agent CLIs ({failed}). Press Refresh to try again.
+          </p>
+        ) : (
+          agents !== null && installed.length === 0 && <p className="conn-detail">No agent CLI was found. Install one, then press Refresh.</p>
+        )}
         {installed.map((a) => {
           const o = optionsOf(settings, a.id);
           const on = !off.includes(a.id);

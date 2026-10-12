@@ -115,3 +115,34 @@ test("SESS-020: Save as team waits until every seat is picked; saved shapes sit 
   expect(html.indexOf("Review crew")).toBeGreaterThan(html.indexOf("Custom"));
   expect(html).toContain("Rename or delete Review crew");
 });
+
+test("SESS-002: Start waits for a search that succeeded, and an errored one says so", () => {
+  const seats: Seat[] = [{ agent: TERMINAL, model: null }];
+  const view = (pass: { looking: boolean; done: boolean; error: string | null }) =>
+    renderToString(createElement(ChooserPane, { saved: [], onSaved: () => {}, onPickSaved: () => {}, number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: false, onCopies: () => {}, closable: true, onClose: () => {}, pass, onRefresh: () => {} }));
+  const start = (html: string) => html.split("</button>").find((b) => b.includes("Start"))!;
+  expect(start(view({ looking: false, done: true, error: null }))).not.toContain("disabled");
+  const failed = view({ looking: false, done: true, error: "IPC down" });
+  expect(failed.replace(/<!-- -->/g, "")).toContain("could not look for agents (IPC down)");
+  expect(start(failed)).toContain("disabled");
+  const first = view({ looking: true, done: false, error: null });
+  expect(first).toContain("Looking for agents");
+  expect(start(first)).toContain("disabled");
+  expect(view({ looking: false, done: true, error: null })).toContain("Refresh agents");
+});
+
+test("SESS-016: the effort picker and fast mode show on the seat whose model has them, and no other", () => {
+  const html = render([{ agent: "claude", model: "opus" }, { agent: "claude", model: "haiku" }]);
+  expect(html).toContain("Seat 1: effort");
+  expect(html).toContain("Seat 1: fast mode");
+  expect(html).not.toContain("Seat 2: effort");
+  expect(html).not.toContain("Seat 2: fast mode");
+  expect(render([{ agent: "claude", model: "sonnet" }])).not.toContain("fast mode");
+});
+
+test("SESS-021: Use last lineup shows only when offered, naming the remembered agents", () => {
+  const props = { saved: [], onSaved: () => {}, onPickSaved: () => {}, number: 2, agents: [claude], seats: [{ agent: null, model: null }], onSeats: () => {}, onLineup: () => {}, shape: "custom" as Shape, task: "", onTask: () => {}, onStart: () => {}, copies: "shared" as Copies, inGit: true, onCopies: () => {}, closable: true, onClose: () => {}, onUseLineup: () => {} };
+  const lineup = { shape: "pair" as Shape, copies: "separate" as Copies, seats: [{ agent: "codex", model: "gpt-5" }, { agent: "claude", model: "opus" }] };
+  expect(renderToString(createElement(ChooserPane, { ...props, lastLineup: lineup }))).toContain("Use last lineup: codex, Claude Code");
+  expect(renderToString(createElement(ChooserPane, { ...props, lastLineup: null }))).not.toContain("Use last lineup");
+});

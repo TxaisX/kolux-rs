@@ -319,7 +319,7 @@ mod tests {
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
         let call_words = |w: Vec<String>, cwd: &Path| {
             let p = parse(&w).1.unwrap().unwrap();
-            app(&ctx, &Request { id: format!("r-{}", w.join(" ")), token: String::new(), command: p.command, cwd: cwd.display().to_string(), args: Value::Object(p.args), pane: None })
+            app(&ctx, &Request { id: format!("r-{}", w.join(" ")), token: String::new(), command: p.command, cwd: cwd.display().to_string(), args: Value::Object(p.args), pane: None, cli: crate::cli::VERSION.into() })
         };
         let call = |line: &str, cwd: &Path| call_words(words(line), cwd);
 

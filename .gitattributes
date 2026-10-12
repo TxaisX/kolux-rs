@@ -1,0 +1,2 @@
+# CLI-006: cmd misreads labels in a batch file saved with bare LF line ends.
+*.cmd text eol=crlf

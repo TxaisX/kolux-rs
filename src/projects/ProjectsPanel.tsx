@@ -23,12 +23,15 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
 import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
-import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target } from "../chrome/icons";
+import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
+import StartGit, { type FirstFile } from "./StartGit";
+import { openKits } from "../kits/Kits";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
 import { chromeShown } from "../chrome/chromeItems";
 import { VOCAB } from "../terminal/status";
+import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 
@@ -49,7 +52,8 @@ type Props = {
   /** The workspace the grid shows (PROJ-066); its row is the selected one. */
   activeDir: string | null;
   /** A click on a row shows that workspace. */
-  onSelect: (dir: string, branch: string | null) => void;
+  /** `fresh`: the workspace was just made (TERM-005 seeds its grid). */
+  onSelect: (dir: string, branch: string | null, fresh?: boolean) => void;
   /** After a workspace and its folder are gone, so the window drops its panes. */
   onRemoved: (path: string) => void;
   /** The plus menu behind "New session" (T-004): agents found on the PATH, and the launch. */
@@ -61,6 +65,10 @@ type Props = {
   onChoose: () => void;
   /** SESS-009: the dropdown's blank-terminal row (a plain shell tab). */
   onTerminal?: () => void;
+  /** SESS-003 / SESS-002: every installed agent is off; where the agent search stands. */
+  allOff?: boolean;
+  pass?: AgentPass;
+  onRefresh?: () => void;
   /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
   /** Which page (Automations, Model routing) is open over the content column, if any. */
   page: Page | null;
@@ -71,6 +79,8 @@ type Props = {
   onIndex: (projects: Project[], owner: Record<string, string>, names: Record<string, string>) => void;
   /** Bumped by Mod+N (workspace.create): opens the name field for the project in front. */
   createRequest: number;
+  /** PROJ-057: a name typed in the palette, put in the name field that createRequest opens. */
+  createName?: string;
   /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
   deleteRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
@@ -102,7 +112,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, page, onPage, refresh, onIndex, createRequest, deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -144,6 +154,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
+  const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
   const indexed = useRef(""); // the last project list and owner map handed to the window
@@ -267,17 +278,36 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   }, [creating]);
 
   // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
+  const added = async (p: Project) => {
+    say("ok", `${p.name} is a project (${p.path})`);
+    setPathDraft("");
+    setShowAdd(false);
+    await reload();
+    const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
+    if (open) onSelect(open.path, open.branch);
+  };
   const addPath = async (path: string) => {
     if (!path.trim()) return;
     setBusy("adding");
     try {
-      const p = await invoke<Project>("project_add", { path });
-      say("ok", `${p.name} is a project (${p.path})`);
-      setPathDraft("");
-      setShowAdd(false);
-      await reload();
-      const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
-      if (open) onSelect(open.path, open.branch);
+      await added(await invoke<Project>("project_add", { path }));
+    } catch (err) {
+      // GIT-061: a plain folder is offered Git and a first commit; a relative or missing path is refused.
+      if (!String(err).includes("not inside a Git repository")) fail(err);
+      else
+        await invoke<FirstFile[]>("git_first_commit_preview", { path })
+          .then((files) => setStartGit({ folder: path.trim(), files }))
+          .catch(fail);
+    } finally {
+      setBusy("");
+    }
+  };
+  const startGitAndAdd = async (files: string[]) => {
+    if (!startGit) return;
+    setBusy("adding");
+    try {
+      await added(await invoke<Project>("git_start", { path: startGit.folder, files }));
+      setStartGit(null);
     } catch (err) {
       fail(err);
     } finally {
@@ -287,7 +317,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
 
   const browse = async () => {
     try {
-      const picked = await open({ directory: true, multiple: true, title: "Choose Git repository folders" });
+      const picked = await open({ directory: true, multiple: true, title: "Choose project folders" });
       const list = Array.isArray(picked) ? picked : picked ? [picked] : [];
       for (const dir of list) await addPath(dir);
     } catch (err) {
@@ -386,7 +416,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       // Create more the new workspace does not take the front, so the next name can be typed.
       const front = !keepOpen && shown.current === from;
       if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
-      else if (front) onSelect(wt.path, wt.branch);
+      else if (front) onSelect(wt.path, wt.branch, true);
     } catch (err) {
       fail(err);
     } finally {
@@ -404,7 +434,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     else setCreating(id);
   };
   useEffect(() => {
-    if (createRequest > 0) openCreate();
+    if (createRequest === 0) return;
+    openCreate();
+    if (createName) setName(createName);
   }, [createRequest]);
   useEffect(() => {
     // VIEW-048: the row under the pointer, read at key time so a row that just went away never counts
@@ -923,6 +955,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </span>
             Artifacts
           </button>
+          <button className="row" onClick={openKits}>
+            <span className="ic">
+              <Box />
+            </span>
+            Starter kits
+          </button>
         </nav>
 
         <div className="sb-section">
@@ -934,7 +972,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             <button className={`ib${filterOpen ? " on" : ""}`} title="Group and sort the list" aria-pressed={filterOpen} onClick={() => setFilterOpen((o) => !o)}>
               <Sliders size={13} />
             </button>
-            <button className="ib" title="Add a project: choose folders that hold a Git repository" onClick={browse} disabled={busy !== ""}>
+            <button className="ib" title="Add a project: choose folders, with or without Git" onClick={browse} disabled={busy !== ""}>
               <FolderPlus size={13} />
             </button>
             <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => (creating === null ? openCreate() : setCreating(null))}>
@@ -959,7 +997,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           {showAdd && (
             <div className="sb-form">
               <label>Add project</label>
-              <input aria-label="project folder" className="field" placeholder="path to a folder with a .git" value={pathDraft} onChange={(e) => setPathDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPath(pathDraft)} />
+              <input aria-label="project folder" className="field" placeholder="path to a folder" value={pathDraft} onChange={(e) => setPathDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addPath(pathDraft)} />
               <div className="btn-row">
                 <button className="btn" onClick={() => addPath(pathDraft)} disabled={busy !== "" || !pathDraft.trim()}>
                   Add
@@ -1037,7 +1075,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </div>
           )}
           {creating === "" && nameField(null)}
-          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add one that holds a Git repository.</div>}
+          {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a folder; one without Git can start it here.</div>}
 
           {groupBy === "project" &&
             projects.map((p) => {
@@ -1155,6 +1193,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             agents={agents}
             defaultId={defaultId}
             onSetDefault={onSetDefault}
+            allOff={allOff}
+            pass={pass}
+            onRefresh={onRefresh}
             onChoose={() => {
               setPlusOpen(false);
               onChoose();
@@ -1215,6 +1256,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           </button>
         </div>
       </aside>
+      {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onCancel={() => setStartGit(null)} />}
     </div>
   );
 }

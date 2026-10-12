@@ -60,7 +60,7 @@ export function keyCard(s: KeyStatus | null): KeyCard {
     };
   }
   // A fix replaces Connect; a reason with no fix keeps it, since connecting is still the way in.
-  if (s.attention && s.attention.reason !== "usage-limit") return { state: "attention", headline: "Needs attention", detail: "", attention: s.attention, actions: fixFor(s.attention, "claude-key") ? [] : ["connect"] };
+  if (s.attention && s.attention.reason !== "usage-limit") return { state: "attention", headline: "Needs attention", detail: "", attention: s.attention, actions: fixFor(s.attention, "claude-key") ? ["cancel"] : ["connect", "cancel"] };
   return {
     state: "disconnected",
     headline: "Connect with a key that lasts a year",

@@ -49,14 +49,14 @@ test("a failed setup shows its reason with the one fix that fits (ACCT-013)", ()
   const wrapper = { ...off, attention: { reason: "install-unavailable" as const, message: "The installed Claude launcher (claude.cmd) is a script wrapper Kolux cannot start directly.", resetsAt: null } };
   const c = keyCard(wrapper);
   expect(c.state).toBe("attention");
-  expect(c.actions).toEqual([]);
+  expect(c.actions).toEqual(["cancel"]);
   const html = renderToString(createElement(ClaudeCardView, { status: wrapper, busy: false, onAction: () => {} }));
   expect(html).toContain("claude.cmd");
   expect(html).toContain("Open install page");
   expect(html).not.toContain(">Connect<");
   // an unknown reason is information only: the card keeps its own Connect and offers no fix
   const odd = { ...off, attention: { reason: "unknown" as const, message: "The key could not be stored: disk full", resetsAt: null } };
-  expect(keyCard(odd).actions).toEqual(["connect"]);
+  expect(keyCard(odd).actions).toEqual(["connect", "cancel"]);
   const oddHtml = renderToString(createElement(ClaudeCardView, { status: odd, busy: false, onAction: () => {} }));
   for (const f of ["Try again", "Renew", "Check again", "Open install page"]) expect(oddHtml).not.toContain(f);
   expect(keyCard(off).actions).toEqual(["connect"]);

@@ -16,6 +16,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "kolux-dev"
 path = "src/bin/kolux-dev.rs"
 
+# CLI-006: the shipped command line. Only the release script builds it, so a development build
+# never puts a `kolux` on its panes' search path that would stand in for the installed one.
+[[bin]]
+name = "kolux"
+path = "src/bin/kolux.rs"
+required-features = ["release-cli"]
+
+[features]
+release-cli = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

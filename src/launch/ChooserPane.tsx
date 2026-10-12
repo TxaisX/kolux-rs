@@ -7,13 +7,16 @@
 // holds the task every seat shares, so the whole lineup is in view before Start. Start sits in a
 // footer below the scrolling choices, so in a small pane it stays in view after a pick. Saved shapes
 // (SESS-020) sit after the built-in ones; each has a menu to rename or delete it, and a delete can
-// be undone from the note it leaves.
+// be undone from the note it leaves. A model with
+// effort levels or fast mode shows those options on its seat only (SESS-016); "Use last lineup"
+// (SESS-021) appears when this project has one whose agents are still here.
 import { useEffect, useRef, useState } from "react";
 import { Close, Dots } from "../chrome/icons";
 import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
-import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape } from "./seats";
+import { canLaunch, type AgentPass } from "./agents";
+import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
 
 type Props = {
   /** The session's number, shown in the header. */
@@ -44,11 +47,29 @@ type Props = {
   saved: SavedShape[];
   onSaved: (list: SavedShape[]) => void;
   onPickSaved: (shape: SavedShape) => void;
+  /** SESS-002: where the agent search stands; Start waits for a pass that succeeded. */
+  pass?: AgentPass;
+  onRefresh?: () => void;
+  /** SESS-021: this project's last lineup, when it has one worth offering; applied only on the click. */
+  lastLineup?: Lineup | null;
+  onUseLineup?: () => void;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup }: Props) {
+  const nameOf = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
+  // TERM-012: a chooser Kolux focuses takes the keyboard, so typing no longer lands in the last pane.
+  const box = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (focused && !hidden && !box.current?.contains(document.activeElement)) box.current?.focus();
+  }, [focused, hidden]);
+  // A program with no model list has nothing to pick: its seat uses the program's own default.
+  const pickAgent = (i: number, id: string) => {
+    const only = modelsFor(id).length === 1;
+    setSeat(i, { agent: id, model: id !== TERMINAL && only ? DEFAULT_MODEL : null, effort: undefined, fast: undefined });
+  };
   const setSeat = (i: number, patch: Partial<Seat>) => onSeats(seats.map((s, j) => (j === i ? { ...s, ...patch } : s)));
-  const ready = allReady(seats) && !busy;
+  const searched = !pass || canLaunch(pass);
+  const ready = allReady(seats) && !busy && searched;
   const anyReady = seats.some(seatReady);
   // SESS-022: a line per provider near its limit, above Start; it never disables Start.
   const warnings = launchWarnings(seats.map((s) => s.agent), useLaunchUsage());
@@ -84,7 +105,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
     else e.currentTarget.value = String(seats.length);
   };
   return (
-    <section className={`pane chooser${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Session ${number} chooser`} onMouseDown={onFocus}>
+    <section ref={box} tabIndex={-1} className={`pane chooser${focused ? " focused" : ""}`} hidden={hidden} aria-label={`Session ${number} chooser`} onMouseDown={onFocus}>
       <header className="pane-head">
         <span className="title">Session {number}</span>
         <span className="word">Choose what to run</span>
@@ -98,6 +119,20 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
       </header>
       <div className="chooser-body">
         <p className="caption">Every seat starts blank. Kolux never picks an AI or a model for you.</p>
+        {pass?.error ? (
+          <p className="caption warn" role="alert">
+            Kolux could not look for agents ({pass.error}). Nothing can start until a search succeeds.
+          </p>
+        ) : pass && !pass.done ? (
+          <p className="caption">Looking for agents…</p>
+        ) : null}
+        {lastLineup && onUseLineup && (
+          <div className="count-row">
+            <button className="btn" onClick={onUseLineup} title="Put back this project's last shape, folders choice and each seat's AI and model">
+              {`Use last lineup: ${lineupAgents(lastLineup).map(nameOf).join(", ")}`}
+            </button>
+          </div>
+        )}
         <div className="count-row" role="group" aria-label="Launch shape">
           <span className="label">Shape</span>
           {SHAPES.map((s) => (
@@ -232,26 +267,50 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
               <div className="choices" role="radiogroup" aria-label={`Seat ${i + 1}: which AI`}>
                 {agents.map((a) => (
                   <label key={a.id} className="choice">
-                    <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => setSeat(i, { agent: a.id, model: null })} />
+                    <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
                     <VendorMark agent={markFor(a.id)} size={12} />
                     {a.name}
                   </label>
                 ))}
                 <label className="choice">
-                  <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === TERMINAL} onChange={() => setSeat(i, { agent: TERMINAL, model: null })} />
+                  <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === TERMINAL} onChange={() => pickAgent(i, TERMINAL)} />
                   <VendorMark agent="shell" size={12} />
                   Terminal
                 </label>
               </div>
+              {seat.agent !== null && seat.agent !== TERMINAL && modelsFor(seat.agent).length === 0 && <span className="caption">Uses the program's default model</span>}
               {seat.agent !== null && modelsFor(seat.agent).length > 0 && (
                 <div className="choices" role="radiogroup" aria-label={`Seat ${i + 1}: which model`}>
                   <span className="label">{seat.model === null ? "Pick a model" : "Model"}</span>
                   {modelsFor(seat.agent).map((m) => (
                     <label key={m.id} className="choice">
-                      <input type="radio" name={`seat-${number}-${i}-model`} checked={seat.model === m.id} onChange={() => setSeat(i, { model: m.id })} />
+                      <input type="radio" name={`seat-${number}-${i}-model`} checked={seat.model === m.id} onChange={() => setSeat(i, { model: m.id, effort: undefined, fast: undefined })} />
                       {m.label}
                     </label>
                   ))}
+                </div>
+              )}
+              {(choiceOf(seat)?.efforts || choiceOf(seat)?.fast) && (
+                <div className="choices">
+                  {choiceOf(seat)?.efforts && (
+                    <label className="choice">
+                      Effort
+                      <select aria-label={`Seat ${i + 1}: effort`} value={seat.effort ?? ""} onChange={(e) => setSeat(i, { effort: e.currentTarget.value || undefined })}>
+                        <option value="">Model default</option>
+                        {choiceOf(seat)?.efforts?.map((l) => (
+                          <option key={l} value={l}>
+                            {l}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  {choiceOf(seat)?.fast && (
+                    <label className="choice" title="Faster answers at a higher price per token">
+                      <input type="checkbox" aria-label={`Seat ${i + 1}: fast mode`} checked={seat.fast === true} onChange={(e) => setSeat(i, { fast: e.currentTarget.checked || undefined })} />
+                      Fast mode
+                    </label>
+                  )}
                 </div>
               )}
               {seat.agent !== null && seat.agent !== TERMINAL && (
@@ -275,7 +334,12 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
           </div>
         ))}
         <div className="btn-row">
-          <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : "Pick an AI and a model (or Terminal) for every seat first"}>
+          {onRefresh && (
+            <button className="btn" disabled={pass?.looking} onClick={onRefresh} title="Look for installed agent CLIs again, for one you just installed">
+              {pass?.looking ? "Looking…" : "Refresh agents"}
+            </button>
+          )}
+          <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : !searched ? "Waiting for a search for agents that succeeds" : "Pick an AI and a model (or Terminal) for every seat first"}>
             {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
           </button>
         </div>

@@ -125,7 +125,13 @@ export function previewSentence(typed: string, preview: Preview | null, project:
 export type CliWorkspace =
   | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean }
   | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null }
-  | { kind: "removed"; path: string };
+  | { kind: "removed"; path: string }
+  // CLI-026, CLI-027: the terminal commands; ask is the request the window answers through its layout.
+  | { kind: "terminal-create"; path: string; branch: string | null; command: string | null; title: string | null; focus: boolean; ask: string }
+  | { kind: "terminal-split"; handle: string; dir: "right" | "down"; command: string | null; ask: string }
+  | { kind: "terminal-rename"; handle: string; title: string | null }
+  | { kind: "terminal-switch"; handle: string }
+  | { kind: "terminal-close"; handles: string[] };
 
 // SESS-035: the composer's project search. The typed letters in order inside `text`: one run when
 // they appear together, else the first letters that fit; null when they are not all there.

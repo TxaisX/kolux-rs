@@ -1,11 +1,11 @@
 //! Terminal panes as the front end sees them: numbered sessions, output pushed as events, input
 //! and resize taken as commands. Every open session is killed when the window goes away.
 
-use crate::pty::{program_command, shell_command, start_dir, PtySession};
+use crate::pty::{check_start_dir, inherited_noise, is_shell_program, program_command, shell_commands, start_dir, PtySession};
 use base64::Engine as _;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub const OUTPUT_EVENT: &str = "terminal-output";
@@ -14,6 +14,9 @@ pub const EXIT_EVENT: &str = "terminal-exit";
 #[derive(Default, Clone)]
 pub struct Terminals {
     inner: Arc<Mutex<Inner>>,
+    /// CLI-023: where each terminal sits in the window (worktree pane, tab, title, in view), as the
+    /// window last reported it, plus the command-line requests it could not open.
+    layout: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 #[derive(Default)]
@@ -29,6 +32,8 @@ struct Inner {
     /// CLI-007 / ORCH-001: each session secret pane key, put in its environment as
     /// `KOLUX_PANE_KEY` next to its handle, so a command run inside it can prove which pane it is.
     keys: HashMap<u32, String>,
+    /// CLI-027: sessions whose process has ended, so a close can confirm the program is gone.
+    ended: HashSet<u32>,
 }
 
 /// `dir` at the front of a search path (CLI-007).
@@ -74,6 +79,10 @@ impl Terminals {
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>) -> Result<u32, String> {
+        // ACCT-049: checked before the lock, so a drive that does not answer holds up only this pane.
+        if let Some(dir) = cwd.as_deref() {
+            check_start_dir(dir, program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p)))?;
+        }
         let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
         inner.next_id += 1;
         let id = inner.next_id;
@@ -82,46 +91,62 @@ impl Terminals {
         let registry = self.inner.clone();
         let out_registry = self.inner.clone();
         let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty());
-        let mut command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            Some(p) => program_command(p, &args, cwd.as_deref()),
-            None => shell_command(cwd.as_deref()),
+        // ACCT-046: a program runs as asked; an automatic shell has a line of fallbacks.
+        let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            Some(p) => vec![program_command(p, &args, cwd.as_deref())],
+            None => shell_commands(cwd.as_deref()),
         };
-        // STAT-001: the pane's programs and their hooks know which pane to report for. Set first:
-        // the hooks find their pane by KOLUX_HOOK_IDENTITY and only check that KOLUX_PANE_KEY is set,
-        // so the command line's handle and pane key below (CLI-007, ORCH-013) take those two names.
-        if let (Some(pane), Some(hooks)) = (pane_key, exit_app.try_state::<crate::hooks::Hooks>()) {
-            for (k, v) in hooks.pane_env(pane, id) {
+        let key = crate::cli::secret();
+        for command in commands.iter_mut() {
+            // ACCT-048: an ordinary terminal's environment: none of Kolux's own runtime or build
+            // variables, no conda activation that came along only in part, no prompt-theme wizard.
+            for (k, _) in std::env::vars_os() {
+                if k.to_str().is_some_and(inherited_noise) {
+                    command.env_remove(k);
+                }
+            }
+            command.env("POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD", "true");
+            // STAT-001: the pane's programs and their hooks know which pane to report for. Set first:
+            // the hooks find their pane by KOLUX_HOOK_IDENTITY and only check that KOLUX_PANE_KEY is set,
+            // so the command line's handle and pane key below (CLI-007, ORCH-013) take those two names.
+            if let (Some(pane), Some(hooks)) = (pane_key, exit_app.try_state::<crate::hooks::Hooks>()) {
+                for (k, v) in hooks.pane_env(pane, id) {
+                    command.env(k, v);
+                }
+            }
+            command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
+            command.env("KOLUX_PANE_KEY", &key);
+            // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
+            // registered system-wide, and it is told which app folder to call. An installed copy keeps
+            // its CLI in the bin folder of the install (CLI-006); a development build runs kolux-dev
+            // from its own folder. ponytail: the Linux `kolux` launcher folder lands with that build.
+            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
+                let bin = dir.join("bin");
+                let dir = if bin.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }).is_file() { bin } else { dir };
+                let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
+                command.env("PATH", path);
+            }
+            if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
+                command.env(crate::cli::APP_DIR_ENV, dir);
+            }
+            // CLI-010: a Kolux started from another copy's terminal inherits that copy's data-folder
+            // override, which would send this pane's commands to the other app.
+            command.env_remove("KOLUX_USER_DATA_PATH");
+            // SET-027: the user's variables for this agent; Kolux's account variable below wins.
+            for (k, v) in &own_env {
+                command.env(k, v);
+            }
+            for (k, v) in &env {
+                // A pane on a managed Claude account must not be overridden by a 1-year key that
+                // Kolux itself was started with (Claude Code prefers the variable).
+                if k == crate::claude_accounts::CONFIG_ENV {
+                    command.env_remove(crate::claude_key::ENV);
+                }
                 command.env(k, v);
             }
         }
-        let key = crate::cli::secret();
-        command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
-        command.env("KOLUX_PANE_KEY", &key);
-        // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
-        // registered system-wide, and it is told which app folder to call. ponytail: the folder
-        // is the app's own; the release launcher (CLI-006, T-185) and the Linux `kolux` launcher
-        // folder land with the packaged build.
-        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(std::path::Path::to_path_buf)) {
-            let path = cli_first(&dir, command.get_env("PATH").map(std::ffi::OsStr::to_os_string));
-            command.env("PATH", path);
-        }
-        if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
-            command.env(crate::cli::APP_DIR_ENV, dir);
-        }
-        // SET-027: the user's variables for this agent; Kolux's account variable below wins.
-        for (k, v) in own_env {
-            command.env(k, v);
-        }
-        for (k, v) in env {
-            // A pane on a managed Claude account must not be overridden by a 1-year key that
-            // Kolux itself was started with (Claude Code prefers the variable).
-            if k == crate::claude_accounts::CONFIG_ENV {
-                command.env_remove(crate::claude_key::ENV);
-            }
-            command.env(k, v);
-        }
-        let session = PtySession::spawn(
-            command,
+        let session = PtySession::spawn_first(
+            commands,
             cols.max(2),
             rows.max(1),
             move |chunk| {
@@ -142,6 +167,7 @@ impl Terminals {
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
                     inner.keys.remove(&id);
+                    inner.ended.insert(id);
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
@@ -156,6 +182,11 @@ impl Terminals {
             inner.dirs.insert(id, dir);
         }
         Ok(id)
+    }
+
+    /// ACCT-046: the program session `id` actually started.
+    pub fn started(&self, id: u32) -> Option<String> {
+        self.inner.lock().ok()?.sessions.get(&id).map(|s| s.program().to_string())
     }
 
     pub fn write(&self, id: u32, data: &str) -> Result<(), String> {
@@ -269,10 +300,44 @@ impl Terminals {
 
     /// CLI-017: every open session as (handle, the folder it started in, its program; none for a shell).
     pub fn sessions(&self) -> Vec<(String, String, Option<String>)> {
+        self.every().into_iter().filter_map(|(h, dir, program)| Some((h, dir?, program))).collect()
+    }
+
+    /// CLI-023: every open session, a shell started in the home folder (no folder) included.
+    pub fn every(&self) -> Vec<(String, Option<String>, Option<String>)> {
         let Ok(inner) = self.inner.lock() else { return Vec::new() };
         let mut ids: Vec<u32> = inner.sessions.keys().copied().collect();
         ids.sort_unstable();
-        ids.into_iter().filter_map(|id| Some((handle_of(id), inner.dirs.get(&id)?.clone(), inner.marks.get(&id).map(|m| m.program.clone())))).collect()
+        ids.into_iter().map(|id| (handle_of(id), inner.dirs.get(&id).cloned(), inner.marks.get(&id).map(|m| m.program.clone()))).collect()
+    }
+
+    /// CLI-023: the window's latest report of its panes and tabs.
+    pub fn layout(&self) -> Vec<serde_json::Value> {
+        self.layout.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+
+    pub fn set_layout(&self, rows: Vec<serde_json::Value>) {
+        if let Ok(mut l) = self.layout.lock() {
+            *l = rows;
+        }
+    }
+
+    /// CLI-027: ends a session and waits up to three seconds for its process to be gone; true only
+    /// once that is confirmed. A session that had already ended counts as stopped.
+    pub fn close(&self, handle: &str) -> bool {
+        let Some(id) = id_of(handle) else { return false };
+        if !self.live(handle) {
+            return true;
+        }
+        let _ = self.kill(id);
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            if self.inner.lock().map(|mut i| i.ended.remove(&id)).unwrap_or(false) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
     }
 
     /// The folder terminal `handle` was started in (ORCH-014 checks it for base drift).
@@ -301,7 +366,7 @@ impl Terminals {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>) -> Result<u32, String> {
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>) -> Result<Spawned, String> {
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
@@ -316,6 +381,8 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
             .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
             .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
+            // ACCT-008: a Grok pane gets the saved xAI key; Grok itself prefers its own sign-in.
+            .or_else(|| crate::grok::pane_env(program.as_deref(), crate::secrets::read_setting(&store, crate::grok::KEY_FIELD).ok().flatten()))
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
@@ -331,7 +398,15 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
     if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
         crate::hooks::install_codex_home(std::path::Path::new(home));
     }
-    terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)
+    let id = terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)?;
+    Ok(Spawned { id, program: terminals.started(id) })
+}
+
+/// A started pane: its id and the program that runs in it (ACCT-046 names a fallback shell).
+#[derive(serde::Serialize)]
+pub struct Spawned {
+    id: u32,
+    program: Option<String>,
 }
 
 /// TERM-045: for each id, whether closing it would stop a live program.
@@ -369,6 +444,12 @@ mod tests {
         assert_eq!(parts, ["D:\\app", "C:\\old\\kolux", "C:\\Windows"].map(std::path::PathBuf::from));
         assert_eq!(std::env::split_paths(&cli_first(dir, None)).count(), 1);
     }
+}
+
+/// CLI-023: the window reports which terminal sits in which pane and tab.
+#[tauri::command]
+pub fn terminal_layout(terminals: tauri::State<'_, Terminals>, rows: Vec<serde_json::Value>) {
+    terminals.set_layout(rows);
 }
 
 #[tauri::command]

@@ -3,9 +3,9 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-013-c · The two rules of the create-workspace card that T-013 left out (a creation overtaken by a newer one is cancelled and its half-made checkout removed; a stand-in tab while Git works)
-Done: 138 / 419 tasks  ·  P0 parity: 0/228 cards
+Done: 153 / 425 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 419 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 425 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
@@ -1233,6 +1233,88 @@ straight into the Windows section of ~/.kolux/keybindings.json, leaving the rest
 was, and every open window picks it up. A shortcut that clashes shows Conflicts on both rows with a
 Reset button on the one that caused it. Double-tapping a modifier and the app menu refresh are later (T-246, T-248).
 
+T-092-a turns Settings > Accounts & keys into a grid of three Connect cards (Claude, Codex, Grok), each with a
+one-line tagline and a loading placeholder until Kolux has looked. An agent that is not on the PC gets Install:
+Kolux installs it through the Windows package manager with a progress bar and Cancel, stops it after 15
+minutes, explains failures in plain words, and once it is in the card moves on to sign-in with no restart.
+Managed Claude accounts sit under "Manage accounts (advanced)".
+
+T-092-b gives every Connect card one state at a time (not connected, connecting, connected, needs attention)
+with an "Other ways to connect" menu, a Cancel that also clears a leftover problem note, and buttons that
+come back after 30 s if nothing answers. Grok connects by its own CLI login in the browser, by a device code,
+or by pasting an xAI API key (advanced, pay-per-use) once into a small dialog; the key is sealed, never shown
+again and handed to new Grok panes. A Grok sign-in already on the PC shows as connected. To try Codex's
+connect live Txais needs Codex's native build (this PC has the npm script wrapper) and his own ChatGPT sign-in.
+
+T-099 makes the agent menus honest: Refresh agents finds a newly installed agent without a restart, agents
+switched off in Settings drop out of every menu, and a fresh install starts with no default agent until you
+pick one with "Set as default". The New tab menu now lists each shell installed here (Windows PowerShell,
+Command Prompt, Git Bash; WSL once a Linux distribution is set up), an empty agent chooser, and new or
+existing markdown files.
+
+T-185-a gets the command line ready to ship: an installed copy will carry `kolux` and a `kolux.cmd` shim in
+its own folder, and its terminals find them first. If Kolux is closed the command says to run `kolux open`;
+if it is open but slow, or the answer gets lost, it says so instead, and for a lost change it prints the
+exact command that finishes it without doing it twice. `request-show` and `reset` let an agent check and
+clear orchestration state. Putting that folder on the system PATH comes with T-250.
+
+T-202 makes Disconnect safe: each one asks first and only ever deletes what Kolux itself created, a
+saved key or an account Kolux added. When Codex or Grok is connected through a login you made yourself,
+Disconnect deletes nothing and tells you the one command that signs out in that tool. Connected Codex and
+Grok cards now have Manage next to Disconnect, and quitting Kolux stops any sign-in or install still running.
+
+T-203 lets you add a folder that has no Git yet. Kolux shows the files its first commit would hold, with
+anything that looks like a password or key file (.env, .pem and the like) unticked, then starts Git and
+commits only what you left ticked.
+
+T-204 adds Starter kits to the sidebar: six ready-made jobs for three AIs. Pick one, point it at your
+CSV or notes (or press Try with sample data) and Kolux remembers what you entered for that project.
+Pressing Start kit does not run the AIs yet; that is the next task.
+
+T-205 makes Start kit run: one session per role, titled like "Analyst · Claude". A strip above the
+sessions counts the roles that are done, opens the results folder, and says per role whether its AI
+is working, waiting on another role, needs you, or stopped. The checker waits for the analyst and
+gets its instructions by itself when the analyst finishes. Your last run's results are kept in a
+dated copy. Also fixed: a new session could sit blank forever when several started at once.
+
+T-098 adds keyboard travel. Ctrl+Shift+Up and Down step through the sidebar's workspaces and wrap
+at the ends, Ctrl+1 to Ctrl+9 jump to a position, and Ctrl+Alt+Left and Right (or the two arrows
+in the top bar) go back and forward like a browser. Ctrl+Shift+J, or clicking Search, opens a
+palette: type a few words to jump to a tab, workspace, project or Settings page, or to start a new
+workspace with that name.
+
+T-100-a adds per-seat options to the launch screen. A Claude Opus or Sonnet seat gets an effort
+picker, and Opus a fast-mode box (fast mode bills usage credits). After a launch, the launch screen
+in that project offers "Use last lineup", which puts back the shape, the folders choice and each
+seat's AI and model. A Claude tab opened from the plus menu now starts on Opus at high effort,
+unless your own Claude arguments on the Agents page already name a model or effort.
+
+T-101-a: Settings > Terminal & sessions has "New workspaces start with" (1, 2, 4, 6, 9 or 12
+panes). A workspace made from the sidebar then opens its terminal plus empty panes that ask what to
+run; the classic look and reopened workspaces stay at one. A session started into a workspace, for
+example by a starter kit, takes an empty pane before it adds a new one. Ctrl+] and Ctrl+[ move
+between panes and wrap around, and typing follows. Two things wait in T-101-b: checking the
+add/remove-session shortcuts with keys assigned, and Equalize, which needs resizable panes.
+
+T-103-a: terminals keep their place when you switch workspaces or screens. One scrolled up stays
+on the same line, one at the bottom keeps following new output, and a full-screen program still
+gets the mouse wheel. T-103-b waits on checking the add/remove-session shortcuts with keys
+assigned, and on settling whether removing an empty pane should ask first.
+
+T-104-a: a new terminal picks the best shell that will actually start. PowerShell 7 if you have
+it, otherwise Windows PowerShell, otherwise the command prompt set up for Unicode text, and the
+pane header says which one you got. Terminals no longer carry Kolux's own behind-the-scenes
+variables or a half-started Python environment. A project folder that was moved, or sits on a
+drive that is unplugged, now says so instead of opening somewhere else, and an agent will not
+start by itself at the top of a drive. T-104-b waits on the shell-ready signal and on the macOS
+and Linux fallback.
+
+T-105: the kolux-dev command line can now list the open terminals (by project, pane and tab),
+open a new one, split one, rename one, bring one into view, and close one, a pane's tabs, or a
+whole project's terminals. A new terminal opens quietly in the background unless you ask for it
+to come forward, and closing checks that each program really stopped. The old terminal stop
+still works and tells you to use close.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -1288,6 +1370,20 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-09 · [release] T-095-a · Artifacts are stored per page path under the app data folder with capped assets from the page's own folder; the viewer is a sandboxed frame on a kolux-artifact scheme limited to the entry's files; outside links go to the system browser (DT-R21).
 - 2026-10-09 · [release] T-095-b · Claude publishes are read from session transcripts only, from each file's end at start, with publishes over 60 s older than start ignored as replay; one entry per URL, newest wins; CDN scripts from Claude's own allow-list are stored offline; paths this machine cannot read are remote (DT-R22).
 - 2026-10-09 · [release] T-097 · kolux open asks a running app to come forward first and starts the app beside the command only when none answers, then waits up to 60 s; KOLUX_USER_DATA_PATH and KOLUX_APP_EXECUTABLE override where it looks and what it starts (DT-R23).
+- 2026-10-12 · [release] T-105 · kolux-dev terminal list, show, create, split, rename, switch (focus) and close now work against the open window; new terminals stay in the background unless asked, close confirms each program stopped and leaves the caller's own terminal open, and terminal stop is a hidden alias (DT-R37).
+- 2026-10-12 · [release] T-104-a · A pane with no program starts the best shell that will run (PowerShell 7, Windows PowerShell, then the command prompt in UTF-8), the header names the one that started, panes no longer inherit Kolux's own build variables, and a folder that is gone, unplugged or a drive root (for agents) gets a message (DT-R36).
+- 2026-10-12 · [release] T-103-a · Terminals you are not looking at stay alive rather than being parked to save memory, so they come back exactly as left (DT-R35).
+- 2026-10-12 · [release] T-101-a · New workspaces can start with several empty panes (never in the classic look or on reopen); a started session fills an empty pane first; Ctrl+] and Ctrl+[ move the keyboard between panes, wrapping (DT-R34).
+- 2026-10-12 · [release] T-100-a · Effort and fast mode only on Claude models; Claude Code with nothing picked starts on Opus at high effort unless its own arguments name a model or effort; the last lineup is kept per project once an agent really starts (DT-R33).
+- 2026-10-12 · [release] T-098 · Keyboard moves follow the sidebar as shown; history keeps 50 places; the palette's Create workspace row opens the name field prefilled instead of creating at once (DT-R32).
+- 2026-10-12 · [release] T-205 · Earlier kit results are copied, not moved, into a dated folder; the run record is hidden in kit-results; waiting roles are checked every ten seconds (DT-R31).
+- 2026-10-12 · [release] T-204 · Kit roles fall back round the connected AIs, results go to kit-results, samples live in kolux-rs\samples under their own Git name (DT-R30).
+- 2026-10-12 · [release] T-203 · Secret-looking files are left out of a first commit by name, not content, and the user's own Git identity signs it (DT-R29).
+- 2026-10-12 · [release] T-202 · Disconnect deletes only what Kolux made and always asks first; for a login the user made it only explains how to sign out in that tool, and removing the active Codex account leaves none active (DT-R28).
+- 2026-10-12 · [release] T-185-a · The installed CLI is a kolux.exe plus kolux.cmd shim in the install's bin folder, built only by the release script; only a refused connection means the app is down, lost answers print an exact --retry-request command, and reset takes exactly one scope (DT-R27).
+- 2026-10-11 · [release] T-099 · A fresh install has no default agent (the spec forbids Kolux picking one), Refresh agents blanks a seat whose agent left instead of swapping it, WSL shows only with a distribution, and Remove session never closes the last empty chooser (DT-R26).
+- 2026-10-11 · [release] T-092-b · Grok connects through its own CLI login against the user's own Grok home (no private home, unlike Codex); Kolux checks only that its auth.json exists, a CLI sign-in outranks a saved xAI key, and the key reaches Grok panes as XAI_API_KEY; Manage and Disconnect on Codex and Grok wait for T-202 (DT-R25).
+- 2026-10-11 · [release] T-092-a · Connect cards install missing agents through WinGet (Anthropic.ClaudeCode, OpenAI.Codex, xAI.GrokBuild), read the PATH again from the registry afterwards and treat a finished install whose program is still missing as a failure; Grok shows no vendor mark until a public xAI kit file is found (DT-R24).
 - 2026-10-07 · Task size: tasks group neighbouring cards of one tier, theme and area, at most 4 P0
   cards, 5 P1, 6 P2 or 5 H cards per task. That gives 338 tasks; at 6 passes a day the plan runs
   about 57 days if every task takes one pass. A task that proves too big is split in place.
@@ -1786,6 +1882,20 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [orchestration] T-198: `agent-context --json` and the skills commands answer in the same envelope as every other command, with the document as its result; aliases are listed by their full words (worktree remove, worktree delete); the four bundled guides are new clean-room text written for this build, short guide = the skill file without its header, full = the guide followed by every reference; topic aliases are cli and kolux, orch, security, ward and injection; gate-create's no-Run refusal applies to gate-create only, and an explicit --from is never checked for being alive, though under ORCH-001 it still has to match the terminal the command runs in.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [release] T-105 · done: CLI-023 CLI-026 and, as T-185-b, CLI-027 built and proven live from a shell outside Kolux RS against the lane app: list drew worktree, pane and tabs with the hosts line, show named pane, tab and in view, create opened in the background and came forward only with focus, a one-shot command stayed back, split opened beside a parked tab without moving the focus, rename and its reset, switch and focus, close of one terminal, of a pane's tabs, of a worktree from inside it (its own terminal left open), and the stop alias; reload survival, the navigation-took-over answer and other hosts not built (DT-R37) · evidence/T-105-live.txt, T-105-create-focus.png, T-105-split.png, T-105-switch.png, T-105-close-inside.png
+- 2026-10-12 · [release] T-104-a · done: ACCT-046 ACCT-048 ACCT-049 built and proven live: with PowerShell 7 refused (access denied) the pane opened Windows PowerShell, with that gone too it opened the command prompt at code page 65001; a pane started from a partial conda activation under pnpm tauri dev showed none of those variables; an agent at a drive root was refused while a shell opened, a subst drive removed gave the not-connected message, and a project whose folder was moved showed the no-longer-exists message in the pane; T-104-b (ACCT-047 ready signal, ACCT-065 macOS and Linux fallback) left open · evidence/T-104-live.txt, T-104-auto-env.png, T-104-cmd.png, T-104-gone.png
+- 2026-10-12 · [release] T-103-a · done: VIEW-108 proven live with no code change: a terminal scrolled up mid-stream came back on the same row after a workspace switch, a pinned one kept following new output, and a Windows full-screen program (a console-mouse stand-in) still counted wheel events after a workspace switch and a Board round trip; cdp.mjs gains a wheel command; T-103-b (VIEW-036 live check with keys assigned, plus the VIEW-036 vs SESS-008 confirm conflict) left open · evidence/T-103-live.txt, T-103-scrolled.png, T-103-back.png, T-103-pinned.png, T-103-mouse.png, T-103-mouse-back.png
+- 2026-10-12 · [release] T-101-a · done: Settings > Terminal & sessions picks how many panes a new workspace starts with (shell plus empty choosers, checked with 4 and in the classic look), a kit started into a seeded grid filled its three empty panes and into a full one added cells with the running ones untouched, the sidebar's New session agent pick now uses the agent's start line, and Ctrl+] / Ctrl+[ cycle focus and keyboard with wrap; T-101-b (TERM-002 with keys assigned, TERM-009 equalize) left open; the kit's "Try with sample data" button made C:UsersXiongTkolux-rssamplesspreadsheet during the test and the lane could not delete it · evidence/T-101-live.txt, T-101-setting.png, T-101-seeded.png, T-101-filled.png, T-101-full.png, T-101-focus.png, T-101-launch.png
+- 2026-10-12 · [release] T-100-a · done: each lineup seat offers effort and fast mode when its Claude model has them, Use last lineup brings back a project's shape, folders and each seat's AI and model, Claude Code started with nothing picked gets its top model at high effort, and the per-agent command, arguments and environment and the new-tab shortcuts were checked live; T-100-b (live model lists) left open · evidence/T-100-live.txt, T-100-options.png, T-100-lineup.png, T-100-project-b.png, T-100-claude-env.png, T-100-shortcuts.png
+- 2026-10-12 · [release] T-098 · done: next and previous workspace (wrapping, folded rows skipped), Mod+1..9, focus the list, back and forward through workspaces and pages (keys and top bar arrows, removed workspaces skipped), and the worktree palette (open tabs, worktrees, projects, settings pages, quick actions, pull requests; every word must match, matches underlined, Create workspace from the typed name, long pastes refused) · evidence/T-098-live.txt, T-098-palette.png, T-098-settings.png, T-098-create.png
+- 2026-10-12 · [release] T-205 · done: Start kit opens one titled session per role (reusing an idle first shell), keeps the last run's results in a dated copy, writes a hidden run record, gives every role the seven plain rules, types a waiting role its prompt once the role it waits on writes DONE, and shows a foldable results strip whose rows say what each AI is up to; also fixed a race where a pane dropped its program's first output and the program never started · evidence/T-205-live.txt, T-205-started.png, T-205-done.png, T-205-conflict.png, T-205-second-kit.png
+- 2026-10-12 · [release] T-204 · done: six starter kits with a gallery (sidebar row), roles assigned to connected AIs, a setup dialog that checks file inputs on disk, refuses Excel workbooks, drops paste quotes, takes dropped files and warns on empty required fields, Try with sample data (built-in samples copied once into their own Git project), and inputs recalled per project. Live: gallery read back, workbook, missing-file and needed warnings, samples created then unchanged on a second try, real inputs recalled on reopen, sample runs not remembered. Start kit shows a placeholder until T-205 · evidence/T-204-live.txt, T-204-gallery.png, T-204-workbook.png, T-204-needed.png, T-204-samples.png, T-204-recalled.png
+- 2026-10-12 · [release] T-203 · done: adding a folder without Git opens a first-commit preview (the folder's .gitignore honoured, secret-looking names unticked and labelled) and Start Git and commit, which inits, commits exactly the ticked files and adds the project, removing the new .git if a step fails; relative, missing and already-Git paths refused. Live: a throwaway folder with .env, deploy.pem and an ignored build/ previewed with 2 left out, one commit of the other 4, the project added and its workspace opened, the three refusals. The automatic folder-to-Git switch moves to T-214 with folder projects · evidence/T-203-live.txt, T-203-preview.png, T-203-added.png
+- 2026-10-12 · [release] T-202 · done: every Disconnect asks first (the tab-close question generalised, with an explain-only single-OK form); Claude's erases the 1-year key; Codex's removes the active account Kolux made with its home and sealed copy, and with only Codex's own login explains `codex logout`; Grok's erases only the saved xAI key and explains `grok logout` for the CLI sign-in; connected Codex and Grok cards gain Manage beside Disconnect; quitting cancels every running hidden sign-in, key setup and install. Live: all five dialogs, a stand-in Codex account added then removed (home and vault copy gone, own login sha256 unchanged), the xAI key erased with the Grok sign-in kept, the Claude key erased, a Grok code sign-in's processes gone after quit · evidence/T-202-live.txt, T-202-*.png
+- 2026-10-12 · [release] T-185-a · done: `src-tauri/cli/kolux.cmd` (forwards to the kolux.exe beside it with its exit status, declines orchestration send/reply with 2, missing launcher 1) and its cmd-run integration test; a `kolux` program behind the release-cli feature that the release script builds and bundles into `bin/` with the shim; panes prefer the install's bin folder and drop an inherited KOLUX_USER_DATA_PATH; call() tells app down from lost answer, timeout and version gap; every answer carries meta.appVersion and an older app refuses changes from a newer CLI; lasting UUID retry ids with the printed retry command; request-show and reset with one scope; PowerShell 5.1 stripped-quote JSON spotted. Live: shim exit statuses with the app open and closed, a two-line body through kolux.exe stored unchanged, one task for two creates with one retry id, request-show before and after reset, a lane pane reaching its own app. T-185-b (terminal close) waits for T-105 · evidence/T-185-live.txt, T-185-pane-cli.png
+- 2026-10-11 · [release] T-099 · done: `shell_list` in pty.rs (installed shells once each, PowerShell first, WSL only with a default distribution), Refresh agents in the plus menu and chooser (one search, told to every window, seats of a vanished or switched-off agent go blank, a failed search keeps the list and warns), no default agent on a fresh install, all-off empty state with Agent settings..., create menu with each shell, Choose agent..., New/Open markdown; Add/Remove session actions (remove never closes a lone chooser). Live with stub agents: fresh default, Grok as default through Ctrl+Shift+K, Grok off, all off, Refresh adding and removing a stub Gemini (seat 2 blanked), Git Bash and Command Prompt tabs as real children, Choose agent... opening an empty chooser. The two session shortcuts ship unbound, so they are unit-tested only. Importer carry-over of switched-off agents and the default agent is T-181 / T-075 · evidence/T-099-*.png, T-099-live.txt
+- 2026-10-11 · [release] T-092-b · done: `grok.rs` (Grok CLI login by browser or device code run hidden, sign-in told by its auth.json, sealed xAI key handed to Grok panes, Cancel that ends the login or wipes a leftover note) and the Grok card with its key dialog; all three cards now share "Other ways to connect", a needs-attention state with Cancel, and a 30 s pending release. Live with a stand-in grok: device code, Cancel, browser route to connected, key dialog (disabled, Cancel blanks it on reopen, sealed, never on the page), sign-in wins over key, expired code to needs attention and Cancel wiping it; Codex's wrapper refusal wiped by Cancel. Codex's real ChatGPT sign-in needs Txais · evidence/T-092-b-*.png, T-092-b-live.txt
+- 2026-10-11 · [release] T-092-a · done (T-092 split; T-092-b keeps ACCT-002's state machine and ACCT-008 Grok sign-in): `install.rs` (WinGet install in a hidden terminal, progress from its printed sizes, 15-minute stop, exit codes to plain reasons, registry PATH re-read, found-after check, cancel and restart per agent) and `ConnectGrid.tsx` (Claude, Codex, Grok grid with taglines, loading placeholder, Install / progress / Cancel, Open install page, Manage accounts (advanced)). Live with a stand-in winget: only-Claude grid, Codex install 50% then Codex's own card with no restart, Grok cancel, Grok finished-but-not-found failure. One real xAI.GrokBuild install happened by mistake in testing and was uninstalled (see live.txt) · evidence/T-092-a-*.png, T-092-a-live.txt
 - 2026-10-12 · [orchestration] T-134 · HAND TO FABLE: all three cards sit on the hard list. terminal read needs PTY internals: today the reader thread in pty.rs / terminal.rs sends output straight to the window (the output event) and keeps no history, so cursors and limits need a kept, cursor-numbered output buffer in that thread, and --screen needs a terminal grid (a VT parser on the Rust side, or a round trip to the window's xterm buffer over IPC); send's "the turn began" receipt, wait --for tui-idle and all of CLI-040 (agent hooks status, on, off, prepare-codex) need the agent status hooks, T-025, unticked. Only send without a receipt and wait --for exit would be buildable now, and neither meets an acceptance line on its own. No code was written, so nothing was reverted; left unticked
 - 2026-10-12 · [orchestration] T-193-b · not built, left unticked. Hermes and OpenClaw cron jobs can only be read and proven with those tools installed, and neither is on this PC; the command group part of this line was built on T-197-a
 - 2026-10-12 · [orchestration] T-192-b · not built, left unticked. The precheck needs no other task, but proving it needs a timed or event-started run and its `--precheck` and `--precheck-timeout` flags sit on T-197-b, so the two belong in one pass; keeping one agent session across runs needs each run's agent session id and resume (with session transcripts, T-169); the grace window in the templates waits on T-175
