@@ -64,6 +64,20 @@ pub struct Change {
     /// The file a write tool just finished with (VIEW-023: the card links to the newest one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrote: Option<String>,
+    /// Why a blocked state happened (STAT-022): `limit`, `signin` or `error`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<&'static str>,
+}
+
+/// STAT-022's three causes for Claude Code's failure kinds (the StopFailure `error` values): a
+/// rate limit is the limit; authentication, an organisation that is not allowed and failed
+/// verification are sign-in; everything else, known or not, is the provider's error.
+pub fn stop_cause(error: &str) -> &'static str {
+    match error {
+        "rate_limit" => "limit",
+        "authentication_failed" | "oauth_org_not_allowed" | "verification_required" => "signin",
+        _ => "error",
+    }
 }
 
 fn trim(s: &str, max: usize) -> String {
@@ -105,11 +119,11 @@ pub fn claude_change(event: &Value) -> Option<Change> {
         }),
         // The interrupted flag and "stays working while a child works" are the session's (status.rs).
         "Stop" => plain("done"),
-        "StopFailure" => Some(Change {
-            state: "blocked",
-            detail: str_of("error").or_else(|| str_of("error_type")).or_else(|| str_of("message")).map(|e| trim(&fold(e), 160)),
-            ..Change::default()
-        }),
+        "StopFailure" => {
+            // STAT-022: a failure report with no error attached is not a stop.
+            let error = str_of("error")?;
+            Some(Change { state: "blocked", cause: Some(stop_cause(error)), detail: str_of("error_details").map(|e| trim(&fold(e), 160)), ..Change::default() })
+        }
         "PreToolUse" => Some(Change {
             state: if matches!(tool.as_deref(), Some("AskUserQuestion" | "ExitPlanMode")) { "waiting" } else { "working" },
             detail: tool_detail(event.get("tool_input")),
@@ -610,8 +624,16 @@ mod tests {
         assert_eq!(c(r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"file_path":"C:/x/b.ts"}}"#).unwrap().wrote, None);
         assert_eq!(c(r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Write"}"#).unwrap().state, "working");
         assert_eq!(c(r#"{"hook_event_name":"Stop"}"#).unwrap().state, "done");
-        let b = c(r#"{"hook_event_name":"StopFailure","error":"rate limit reached"}"#).unwrap();
-        assert_eq!((b.state, b.detail.as_deref()), ("blocked", Some("rate limit reached")));
+        // STAT-022: the failure's error names the cause; details ride along; no error, no stop.
+        let b = c(r#"{"hook_event_name":"StopFailure","error":"rate_limit","error_details":"resets at 3pm"}"#).unwrap();
+        assert_eq!((b.state, b.cause, b.detail.as_deref()), ("blocked", Some("limit"), Some("resets at 3pm")));
+        for e in ["authentication_failed", "oauth_org_not_allowed", "verification_required"] {
+            assert_eq!(c(&format!(r#"{{"hook_event_name":"StopFailure","error":"{e}"}}"#)).unwrap().cause, Some("signin"), "{e}");
+        }
+        for e in ["overloaded", "server_error", "billing_error", "something_new"] {
+            assert_eq!(c(&format!(r#"{{"hook_event_name":"StopFailure","error":"{e}"}}"#)).unwrap().cause, Some("error"), "{e}");
+        }
+        assert!(c(r#"{"hook_event_name":"StopFailure"}"#).is_none(), "a failure report with no error attached is not a stop");
         let m = c(r#"{"hook_event_name":"PostCompact","trigger":"manual"}"#).unwrap();
         assert_eq!((m.state, m.boundary), ("done", true));
         assert!(c(r#"{"hook_event_name":"PostCompact","trigger":"auto"}"#).is_none());

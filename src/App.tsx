@@ -32,8 +32,8 @@ import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
-import { noteTitle, turnNote, type Turn } from "./terminal/notify";
-import { FINISH_FIELD } from "./settings/Notifications";
+import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
+import { FINISH_FIELD, STOPPED_FIELD } from "./settings/Notifications";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, Globe, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
@@ -117,7 +117,7 @@ function Window() {
   // STAT-050: when each pane's state last moved, and whether that turn was interrupted; the Inbox's clock.
   const [stamp, setStamp] = useState<Record<number, { at: number; interrupted: boolean }>>({});
   // VIEW-023: what each pane's last event said it was doing, and the newest file it wrote this session.
-  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string }>>({});
+  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo }>>({});
   // STAT-045: the terminal has printed nothing for the quiet window; cleared by the next event.
   const [stale, setStale] = useState<Record<number, boolean>>({});
   const [crew, setCrew] = useState<Record<number, Crew>>({}); // STAT-026: each pane's sub-agents and teammates
@@ -643,14 +643,14 @@ function Window() {
     const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
     return repos.size > 1 && p.cwd !== null ? folderName(p.cwd) : null;
   };
-  const noticed = (p: Pane, what: string, body = "") => {
+  const noticed = (p: Pane, what: string, body = "", gate: string = FINISH_FIELD) => {
     const known = new Set(panes.map((x) => x.key));
     if (!known.has(p.key)) return;
     const title = noteTitle(tabName(p, titles), repoOf(p), what);
     // STAT-041: every note on a pane out of view (or in an unfocused window) is a desktop
-    // notification unless 'Agent Task Complete' is off; the unread mark and the toast keep T-024's
-    // one-mark-until-viewed rule.
-    if (!(inView(p.key) && winFocused) && settings[FINISH_FIELD] !== false) invoke("notify", { title, body }).catch(() => {});
+    // notification unless 'Agent Task Complete' is off (a stop goes by 'Agent Stopped', STAT-023);
+    // the unread mark and the toast keep T-024's one-mark-until-viewed rule.
+    if (!(inView(p.key) && winFocused) && settings[gate] !== false) invoke("notify", { title, body }).catch(() => {});
     if (!marksUnread(p.key, known, unreadPanes, inView(p.key), winFocused)) return;
     setUnreadPanes((u) => new Set([...u, p.key]));
     if (p.cwd !== null) markDir(p.cwd, true);
@@ -672,17 +672,20 @@ function Window() {
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children, tool, detail, reply, wrote, boundary } = e.payload;
+      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop } = e.payload;
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
-      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
+      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
       setStale((m) => (m[paneKey] ? { ...m, [paneKey]: false } : m));
       const prev = hookRef.current[paneKey];
       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
       const note = turnNote(prev, e.payload);
       if (note) {
         const p = panesRef.current.find((x) => x.key === paneKey);
-        if (p) noticedRef.current(p, note.what, note.body);
+        if (p) noticedRef.current(p, note.what, note.body, note.stopped ? STOPPED_FIELD : FINISH_FIELD);
       }
+      // STAT-046: a stop on a sign-in failure has the account checked, so the main-window notice
+      // (SignInNotice) names the lapsed account without waiting for the next start.
+      if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check").catch(() => {});
       if (prev !== state) {
         setHook((h) => ({ ...h, [paneKey]: state }));
         setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted } }));
@@ -847,6 +850,7 @@ function Window() {
                     agent={p.agent}
                     program={p.program}
                     args={p.args}
+                    stop={turn[p.key]?.stop}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {

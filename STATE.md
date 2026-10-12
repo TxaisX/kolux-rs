@@ -1335,7 +1335,27 @@ recorded default until told otherwise; nothing here blocks a pass.
   test checks the fallback agent against the real catalogue, the three warnings, `issue:12`,
   `issue:99` not found, and the two refusals. No live proof: the CLI has no window part.
 
+- 2026-10-12 · [core] T-039-a: a Claude Code session that halts says why. The StopFailure hook's
+  `error` becomes a cause (`hooks::stop_cause`: rate_limit is `limit`; authentication_failed,
+  oauth_org_not_allowed and verification_required are `signin`; everything else `error`) and
+  `error_details` rides along; `status.rs` keeps a `Stop { cause, detail, resetsAt }` on the
+  session while it is blocked, ignores further failure reports in the same episode (one history
+  line), drops it when a turn reaches done or a session boundary passes, and reads a failure after
+  a Kolux cancel as interrupted and one with no error as nothing. The Board chip's second line
+  and the pane header's tooltip read `Limit reached · 5-hour limit` (`stopLine` in
+  `terminal/notify.ts`, shared by `board/chip.ts` and `TerminalPane`). The stopped notification
+  says `stopped: limit reached` with the reset time or the details, once per episode (the state
+  does not change on the second report), behind a new 'Agent Stopped' switch (`notifyOnStopped`,
+  default on) separate from 'Agent Task Complete'. A sign-in stop calls `claude_account_check`
+  once so the existing main-window SignInNotice shows the lapsed account (STAT-046). `resetsAt`
+  is always empty until T-039-b reads the status line. Kimi and Codex report no cause (DT-C13).
+  Live: posted a rate_limit StopFailure to the lane app's hook endpoint for the Claude pane; the
+  Board card read Stopped / Limit reached · 5-hour limit and the header tooltip the same
+  (`evidence/T-039-a-stopped.png`). Not live-proven: the desktop notification and the sign-in
+  recheck (no lapsed account to hand).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
 - 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
 - 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
 - 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
@@ -1346,6 +1366,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-010-fix · done: `src/terminal/paste.ts` (+ test), `TerminalPane.tsx` wired to it; `evidence/T-010-fix-paste.png`
 - 2026-10-11 · [core] T-009-fix-b · done: `blocking()` in `grid.ts` (+ test), the naming toast in `App.tsx`, T-151 named as the owner; `evidence/T-009-fix-b-toast.png`
 - 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
-- 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
 
 

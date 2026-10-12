@@ -22,6 +22,7 @@ import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
+import { stopLine, type StopInfo } from "./notify";
 
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
@@ -42,6 +43,8 @@ type Props = {
   hook?: AgentState;
   /** STAT-026: the sub-agents and teammates under this session, shown beside the status word. */
   crew?: Crew;
+  /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */
+  stop?: StopInfo;
   /** TERM-118: the program rang the terminal bell. */
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
@@ -79,7 +82,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, crew, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], onRunning, onNeedsYou, hook, crew, stop, onBell, unread = false, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -232,7 +235,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     if (hook === "done") setFinishedAt((t) => t ?? Date.now());
     else if (hook === "working") setFinishedAt(null);
   }, [hook]);
-  const { word, tone, glyph, explain, age, needsYou } = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  const header = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  const { word, tone, glyph, age, needsYou } = header;
+  const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;
   const needs = useRef(onNeedsYou);
   needs.current = onNeedsYou;
   useEffect(() => {

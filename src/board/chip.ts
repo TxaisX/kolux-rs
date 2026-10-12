@@ -3,6 +3,7 @@
 // the signals the window already has. Pure, tested on its own.
 
 import type { AgentState } from "../projects/rows";
+import { stopLine, type StopInfo } from "../terminal/notify";
 
 export type Lane = "needs" | "working" | "done" | "stopped" | "idle";
 export const LANES: Array<{ id: Lane; title: string }> = [
@@ -24,6 +25,8 @@ export type Signal = {
   tool?: string;
   detail?: string;
   reply?: string;
+  /** STAT-022: why the session is stopped, while it is. */
+  stop?: StopInfo;
   /** The newest file the agent wrote this session. */
   wrote?: string;
   /** When the state last moved; 0 when unknown. */
@@ -61,7 +64,7 @@ export function chipOf(s: Signal, now: number): Chip | null {
       return chip("needs", "Needs you", step || "Question");
     // A stop caused by a limit or sign-in reads Stopped, never Done (STAT-022 names the cause).
     case "blocked":
-      return chip("stopped", "Stopped", s.detail ?? "");
+      return chip("stopped", "Stopped", s.stop ? stopLine(s.stop) : (s.detail ?? ""));
     case "interrupted":
       return chip("stopped", "Stopped", "Interrupted");
     case "done":

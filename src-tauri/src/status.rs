@@ -49,6 +49,18 @@ pub struct Entry {
     pub interrupted: bool,
 }
 
+/// Why the lead is stopped (STAT-022): the cause, the agent's own words, and when a limit lifts
+/// (milliseconds since the epoch; T-039-b fills it from the status line's figures).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stop {
+    pub cause: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<u64>,
+}
+
 /// What the window is told after an event: the resolved state plus the roster.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,6 +70,10 @@ pub struct Status {
     #[serde(flatten)]
     pub change: Change,
     pub children: Vec<Child>,
+    /// Attached while the session is stopped on a limit, a sign-in or an error, until a later
+    /// turn reaches done (STAT-022).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Stop>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply: Option<String>,
     /// The child whose turn just ended, so its reply is announced on its own (STAT-026).
@@ -85,6 +101,8 @@ pub struct Session {
     skip_prompt: bool,
     prompt: Option<String>,
     pub reply: Option<String>,
+    /// The stop the session is blocked on, kept until a turn reaches done (STAT-022).
+    pub stop: Option<Stop>,
     pub history: VecDeque<Entry>,
     /// The quiet alert already went out for this silent spell (STAT-045).
     quiet_fired: bool,
@@ -225,8 +243,8 @@ impl Session {
         if name == "UserPromptSubmit" && std::mem::take(&mut self.skip_prompt) {
             return None;
         }
-        // Late events after an interrupt cannot revive the turn (STAT-028).
-        if self.interrupted && !matches!(name, "UserPromptSubmit" | "SessionStart" | "PostCompact" | "StopFailure") {
+        // Late events after an interrupt cannot revive the turn (STAT-028), nor stop it (STAT-022).
+        if self.interrupted && !matches!(name, "UserPromptSubmit" | "SessionStart" | "PostCompact") {
             return None;
         }
         let mut change = match agent {
@@ -252,6 +270,21 @@ impl Session {
                 self.reply = str_of(event, "last_assistant_message").map(|m| trim(m, 8000));
                 self.background = event.get("background_tasks").and_then(Value::as_array).is_some_and(|t| !t.is_empty());
                 self.own = Some(if self.interrupted { "interrupted" } else { "done" });
+                self.stop = None;
+            }
+            "StopFailure" => {
+                self.pending = None;
+                // A failure after a Kolux cancel is the interruption, not a stop (STAT-022).
+                if std::mem::take(&mut self.cancelled) {
+                    self.interrupted = true;
+                    self.own = Some("interrupted");
+                } else {
+                    // One episode keeps the first report's words, however many reports arrive.
+                    if self.own != Some("blocked") || self.stop.is_none() {
+                        self.stop = Some(Stop { cause: change.cause.unwrap_or("error"), detail: change.detail.clone(), resets_at: None });
+                    }
+                    self.own = Some("blocked");
+                }
             }
             "PermissionRequest" => {
                 self.pending = change.tool.clone();
@@ -350,7 +383,7 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
         let session = s.entry(pane_key).or_default();
         session.terminal = terminal.or(session.terminal);
         let (change, child) = session.apply(agent, event)?;
-        Some(Status { pane_key, terminal, change, children: session.children.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted })
+        Some(Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted })
     })
 }
 
@@ -464,6 +497,36 @@ mod tests {
             state(&mut s, &format!(r#"{{"hook_event_name":"SubagentStart","agent_id":"c{i}","agent_type":"w"}}"#));
         }
         assert_eq!(s.children.len(), MAX_CHILDREN);
+    }
+
+    #[test]
+    fn a_failure_stops_the_session_with_its_cause_until_a_later_turn_finishes() {
+        // STAT-022: the cause stays attached while blocked, a second report in the episode changes
+        // nothing, and a turn that reaches done drops it.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"go"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"StopFailure","error":"rate_limit","error_details":"5-hour limit"}"#), Some("blocked"));
+        assert_eq!(s.stop, Some(Stop { cause: "limit", detail: Some("5-hour limit".into()), resets_at: None }));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"StopFailure","error":"rate_limit"}"#), Some("blocked"));
+        assert_eq!(s.stop.as_ref().map(|t| t.detail.as_deref()), Some(Some("5-hour limit")), "the first report's words stay");
+        assert_eq!(s.history.iter().filter(|e| e.state == "blocked").count(), 1, "one episode, one history line");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#), Some("working"));
+        assert!(s.stop.is_some(), "still attached until the turn finishes");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("done"));
+        assert_eq!(s.stop, None);
+        // A failure report without an error attached, and one after a Kolux cancel, never stop the session.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"more"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"StopFailure"}"#), None);
+        assert_eq!(s.resolved(), "working");
+        s.cancel();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"StopFailure","error":"server_error"}"#), Some("interrupted"));
+        assert_eq!(s.stop, None);
+        // A sign-in failure reads as such, and a session boundary forgets the stop.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"x"}"#);
+        state(&mut s, r#"{"hook_event_name":"StopFailure","error":"authentication_failed"}"#);
+        assert_eq!(s.stop.as_ref().map(|t| t.cause), Some("signin"));
+        state(&mut s, r#"{"hook_event_name":"SessionStart","source":"startup"}"#);
+        assert_eq!(s.stop, None);
     }
 
     #[test]

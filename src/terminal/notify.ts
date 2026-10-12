@@ -2,8 +2,27 @@
 // say the same thing; the window decides from a status change whether there is anything to say.
 import type { AgentState } from "../projects/rows";
 
-export type Turn = { state: AgentState; interrupted: boolean; boundary: boolean; reply?: string; child?: string };
-export type Note = { what: string; body: string };
+/** STAT-022: why a session stopped, the agent's own words, and when a limit lifts (ms since the epoch). */
+export type StopInfo = { cause: "limit" | "signin" | "error"; detail?: string; resetsAt?: number };
+export type Turn = { state: AgentState; interrupted: boolean; boundary: boolean; reply?: string; child?: string; stop?: StopInfo };
+/** `stopped` marks a note the 'Agent Stopped' switch gates (STAT-023) rather than 'Agent Task Complete'. */
+export type Note = { what: string; body: string; stopped?: true };
+
+const CAUSE: Record<StopInfo["cause"], string> = { limit: "limit reached", signin: "sign in again", error: "the AI hit an error" };
+
+/** "3:05 PM" today, "Tue 3:05 PM" another day. */
+export function resetWords(at: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+}
+
+/** The short wording the Board chips and the stopped notification share (STAT-022). */
+export function stopLine(stop: StopInfo): string {
+  const head = CAUSE[stop.cause];
+  const tail = stop.resetsAt ? `resets at ${resetWords(stop.resetsAt)}` : stop.detail;
+  return `${head[0].toUpperCase()}${head.slice(1)}${tail ? ` · ${tail}` : ""}`;
+}
 
 /** One line of a reply, cut to fit a notification. */
 export function preview(reply: string): string {
@@ -28,8 +47,11 @@ export function turnNote(prev: AgentState | undefined, t: Turn): Note | null {
       return { what: "was interrupted", body: "" };
     case "permission":
       return { what: "needs permission", body: "" };
-    case "blocked":
-      return { what: "is blocked", body };
+    case "blocked": {
+      // STAT-023: says why it stopped, with the reset time when known; never reads like a finish.
+      const stop = t.stop ?? { cause: "error" as const };
+      return { what: `stopped: ${CAUSE[stop.cause]}`, body: stop.resetsAt ? `Resets at ${resetWords(stop.resetsAt)}` : (stop.detail ?? body), stopped: true };
+    }
     default:
       return null;
   }

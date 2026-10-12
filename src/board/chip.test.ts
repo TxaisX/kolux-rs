@@ -18,6 +18,7 @@ test("working shows how long and the current step; a stale working signal never 
 
 test("a limit stop reads Stopped, never Done; a finish shows the first line of the last message and the file it wrote (VIEW-023)", () => {
   expect(chipOf(sig({ state: "blocked", detail: "rate limit reached" }), now)).toMatchObject({ lane: "stopped", word: "Stopped", line: "rate limit reached" });
+  expect(chipOf(sig({ state: "blocked", stop: { cause: "limit", detail: "rate_limit" } }), now)).toMatchObject({ lane: "stopped", word: "Stopped", line: "Limit reached · rate_limit" });
   expect(chipOf(sig({ state: "interrupted" }), now)).toMatchObject({ lane: "stopped", line: "Interrupted" });
   expect(chipOf(sig({ state: "done", reply: "\n  All three tests pass.\nDetails below.", wrote: "G:/repo/src/b.ts" }), now)).toEqual({ lane: "done", word: "Done", line: "All three tests pass.", file: "G:/repo/src/b.ts", answer: false });
   expect(chipOf(sig({ state: "done", running: false }), now)).toMatchObject({ lane: "done" });

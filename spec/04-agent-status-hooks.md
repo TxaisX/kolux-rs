@@ -226,6 +226,9 @@ Rules: rate-limit failures count as limit; authentication failures, an organisat
   provider error; a failure report with no error attached, or one caused by an interrupt, does not
   make the session stopped; the cause and reset time stay attached while the session is blocked and
   are dropped once it later reaches done; Claude Code and Kimi both report this state.
+  (Kolux RS, T-039-a: only Claude Code reports it, through its StopFailure hook; Kimi and Codex
+  have no failure hook, DT-C13. The reset time is filled by T-039-b from the status line; a
+  session boundary also drops the cause. The pane header's tooltip carries the same words.)
 Acceptance:
   - [ ] Simulate a rate-limit failure → the session shows stopped for the limit with its reset time,
         and no task-complete notification appears.
@@ -241,6 +244,9 @@ User sees: one system notification saying the agent stopped and why, with the re
   it never reads like a finished task.
 Rules: one notification per stop episode, however many failure reports arrive; a normal finish never
   raises it; the 'Agent Stopped' switch controls it and is on by default.
+  (Kolux RS, T-039-a: the switch is settings key `notifyOnStopped`; a second report in the episode
+  leaves the state as it was, so no second note is raised; 'Agent Task Complete' no longer
+  covers a stop.)
 Acceptance:
   - [ ] Cause two sign-in failures in the same episode → exactly one notification, naming sign-in.
   - [ ] Let an agent finish normally → no stopped notification.
@@ -268,6 +274,9 @@ User sees: a notice in the main window, not tucked away in Settings, saying that
   in again, with a 'Sign in again' button.
 Rules: the notice names the account whose sign-in lapsed; the button starts the sign-in flow for
   that account.
+  (Kolux RS, T-039-a: a sign-in stop reported by a Claude pane asks Claude Code once whether the
+  active account is still signed in, `claude_account_check`, so the notice appears without waiting
+  for the next window start.)
 Acceptance:
   - [ ] Let a saved Claude account's sign-in expire → the notice appears; finish signing in → it
         goes away.
