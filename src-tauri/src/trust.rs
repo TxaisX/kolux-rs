@@ -146,7 +146,7 @@ pub fn trust_codex(file: &Path, paths: &[PathBuf]) -> Result<usize, String> {
 
 /// Every folder a launch will use, trusted for `agent` in one write before it starts.
 /// ponytail: Claude and Codex; Cursor and Copilot keep their trust in files whose shape no public
-/// source describes (T-017-c).
+/// source describes, so they get nothing and their own prompt stays with the user (DT-C17).
 pub fn trust_folders(claude_config: &Path, agent: &str, paths: &[PathBuf]) -> Result<usize, String> {
     match agent {
         "claude" => trust_claude(claude_config, paths),

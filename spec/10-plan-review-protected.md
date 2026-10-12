@@ -38,6 +38,9 @@ Rules: before launch, Kolux records the folder as trusted in each agent's own co
   other folder; Claude's project entries always use forward slashes and the folder's real letter
   case on disk, because Claude ignores an entry written with backslashes; a folder that is already
   trusted is reported as done at once.
+  (Kolux RS, T-017-c, DT-C17: Claude Code and Codex only. Cursor and Copilot are not pre-trusted:
+  neither documents where its trust decision is kept, and Cursor's `--trust` flag is for headless
+  runs only; their own trust prompt stays with the user.)
 Acceptance:
   - [ ] Create a worktree and launch Claude Code with a prompt → no trust menu, and the prompt
         reaches the agent.

@@ -249,7 +249,8 @@ repository are written to Codex's own `config.toml` (under `CODEX_HOME`, else `~
 itself writes. The file is edited with `toml_edit`, so every other line, comment and the key
 order stay byte for byte; an already-trusted folder changes nothing; a file that is not valid
 TOML is left alone. Same batch rules and the same one lock as Claude (`checked_keys`,
-`write_whole` shared by both). Cursor and Copilot still get nothing (T-017-c).
+`write_whole` shared by both). Cursor and Copilot get nothing (DT-C17, T-017-c, [core]):
+neither documents where its trust decision lives, so their own prompt stays with the user.
 
 **Source Control (T-018-a, GIT-002 / GIT-004).** Mod+Shift+G, Mod+L or the top bar's right panel
 button opens a 320 px card right of the content with the workspace in front's changes under
@@ -1489,7 +1490,18 @@ recorded default until told otherwise; nothing here blocks a pass.
   folder did not flag the row: Claude Code's first run there took longer than the 20-s limit, so
   the account stayed as it was until the next check. Seed row, folder and setting removed after.
 
+- 2026-10-12 · [core] T-017-c: decision only, no code beyond a comment. Pre-trust for Cursor and
+  Copilot (the rest of the pre-trust card) is dropped in DECISIONS §7 DT-C17: Copilot's public
+  technical reference lists `~/.copilot/config.json` as "internal state" and documents no
+  trusted-folder key; Cursor's CLI reference documents `--trust` as "headless mode only" and the
+  changelog says a trust decision is "saved" without saying where; Cursor's editor docs describe
+  workspace trust (off by default) but not its storage. The clean-room rule forbids learning
+  either shape from the old app. `trust_folders` keeps returning 0 for both agents, the launch
+  proceeds, and the agent's own trust prompt, when it appears, is the user's to answer; a pasted
+  starting prompt may then be swallowed, which is the card's stated risk. Gates re-run clean.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
 - 2026-10-12 · [core] T-043-d · done: sign-in upkeep switch, lapsed warnings follow it, check on switch-off; Kolux-side renewal dropped (DT-C16); keychain rules → T-043-e; evidence/T-043-d-upkeep.png
 - 2026-10-12 · [core] T-042-b · done, decision only: usage service and hidden /status screen dropped (DT-C15); background app-server read is the only Codex figures route
 - 2026-10-12 · [core] T-041-b · done: resume after a limit (resume.rs, timer, foreground check, cancel on typing, persisted waits); evidence/T-041-b-resume.png
@@ -1499,6 +1511,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
 - 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
 - 2026-10-12 · [core] T-012-b-fix · done: page script forwards browser chords as a cancelled `kolux-chord:` navigation, `history.ts`; Alt+Left/Right, mouse back, Ctrl+L proved inside the page; `evidence/T-012-b-fix-chords.png`
-- 2026-10-12 · [core] T-008-b-fix · closed by DT-C11 (no foreground poll; own program and hooks credit the pane); stale attribute off `credited_agent`; clippy clean
 
 

@@ -72,7 +72,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-016 · ORCH-016 [compat] One command starts a worker agent in a worktree of its own
 - [x] T-017-a · SAFE-023 [compat] New worktrees are pre-trusted so an agent's first prompt is not lost (Claude Code) · SAFE-024 A batch of Claude worktrees is trusted in one write before any agent starts
 - [x] T-017-b · Pre-trust for Codex in its own configuration file (the rest of the card on T-017-a)
-- [ ] T-017-c · Pre-trust for Cursor and Copilot in their own configuration files (the rest of the card on T-017-a; their file formats are not public)
+- [x] T-017-c · done 2026-10-12, decision only (DT-C17): pre-trust for Cursor and Copilot is not built. Neither keeps its folder-trust decision in a documented place: Copilot's public reference lists `~/.copilot/config.json` only as internal state, and Cursor's CLI documents `--trust` for headless runs alone and says only that a trust decision is saved. `trust_folders` keeps answering 0 for both; the launch goes ahead and their own trust prompt, when one appears, is the user's to answer. Revisit when either documents its file or an interactive flag.
 - [x] T-018-a · GIT-002 Stage and unstage by file, folder or section · GIT-004 Commit from the panel with a message
 - [x] T-018-b · GIT-006 The main button always proposes the next step · GIT-007 Remote actions from the panel
 - [ ] T-018-c · Source Control bulk bar: select several rows and stage or unstage them together (the rest of the stage card on T-018-a)
