@@ -1,6 +1,35 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { linkedPrs, withLink, prMismatch, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { graph, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+
+const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
+
+test("GIT-035: the lane graph keeps a straight line straight and joins a merged branch back", () => {
+  const line = graph([commit("c", ["b"]), commit("b", ["a"]), commit("a", [])]);
+  expect(line.map((r) => r.col)).toEqual([0, 0, 0]);
+  expect(new Set(line.map((r) => r.color)).size).toBe(1);
+  expect(line[2].lanesOut).toEqual([]);
+
+  // m merges f into the line; f and b both sit on a, so the second lane ends there.
+  const rows = graph([commit("m", ["b", "f"]), commit("f", ["a"]), commit("b", ["a"]), commit("a", [])]);
+  expect(rows.map((r) => r.col)).toEqual([0, 1, 0, 0]);
+  expect(rows[1].color).not.toBe(rows[0].color);
+  expect(rows[3].lanesIn.length).toBe(2);
+  expect(rows[3].lanesOut).toEqual([]);
+  // The merge row draws one line down its own lane and one out to the new lane.
+  const m = graphLines(rows[0]);
+  expect(m).toContainEqual({ from: 0, to: 0, top: false, bottom: true, color: rows[0].color });
+  expect(m).toContainEqual({ from: 0, to: 1, top: false, bottom: true, color: rows[1].color });
+  // At a, the second lane bends in to the dot.
+  expect(graphLines(rows[3])).toContainEqual({ from: 1, to: 0, top: true, bottom: false, color: rows[1].color });
+});
+
+test("GIT-036: Explain changes asks about that commit", () => {
+  const p = explainPrompt(commit("0123456789abcdef", [], "feat: three"));
+  expect(p).toContain("0123456789abcdef");
+  expect(p).toContain("feat: three");
+  expect(p).toContain("git show 0123456789abcdef");
+});
 
 test("GIT-025: a hand-linked pull request is kept per workspace and flagged when its branch differs", () => {
   expect(linkedPrs({ "G:/a": "https://github.com/o/r/pull/3", "G:/b": 4, bad: null })).toEqual({ "G:/a": "https://github.com/o/r/pull/3" });

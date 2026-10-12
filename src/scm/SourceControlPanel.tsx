@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { prMismatch, prStateWord, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -44,7 +44,24 @@ type Props = {
   onLinkPr: (url: string | null) => void;
 };
 
-type Asking = { agent: string; prompt: string; remember: boolean };
+type Asking = { agent: string; prompt: string; remember: boolean; title?: string };
+
+const LANE = 12;
+const ROW = 22;
+
+/** GIT-035: one row of the lane graph. */
+function GraphCell({ row }: { row: GraphRow }) {
+  const x = (i: number) => i * LANE + LANE / 2;
+  const width = Math.max(row.lanesIn.length, row.lanesOut.length, row.col + 1) * LANE;
+  return (
+    <svg className="scm-graph" width={width} height={ROW} aria-hidden="true">
+      {graphLines(row).map((l, i) => (
+        <line key={i} x1={x(l.from)} y1={l.top ? 0 : ROW / 2} x2={x(l.to)} y2={l.bottom ? ROW : ROW / 2} className={`c${l.color % 6}`} />
+      ))}
+      <circle cx={x(row.col)} cy={ROW / 2} r={3.5} className={`c${row.color % 6}`} />
+    </svg>
+  );
+}
 
 type Failure = { title: string; output: string; fix?: string | null };
 
@@ -71,6 +88,13 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     const prompt = conflictPrompt(files);
     if (saved) return void runAgent(saved, prompt);
     setAsking({ agent: agents[0]?.id ?? "", prompt, remember: false });
+  };
+  // GIT-036: Explain changes starts an agent with a prompt about the commit.
+  const explain = (c: Commit) => {
+    const prompt = explainPrompt(c);
+    if (saved) return void runAgent(saved, prompt);
+    if (agents.length === 0) return setAgentError("No agent was found on this computer, so nothing can explain this commit.");
+    setAsking({ agent: agents[0].id, prompt, remember: false, title: "Explain changes with an agent" });
   };
   const confirmAsk = () => {
     const a = asking && agents.find((x) => x.id === asking.agent);
@@ -232,6 +256,36 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const prItemReason = look.pr?.state === "OPEN" ? null : prReason(status, look);
 
   const step = withPr(nextStep(status, draft), status, look);
+
+  // GIT-035: the history section loads while it is open, again when HEAD moves or on refresh.
+  const [histOpen, setHistOpen] = useState(false);
+  const [histTick, setHistTick] = useState(0);
+  const [history, setHistory] = useState<Commit[] | null>(null);
+  const [picked, setPicked] = useState<{ hash: string; files: Change[] | null } | null>(null);
+  const [ctx, setCtx] = useState<{ x: number; y: number; commit: Commit } | null>(null);
+  useEffect(() => {
+    setHistory(null);
+    setPicked(null);
+  }, [dir]);
+  useEffect(() => {
+    if (!histOpen || dir === null) return;
+    invoke<Commit[]>("scm_history", { worktree: dir })
+      .then(setHistory)
+      .catch((err) => setError(String(err)));
+  }, [histOpen, dir, head, histTick]);
+  const rows = history ? graph(history) : [];
+  const pick = (c: Commit) => {
+    if (picked?.hash === c.hash) return setPicked(null);
+    setPicked({ hash: c.hash, files: null });
+    invoke<Change[]>("scm_commit_files", { worktree: dir, hash: c.hash })
+      .then((files) => setPicked((p) => (p?.hash === c.hash ? { hash: c.hash, files } : p)))
+      .catch((err) => setError(String(err)));
+  };
+  const copy = (text: string, what: string) =>
+    navigator.clipboard
+      .writeText(text)
+      .then(() => setInfo(`Copied the ${what}`))
+      .catch(() => setError(`Could not copy the ${what}`));
   const mainAction = () => {
     if (!status) return;
     switch (step.action) {
@@ -522,7 +576,8 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               </div>
             )}
             {asking && (
-              <div className="scm-ask" role="dialog" aria-label="Resolve conflicts with an agent">
+              <div className="scm-ask" role="dialog" aria-label={asking.title ?? "Resolve conflicts with an agent"}>
+                {asking.title && <div className="scm-ask-title">{asking.title}</div>}
                 <select aria-label="agent to start" className="field" value={asking.agent} onChange={(e) => setAsking({ ...asking, agent: e.target.value })}>
                   {agents.map((a) => (
                     <option key={a.id} value={a.id}>
@@ -557,6 +612,99 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               {status && section("Changes", status.changed, true)}
               {status && section("Untracked", status.untracked, true)}
             </div>
+            <details className="scm-history" open={histOpen} onToggle={(e) => setHistOpen((e.target as HTMLDetailsElement).open)}>
+              <summary>
+                <span>History</span>
+                <button
+                  className="ib"
+                  title="Refresh history"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setHistTick((t) => t + 1);
+                  }}
+                >
+                  <Refresh />
+                </button>
+              </summary>
+              <div className="scm-hist-list" data-history>
+                {history === null && <div className="sb-hint">Loading{"\u2026"}</div>}
+                {history?.length === 0 && <div className="sb-hint">No commits yet.</div>}
+                {history?.map((c, i) => (
+                  <div key={c.hash}>
+                    <div
+                      className={`scm-commit-row${picked?.hash === c.hash ? " sel" : ""}`}
+                      data-commit-row={c.short}
+                      title={c.message}
+                      onClick={() => pick(c)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setCtx({ x: Math.min(e.clientX, window.innerWidth - 240), y: Math.min(e.clientY, window.innerHeight - 130), commit: c });
+                      }}
+                    >
+                      <GraphCell row={rows[i]} />
+                      {c.outgoing && (
+                        <span className="scm-io out" title="Not on the remote yet">
+                          {"\u2191"}
+                        </span>
+                      )}
+                      {c.incoming && (
+                        <span className="scm-io in" title="On the remote, not here yet">
+                          {"\u2193"}
+                        </span>
+                      )}
+                      <span className="subj">{c.subject}</span>
+                      {c.labels.map((l) => (
+                        <span key={l.kind + l.name} className={`scm-ref k-${l.kind}`}>
+                          {l.name}
+                        </span>
+                      ))}
+                    </div>
+                    {picked?.hash === c.hash && (
+                      <div className="scm-commit-files">
+                        {picked.files === null ? (
+                          <div className="sb-hint">Loading{"\u2026"}</div>
+                        ) : picked.files.length === 0 ? (
+                          <div className="sb-hint">No files changed against the first parent.</div>
+                        ) : (
+                          picked.files.map((f) => (
+                            <div key={f.path} className="scm-file">
+                              <span className="st">{f.status}</span>
+                              <span className="path">{f.from ? `${f.from} \u2192 ${f.path}` : f.path}</span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+            {ctx && (
+              <>
+                <div className="menu-backdrop" onClick={() => setCtx(null)} aria-hidden="true" />
+                <div className="menu" role="menu" aria-label="Commit actions" style={{ left: ctx.x, top: ctx.y }}>
+                  <div className="menu-title hash">{ctx.commit.short}</div>
+                  {[
+                    { id: "hash", label: "Copy hash", run: () => copy(ctx.commit.hash, "commit hash") },
+                    { id: "message", label: "Copy message", run: () => copy(ctx.commit.message, "commit message") },
+                    { id: "explain", label: "Explain changes", run: () => explain(ctx.commit) },
+                  ].map((item) => (
+                    <button
+                      key={item.id}
+                      role="menuitem"
+                      className="menu-item"
+                      data-commit-action={item.id}
+                      onClick={() => {
+                        setCtx(null);
+                        void item.run();
+                      }}
+                    >
+                      <span className="name">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             <HandoffNote dir={dir} agents={agents} onHand={onHand} />
           </>
         )}

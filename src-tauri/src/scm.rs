@@ -497,6 +497,134 @@ pub fn scm_open_pr(url: String) -> Result<(), String> {
     std::process::Command::new(opener).arg(url).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// GIT-035: one ref drawn on a commit; `kind` is current, head (detached), branch, upstream,
+/// base, remote or tag.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Label {
+    pub name: String,
+    pub kind: &'static str,
+}
+
+/// GIT-035: one commit of the history; `outgoing` is here and not on the upstream, `incoming`
+/// the other way round.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Commit {
+    pub hash: String,
+    pub short: String,
+    pub parents: Vec<String>,
+    pub author: String,
+    pub time: i64,
+    pub subject: String,
+    pub message: String,
+    pub labels: Vec<Label>,
+    pub outgoing: bool,
+    pub incoming: bool,
+}
+
+/// The refs `git log --decorate=full` printed for one commit, sorted into kinds. A remote label
+/// beside a local branch of the same name is left out, and so is a remote's HEAD.
+fn labels(decor: &str, upstream: Option<&str>, base: Option<&str>) -> Vec<Label> {
+    let mut out = Vec::new();
+    for part in decor.split(", ").map(str::trim).filter(|p| !p.is_empty()) {
+        let (name, kind) = if let Some(b) = part.strip_prefix("HEAD -> refs/heads/") {
+            (b, "current")
+        } else if part == "HEAD" {
+            ("HEAD", "head")
+        } else if let Some(t) = part.strip_prefix("tag: refs/tags/") {
+            (t, "tag")
+        } else if let Some(b) = part.strip_prefix("refs/heads/") {
+            (b, "branch")
+        } else if let Some(r) = part.strip_prefix("refs/remotes/") {
+            if r.ends_with("/HEAD") {
+                continue;
+            }
+            (r, "remote")
+        } else {
+            continue;
+        };
+        let kind = if kind == "remote" && Some(name) == upstream {
+            "upstream"
+        } else if (kind == "remote" && Some(name) == base) || (kind == "branch" && base.and_then(|b| b.split_once('/')).map(|(_, b)| b) == Some(name)) {
+            "base"
+        } else {
+            kind
+        };
+        out.push(Label { name: name.to_string(), kind });
+    }
+    let locals: Vec<String> = out.iter().filter(|l| l.kind == "current" || l.kind == "branch" || (l.kind == "base" && !l.name.contains('/'))).map(|l| l.name.clone()).collect();
+    out.retain(|l| !(matches!(l.kind, "remote" | "upstream" | "base") && l.name.split_once('/').is_some_and(|(_, rest)| locals.iter().any(|n| n == rest))));
+    out
+}
+
+/// GIT-035: the newest `limit` commits of HEAD and its upstream in topological order, so commits
+/// the upstream gained later sit apart at the top instead of inside older history. Empty for a
+/// repository with no commits.
+pub fn history(worktree: &Path, limit: usize) -> Result<Vec<Commit>, String> {
+    if run(&["rev-parse", "--verify", "-q", "HEAD"], Some(worktree)).is_err() {
+        return Ok(Vec::new());
+    }
+    let st = status(worktree)?;
+    let count = format!("-n{limit}");
+    let mut args = vec!["log", "--topo-order", count.as_str(), "--decorate=full", "--format=%H%x1f%h%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%B%x1e", "HEAD"];
+    if st.upstream.is_some() {
+        args.push("@{upstream}");
+    }
+    let text = run(&args, Some(worktree))?;
+    let set = |range: &str| run(&["rev-list", range], Some(worktree)).map(|t| t.lines().map(str::to_string).collect::<std::collections::HashSet<_>>()).unwrap_or_default();
+    let (outgoing, incoming) = if st.upstream.is_some() { (set("@{upstream}..HEAD"), set("HEAD..@{upstream}")) } else { Default::default() };
+    Ok(text
+        .split('\x1e')
+        .map(|r| r.trim_start_matches(['\n', '\r']))
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let f: Vec<&str> = r.splitn(8, '\x1f').collect();
+            (f.len() == 8).then(|| Commit {
+                hash: f[0].to_string(),
+                short: f[1].to_string(),
+                parents: f[2].split_whitespace().map(str::to_string).collect(),
+                author: f[3].to_string(),
+                time: f[4].parse().unwrap_or(0),
+                labels: labels(f[5], st.upstream.as_deref(), st.base.as_deref()),
+                subject: f[6].to_string(),
+                message: f[7].trim_end().to_string(),
+                outgoing: outgoing.contains(f[0]),
+                incoming: incoming.contains(f[0]),
+            })
+        })
+        .collect())
+}
+
+/// GIT-035: the files one commit changed (against its first parent; a root commit adds all).
+pub fn commit_files(worktree: &Path, hash: &str) -> Result<Vec<Change>, String> {
+    if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("That is not a commit id".into());
+    }
+    let text = run(&["diff-tree", "--no-commit-id", "-r", "--root", "-M", "--name-status", "-z", hash], Some(worktree))?;
+    let mut parts = text.split('\0').filter(|p| !p.is_empty());
+    let mut out = Vec::new();
+    while let Some(code) = parts.next() {
+        let letter = code.chars().next().unwrap_or('M').to_string();
+        if letter == "R" || letter == "C" {
+            let from = parts.next().unwrap_or_default().to_string();
+            let path = parts.next().unwrap_or_default().to_string();
+            out.push(Change { path, status: letter, from: Some(from) });
+        } else if let Some(path) = parts.next() {
+            out.push(Change { path: path.to_string(), status: letter, from: None });
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn scm_history(worktree: String) -> Result<Vec<Commit>, String> {
+    tauri::async_runtime::spawn_blocking(move || history(Path::new(&worktree), 200)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn scm_commit_files(worktree: String, hash: String) -> Result<Vec<Change>, String> {
+    commit_files(Path::new(&worktree), &hash)
+}
+
 /// Parses porcelain v2 with NUL separators, so names with spaces, quotes or non-ASCII letters
 /// come through as they are. A file changed in both the index and the tree is in both lists.
 pub fn parse_status(text: &str) -> Status {
@@ -775,6 +903,66 @@ mod tests {
         assert!(pr_link(&gh, &dir, "file:///C:/Windows/notepad.exe").unwrap_err().contains("pull request link"));
         let _ = fs::remove_dir_all(&tools);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn history_marks_outgoing_and_incoming_commits_and_keeps_its_labels_tidy() {
+        let empty = std::env::temp_dir().join(format!("kolux-rs-scm-hist-empty-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&empty);
+        fs::create_dir_all(&empty).unwrap();
+        run(&["init", "-q", "-b", "main"], Some(&empty)).unwrap();
+        assert!(history(&empty, 50).unwrap().is_empty(), "a repository with no commits has no history");
+
+        let bare = std::env::temp_dir().join(format!("kolux-rs-scm-hist-bare-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&bare);
+        fs::create_dir_all(&bare).unwrap();
+        run(&["init", "-q", "--bare", "-b", "main"], Some(&bare)).unwrap();
+        let dir = temp_repo("hist");
+        run(&["remote", "add", "origin", &bare.to_string_lossy().replace('\\', "/")], Some(&dir)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&dir)).unwrap();
+        run(&["remote", "set-head", "origin", "main"], Some(&dir)).unwrap();
+        run(&["tag", "v1"], Some(&dir)).unwrap();
+        let names = |c: &Commit| {
+            let mut n = c.labels.iter().map(|l| format!("{}:{}", l.kind, l.name)).collect::<Vec<_>>();
+            n.sort();
+            n
+        };
+
+        // main and origin/main on one commit: the remote label says nothing new and is left out.
+        let h = history(&dir, 50).unwrap();
+        assert_eq!(names(&h[0]), vec!["current:main", "tag:v1"]);
+
+        // One commit only on the remote (incoming) and one only here (outgoing).
+        commit_file(&dir, "two.txt", "2\n");
+        run(&["push", "-q"], Some(&dir)).unwrap();
+        run(&["reset", "-q", "--hard", "HEAD~1"], Some(&dir)).unwrap();
+        fs::write(dir.join("three.txt"), "3\n").unwrap();
+        run(&["add", "."], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "feat: three", "-m", "A longer body that explains the change."], Some(&dir)).unwrap();
+        let h = history(&dir, 50).unwrap();
+        let by = |s: &str| h.iter().find(|c| c.subject == s).unwrap_or_else(|| panic!("no {s}"));
+        assert_eq!((by("feat: three").outgoing, by("feat: three").incoming), (true, false));
+        assert_eq!((by("two.txt").outgoing, by("two.txt").incoming), (false, true));
+        assert_eq!((by("first").outgoing, by("first").incoming), (false, false));
+        assert!(by("feat: three").message.contains("A longer body"));
+        assert_eq!(names(by("feat: three")), vec!["current:main"]);
+        assert_eq!(names(by("two.txt")), vec!["upstream:origin/main"]);
+        assert_eq!(names(by("first")), vec!["tag:v1"]);
+        assert_eq!(h.last().unwrap().subject, "first", "the shared root comes last");
+        assert_eq!(h.len(), 3);
+
+        // On a feature branch the local copy of the base reads as the base.
+        run(&["checkout", "-q", "-b", "feat"], Some(&dir)).unwrap();
+        assert_eq!(names(&history(&dir, 50).unwrap()[0]), vec!["base:main", "current:feat"]);
+
+        // The selected commit's files.
+        let files = commit_files(&dir, &by("feat: three").hash).unwrap();
+        assert_eq!(paths(&files), vec!["three.txt"]);
+        assert_eq!(files[0].status, "A");
+        assert!(commit_files(&dir, "HEAD; rm -rf").is_err(), "only a commit id is accepted");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&bare);
+        let _ = fs::remove_dir_all(&empty);
     }
 
     #[test]

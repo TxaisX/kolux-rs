@@ -69,6 +69,57 @@ export const nextStep = (s: Status | null, message: string): Step => {
   return { label: "Create pull request", action: "pr", reason: null };
 };
 
+/** GIT-035: one commit of the history as `scm_history` gives it. */
+export type Commit = { hash: string; short: string; parents: string[]; author: string; time: number; subject: string; message: string; labels: { name: string; kind: string }[]; outgoing: boolean; incoming: boolean };
+
+/** GIT-035: a lane waiting for the commit `hash`; `color` stays with the lane while it lasts. */
+export type Lane = { hash: string; color: number };
+export type GraphRow = { hash: string; parents: string[]; col: number; color: number; lanesIn: Lane[]; lanesOut: Lane[] };
+
+/** GIT-035: lays commits (newest first, topological order) out on lanes. Each row keeps the lanes
+ * coming in from above and going out below, which is all that is needed to draw it. */
+export function graph(commits: Commit[]): GraphRow[] {
+  let lanes: Lane[] = [];
+  let next = 0;
+  return commits.map((c) => {
+    const lanesIn = lanes;
+    let col = lanes.findIndex((l) => l.hash === c.hash);
+    let out = lanes.slice();
+    let color: number;
+    if (col < 0) {
+      col = out.length;
+      color = next++;
+      out.push({ hash: c.hash, color });
+    } else color = out[col].color;
+    // Other lanes waiting for this commit end in it (they all sit after `col`).
+    out = out.filter((l, i) => i === col || l.hash !== c.hash);
+    const [first, ...rest] = c.parents;
+    if (first === undefined) out.splice(col, 1);
+    else out[col] = { hash: first, color };
+    for (const p of rest) if (!out.some((l) => l.hash === p)) out.push({ hash: p, color: next++ });
+    lanes = out;
+    return { hash: c.hash, parents: c.parents, col, color, lanesIn, lanesOut: out };
+  });
+}
+
+/** One stroke of a row: from lane `from` to lane `to`, starting at the top edge or the dot and
+ * ending at the dot or the bottom edge. */
+export type Stroke = { from: number; to: number; top: boolean; bottom: boolean; color: number };
+
+/** GIT-035: the strokes of one row: lanes ending in the dot, lanes passing by (kept by identity,
+ * so two lanes waiting for one commit stay apart), and the dot's lines down to its parents. */
+export function graphLines(r: GraphRow): Stroke[] {
+  const lines: Stroke[] = r.lanesIn.map((l, j) => (l.hash === r.hash ? { from: j, to: r.col, top: true, bottom: false, color: l.color } : { from: j, to: r.lanesOut.indexOf(l), top: true, bottom: true, color: l.color }));
+  r.parents.forEach((p, i) => {
+    const k = i === 0 ? r.col : r.lanesOut.findIndex((o) => o.hash === p);
+    if (k >= 0) lines.push({ from: r.col, to: k, top: false, bottom: true, color: r.lanesOut[k].color });
+  });
+  return lines;
+}
+
+/** GIT-036: what Explain changes asks the agent. */
+export const explainPrompt = (c: Commit): string => `Explain the changes in commit ${c.hash} ("${c.subject}") in plain language: what changed, why it probably changed, and anything that looks risky. Read it with: git show ${c.hash}`;
+
 /** GIT-021: a branch's pull request; `state` is OPEN, MERGED or CLOSED; `head` its branch. */
 export type Pr = { number: number; url: string; state: string; title?: string | null; head?: string | null; draft?: boolean };
 
