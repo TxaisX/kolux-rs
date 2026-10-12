@@ -382,7 +382,8 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [x] T-199-a · APP-028 A failed update install is reported at the next launch, with a retry · APP-029 Restart to update either installs or explains why it could not
 - [x] T-199-b · APP-031 Update download problems fix themselves or offer a fix
-- [ ] T-199-c · APP-061 Packaged builds are smoke-tested before they are published
+- [x] T-199-c · APP-061 Packaged builds are smoke-tested before they are published (the command-line part: version and help)
+- [ ] T-199-d · Packaged-build smoke test, part 2 (the rest of the card built in T-199-c): the old-profile migration in an isolated profile once an importer exists, and the terminal smoke test (packaged app hidden in a throwaway profile, coloured output, clipboard round trip, 16 panes without leaving GPU drawing, WSL when present)
 
 ### P1 · theme 6 · Business-user frame (33 cards)
 
