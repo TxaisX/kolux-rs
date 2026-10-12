@@ -16,6 +16,7 @@ import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget }
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
 const AppearancePage = lazy(() => import("./AppearancePage"));
 const GeneralPage = lazy(() => import("./GeneralPage"));
+const NotificationsPage = lazy(() => import("./NotificationsPage"));
 const ShortcutsPage = lazy(() => import("./ShortcutsPage"));
 const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
@@ -224,7 +225,8 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           {page === "terminal" && <TerminalPage />}
           {page === "git" && <GitPage />}
           {page === "agents" && <AgentsPage />}
-          {(page === "safety" || page === "notifications" || page === "usage") && later}
+          {page === "notifications" && <NotificationsPage />}
+          {(page === "safety" || page === "usage") && later}
           {repo && <RepoPage project={repo} />}
         </Suspense>
       </main>

@@ -11,6 +11,7 @@ mod git;
 mod include;
 mod keybindings;
 mod names;
+mod notifications;
 mod orchestration;
 mod procs;
 mod resources;
@@ -68,6 +69,7 @@ fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, v
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
@@ -110,6 +112,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            notifications::notification_test,
+            notifications::open_notification_settings,
             get_settings,
             save_settings,
             sysmem::process_memory,
