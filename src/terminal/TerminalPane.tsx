@@ -30,7 +30,10 @@ import { matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { stopLine, type StopInfo } from "./notify";
 
-type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
+type Status = { kind: "starting" } | { kind: "running"; id: number; account: string | null } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
+
+/** ACCT-064: a centred question over the terminal; Enter takes the first button, Escape the second. */
+export type PaneNotice = { title: string; body: string; primary: string; onPrimary: () => void; secondary?: string; onSecondary?: () => void };
 
 type Props = {
   /** Kept mounted but not shown: another workspace is in front (PROJ-066). */
@@ -59,8 +62,13 @@ type Props = {
   onBell?: () => void;
   /** TERM-118: finished or rang while not in view; the pane carries the mark until viewed. */
   unread?: boolean;
-  /** TERM-045: the session id once it runs, so the window can ask whether closing would stop a program. */
-  onPty?: (id: number) => void;
+  /** TERM-045: the session id once it runs, so the window can ask whether closing would stop a program;
+   *  ACCT-023: with the Codex account it runs on (null: Codex's own sign-in). */
+  onPty?: (id: number, account: string | null) => void;
+  /** ACCT-023: the Codex account to resume on; a pane that must not quietly move to another one. */
+  account?: string | null;
+  /** ACCT-064: a question shown over the terminal (the Codex account changed); null for none. */
+  notice?: PaneNotice | null;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
@@ -96,7 +104,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -119,8 +127,13 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
 
   useEffect(() => {
     report.current?.(status.kind === "running");
-    if (status.kind === "running") pty.current?.(status.id);
+    if (status.kind === "running") pty.current?.(status.id, status.account);
   }, [status.kind]);
+  // ACCT-064: the question takes the keyboard only in the active, visible pane.
+  const noticeButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (notice && focused && !hidden) noticeButton.current?.focus();
+  }, [notice !== null, focused, hidden]);
   // TERM-023: an agent that finished while this pane was not focused glows until it is; the age
   // next to Done refreshes each minute. The glow is static (no animation).
   useEffect(() => {
@@ -219,13 +232,13 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         return;
       }
       try {
-        const id = await invoke<number>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number });
+        const { id, account: used } = await invoke<{ id: number; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number, account: account ?? null });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
         }
         idRef.current = id;
-        setStatus({ kind: "running", id });
+        setStatus({ kind: "running", id, account: used });
         term.focus();
       } catch (err) {
         setStatus({ kind: "failed", error: String(err) });
@@ -438,6 +451,33 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         </div>
       )}
       <div ref={host} className="pane-body" />
+      {notice && (
+        <div className="pane-ask" onMouseDown={(e) => e.stopPropagation()}>
+          <div
+            className="ask"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={notice.title}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") notice.onSecondary?.();
+            }}
+          >
+            <h2 className="ask-title">{notice.title}</h2>
+            <p className="ask-body">{notice.body}</p>
+            <div className="btn-row">
+              {notice.secondary && (
+                <button className="btn" onClick={notice.onSecondary}>
+                  {notice.secondary}
+                </button>
+              )}
+              <button ref={noticeButton} className="btn primary" onClick={notice.onPrimary}>
+                {notice.primary}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

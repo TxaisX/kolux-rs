@@ -48,7 +48,8 @@ import UpdateCenter from "./update/UpdateCenter";
 import { FIELDS as STATUS_FIELDS, readStatusBar, toggleItem } from "./chrome/statusItems";
 import { chromeShown } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
-import TerminalPane from "./terminal/TerminalPane";
+import TerminalPane, { type PaneNotice } from "./terminal/TerminalPane";
+import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accountChange";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
@@ -81,7 +82,7 @@ import { useUsageAlerts } from "./usage/alerts";
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -162,6 +163,16 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
+  // ACCT-064: the managed Codex accounts and the active one, so panes left on another are asked.
+  const [codex, setCodex] = useState<{ active: string | null; accounts: CodexAccount[] }>({ active: null, accounts: [] });
+  // ACCT-064: per pane, the active account the user chose to keep away from (asked once per change).
+  const [kept, setKept] = useState<Record<number, string | null>>({});
+  useEffect(() => {
+    const read = () => void invoke<{ active: string | null; accounts: CodexAccount[] }>("codex_accounts").then((v) => setCodex({ active: v.active, accounts: v.accounts })).catch(() => {});
+    read();
+    const off = listen("codex-accounts", read);
+    return () => void off.then((u) => u()).catch(() => {});
+  }, []);
   const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
   const [hook, setHook] = useState<Record<number, AgentState>>({}); // STAT-001: each pane's last hook-fed state
   // STAT-050: when each pane's state last moved, and whether that turn was interrupted; the Inbox's clock.
@@ -792,6 +803,35 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setToast(batchEmpty ? `Nothing started: ${error}` : `A session did not start: ${error}`);
   };
 
+  // ACCT-064: Restart starts the program again in the same slot (a new key remounts the pane, which
+  // ends the old program) on the account active now; a split beside it is not touched.
+  const restartPane = (key: number) => {
+    const fresh = nextKey.current++;
+    delete ptys.current[key];
+    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, key: fresh, account: undefined, typed: undefined } : p)));
+    setRunning((r) => {
+      const { [key]: _gone, ...rest } = r;
+      return rest;
+    });
+    setFocused((f) => (f === key ? fresh : f));
+  };
+  const noticeFor = (p: Pane): PaneNotice | null => {
+    const prompt = accountPrompt(p, !!running[p.key], codex.active, codex.accounts, kept[p.key]);
+    if (!prompt) return null;
+    if (prompt.kind === "removed")
+      return prompt.to === null
+        ? { title: "This pane's Codex account was removed", body: "Add or pick a Codex account in Settings, then restart this pane.", primary: "Open Settings", onPrimary: () => openSettings("accounts", "codex") }
+        : { title: "This pane's Codex account was removed", body: `Restart to run Codex as ${prompt.to}.`, primary: "Restart", onPrimary: () => restartPane(p.key) };
+    return {
+      title: "The Codex account changed",
+      body: `This pane still runs as ${prompt.from}. Restart to run as ${prompt.to}, or keep ${prompt.from} here.`,
+      primary: "Restart",
+      onPrimary: () => restartPane(p.key),
+      secondary: `Keep ${accountLabel(p.account ?? null, codex.accounts)}`,
+      onSecondary: () => setKept((k) => ({ ...k, [p.key]: codex.active })),
+    };
+  };
+
   const dropPane = (key: number) => {
     delete ptys.current[key];
     setPanes((ps) => ps.filter((p) => p.key !== key));
@@ -1262,9 +1302,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onBell={() => noticed(p, "rang the bell")}
                     unread={unreadPanes.has(p.key)}
-                    onPty={(id) => {
+                    onPty={(id, account) => {
                       ptys.current[p.key] = id;
+                      // ACCT-023: a Codex pane remembers the account it began on.
+                      if (p.agent === "codex" && p.account !== account) setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, account } : x)));
                     }}
+                    account={p.account}
+                    notice={noticeFor(p)}
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title || nameOf(names, p.cwd)}

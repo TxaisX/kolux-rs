@@ -507,27 +507,43 @@ impl Terminals {
     }
 }
 
+/// What `terminal_spawn` answers: the session id and, for a Codex pane, the managed account it
+/// runs on (ACCT-023: the pane remembers it; none for Codex's own sign-in).
+#[derive(serde::Serialize)]
+pub struct Spawned {
+    pub id: u32,
+    pub account: Option<String>,
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>) -> Result<u32, String> {
+pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>, account: Option<String>) -> Result<Spawned, String> {
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
+    // ACCT-023: a resumed Codex pane runs on the account it began on, or not at all.
+    let codex = program.as_deref().and_then(crate::agents::credited_agent) == Some("codex");
+    let resumed = match account.as_deref().filter(|_| codex) {
+        Some(id) => Some(crate::codex_accounts::wait_home(&store, id)?),
+        None => None,
+    };
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
-    let (env, cap): (Vec<(String, String)>, bool) = {
+    let (env, cap, account): (Vec<(String, String)>, bool, Option<String>) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
+        let used = codex.then(|| account.clone().or_else(|| crate::codex_accounts::active_account(&store).map(|a| a.id))).flatten();
+        let codex_home = resumed.or_else(|| crate::codex_accounts::active_home(&store));
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
         let env: Vec<(String, String)> = crate::claude_key::pane_env(program.as_deref(), &settings, token)
             .or_else(|| crate::claude_accounts::pane_env(program.as_deref(), key_mode, crate::claude_accounts::active_dir(&store)))
             // ACCT-007: a Codex pane runs in the active Codex account's private home.
-            .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), crate::codex_accounts::active_home(&store)))
+            .or_else(|| crate::codex_accounts::pane_env(program.as_deref(), codex_home))
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
-        (env, crate::cap::on(&settings))
+        (env, crate::cap::on(&settings), used)
     };
     // USAGE-006: the 200k cap, added at start so the pane's saved start line stays free of it.
     let mut env = env;
@@ -539,7 +555,8 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
     if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
         crate::hooks::install_codex_home(std::path::Path::new(home));
     }
-    terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)
+    let id = terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)?;
+    Ok(Spawned { id, account })
 }
 
 /// TERM-045: for each id, whether closing it would stop a live program.

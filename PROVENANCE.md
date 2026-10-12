@@ -437,3 +437,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
 > 2026-10-12 · T-134-a · The cards CLI-024/CLI-025, COMPAT 2.1 rows for terminal read/send/wait, the xterm.js public typings in node_modules (`buffer.active`, `viewportY`, `translateToString`). Nothing from the old app.
+> 2026-10-12 · T-139-b · The cards ACCT-023/ACCT-064 and the repo's own codex_accounts and terminal modules. Nothing from the old app.
