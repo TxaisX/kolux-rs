@@ -126,8 +126,9 @@ The layout strip's 1 / 2 / 4 / 6 buttons set the count of the workspace in front
 button is the current count (none at 3, 5 or above 6): growing adds empty chooser panes, nothing
 starts on its own; shrinking removes unstarted panes newest first and never a started session (a
 toast says to close one instead). Every pane header has a split button that opens a shell beside
-it in the same folder; Ctrl+Shift+D (split right), Alt+Shift+D (split down: the cell below) and
-Ctrl+W (close the focused pane) go through the shortcuts file. Closing a pane ends its program and
+it in the same folder; Ctrl+Shift+D (split right), Alt+Shift+D (split down: the cell below; from a
+single pane the pair is stacked, one column of two rows, until a split right makes it side by
+side again, T-009-fix-a) and Ctrl+W (close the focused pane) go through the shortcuts file. Closing a pane ends its program and
 the neighbours take the space; closing the last one leaves the workspace's empty placeholder.
 
 T-010 gives every grid cell tabs (TERM-040, TERM-041, TERM-068). The strip's "New tab" menu (and
@@ -1227,6 +1228,7 @@ recorded default until told otherwise; nothing here blocks a pass.
   row (the review named this fix).
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-11 · [core] T-009-fix-a · done: `columnsFor(count, stacked)` in `grid.ts`, a per-workspace stacked flag in `App.tsx`, tests; `evidence/T-009-fix-a-stacked.png`
 - 2026-10-11 · [core] T-003b-fix-a · done: `.topbar` grid in `src/styles.css`; `evidence/T-003b-fix-a-1400.png` (no overlap at 1400; centred at 1920)
 - 2026-10-11 · [core] T-001-fix · done: the opening of STATE.md rewritten from the 2026-10-11 state (bookkeeping only)
 - 2026-10-11 · [core] T-029, T-030 · deferred (0 passes): the palette and the orchestration store are other tasks' work
@@ -1236,6 +1238,5 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-11 · [core] T-026-b · done: `VOCAB` + `stoppedLabel` + `headerOf` on it (`status.ts`, tests), `StatusGlyph` + synced `Spinner` (`icons.tsx`), `Tip.tsx`, `.spin` 12 fps + reduced motion (`styles.css`), header / badge / dot wired; `evidence/T-026-b-working.png`, `-needs-you.png`, `-done.png`, `-tab-badge.png`, `-sidebar-dot.png`, `-reduced-motion.png`
 - 2026-10-11 · [core] T-026-a · done: `tauri-plugin-notification` + `notify` command, `src/terminal/notify.ts` (+ test), `Session::quiet` / `quiet_check` watcher (+ test), `Terminals::silence`, Settings > Notifications; `evidence/T-026-a-permission-toast.png`, `-finished-toast.png`, `-quiet-toast.png`, `-quiet-window.png`, `-settings.png`
 - 2026-10-09 · [core] T-025-c · done: `src-tauri/src/status.rs` (per-pane session: roster, pending tool, interrupted flag, background work, compact skip, reply, 20-state history; 5 tests), `hooks.rs` answers through it, `terminal.rs` marks Ctrl+C/Escape, pane header roster label (`status.ts` + test); `evidence/T-025-c-lead-working.png`, `-child-needs.png`, `-done.png`, `-interrupted.png`
-- 2026-10-09 · [core] T-025-b · done: `src-tauri/src/hooks.rs` (Codex event mapping, script, `hooks.json` installer after the user's groups, trust from Codex's own `hooks/list`, managed-home install at spawn) + 3 tests; `terminal.rs` spawn hook; `codex_usage.rs` and `trust.rs` helpers shared; `evidence/T-025-b-trust.txt`, `-needs.png`, `-done.png` (scratch Codex home; no real Codex session yet, T-025-e)
 
 

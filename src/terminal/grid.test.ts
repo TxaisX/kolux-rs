@@ -50,6 +50,18 @@ test("TERM-006: split right lands next to the pane, split down in the cell below
   expect(splitIndex(keys, 99, "right", 3)).toBe(6);
 });
 
+test("TERM-006: split down from one pane stacks two rows; from four panes the new pane lands below (T-009-fix-a)", () => {
+  // one pane, split down: the grid turns into one column of two rows and the new pane is the lower one
+  expect(columnsFor(2, true)).toBe(1);
+  expect(rowsFor(2, true)).toBe(2);
+  expect(splitIndex([1], 1, "down", columnsFor(2, true))).toBe(1);
+  // split right from a stacked pair goes back to columns
+  expect([columnsFor(2, false), columnsFor(3, true)]).toEqual([2, 2]);
+  // four panes (2x2) become five (3 wide): the pane split down from the first lands in row 2, column 1
+  expect(splitIndex([1, 2, 3, 4], 1, "down", columnsFor(5))).toBe(3);
+  expect(splitIndex([1, 2, 3, 4], 4, "down", columnsFor(5))).toBe(4);
+});
+
 test("TERM-004/006: inserting before a pane keeps every other pane in place", () => {
   const panes = [
     { key: 1, cwd: null },

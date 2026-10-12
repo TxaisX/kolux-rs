@@ -38,13 +38,14 @@ export function clampCount(n: number): number {
   return Number.isFinite(whole) ? Math.max(1, Math.min(MAX_PANES, whole)) : 1;
 }
 
-/** TERM-004: columns for a pane count, so rows stay roughly even (1, 2, 2x2, 3x2, 3x3, 4x3). */
-export function columnsFor(count: number): number {
-  return count <= 1 ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4;
+/** TERM-004: columns for a pane count, so rows stay roughly even (1, 2, 2x2, 3x2, 3x3, 4x3).
+ * TERM-006: a pair made by splitting a single pane down is stacked (one column, two rows). */
+export function columnsFor(count: number, stacked = false): number {
+  return count <= 1 ? 1 : count === 2 && stacked ? 1 : count <= 4 ? 2 : count <= 9 ? 3 : 4;
 }
 
-export function rowsFor(count: number): number {
-  return Math.max(1, Math.ceil(count / columnsFor(count)));
+export function rowsFor(count: number, stacked = false): number {
+  return Math.max(1, Math.ceil(count / columnsFor(count, stacked)));
 }
 
 /** TERM-001: growing adds empty panes; shrinking drops unstarted panes first, newest first, and

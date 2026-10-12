@@ -149,6 +149,7 @@ function Window() {
   const [owner, setOwner] = useState<Record<string, string>>({});
   const [refresh, setRefresh] = useState(0);
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
+  const [stacked, setStacked] = useState<Record<string, boolean>>({}); // TERM-006: a single pane split down makes a stacked pair
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
@@ -348,7 +349,10 @@ function Window() {
       return;
     }
     const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [] };
-    const at = splitIndex(shown.map((c) => c.group), groupOf(src), dir, columnsFor(shown.length + 1));
+    // one pane split down becomes a stacked pair; a split right puts the pair side by side again
+    const stack = dir === "down" && shown.length === 1;
+    setStacked((st) => ({ ...st, [activeDir ?? ""]: stack }));
+    const at = splitIndex(shown.map((c) => c.group), groupOf(src), dir, columnsFor(shown.length + 1, stack));
     setPanes(insertBefore(panes, shown[at]?.panes[0], pane));
     setFocused(pane.key);
   };
@@ -749,7 +753,7 @@ function Window() {
           <div
             className={board ? "board" : "grid"}
             hidden={!terminals && !board}
-            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length)}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length)}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
+            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
           >
               {board &&
                 lanes.map((l, i) => (
