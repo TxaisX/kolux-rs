@@ -436,6 +436,7 @@ Acceptance:
         in as the new account.
   - [ ] Force the change to fail → the earlier account still shows Active.
 Compat: —
+Amended 2026-10-11 (DT-A3): no save-aside copy; managed accounts run in their own folders, so the system login is never touched and a switch is a single locked write.
 Source: D-07-017
 
 ### ACCT-018 · The same Claude account cannot be added twice
@@ -492,6 +493,7 @@ Acceptance:
   - [ ] Sign Codex in with an API key and a custom provider → the row shows the API-key login, not a
         ChatGPT account.
 Compat: —
+Amended 2026-10-11 (DT-A3): no mirrored copy; Kolux reads the user's own Codex folder directly, read only, re-read whenever the window gets focus.
 Source: D-07-020
 
 ### ACCT-023 · A resumed session keeps the account it began on

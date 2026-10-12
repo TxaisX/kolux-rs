@@ -224,6 +224,14 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, existing: bool, n
         undo(&before);
         return Err(Attention::new("sign-in-refused", "Claude Code did not report a signed-in account after the browser step."));
     };
+    if !existing {
+        let twin = load(&*store.lock().map_err(|e| e.to_string())?).into_iter().find(|a| same_account(a, email.as_deref(), organization.as_deref()));
+        if let Some(t) = twin {
+            undo(&before);
+            let who = [t.email, t.organization].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+            return Err(Attention::new("unknown", format!("{who} is already in the list, so nothing was added.")));
+        }
+    }
     if let Err(e) = secrets::write_file(&vault, &fresh) {
         undo(&before);
         return Err(format!("The sign-in could not be stored: {e}").into());
@@ -360,15 +368,61 @@ pub fn claude_account_cancel(sign_ins: tauri::State<'_, SignIns>) {
     }
 }
 
-#[tauri::command]
-pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: String) -> Result<(), String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    if !load(&store).iter().any(|a| a.id == id) {
-        return Err("That Claude account is no longer listed.".into());
+/// ACCT-018: one account is one email (letter case and surrounding spaces ignored) in one
+/// organisation; the same email in another organisation is another account.
+pub fn same_account(a: &Account, email: Option<&str>, organization: Option<&str>) -> bool {
+    let norm = |e: Option<&str>| e.map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+    norm(a.email.as_deref()).is_some() && norm(a.email.as_deref()) == norm(email) && a.organization.as_deref().map(str::trim) == organization.map(str::trim)
+}
+
+/// ACCT-016: `None` makes the system-default login the one new Claude panes use. Panes already
+/// running keep the account they started on (ACCT-017): the choice is read only at launch.
+pub fn activate(store: &Store, id: Option<&str>) -> Result<(), String> {
+    if let Some(id) = id {
+        if !load(store).iter().any(|a| a.id == id) {
+            return Err("That Claude account is no longer listed.".into());
+        }
     }
-    store.set(ACTIVE_KEY, &id).map_err(|e| e.to_string())?;
+    store.set(ACTIVE_KEY, id.unwrap_or("")).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: Option<String>) -> Result<(), String> {
+    activate(&*store.lock().map_err(|e| e.to_string())?, id.as_deref())?;
     let _ = app.emit(EVENT, ());
     Ok(())
+}
+
+/// ACCT-016: takes the account off the list, deletes its private folder and sealed copy, and
+/// hands new panes back to the system default when it was the active one. Only a folder inside
+/// Kolux's own accounts folder is ever deleted.
+pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
+    let mut list = load(store);
+    let Some(at) = list.iter().position(|a| a.id == id) else {
+        return Err("That Claude account is no longer listed.".into());
+    };
+    let gone = list.remove(at);
+    save(store, &list)?;
+    if store.get(ACTIVE_KEY).ok().flatten().as_deref() == Some(id) {
+        store.set(ACTIVE_KEY, "").map_err(|e| e.to_string())?;
+    }
+    let dir = PathBuf::from(&gone.config_dir);
+    if dir.starts_with(profile.join(FOLDER)) {
+        crate::codex_accounts::remove_dir_patiently(&dir).map_err(|e| format!("The account was removed, but its folder could not be deleted: {e}"))?;
+    }
+    let _ = fs::remove_file(profile.join(secrets::VAULT).join(format!("claude-{id}.json")));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn claude_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
+    if sign_ins.running.lock().map_err(|e| e.to_string())?.is_some() {
+        return Err("Finish or cancel the sign-in first.".into());
+    }
+    let profile = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let result = remove(&*store.lock().map_err(|e| e.to_string())?, &profile, &id);
+    let _ = app.emit(EVENT, ());
+    result
 }
 
 /// Marks an account stale or fresh (ACCT-012); true when that changed anything.
@@ -475,6 +529,44 @@ mod tests {
             fs::write(dir.join(CREDENTIALS), creds).unwrap();
             ("Opening https://claude.ai/oauth/authorize?code=abc123def456ghi789 in your browser".into(), ended)
         }
+    }
+
+    #[test]
+    fn the_same_account_is_not_added_twice_but_another_organisation_is() {
+        let (dir, store) = profile("twice");
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        let again = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"  SAM@Example.com ","orgName":"Example Org"}"#;
+        let err = sign_in(&store, &dir, "a2", false, 8, writes(CREDS, Ended::Exited(Some(0))), |_| Some(again.into())).unwrap_err();
+        assert_eq!(err.message, "sam@example.com · Example Org is already in the list, so nothing was added.");
+        assert_eq!(load(&store.lock().unwrap()).len(), 1);
+        assert!(!dir.join(FOLDER).join("a2").exists(), "the second folder is not kept");
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Second Org"}"#;
+        sign_in(&store, &dir, "a3", false, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
+        assert_eq!(load(&store.lock().unwrap()).len(), 2, "one email in two organisations is two accounts");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_the_active_account_goes_back_to_the_system_default() {
+        let (dir, store) = profile("remove");
+        let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"lee@example.com","orgName":"Example Org"}"#;
+        sign_in(&store, &dir, "a1", false, 7, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
+        sign_in(&store, &dir, "a2", false, 8, writes(CREDS, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
+        let s = store.lock().unwrap();
+        activate(&s, Some("a2")).unwrap();
+        assert_eq!(active(&s).as_deref(), Some("a2"));
+        assert!(activate(&s, Some("gone")).is_err());
+        assert_eq!(active(&s).as_deref(), Some("a2"), "a failed change keeps the earlier choice");
+        remove(&s, &dir, "a2").unwrap();
+        assert_eq!(active(&s), None, "the system default takes over");
+        assert!(!dir.join(FOLDER).join("a2").exists() && !dir.join("vault").join("claude-a2.json").exists());
+        assert_eq!(load(&s).len(), 1);
+        activate(&s, Some("a1")).unwrap();
+        activate(&s, None).unwrap();
+        assert_eq!(active(&s), None, "the system default can be picked again");
+        assert!(remove(&s, &dir, "a2").is_err());
+        drop(s);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

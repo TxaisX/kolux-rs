@@ -23,12 +23,12 @@ test("a running sign-in asks to finish in the browser, with Cancel, and hides Ad
   expect(h).not.toContain("Add Account");
 });
 
-test("rows show email and organisation; only the inactive one offers Make active", () => {
+test("rows show email and organisation; every row but the active one can be picked", () => {
   const h = html({ ...empty, accounts: [sam, kim], active: "a1" });
   expect(h).toContain("sam@example.com");
   expect(h).toContain("Example Org");
   expect(h).toContain("No organisation");
-  expect(h.match(/Make active/g)?.length).toBe(1);
+  expect(h.match(/aria-pressed="false"/g)?.length).toBe(2); // ACCT-016: the row itself is the pick control (System default and kim)
   expect(h).toContain("Active");
 });
 
@@ -42,4 +42,35 @@ test("the Claude card offers the account route only while the key is not connect
   const card = (s: KeyStatus) => renderToString(createElement(ClaudeCardView, { status: s, busy: false, onAction: () => {}, onUseAccount: () => {} }));
   expect(card(off)).toContain("Use my Claude account instead");
   expect(card({ ...off, connected: true, createdAt: 1, expiresAt: 2, daysLeft: 300 })).not.toContain("Use my Claude account instead");
+});
+
+const htmlAsking = (view: AccountsView, confirming: string | null) => renderToString(createElement(ClaudeAccountsView, { view, confirming, onAction: () => {} }));
+
+test("ACCT-016: the System default row comes first and is Active when no managed account is chosen", () => {
+  const h = html({ ...empty, accounts: [sam] });
+  expect(h.indexOf("System default")).toBeGreaterThan(-1);
+  expect(h.indexOf("System default")).toBeLessThan(h.indexOf("sam@example.com"));
+  expect(h.match(/>Active</g)?.length).toBe(1);
+  expect(html({ ...empty, accounts: [sam], active: "a1" }).match(/>Active</g)?.length).toBe(1);
+});
+
+test("ACCT-016: with no managed accounts the section says Kolux uses the system-default login", () => {
+  expect(html(empty)).toContain("Kolux is using the system-default login");
+  expect(html({ ...empty, accounts: [sam] })).not.toContain("Kolux is using the system-default login");
+});
+
+test("ACCT-016: managed rows show last sign-in, Re-authenticate, Remove and a Needs re-auth warning when stale", () => {
+  const h = html({ ...empty, accounts: [sam, { ...kim, stale: true }], active: "a1" });
+  expect(h).toContain("Last signed in");
+  expect(h.match(/Re-authenticate/g)?.length).toBe(2);
+  expect(h.match(/>Remove</g)?.length).toBe(2);
+  expect(h.match(/Needs re-auth/g)?.length).toBe(1);
+});
+
+test("ACCT-016: Remove asks first, and says the system default takes over when the active one goes", () => {
+  const h = htmlAsking({ ...empty, accounts: [sam, kim], active: "a1" }, "a1");
+  expect(h).toContain("Remove sam@example.com?");
+  expect(h).toContain("System default");
+  expect(h).toContain("Keep");
+  expect(htmlAsking({ ...empty, accounts: [sam, kim], active: "a1" }, "a2")).not.toContain("takes over");
 });

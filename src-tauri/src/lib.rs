@@ -171,6 +171,8 @@ pub fn run() {
             codex_accounts::codex_account_sign_in,
             codex_accounts::codex_account_cancel,
             codex_accounts::codex_account_activate,
+            claude_accounts::claude_account_remove,
+            codex_accounts::codex_account_remove,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
