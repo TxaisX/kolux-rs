@@ -102,6 +102,20 @@ fn terminal_of(d: &Value) -> Option<String> {
     d["terminal"].as_u64().map(|t| crate::terminal::handle_of(t as u32))
 }
 
+/// ORCH-040: the open dispatches tied to one worktree, by the folder they were started in or by a
+/// live terminal that sits there.
+pub fn workers_in(dispatches: &[Value], here: &dyn Fn(&str) -> bool, homed: &dyn Fn(&str) -> bool) -> Vec<Value> {
+    dispatches
+        .iter()
+        .filter(|d| !finished(d))
+        .filter_map(|d| {
+            let t = terminal_of(d);
+            let mine = d["worktree"].as_str().is_some_and(here) || t.as_deref().is_some_and(homed);
+            mine.then(|| json!({ "dispatchId": d["id"], "taskId": d["taskId"], "runId": d["runId"], "status": d["status"], "agent": d["agent"], "terminal": t }))
+        })
+        .collect()
+}
+
 impl Mail {
     pub fn load(store: &crate::state::Store) -> Mail {
         store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()

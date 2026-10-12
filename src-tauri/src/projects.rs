@@ -260,10 +260,14 @@ pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
 /// names and parents laid over, and kind, source and visibility from `visibility::apply`, which
 /// also drops the scratch worktrees other coding tools keep under a dot-folder of the main checkout.
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
+    decorate(store, project, git.worktrees(Path::new(&project.path))?)
+}
+
+/// A repo's scanned worktrees with what Kolux keeps about them: visibility, names and parents.
+pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let hidden = load_map(store, HIDDEN_KEY);
-    let all = git.worktrees(Path::new(&project.path))?;
     Ok(crate::visibility::apply(store, project, &hidden, all)?
         .into_iter()
         .map(|mut w| {

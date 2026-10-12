@@ -12,7 +12,8 @@ use serde_json::{json, Map, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::collections::BTreeMap;
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Where the app says how to reach it, inside its data folder.
@@ -666,7 +667,12 @@ pub fn main(words: Vec<String>) -> i32 {
             (Ok(handle), Ok(key)) if !handle.is_empty() => Some(Pane { handle, key }),
             _ => None,
         };
-        let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(parsed.args.clone()), pane };
+        let mut args = parsed.args.clone();
+        if json && parsed.command == "worktree.ps" {
+            // ORCH-040: only a JSON poll may get the short "unchanged" answer; text is always whole.
+            args.insert("json".into(), json!(true));
+        }
+        let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane };
         if parsed.command == CHECK && parsed.args.contains_key("wait") {
             return Ok((parsed.command.clone(), wait_for_mail(port, req)?));
         }
@@ -892,6 +898,120 @@ fn worktree_row(p: &Project, w: &Worktree, all: &[Worktree]) -> Value {
 
 /// Which hosts a listing looked at, so an empty one is never read as the whole picture.
 // ponytail: local only; remote hosts were dropped (CLI-051), so nothing is ever left out.
+/// ORCH-040: how long `worktree ps` reuses a repo's scan, and how long it waits on one before it
+/// shows the last known worktrees instead.
+const SCAN_FRESH: Duration = Duration::from_millis(1500);
+const SCAN_SLOW: Duration = Duration::from_secs(3);
+
+/// One repo's latest `git worktree list` for ps, and the last one that worked.
+#[derive(Default)]
+struct Scan {
+    at: Option<Instant>,
+    got: Option<Result<Vec<Worktree>, String>>,
+    last_ok: Option<Vec<Worktree>>,
+    running: bool,
+}
+static SCANS: Mutex<BTreeMap<String, Scan>> = Mutex::new(BTreeMap::new());
+/// The snapshot each terminal's last JSON ps was given, keyed by its pane key.
+static POLLS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
+
+/// What ps shows for one repo: its worktrees, how they were got, and why they may be stale. A
+/// failed or slow scan never comes back empty-handed: the last list that worked is shown.
+fn scan(repo: &str) -> (Vec<Worktree>, Value) {
+    let key = repo.to_lowercase();
+    let read = |s: &Scan, cached: bool| match &s.got {
+        Some(Ok(v)) => (v.clone(), json!({ "scan": if cached { "cached" } else { "scanned" }, "cached": cached })),
+        Some(Err(e)) => (s.last_ok.clone().unwrap_or_default(), json!({ "scan": "degraded", "cached": cached, "error": e.trim() })),
+        None => (Vec::new(), json!({ "scan": "degraded", "cached": cached, "error": "the first scan has not finished" })),
+    };
+    let slow = |s: &Scan| (s.last_ok.clone().unwrap_or_default(), json!({ "scan": "degraded", "cached": true, "error": "the scan is slow; showing the last known worktrees" }));
+    {
+        let mut scans = SCANS.lock().unwrap_or_else(|e| e.into_inner());
+        let s = scans.entry(key.clone()).or_default();
+        if s.running {
+            return slow(s);
+        }
+        if s.at.is_some_and(|t| t.elapsed() < SCAN_FRESH) {
+            return read(s, true);
+        }
+        s.running = true;
+    }
+    let (tx, rx) = mpsc::channel();
+    let (k, path) = (key.clone(), repo.to_string());
+    std::thread::spawn(move || {
+        let got = crate::git::run(&["worktree", "list", "--porcelain"], Some(Path::new(&path))).map(|t| crate::git::parse_worktrees(&t));
+        let mut scans = SCANS.lock().unwrap_or_else(|e| e.into_inner());
+        let s = scans.entry(k).or_default();
+        if let Ok(v) = &got {
+            s.last_ok = Some(v.clone());
+        }
+        (s.at, s.got, s.running) = (Some(Instant::now()), Some(got), false);
+        let _ = tx.send(());
+    });
+    let done = rx.recv_timeout(SCAN_SLOW).is_ok();
+    let scans = SCANS.lock().unwrap_or_else(|e| e.into_inner());
+    if done {
+        read(&scans[&key], false)
+    } else {
+        slow(&scans[&key])
+    }
+}
+
+/// ORCH-040: `worktree ps`, one row per worktree with sessions or open workers, and a scope line.
+fn ps(ctx: &Ctx, req: &Request, only: Option<Project>, limit: Option<usize>) -> Result<Value, Fail> {
+    let lock = || ctx.store.lock().map_err(|e| Fail::from(e.to_string()));
+    let listed = projects::load_projects(&*lock()?);
+    let (mut lists, mut repos) = (Vec::new(), Vec::new());
+    for p in listed.into_iter().filter(|p| only.as_ref().is_none_or(|o| o.id == p.id)) {
+        let (all, mut how) = scan(&p.path);
+        let all = projects::decorate(&*lock()?, &p, all)?;
+        how["repoId"] = json!(p.id);
+        how["name"] = json!(p.name);
+        lists.push((p, all, how["scan"] == "degraded"));
+        repos.push(how);
+    }
+    // Each open session goes to the innermost worktree its folder is in.
+    let sessions = ctx.terminals.sessions();
+    let home = |dir: &str| lists.iter().flat_map(|(_, all, _)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
+    let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
+    let dispatches = load_list(&*lock()?, DISPATCHES_KEY);
+    let mut rows = Vec::new();
+    for (p, all, degraded) in &lists {
+        for w in all {
+            let here = |h: &Option<String>| h.as_deref() == Some(w.path.as_str());
+            let mine: Vec<Value> = sessions.iter().zip(&homes).filter(|(_, h)| here(h)).map(|((handle, _, program), _)| json!({ "terminal": handle, "program": program })).collect();
+            let homed = |t: &str| sessions.iter().zip(&homes).any(|((handle, _, _), h)| handle == t && here(h));
+            let workers = crate::orchestration::workers_in(&dispatches, &|d| lower(Path::new(d)) == lower(Path::new(&w.path)), &homed);
+            if mine.is_empty() && workers.is_empty() {
+                continue;
+            }
+            let mut row = worktree_row(p, w, all);
+            row["sessions"] = json!(mine);
+            row["workers"] = json!(workers);
+            row["degraded"] = json!(degraded);
+            rows.push(row);
+        }
+    }
+    let worktrees: usize = lists.iter().map(|(_, all, _)| all.len()).sum();
+    let scope = json!({ "repos": repos, "worktrees": worktrees, "shown": rows.len(), "machine": "this computer only", "hosts": hosts() });
+    let truncated = limit.is_some_and(|n| rows.len() > n);
+    rows.truncate(limit.unwrap_or(usize::MAX));
+    let mut out = json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts(), "scope": scope });
+    // A terminal polling with --json gets the full snapshot once, then a tiny answer while it holds.
+    if let (true, Some(pane)) = (req.args["json"] == true, &req.pane) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        json!([out["worktrees"], out["truncated"], repos.iter().map(|r| &r["error"]).collect::<Vec<_>>()]).to_string().hash(&mut h);
+        let snap = h.finish();
+        let seen = POLLS.lock().unwrap_or_else(|e| e.into_inner()).insert(pane.key.clone(), snap);
+        if seen == Some(snap) {
+            return Ok(json!({ "unchanged": true, "snapshot": format!("{snap:016x}") }));
+        }
+        out["snapshot"] = json!(format!("{snap:016x}"));
+    }
+    Ok(out)
+}
+
 fn hosts() -> Value {
     json!({ "covered": ["local"], "leftOut": [] })
 }
@@ -990,8 +1110,8 @@ fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 .collect();
             Ok(json!({ "repoId": p.id, "refs": refs }))
         }
-        "worktree.list" | "worktree.ps" => {
-            let ps = req.command == "worktree.ps";
+        "worktree.ps" => ps(ctx, req, text("repo").map(|r| pick_project(ctx, Some(&r), &req.cwd)).transpose()?, limit),
+        "worktree.list" => {
             let only = text("repo").map(|r| pick_project(ctx, Some(&r), &req.cwd)).transpose()?;
             let mut lists = Vec::new();
             {
@@ -1001,24 +1121,7 @@ fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                     lists.push((p, all));
                 }
             }
-            // ps: each open session goes to the innermost worktree its folder is in.
-            let sessions = if ps { ctx.terminals.sessions() } else { Vec::new() };
-            let home = |dir: &str| lists.iter().flat_map(|(_, all)| all).filter(|w| under(&w.path, dir)).max_by_key(|w| w.path.len()).map(|w| w.path.clone());
-            let homes: Vec<Option<String>> = sessions.iter().map(|(_, dir, _)| home(dir)).collect();
-            let mut rows = Vec::new();
-            for (p, all) in &lists {
-                for w in all {
-                    let mut row = worktree_row(p, w, all);
-                    if ps {
-                        let mine: Vec<Value> = sessions.iter().zip(&homes).filter(|(_, h)| h.as_deref() == Some(w.path.as_str())).map(|((handle, _, program), _)| json!({ "terminal": handle, "program": program })).collect();
-                        if mine.is_empty() {
-                            continue;
-                        }
-                        row["sessions"] = json!(mine);
-                    }
-                    rows.push(row);
-                }
-            }
+            let mut rows: Vec<Value> = lists.iter().flat_map(|(p, all)| all.iter().map(move |w| worktree_row(p, w, all))).collect();
             let truncated = limit.is_some_and(|n| rows.len() > n);
             rows.truncate(limit.unwrap_or(usize::MAX));
             Ok(json!({ "worktrees": rows, "truncated": truncated, "hosts": hosts() }))
@@ -1072,18 +1175,33 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
             let mut out: Vec<String> = rows("worktrees")
                 .iter()
                 .map(|w| {
-                    let mut line = format!("{}  [{}]  {}  ({})", label(w), w["branch"].as_str().unwrap_or("detached"), s(w, "path"), s(w, "selector"));
-                    if let Some(list) = w["sessions"].as_array() {
+                    let mut line = format!("{}  [{}]  {}  ({}){}", label(w), w["branch"].as_str().unwrap_or("detached"), s(w, "path"), s(w, "selector"), if w["degraded"] == true { "  [last known]" } else { "" });
+                    for x in w["workers"].as_array().into_iter().flatten() {
+                        line.push_str(&format!("\n    worker {} on {} · {}{}", s(x, "dispatchId"), s(x, "taskId"), s(x, "status"), x["terminal"].as_str().map(|t| format!(" ({t})")).unwrap_or_default()));
+                    }
+                    if let Some(list) = w["sessions"].as_array().filter(|l| !l.is_empty()) {
                         line.push_str(&format!("\n    {}", list.iter().map(|x| format!("{} {}", s(x, "terminal"), x["program"].as_str().unwrap_or("shell"))).collect::<Vec<_>>().join(", ")));
                     }
                     line
                 })
                 .collect();
             if out.is_empty() {
-                out.push(if command == "worktree.ps" { "no sessions are running".into() } else { "no worktrees".into() });
+                out.push(if command == "worktree.ps" { "no sessions or workers are running".into() } else { "no worktrees".into() });
             }
             if r["truncated"] == true {
                 out.push("(more rows; raise --limit)".into());
+            }
+            if r["unchanged"] == true {
+                return Some(format!("no change since this terminal's last ps (snapshot {})", s(r, "snapshot")));
+            }
+            if let Some(scope) = r.get("scope") {
+                let repos = scope["repos"].as_array().cloned().unwrap_or_default();
+                let n = |v: &Value| v.as_u64().unwrap_or(0);
+                let mut line = format!("scope: {} repo{}, {} worktrees, {} with work", repos.len(), if repos.len() == 1 { "" } else { "s" }, n(&scope["worktrees"]), n(&scope["shown"]));
+                for x in repos.iter().filter(|x| x["scan"] == "degraded") {
+                    line.push_str(&format!("; {}: last known list ({})", s(x, "name"), s(x, "error")));
+                }
+                out.push(line + "; this computer only");
             }
             out.push("hosts covered: local; none left out".into());
             out.join("\n")
@@ -2112,6 +2230,75 @@ mod tests {
         }
         let handle = dispatch(&ctx, &req("orchestration.worker-start", &repo, json!({ "spec": "x", "terminal": "t1", "worktree": "current", "setup": "inherit" }))).unwrap_err();
         assert_eq!(handle.code, "not_found");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn worktree_ps_sums_up_workers_and_keeps_the_last_list_when_a_scan_fails() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli129-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q", "-b", "main"], &repo);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"], &repo);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let mut settings = s.settings();
+            settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
+            s.save_settings(&settings).unwrap();
+        }
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: repo.display().to_string(), args, pane: None };
+        let mut open = Vec::new();
+        for n in ["a", "b", "c", "d"] {
+            let made = dispatch(&ctx, &req("worktree.create", json!({ "name": n, "setup": "skip" }))).unwrap();
+            open.push(json!({ "id": format!("d-{n}"), "runId": "run-1", "taskId": format!("t-{n}"), "status": "running", "worktree": made["path"], "agent": "claude" }));
+        }
+        open.push(json!({ "id": "d-old", "taskId": "t-old", "status": "completed", "worktree": open[0]["worktree"], "agent": "claude" }));
+        save_list(&store.lock().unwrap(), DISPATCHES_KEY, &open).unwrap();
+
+        // ORCH-040: one row per worktree with its workers, a row cap and a scope line.
+        let ps = dispatch(&ctx, &req("worktree.ps", json!({ "limit": "3" }))).unwrap();
+        let rows = ps["worktrees"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(ps["truncated"], true);
+        assert_eq!(rows[0]["workers"].as_array().unwrap().len(), 1, "a finished dispatch is not counted: {}", rows[0]);
+        assert_eq!(ps["scope"]["worktrees"], 5);
+        assert_eq!(ps["scope"]["shown"], 4);
+        assert_eq!(ps["scope"]["repos"][0]["scan"], "scanned");
+        let text = query_text("worktree.ps", &ps).unwrap();
+        assert!(text.contains("worker d-") && text.contains("scope: 1 repo, 5 worktrees, 4 with work"), "{text}");
+        // An immediate repeat reuses the scan instead of running git again.
+        let again = dispatch(&ctx, &req("worktree.ps", json!({}))).unwrap();
+        assert_eq!(again["scope"]["repos"][0]["scan"], "cached");
+
+        // A repeated JSON poll from the same terminal gets a tiny answer when nothing changed.
+        let poll = |json_: bool| Request { pane: Some(Pane { handle: "term-1".into(), key: "k1".into() }), ..req("worktree.ps", json!({ "json": json_ })) };
+        let first = dispatch(&ctx, &poll(true)).unwrap();
+        assert!(first["worktrees"].is_array() && first["snapshot"].is_string());
+        let second = dispatch(&ctx, &poll(true)).unwrap();
+        assert_eq!(second["unchanged"], true);
+        assert_eq!(second["snapshot"], first["snapshot"]);
+        assert!(second.get("worktrees").is_none());
+        assert!(dispatch(&ctx, &poll(false)).unwrap()["worktrees"].is_array(), "text output is always the full list");
+
+        // Break the repo: the last list stays, marked degraded, and the failure is remembered.
+        std::thread::sleep(SCAN_FRESH + Duration::from_millis(100));
+        std::fs::rename(repo.join(".git"), dir.join("git-aside")).unwrap();
+        let broken = dispatch(&ctx, &req("worktree.ps", json!({}))).unwrap();
+        assert_eq!(broken["worktrees"].as_array().unwrap().len(), 4, "{broken}");
+        assert_eq!(broken["worktrees"][0]["degraded"], true);
+        assert_eq!(broken["scope"]["repos"][0]["scan"], "degraded");
+        assert!(broken["scope"]["repos"][0]["error"].is_string());
+        assert!(query_text("worktree.ps", &broken).unwrap().contains("last known"));
+        let polled = dispatch(&ctx, &req("worktree.ps", json!({}))).unwrap();
+        assert_eq!(polled["scope"]["repos"][0]["scan"], "degraded");
+        assert_eq!(polled["scope"]["repos"][0]["cached"], true, "the failure is remembered: {}", polled["scope"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
