@@ -370,3 +370,15 @@ fn stat_002_off_clears_the_managed_codex_homes_too() {
     let left: Value = serde_json::from_str(&fs::read_to_string(home.join("hooks.json")).unwrap()).unwrap();
     assert_eq!(left, json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": "keep.cmd" }] }] } }));
 }
+
+#[test]
+fn t_152_gate_installing_stays_off_with_the_default_settings() {
+    // A fresh profile's settings, the empty settings a failed read gives, and anything but a true.
+    let dir = temp("gate");
+    let fresh = crate::state::Store::open(&dir).unwrap().settings();
+    for settings in [fresh, Value::Null, json!({}), json!({ INSTALL_KEY: "true" }), json!({ INSTALL_KEY: false })] {
+        assert!(!install_allowed(&settings), "{settings}");
+    }
+    assert!(install_allowed(&json!({ INSTALL_KEY: true })));
+    let _ = fs::remove_dir_all(&dir);
+}

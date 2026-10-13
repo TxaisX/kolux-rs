@@ -17,6 +17,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The Settings key listing the agents switched off on the Agents page (SET-010).
 pub const DISABLED_KEY: &str = "disabledAgents";
+/// T-152-gate: hook entries go into agents' own settings only once this setting is true.
+pub const INSTALL_KEY: &str = "agentHooksInstall";
+
+/// T-152-gate: off unless switched on, so a launch never writes into the user's agent settings by default.
+pub fn install_allowed(settings: &Value) -> bool {
+    settings.get(INSTALL_KEY).and_then(Value::as_bool).unwrap_or(false)
+}
 /// The copy of an agent's settings kept from before Kolux first wrote to them.
 pub const BACKUP_SUFFIX: &str = ".bak-kolux";
 const LOCK_FILE: &str = "install.lock";
@@ -284,6 +291,10 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
 /// each managed agent is installed, cleared or left by `plan`. Never stops the launch; each
 /// agent's outcome is returned and problems also go to stderr. `profile` is Kolux's data folder.
 pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
+    if !install_allowed(settings) {
+        eprintln!("kolux-rs: agent hooks: not installed ({INSTALL_KEY} is off)");
+        return Vec::new();
+    }
     let home = home_dir();
     let _lock = match Lock::take(&home.join(SCRIPT_DIR)) {
         Ok(l) => l,
