@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { taskKind, tasksRepo } from "./model";
+import { beyondWindow, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
 
 const projects = [
   { id: "a", name: "Alpha", path: "G:/r/alpha" },
@@ -14,8 +14,31 @@ test("VIEW-010: the Tasks page reads the workspace on screen, else the first pro
 });
 
 test("VIEW-010: each row says whether it is an issue, a pull request or a draft", () => {
-  const t = { kind: "pr", number: 9, title: "Fix", url: "", state: "OPEN", updated: "", draft: true };
+  const t = { kind: "pr", number: 9, title: "Fix", url: "", repo: "o/r", state: "open", updated: "", draft: true, labels: [], assignees: [], checks: null };
   expect(taskKind(t)).toBe("Draft pull request #9");
   expect(taskKind({ ...t, draft: false })).toBe("Pull request #9");
   expect(taskKind({ ...t, kind: "issue", draft: false, number: 3 })).toBe("Issue #3");
+});
+
+test("GIT-043: the preset sets issues, pull requests or both, and a typed is:pr or is:issue wins", () => {
+  expect(PRESETS[0].id).toBe("all");
+  expect(taskQueries("all", "", ["o/r"])).toEqual(["is:issue is:open repo:o/r", "is:pr is:open repo:o/r"]);
+  expect(taskQueries("assigned", "", ["o/r"])).toEqual(["is:issue is:open assignee:@me repo:o/r", "is:pr is:open assignee:@me repo:o/r"]);
+  expect(taskQueries("assigned", "is:pr", ["o/r"])).toEqual(["is:open assignee:@me is:pr repo:o/r"]);
+  expect(taskQueries("review", "", ["o/r"])).toEqual(["is:pr is:open review-requested:@me repo:o/r"]);
+  expect(taskQueries("review", "is:issue crash", ["o/r"])).toEqual(["is:open review-requested:@me is:issue crash repo:o/r"]);
+  expect(taskQueries("all", "  label:bug  ", ["o/r", "o/s"])).toEqual(["is:issue is:open label:bug repo:o/r repo:o/s", "is:pr is:open label:bug repo:o/r repo:o/s"]);
+  expect(taskQueries("all", "", [])).toEqual([]);
+});
+
+test("GIT-043: pages stop at GitHub's 1000-result search window, and the buttons fold around the current page", () => {
+  expect(pageCount(0)).toBe(1);
+  expect(pageCount(25)).toBe(1);
+  expect(pageCount(26)).toBe(2);
+  expect(pageCount(5000)).toBe(40);
+  expect(beyondWindow(1000)).toBe(false);
+  expect(beyondWindow(1001)).toBe(true);
+  expect(pageButtons(1, 3)).toEqual([1, 2, 3]);
+  expect(pageButtons(10, 40)).toEqual([1, null, 8, 9, 10, 11, 12, null, 40]);
+  expect(pageButtons(2, 40)).toEqual([1, 2, 3, 4, null, 40]);
 });

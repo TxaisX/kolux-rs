@@ -737,40 +737,147 @@ pub async fn scm_gh_budget() -> Result<Vec<Budget>, String> {
     tauri::async_runtime::spawn_blocking(|| gh_budget(&gh_program()?)).await.map_err(|e| e.to_string())?
 }
 
-/// VIEW-010: one row of the Tasks page, an issue or a pull request.
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// GIT-043: a label as GitHub draws it; `color` is six hex digits or empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskLabel {
+    pub name: String,
+    pub color: String,
+}
+
+/// GIT-043: one issue or pull request found by a Tasks search.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Task {
-    #[serde(default)]
+    /// "issue" or "pr".
     pub kind: String,
     pub number: u64,
     pub title: String,
     pub url: String,
+    /// owner/name.
+    pub repo: String,
+    /// open, closed or merged.
     pub state: String,
-    #[serde(alias = "updatedAt", default)]
-    pub updated: String,
-    #[serde(alias = "isDraft", default)]
     pub draft: bool,
+    pub labels: Vec<TaskLabel>,
+    pub assignees: Vec<String>,
+    pub updated: String,
+    /// passing, failing, running or unresolved; None for an issue.
+    pub checks: Option<String>,
 }
 
-/// VIEW-010: the default preset, every open issue and pull request of the repository, newest first.
-// ponytail: the first 50 of each; presets, search and paging are T-231-b.
-pub fn tasks_list(gh: &Path, worktree: &Path) -> Result<Vec<Task>, String> {
-    let mut all = Vec::new();
-    for (kind, fields) in [("issue", "number,title,url,state,updatedAt"), ("pr", "number,title,url,state,updatedAt,isDraft")] {
-        let text = gh_run(gh, worktree, &[kind, "list", "--state", "open", "--limit", "50", "--json", fields], None).map_err(|e| gh_words(&e))?;
-        let mut got: Vec<Task> = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
-        for t in &mut got {
-            t.kind = kind.into();
-        }
-        all.extend(got);
+/// GIT-043: one page of a Tasks search. `total` adds up every search's matches; `deepest` is the
+/// largest single search, which sets how many pages there are.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskPage {
+    pub total: u64,
+    pub deepest: u64,
+    pub items: Vec<Task>,
+}
+
+pub const TASKS_PER_PAGE: u32 = 25;
+/// GitHub's search hands out only its first 1000 results.
+const SEARCH_WINDOW: u32 = 1000;
+
+/// GIT-043: the checks pill's word for a commit's rollup state.
+pub fn checks_word(state: Option<&str>) -> &'static str {
+    match state {
+        Some("SUCCESS") => "passing",
+        Some("FAILURE") | Some("ERROR") => "failing",
+        Some("PENDING") | Some("EXPECTED") => "running",
+        _ => "unresolved",
     }
-    all.sort_by(|a, b| b.updated.cmp(&a.updated));
-    Ok(all)
+}
+
+fn task_from(v: &serde_json::Value) -> Option<(Task, String)> {
+    let pr = v.get("pull_request").filter(|p| !p.is_null());
+    let state = if pr.is_some_and(|p| p["merged_at"].is_string()) { "merged" } else { v["state"].as_str()? };
+    let mut parts = v["repository_url"].as_str()?.rsplit('/');
+    let (name, owner) = (parts.next()?, parts.next()?);
+    let hex = |c: &str| if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) { c.to_string() } else { String::new() };
+    let labels = v["labels"].as_array().map(|a| a.iter().filter_map(|l| Some(TaskLabel { name: l["name"].as_str()?.into(), color: hex(l["color"].as_str().unwrap_or("")) })).collect()).unwrap_or_default();
+    let assignees = v["assignees"].as_array().map(|a| a.iter().filter_map(|u| u["login"].as_str().map(String::from)).collect()).unwrap_or_default();
+    let task = Task {
+        kind: if pr.is_some() { "pr" } else { "issue" }.into(),
+        number: v["number"].as_u64()?,
+        title: v["title"].as_str()?.into(),
+        url: v["html_url"].as_str()?.into(),
+        repo: format!("{owner}/{name}"),
+        state: state.to_lowercase(),
+        draft: v["draft"].as_bool().unwrap_or(false),
+        labels,
+        assignees,
+        updated: v["updated_at"].as_str().unwrap_or("").into(),
+        checks: None,
+    };
+    Some((task, v["node_id"].as_str().unwrap_or("").into()))
+}
+
+/// GIT-043: the checks rollup of each pull request, by node id, in one GraphQL call. A failed read
+/// leaves every pill unresolved rather than failing the list.
+fn checks_of(gh: &Path, host: &str, ids: &[String]) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let ok = |i: &String| !i.is_empty() && i.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '=');
+    let ids: Vec<&String> = ids.iter().filter(|i| ok(i)).collect();
+    if ids.is_empty() {
+        return out;
+    }
+    let list = ids.iter().map(|i| format!("\"{i}\"")).collect::<Vec<_>>().join(",");
+    let query = format!("query{{nodes(ids:[{list}]){{... on PullRequest{{id commits(last:1){{nodes{{commit{{statusCheckRollup{{state}}}}}}}}}}}}}}");
+    let Ok(text) = gh_run(gh, &std::env::temp_dir(), &["api", "graphql", "--hostname", host, "-f", &format!("query={query}")], None) else { return out };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return out };
+    for n in v["data"]["nodes"].as_array().into_iter().flatten() {
+        if let Some(id) = n["id"].as_str() {
+            out.insert(id.to_string(), checks_word(n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str()).to_string());
+        }
+    }
+    out
+}
+
+/// GIT-043: one page of every search in `queries` on `host`, newest first, each item once.
+pub fn tasks_search(gh: &Path, host: &str, queries: &[String], page: u32) -> Result<TaskPage, String> {
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':') {
+        return Err("This repository's GitHub host cannot be read".into());
+    }
+    if page == 0 || page * TASKS_PER_PAGE > SEARCH_WINDOW {
+        return Err(format!("GitHub search reaches only the first {SEARCH_WINDOW} results; this page cannot be reached"));
+    }
+    let mut out = TaskPage::default();
+    let mut ids = Vec::new();
+    for q in queries {
+        let (q, per, pg) = (format!("q={q}"), format!("per_page={TASKS_PER_PAGE}"), format!("page={page}"));
+        let args = ["api", "search/issues", "--hostname", host, "-X", "GET", "-f", &q, "-f", "sort=updated", "-f", "order=desc", "-f", &per, "-f", &pg];
+        let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+        let total = v["total_count"].as_u64().unwrap_or(0);
+        out.total += total;
+        out.deepest = out.deepest.max(total);
+        for (t, id) in v["items"].as_array().into_iter().flatten().filter_map(task_from) {
+            if out.items.iter().all(|x| x.url != t.url) {
+                if t.kind == "pr" {
+                    ids.push(id);
+                }
+                out.items.push(t);
+            }
+        }
+    }
+    let checks = checks_of(gh, host, &ids);
+    for (at, t) in out.items.iter_mut().filter(|t| t.kind == "pr").enumerate() {
+        t.checks = Some(checks.get(&ids[at]).cloned().unwrap_or_else(|| "unresolved".into()));
+    }
+    out.items.sort_by(|a, b| b.updated.cmp(&a.updated));
+    Ok(out)
 }
 
 #[tauri::command]
-pub async fn scm_tasks(worktree: String) -> Result<Vec<Task>, String> {
-    tauri::async_runtime::spawn_blocking(move || tasks_list(&gh_program()?, Path::new(&worktree))).await.map_err(|e| e.to_string())?
+pub async fn scm_tasks_search(host: String, queries: Vec<String>, page: u32) -> Result<TaskPage, String> {
+    tauri::async_runtime::spawn_blocking(move || tasks_search(&gh_program()?, &host, &queries, page)).await.map_err(|e| e.to_string())?
+}
+
+/// GIT-043: the account gh is signed in with on `host`, from gh's own config (no network).
+#[tauri::command]
+pub fn scm_gh_account(host: String) -> Option<String> {
+    let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", &host, "user"]).output().ok()?;
+    let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !login.is_empty()).then_some(login)
 }
 
 /// GIT-033: what the merge box needs, read in one GraphQL call when the box is opened.
@@ -1893,31 +2000,49 @@ mod tests {
     }
 
     #[test]
-    fn view010_tasks_lists_open_issues_and_pull_requests_newest_first() {
-        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-view010-{}", std::process::id()));
+    fn git043_tasks_search_pages_through_github_search_with_labels_assignees_and_checks() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git043-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tools);
         fs::create_dir_all(&tools).unwrap();
-        fs::write(tools.join("issue.json"), r#"[{"number":3,"title":"Crash on start","url":"https://github.com/o/r/issues/3","state":"OPEN","updatedAt":"2026-10-10T08:00:00Z"}]"#).unwrap();
-        fs::write(tools.join("pr.json"), r#"[{"number":9,"title":"Fix crash","url":"https://github.com/o/r/pull/9","state":"OPEN","updatedAt":"2026-10-11T08:00:00Z","isDraft":true}]"#).unwrap();
+        let search = r#"{"total_count":1234,"incomplete_results":false,"items":[
+            {"number":3,"title":"Crash on start","html_url":"https://github.com/o/r/issues/3","repository_url":"https://api.github.com/repos/o/r","state":"open","node_id":"I_3","updated_at":"2026-10-10T08:00:00Z","labels":[{"name":"bug","color":"d73a4a"},{"name":"odd","color":"red;x"}],"assignees":[{"login":"txais"}]},
+            {"number":9,"title":"Fix crash","html_url":"https://github.com/o/r/pull/9","repository_url":"https://api.github.com/repos/o/r","state":"open","draft":true,"node_id":"PR_9","updated_at":"2026-10-11T08:00:00Z","labels":[],"assignees":[],"pull_request":{"merged_at":null}},
+            {"number":8,"title":"Old fix","html_url":"https://github.com/o/r/pull/8","repository_url":"https://api.github.com/repos/o/r","state":"closed","node_id":"PR_8","updated_at":"2026-10-01T08:00:00Z","labels":[],"assignees":[],"pull_request":{"merged_at":"2026-10-01T08:00:00Z"}}]}"#;
+        fs::write(tools.join("search.json"), search).unwrap();
+        fs::write(tools.join("checks.json"), r#"{"data":{"nodes":[{"id":"PR_9","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"id":"PR_8","commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}"#).unwrap();
         let gh = if cfg!(windows) {
             let f = tools.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\ntype \"%~dp0%1.json\"\r\n").unwrap();
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"graphql\" (type \"%~dp0checks.json\") else (type \"%~dp0search.json\")\r\n").unwrap();
             f
         } else {
             let f = tools.join("gh");
-            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\ncat \"$(dirname \"$0\")/$1.json\"\n").unwrap();
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$2\" = graphql ]; then cat \"$(dirname \"$0\")/checks.json\"; else cat \"$(dirname \"$0\")/search.json\"; fi\n").unwrap();
             std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
             f
         };
-        let got = tasks_list(&gh, &tools).unwrap();
-        let seen: Vec<(String, u64, bool)> = got.iter().map(|t| (t.kind.clone(), t.number, t.draft)).collect();
-        assert_eq!(seen, vec![("pr".to_string(), 9, true), ("issue".to_string(), 3, false)]);
-        assert_eq!(got[1].title, "Crash on start");
+        let qs = ["is:issue is:open repo:o/r".to_string(), "is:pr is:open repo:o/r".to_string()];
+        let got = tasks_search(&gh, "github.com", &qs, 3).unwrap();
+        // Two searches of the same answer: summed for the count, the deeper one sets the pages, each item once.
+        assert_eq!((got.total, got.deepest), (2468, 1234));
+        let seen: Vec<(&str, u64, &str, bool, Option<&str>)> = got.items.iter().map(|t| (t.kind.as_str(), t.number, t.state.as_str(), t.draft, t.checks.as_deref())).collect();
+        assert_eq!(seen, vec![("pr", 9, "open", true, Some("failing")), ("issue", 3, "open", false, None), ("pr", 8, "merged", false, Some("unresolved"))]);
+        let issue = &got.items[1];
+        assert_eq!((issue.repo.as_str(), issue.assignees.clone()), ("o/r", vec!["txais".to_string()]));
+        // A colour that is not six hex digits is dropped, never handed to the page's style.
+        assert_eq!(issue.labels, vec![TaskLabel { name: "bug".into(), color: "d73a4a".into() }, TaskLabel { name: "odd".into(), color: String::new() }]);
         let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
-        assert!(calls.contains("issue list --state open"), "{calls}");
-        assert!(calls.contains("pr list --state open"), "{calls}");
-        fs::write(tools.join("issue.json"), "not json").unwrap();
-        assert!(tasks_list(&gh, &tools).unwrap_err().contains("cannot read"));
+        assert!(calls.contains("api search/issues --hostname github.com -X GET"), "{calls}");
+        assert!(calls.contains("is:pr is:open repo:o/r") && calls.contains("page=3") && calls.contains("per_page=25"), "{calls}");
+        assert!(calls.contains("api graphql --hostname github.com") && calls.contains("PR_9") && !calls.contains("I_3"), "{calls}");
+        // Past GitHub's 1000-result window nothing is asked.
+        let before = calls.lines().count();
+        assert!(tasks_search(&gh, "github.com", &qs, 41).unwrap_err().contains("first 1000"));
+        assert!(tasks_search(&gh, "bad host", &qs, 1).is_err());
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
+        assert_eq!(checks_word(Some("SUCCESS")), "passing");
+        assert_eq!(checks_word(Some("PENDING")), "running");
+        assert_eq!(checks_word(Some("ERROR")), "failing");
+        assert_eq!(checks_word(None), "unresolved");
         let _ = fs::remove_dir_all(&tools);
     }
 

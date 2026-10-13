@@ -1064,7 +1064,22 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .tasks-list li { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 12px; border-bottom: 1px solid var(--line-inner); }
 .tasks-list li:hover { background: var(--input-bg); }
 .tasks-list .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dot-live); }
-.tasks-list .dot.issue { background: var(--dot-idle); }
-.tasks-list .dot.draft { background: var(--fg-faint); }
+.tasks-list { flex: 1; min-height: 0; }
+.tasks-list .dot.open { background: var(--done-icon); }
+.tasks-list .dot.issue.open { opacity: .6; }
+.tasks-list .dot.merged { background: var(--link); }
+.tasks-list .dot.closed, .tasks-list .dot.draft { background: var(--fg-faint); }
+.tasks-label { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; color: var(--fg-muted); }
+.tasks-label i { width: 6px; height: 6px; border-radius: 50%; }
+.tasks-who { flex: none; color: var(--fg-label); }
+.tasks-checks { flex: none; padding: 1px 6px; border-radius: 999px; background: var(--chip-bg); font-size: 11px; color: var(--fg-faint); }
+.tasks-checks.passing { color: var(--done); }
+.tasks-checks.failing { color: var(--danger); }
+.tasks-checks.running { color: var(--working-icon); }
+.tasks-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 8px 12px; border-top: 1px solid var(--line-subtle); font-size: 12px; }
+.tasks-foot .btn { min-width: 26px; padding: 2px 6px; }
+.tasks-foot .btn[aria-current="page"] { background: var(--row-selected); color: var(--fg); }
+.tasks-count, .tasks-gap { color: var(--fg-label); }
+.tasks-window { flex-basis: 100%; text-align: right; }
 .tasks-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
 .tasks-kind, .tasks-when { flex: none; color: var(--fg-label); }
