@@ -297,8 +297,9 @@ impl Session {
                 self.own = Some("permission");
             }
             "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
-                // A pending permission clears only when that same tool carries on.
-                if self.own == Some("permission") && self.pending != change.tool {
+                // A pending permission clears only when that same tool carries on. The event names the
+                // tool even where the outgoing change does not (PostToolUse), SAFE-007.
+                if self.own == Some("permission") && self.pending != str_of(event, "tool_name").map(|t| trim(t, 60)) {
                     return None;
                 }
                 self.pending = None;
@@ -654,6 +655,16 @@ mod tests {
         let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
         assert_eq!(states, [("working", false), ("interrupted", true), ("working", false), ("done", false), ("working", false), ("done", false)]);
         assert_eq!(s.history[0].prompt.as_deref(), Some("long job"));
+    }
+
+    #[test]
+    fn a_plan_approved_in_the_terminal_ends_the_wait_when_its_tool_finishes() {
+        // SAFE-007: Claude's PostToolUse names its tool, so the plan's own wait ends there.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"plan it"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode","tool_input":{"plan":"1. a"}}"#), Some("permission"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"1. a"}}"#), Some("working"));
     }
 
     #[test]
