@@ -659,9 +659,59 @@ pub fn clean_message(text: &str) -> String {
     lines.iter().map(bare).collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
-/// GIT-017: what the agent is asked, with the (trimmed) staged diff at the end.
-pub fn message_prompt(diff: &str) -> String {
-    format!("Write a git commit message for the staged changes below. Reply with the commit message only: a summary line under 72 characters, then, when it helps, a blank line and a few plain sentences on what changed and why. No code fences, no bullets, no preamble.\n\n{diff}")
+/// GIT-018: the most custom instructions a commit-message prompt carries.
+pub const INSTRUCTIONS_MAX: usize = 2_000;
+
+/// GIT-017 / GIT-018: what the agent is asked: the job, the user's own instructions in their own
+/// size-capped part (blank ones add nothing), and the (trimmed) staged diff at the end.
+pub fn message_prompt(diff: &str, instructions: &str) -> String {
+    let own = instructions.trim();
+    let own = match own.char_indices().nth(INSTRUCTIONS_MAX) {
+        Some((i, _)) => &own[..i],
+        None => own,
+    };
+    let part = if own.is_empty() { String::new() } else { format!("\n\nInstructions from the user for this message:\n{own}") };
+    format!("Write a git commit message for the staged changes below. Reply with the commit message only: a summary line under 72 characters, then, when it helps, a blank line and a few plain sentences on what changed and why. No code fences, no bullets, no preamble.{part}\n\n{diff}")
+}
+
+/// GIT-018: a custom command split into words: double quotes keep spaces inside one word, and
+/// backslashes stay exactly as typed (Windows paths).
+pub fn split_command(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    for c in line.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// GIT-018: a custom command's arguments with the prompt wherever `{prompt}` appears; with no
+/// placeholder the prompt goes on standard input instead (the second value).
+pub fn writer_args(args: &[String], prompt: &str) -> (Vec<String>, Option<String>) {
+    if args.iter().any(|a| a.contains("{prompt}")) {
+        (args.iter().map(|a| a.replace("{prompt}", prompt)).collect(), None)
+    } else {
+        (args.to_vec(), Some(prompt.to_string()))
+    }
 }
 
 /// GIT-017: runs whose stop was asked for, by key (the worktree).
@@ -688,20 +738,19 @@ fn excerpt(text: &str) -> String {
 
 /// GIT-017: runs an agent CLI in `dir` with `prompt` on its standard input and returns its answer
 /// as a commit message. `stop_message(key)` ends the run early with the error "stopped".
-pub fn write_message(program: &Path, args: &[&str], dir: &Path, prompt: &str, key: &str, limit: std::time::Duration) -> Result<String, String> {
+pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&str>, key: &str, limit: std::time::Duration) -> Result<String, String> {
     use std::io::Read;
     use std::process::Stdio;
     stop_asked(key);
     let mut cmd = std::process::Command::new(program);
-    cmd.args(args).current_dir(dir).env("NO_COLOR", "1").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args).current_dir(dir).env("NO_COLOR", "1").stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
     let mut child = cmd.spawn().map_err(|e| format!("Could not start the agent: {e}"))?;
-    if let Some(mut pipe) = child.stdin.take() {
-        let text = prompt.to_string();
+    if let (Some(mut pipe), Some(text)) = (child.stdin.take(), input.map(str::to_string)) {
         std::thread::spawn(move || {
             let _ = pipe.write_all(text.as_bytes());
         });
@@ -757,11 +806,12 @@ pub fn write_message(program: &Path, args: &[&str], dir: &Path, prompt: &str, ke
     Ok(message)
 }
 
-/// GIT-017: a commit message for what is staged in `worktree`, written by Claude Code.
-// ponytail: Claude Code only, with its default writing model; choosing the agent, model, effort or a
-// custom command is GIT-018 (T-228-c).
+/// GIT-017 / GIT-018: a commit message for what is staged in `worktree`, written by Claude Code, or
+/// by the user's own `command` when one is set, following their `instructions`.
+// ponytail: Claude Code with its default writing model; choosing another agent, a model or an effort
+// is T-228-d's.
 #[tauri::command]
-pub async fn scm_commit_message(worktree: String) -> Result<String, String> {
+pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = Path::new(&worktree);
         let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
@@ -773,8 +823,16 @@ pub async fn scm_commit_message(worktree: String) -> Result<String, String> {
         let stand_in = std::env::var_os("KOLUX_DEV_WRITER").map(std::path::PathBuf::from);
         #[cfg(not(debug_assertions))]
         let stand_in: Option<std::path::PathBuf> = None;
+        let prompt = message_prompt(&trim_diff(&diff, MESSAGE_BUDGET), instructions.as_deref().unwrap_or(""));
+        let limit = std::time::Duration::from_secs(180);
+        if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
+            let words = split_command(&line);
+            let (args, input) = writer_args(&words[1..], &prompt);
+            let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
+            return write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit);
+        }
         let program = stand_in.or_else(|| crate::agents::find_program("claude")).ok_or("Claude Code was not found on this computer")?;
-        write_message(&program, &["-p", "--model", "sonnet"], dir, &message_prompt(&trim_diff(&diff, MESSAGE_BUDGET)), &worktree, std::time::Duration::from_secs(180))
+        write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2533,6 +2591,41 @@ mod tests {
     }
 
     #[test]
+    fn git018_a_custom_writer_command_takes_the_prompt_in_place_or_on_standard_input() {
+        // Quoted arguments stay together and backslashes stay as typed.
+        assert_eq!(split_command(r#"node "C:\My Tools\w.js" --say {prompt}"#), vec!["node", r"C:\My Tools\w.js", "--say", "{prompt}"]);
+        assert_eq!(split_command(r#"  tool  -m "a b"x  "#), vec!["tool", "-m", "a bx"]);
+        // The placeholder takes the prompt; without one the prompt goes on standard input.
+        let (args, input) = writer_args(&["--say".into(), "<{prompt}>".into()], "hi there");
+        assert_eq!((args, input), (vec!["--say".to_string(), "<hi there>".to_string()], None));
+        let (args, input) = writer_args(&["-q".into()], "hi");
+        assert_eq!((args, input), (vec!["-q".to_string()], Some("hi".to_string())));
+        // Custom instructions have their own capped part; blank ones add nothing.
+        assert_eq!(message_prompt("D", "  \n "), message_prompt("D", ""));
+        let p = message_prompt("D", "Use the imperative mood.");
+        assert!(p.contains("Use the imperative mood.") && p.ends_with("\n\nD"), "{p}");
+        let long = message_prompt("D", &"x".repeat(INSTRUCTIONS_MAX * 3));
+        assert!(long.matches('x').count() <= INSTRUCTIONS_MAX, "{}", long.len());
+        // A command run with the prompt in its arguments gets no standard input.
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git018-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let f = if cfg!(windows) {
+            let f = root.join("say.cmd");
+            fs::write(&f, "@echo off\r\necho %~1\r\n").unwrap();
+            f
+        } else {
+            let f = root.join("say");
+            fs::write(&f, "#!/bin/sh\necho \"$1\"\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let (args, input) = writer_args(&["{prompt}".into()], "Fix the poll");
+        assert_eq!(write_message(&f, &args.iter().map(String::as_str).collect::<Vec<_>>(), &root, input.as_deref(), "k18", std::time::Duration::from_secs(20)), Ok("Fix the poll".to_string()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn git017_commit_message_from_the_staged_diff_is_trimmed_cleaned_and_stoppable() {
         // A large diff is cut to the budget, shared fairly: the small file stays whole.
         let small = "diff --git a/s b/s\n+one\n+two\n";
@@ -2564,14 +2657,14 @@ mod tests {
         let limit = std::time::Duration::from_secs(20);
         // The prompt arrives on standard input and the answer comes back cleaned.
         let echo = script("echo", "findstr /c:\"STAGED\" >nul && echo - Wrote the message", "grep -q STAGED && echo '- Wrote the message'");
-        assert_eq!(write_message(&echo, &[], &root, "STAGED diff", "k1", limit), Ok("Wrote the message".to_string()));
+        assert_eq!(write_message(&echo, &[], &root, Some("STAGED diff"), "k1", limit), Ok("Wrote the message".to_string()));
         // A clean exit with nothing printed is an empty result, with the error stream's excerpt.
         let empty = script("empty", "echo warming up 1>&2", "echo 'warming up' >&2");
-        let e = write_message(&empty, &[], &root, "x", "k2", limit).unwrap_err();
+        let e = write_message(&empty, &[], &root, Some("x"), "k2", limit).unwrap_err();
         assert!(e.contains("wrote nothing") && e.contains("warming up"), "{e}");
         // A failure favours the error stream and masks keys.
         let fail = script("fail", "echo partial\r\necho bad key sk-ant-abc123 1>&2\r\nexit /b 3", "echo partial; echo 'bad key sk-ant-abc123' >&2; exit 3");
-        let e = write_message(&fail, &[], &root, "x", "k3", limit).unwrap_err();
+        let e = write_message(&fail, &[], &root, Some("x"), "k3", limit).unwrap_err();
         assert!(e.contains("bad key sk-ant-[masked]") && !e.contains("abc123") && !e.contains("partial"), "{e}");
         // Stopping a run ends it at once and leaves no message.
         let slow = script("slow", "ping -n 30 127.0.0.1 >nul\r\necho late", "sleep 30; echo late");
@@ -2580,12 +2673,12 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(800));
             stop_message("k4");
         });
-        let e = write_message(&slow, &[], &root, "x", "k4", limit).unwrap_err();
+        let e = write_message(&slow, &[], &root, Some("x"), "k4", limit).unwrap_err();
         stopper.join().unwrap();
         assert_eq!(e, "stopped");
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
         // The prompt names the job and carries the diff.
-        let p = message_prompt("diff --git a/x b/x\n+y\n");
+        let p = message_prompt("diff --git a/x b/x\n+y\n", "");
         assert!(p.contains("commit message") && p.ends_with("diff --git a/x b/x\n+y\n"), "{p}");
         let _ = fs::remove_dir_all(&root);
     }

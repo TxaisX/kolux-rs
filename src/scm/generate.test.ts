@@ -42,3 +42,13 @@ test("GIT-017: a generation fills only the box of the worktree that began it, an
   await tick();
   expect(genState("C")).toBe("The agent failed: no key");
 });
+
+test("GIT-018: the commit-message writer is Claude Code by default, can be a custom command or off", async () => {
+  const { writerOf, WRITER_KEY, WRITER_COMMAND_KEY, WRITER_INSTRUCTIONS_KEY } = await import("./generate");
+  expect(writerOf({})).toEqual({ mode: "claude", command: null, instructions: "" });
+  expect(writerOf({ [WRITER_KEY]: "custom", [WRITER_COMMAND_KEY]: "  tool {prompt} ", [WRITER_INSTRUCTIONS_KEY]: "Be brief" })).toEqual({ mode: "custom", command: "tool {prompt}", instructions: "Be brief" });
+  // A custom choice with no command is not usable, so nothing is offered.
+  expect(writerOf({ [WRITER_KEY]: "custom", [WRITER_COMMAND_KEY]: " " }).mode).toBe("off");
+  expect(writerOf({ [WRITER_KEY]: "off" }).mode).toBe("off");
+  expect(writerOf({ [WRITER_KEY]: 7 }).mode).toBe("claude");
+});

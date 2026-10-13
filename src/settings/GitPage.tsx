@@ -7,6 +7,7 @@ import { CONFIRM_DELETE_FIELD, asksBeforeDelete } from "../projects/deleting";
 import { prefixSample, type PrefixCheck } from "../projects/model";
 import { budgetLine, budgetLow, type Budget, SCM_GROUP_ORDERS, SCM_GROUP_ORDER_KEY, scmGroups, SUMMARY_UPSTREAM_KEY } from "../scm/model";
 import { useSettings } from "./useSettings";
+import { WRITER_COMMAND_KEY, WRITER_INSTRUCTIONS_KEY, WRITER_KEY } from "../scm/generate";
 
 const REFRESH_FIELD = "refreshBaseFirst";
 
@@ -91,6 +92,41 @@ export function GitView({ settings, save, draft, setDraft, check, budget = { row
         <p className="conn-detail" data-group-order>
           The list reads {scmGroups(settings[SCM_GROUP_ORDER_KEY]).map((g) => g[0].toUpperCase() + g.slice(1)).join(", then ")}. Conflicts always come first, since they hold up a commit.
         </p>
+      </section>
+      <section className="conn-card" data-section="commit-writer">
+        <h2 className="conn-name">Commit messages</h2>
+        <div className="look-select">
+          <span>Written by</span>
+          <select aria-label="commit message writer" className="field" value={settings[WRITER_KEY] === "custom" || settings[WRITER_KEY] === "off" ? String(settings[WRITER_KEY]) : "claude"} onChange={(e) => void save({ [WRITER_KEY]: e.target.value })}>
+            <option value="claude">Claude Code</option>
+            <option value="custom">Custom command</option>
+            <option value="off">Off: no generate button</option>
+          </select>
+        </div>
+        {settings[WRITER_KEY] === "custom" && (
+          <>
+            <input
+              key={String(settings[WRITER_COMMAND_KEY] ?? "")}
+              aria-label="custom commit message command"
+              className="field"
+              placeholder="e.g. my-writer --text {prompt}"
+              defaultValue={String(settings[WRITER_COMMAND_KEY] ?? "")}
+              onBlur={(e) => e.target.value !== String(settings[WRITER_COMMAND_KEY] ?? "") && void save({ [WRITER_COMMAND_KEY]: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            />
+            <p className="conn-detail">The prompt goes wherever <code>{"{prompt}"}</code> appears in the command, or on its standard input when it does not. Put quotes around a word with spaces in it; backslashes are kept as typed.</p>
+          </>
+        )}
+        <textarea
+          key={String(settings[WRITER_INSTRUCTIONS_KEY] ?? "")}
+          aria-label="commit message instructions"
+          className="field multi"
+          maxLength={2000}
+          placeholder="Your own instructions for the message, e.g. use the imperative mood (optional)"
+          defaultValue={String(settings[WRITER_INSTRUCTIONS_KEY] ?? "")}
+          onBlur={(e) => e.target.value !== String(settings[WRITER_INSTRUCTIONS_KEY] ?? "") && void save({ [WRITER_INSTRUCTIONS_KEY]: e.target.value })}
+        />
+        <p className="conn-detail">The spark button beside the commit message asks for a message describing what is staged.</p>
       </section>
       <section className="conn-card" data-section="gh-budget">
         <h2 className="conn-name">GitHub API budget</h2>
