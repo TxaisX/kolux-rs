@@ -1440,6 +1440,13 @@ and their worktrees. Open a file shows Kolux's own picker, and the one file you 
 outside a project, but nothing else in its folder does. Network shares, a whole drive and links
 that point out of a project are turned down with a plain message.
 
+[accounts] T-171: the AI connection cards now notice by themselves when an agent is installed
+or removed outside Kolux (every 5 seconds while the window is visible, and at once when it gets
+focus back). New Claude panes no longer pick up a 1-year key Kolux itself was started with
+unless key mode is on; with a managed Claude account, a pane whose own settings set an Anthropic
+key or token is not started and says which override to remove. A new Codex pane waits about two
+seconds for the chosen account's sign-in, then starts on the system login instead of hanging.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2595,7 +2602,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-154-b · The fence (fence.rs) covers file_read, file_write, dir_list, file_list, md_list, md_new, diff_sides, diff_image, git_changes and change_entries. Roots are the stored projects, then, on a miss, every worktree Git lists for them (re-read at most every 3 s). Every path is resolved through its links before the check, a path that does not exist yet through its folder; the command then uses the caller's own spelling. A network share, a drive root and a folder are never a root or a grant. Picked files are granted exactly, newest 100 kept, in memory only for now (a restored tab for a picked file is refused after a restart; T-154-c). Open a file moved from the window's dialog to a Kolux command (file_pick) so the window cannot grant itself a file; the other pickers (project folders, kit inputs, artifacts) still use the window's dialog, since they grant nothing. A project added at a drive root gives no file access, by the card's drive-root rule.
 
+- [accounts] T-171 · ACCT-014: the backup check runs on the connection grid (ConnectGrid) only, so it runs only while that page is open; it re-reads agent detection and install state, and a changed detection result is sent to every window as agents-changed. Account cards are not re-checked every 5 s, since a Claude account check starts a program per account (T-171-b covers their focus refresh). ACCT-024: the sign-in variables are ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN; terminal_spawn became an async command so the Codex wait (re-reading the active account every 100 ms) does not hold up the window; when the account changed during the wait and the new one also has no sign-in, the pane is refused with "Open it again".
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-171 · done (part): ConnectGrid liveCheck (5 s while visible, on focus, changes broadcast); claude_key::strip_inherited, claude_accounts::sign_in_overrides, codex_accounts::ready_home wired in terminal_spawn · evidence/T-171.txt, T-171-1-grok-not-installed.png, T-171-2-grok-found-without-reload.png
 - 2026-10-12 · [accounts] T-154-b · done: `src-tauri/src/fence.rs` (projects, worktrees and exact grants; shares, drive roots and links refused); file commands fenced; Open a file uses file_pick · evidence/T-154-b.txt, T-154-b-1-picker.png
 - 2026-10-12 · [accounts] T-153-c · skipped this batch, left open: VIEW-054 is built or marked SKIPPED only after Txais clicks through the installed app (DT-37), which the clean-room rule bars the builder from
 - 2026-10-12 · [accounts] T-153-b · done: `src/status/resources.ts` endNeedsAsk; Resource Manager End reads again before asking · evidence/T-153-b.txt, T-153-b-*.png

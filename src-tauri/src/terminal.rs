@@ -97,6 +97,7 @@ impl Terminals {
             None => shell_commands(cwd.as_deref()),
         };
         let key = crate::cli::secret();
+        let strip_key = crate::claude_key::strip_inherited(program.as_deref(), &env);
         for command in commands.iter_mut() {
             // ACCT-048: an ordinary terminal's environment: none of Kolux's own runtime or build
             // variables, no conda activation that came along only in part, no prompt-theme wizard.
@@ -132,16 +133,16 @@ impl Terminals {
             // CLI-010: a Kolux started from another copy's terminal inherits that copy's data-folder
             // override, which would send this pane's commands to the other app.
             command.env_remove("KOLUX_USER_DATA_PATH");
+            // ACCT-024: a Claude pane not handed the 1-year key drops one Kolux itself was started
+            // with (Claude Code prefers the variable over its own login).
+            if strip_key {
+                command.env_remove(crate::claude_key::ENV);
+            }
             // SET-027: the user's variables for this agent; Kolux's account variable below wins.
             for (k, v) in &own_env {
                 command.env(k, v);
             }
             for (k, v) in &env {
-                // A pane on a managed Claude account must not be overridden by a 1-year key that
-                // Kolux itself was started with (Claude Code prefers the variable).
-                if k == crate::claude_accounts::CONFIG_ENV {
-                    command.env_remove(crate::claude_key::ENV);
-                }
                 command.env(k, v);
             }
         }
@@ -366,7 +367,7 @@ impl Terminals {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>) -> Result<Spawned, String> {
+pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>) -> Result<Spawned, String> {
     // TERM-040: `cwd` is the workspace folder; `start` may ask for a folder relative to it.
     let cwd = cwd.map(|w| start_dir(&w, start.as_deref()));
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
@@ -388,8 +389,25 @@ pub fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, st
             .collect();
         (env, crate::cap::on(&settings))
     };
-    // USAGE-006: the 200k cap, added at start so the pane's saved start line stays free of it.
+    // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
+    if env.iter().any(|(k, _)| k == crate::claude_accounts::CONFIG_ENV) {
+        let found = crate::claude_accounts::sign_in_overrides(&env_own, cfg!(windows));
+        if !found.is_empty() {
+            return Err(format!("This Claude pane runs on your managed account, but your Claude settings set {}. Remove those overrides in Settings > Agents and open it again.", found.join(", ")));
+        }
+    }
     let mut env = env;
+    // ACCT-024: a Codex pane waits (about two seconds) for the chosen account's sign-in.
+    // ponytail: blocks one async worker while it waits; a timer-based wait if panes queue up.
+    if let Some(i) = env.iter().position(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
+        let active = || store.lock().ok().and_then(|s| crate::codex_accounts::active_home(&s));
+        let signed_in = |h: &str| std::path::Path::new(h).join("auth.json").is_file();
+        match crate::codex_accounts::ready_home(active, signed_in, crate::codex_accounts::SIGN_IN_WAIT, std::time::Duration::from_millis(100))? {
+            Some(home) => env[i].1 = home,
+            None => drop(env.remove(i)),
+        }
+    }
+    // USAGE-006: the 200k cap, added at start so the pane's saved start line stays free of it.
     let mut args = args.unwrap_or_default();
     if cap {
         crate::cap::apply(program.as_deref(), &mut args, &mut env, crate::cap::env_set());

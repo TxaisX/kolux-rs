@@ -229,6 +229,12 @@ pub fn pane_env(program: Option<&str>, settings: &Value, token: Option<String>) 
     token.filter(|t| !t.is_empty()).map(|t| (ENV, t))
 }
 
+/// ACCT-024: whether a pane drops a key variable Kolux itself was started with: every Claude pane
+/// that is not handed the key (plain and managed panes use their own login).
+pub fn strip_inherited(program: Option<&str>, env: &[(String, String)]) -> bool {
+    program.and_then(crate::agents::credited_agent) == Some("claude") && !env.iter().any(|(k, _)| k == ENV)
+}
+
 /// Stores a fresh key: sealed, with its creation date and the key-mode marker.
 pub fn keep(store: &Store, token: &str, now: i64) -> Result<(), String> {
     secrets::write_setting(store, TOKEN_FIELD, token)?;
@@ -634,5 +640,14 @@ mod tests {
         assert!(asked.elapsed() < Duration::from_secs(3));
         assert_eq!(running.join().unwrap(), Outcome::Cancelled);
         assert!(cancel_all(Duration::from_millis(10)), "nothing left to stop");
+    }
+
+    #[test]
+    fn acct_024_only_a_key_mode_claude_pane_keeps_the_key_variable() {
+        let with = vec![(ENV.to_string(), "k".to_string())];
+        assert!(strip_inherited(Some("claude"), &[]), "a plain Claude pane drops a key Kolux was started with");
+        assert!(strip_inherited(Some("claude"), &[(crate::claude_accounts::CONFIG_ENV.to_string(), "d".to_string())]), "so does a managed one");
+        assert!(!strip_inherited(Some("claude"), &with), "key mode keeps its own key");
+        assert!(!strip_inherited(Some("codex"), &[]) && !strip_inherited(None, &[]), "other programs are left alone");
     }
 }
