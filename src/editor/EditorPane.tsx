@@ -3,7 +3,8 @@
 // tab is unsaved while that text differs from the disk copy. Mod+S comes from App's shortcut
 // router, which calls the focused pane's entry in `editors`. A file that will not load is tried
 // three times, then the body says why and offers Retry; a failed save is a toast and the
-// marker stays. A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
+// marker stays. A save is refused when the file changed on disk since it was loaded (EDIT-003,
+// T-073-a): the pane then asks Reload (take the disk copy) or Keep mine (overwrite it). A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
 // Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
 // EDIT-007: Copy Context copies the selection under its path and line range, with a hint beside a
 // selection it applies to; EDIT-020: review notes take a selection from any file, not just Markdown.
@@ -16,7 +17,7 @@ import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
-import { attach, baseName, detach, isDirty, loadText, relay, save, subscribe } from "./buffers";
+import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections } from "./notes";
 import { contextText } from "./copyContext";
@@ -52,6 +53,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
   const [error, setError] = useState<string | null>(null);
   const [tries, setTries] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [stale, setStale] = useState(false); // the last save was refused: the disk copy moved on
   const report = useRef({ onDirty, onToast });
   report.current = { onDirty, onToast };
   const wantFocus = useRef(focused);
@@ -86,6 +88,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       report.current.onDirty?.(d);
     });
     setError(null);
+    setStale(false);
     loadText(() => invoke<string>("file_read", { path })).then(
       (text) => {
         if (!alive) return;
@@ -109,8 +112,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
     );
     editors.set(id, async () => {
       try {
-        await save(path, (text) => invoke("file_write", { path, text }));
+        await save(path, (text, loadedHash) => invoke("file_write", { path, text, loadedHash }));
+        setStale(false);
       } catch (err) {
+        if (isStale(err)) return setStale(true);
         report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
       }
     });
@@ -259,6 +264,38 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
               Open this file anyway
             </button>
           )}
+        </div>
+      )}
+      {stale && (
+        <div className="notice save-stale" role="alert">
+          {name} changed on disk since you opened it, so it was not saved.
+          <button
+            className="btn"
+            title="Show the disk copy; your unsaved edits are dropped"
+            onClick={() =>
+              void invoke<string>("file_read", { path }).then(
+                (text) => {
+                  replaceAll(path, text);
+                  setStale(false);
+                },
+                (err) => report.current.onToast?.(name + " did not reload: " + String(err)),
+              )
+            }
+          >
+            Reload
+          </button>
+          <button
+            className="btn"
+            title="Save your text over the disk copy"
+            onClick={() =>
+              void save(path, (text) => invoke("file_write", { path, text }), true).then(
+                () => setStale(false),
+                (err) => report.current.onToast?.(name + " was not saved: " + String(err)),
+              )
+            }
+          >
+            Keep mine
+          </button>
         </div>
       )}
       {banner && (
