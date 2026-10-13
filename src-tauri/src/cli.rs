@@ -46,6 +46,10 @@ pub struct Request {
     /// an orchestration change away before running it. Empty from a CLI that predates the field.
     #[serde(default)]
     pub cli: String,
+    /// When the app took the connection, which can be well before it gets to answer: requests
+    /// are answered one at a time (ORCH-017's repeat that joins the start ahead of it).
+    #[serde(skip)]
+    pub arrived: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -918,6 +922,7 @@ fn text_of(command: &str, r: &Value) -> String {
             let model = r["model"].as_str().map(|m| format!(", {m}")).unwrap_or_default();
             let term = r["terminals"][0]["id"].as_u64().map(|t| format!(" in terminal {t}")).unwrap_or_default();
             let how = if s("launch") == "reused_terminal" { ", reused" } else { "" };
+            let how = if r["joined"] == true { format!("{how}; joined the same start already under way") } else { how.to_string() };
             let mut line = format!("worker {}: {} for {} in {} ({}{}){}{how}", s("status"), s("dispatchId"), s("taskId"), r["worktree"]["path"].as_str().unwrap_or_default(), s("agent"), model, term);
             if let Some(h) = r["reveal"].as_str() {
                 line.push_str(&format!("\n{h}"));
@@ -1386,7 +1391,7 @@ pub fn main(words: Vec<String>) -> i32 {
         if parsed.command == cli_accounts::ADD {
             let (port, token) = read_endpoint(&data_dir())?;
             let ask = |command: &str, args: Value| -> Result<Value, Fail> {
-                let r = Request { id: request_id(), token: token.clone(), command: command.into(), cwd: cwd.clone(), args, pane: None, cli: VERSION.into() };
+                let r = Request { id: request_id(), token: token.clone(), command: command.into(), cwd: cwd.clone(), args, pane: None, cli: VERSION.into(), arrived: None };
                 let env = call(port, &r)?;
                 if env["success"] == Value::Bool(true) {
                     return Ok(env["result"].clone());
@@ -1405,12 +1410,12 @@ pub fn main(words: Vec<String>) -> i32 {
         }
         if (parsed.command == CHECK && parsed.args.contains_key("wait")) || parsed.command == ASK {
             let (port, token) = read_endpoint(&data_dir())?;
-            let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane, cli: VERSION.into() };
+            let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane, cli: VERSION.into(), arrived: None };
             return Ok((parsed.command.clone(), wait_for_mail(port, req)?));
         }
         let send = || {
             let (port, token) = read_endpoint(&data_dir())?;
-            call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(args.clone()), pane: pane.clone(), cli: VERSION.into() })
+            call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(args.clone()), pane: pane.clone(), cli: VERSION.into(), arrived: None })
         };
         let env = if parsed.command == "app.open" { open(&send, &launch_app, OPEN_LIMIT)? } else { send()? };
         Ok((parsed.command.clone(), env))
@@ -2801,7 +2806,15 @@ fn reuse(ctx: &Ctx, req: &Request, to: &str) -> Result<Value, Fail> {
 /// second worker. A start turned away leaves no receipt; one that timed out keeps its outcome. A
 /// start left pending by an earlier run of Kolux is over (its terminals went with it): it runs fresh.
 fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
-    let Some(id) = req.args["retryRequest"].as_str().map(str::trim).filter(|s| !s.is_empty()) else { return worker_start(ctx, req) };
+    // ORCH-017: the same start is the same caller, folder and flags; the CLI gives every send a
+    // request id of its own, so that one is left out.
+    let start = || {
+        let mut flags = req.args.clone();
+        flags.as_object_mut().map(|f| f.remove("retryRequest"));
+        let same = format!("{}|{}|{}|{flags}", req.command, caller(ctx, req).ok().flatten().unwrap_or_default(), req.cwd);
+        join_running(&same, req.arrived, || worker_start(ctx, req))
+    };
+    let Some(id) = req.args["retryRequest"].as_str().map(str::trim).filter(|s| !s.is_empty()) else { return start() };
     let key = format!("{}|{}|{id}", req.command, caller(ctx, req)?.unwrap_or_default());
     let me = u64::from(std::process::id());
     let until = Instant::now() + Duration::from_secs(300);
@@ -2826,7 +2839,7 @@ fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         m.save(&store)?;
         break;
     }
-    let out = worker_start(ctx, req);
+    let out = start();
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut m = crate::orchestration::Mail::load(&store);
     let kept = match &out {
@@ -2836,6 +2849,33 @@ fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     };
     m.finish(&key, kept);
     m.save(&store)?;
+    out
+}
+
+/// Starts lately finished: the request (command, caller, folder and flags), when it began and
+/// ended, and how it went. Kept ten minutes.
+type Finished = (String, Instant, Instant, Result<Value, Fail>);
+static FINISHED: Mutex<Vec<Finished>> = Mutex::new(Vec::new());
+
+/// ORCH-017: the same start sent again while the first is under way joins it. The app answers
+/// one request at a time, so the repeat waits behind the first; when its turn comes it hands back
+/// the first one's outcome (marked `joined`) rather than starting a second worker. A repeat sent
+/// after the first finished, or with any other flag, is a start of its own.
+fn join_running(same: &str, arrived: Option<Instant>, start: impl FnOnce() -> Result<Value, Fail>) -> Result<Value, Fail> {
+    let lock = || FINISHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(at) = arrived {
+        if let Some((.., out)) = lock().iter().rev().find(|(k, from, to, _)| k == same && *from <= at && at <= *to) {
+            return out.clone().map(|mut v| {
+                v["joined"] = json!(true);
+                v
+            });
+        }
+    }
+    let from = Instant::now();
+    let out = start();
+    let mut done = lock();
+    done.retain(|(.., to, _)| to.elapsed() < Duration::from_secs(600));
+    done.push((same.to_string(), from, Instant::now(), out.clone()));
     out
 }
 
@@ -2996,11 +3036,19 @@ pub(crate) fn secret() -> String {
     format!("{:016x}{:016x}", h.finish(), std::collections::hash_map::RandomState::new().build_hasher().finish())
 }
 
-/// Answers requests on `listener` one at a time until the listener is dropped.
+/// Answers requests on `listener` one at a time, for as long as the app runs.
 pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: impl Fn(&Request) -> Result<Value, Fail>) {
-    // ponytail: one request at a time; a parallel accept loop if agents ever queue up on it.
-    for stream in listener.incoming().flatten() {
-        let mut stream = stream;
+    // ponytail: one request at a time; a parallel accept loop if agents ever queue up on it. A
+    // second thread takes each connection as it comes, so a request knows when it was sent.
+    let (queue, taken) = mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            if queue.send((stream, Instant::now())).is_err() {
+                break;
+            }
+        }
+    });
+    for (mut stream, arrived) in taken {
         stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
         let mut line = String::new();
         if BufReader::new(&stream).read_line(&mut line).is_err() {
@@ -3012,7 +3060,7 @@ pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: imp
             Ok(req) if CHANGES.contains(&req.command.as_str()) && newer(&req.cli, VERSION) => {
                 (req.id, Err(Fail { code: "version_gap", message: format!("this Kolux ({VERSION}) is older than the command line ({}); update Kolux before sending orchestration changes", req.cli), data: json!({ "appVersion": VERSION, "cliVersion": req.cli }) }))
             }
-            Ok(req) => (req.id.clone(), handle(&req)),
+            Ok(req) => (req.id.clone(), handle(&Request { arrived: Some(arrived), ..req })),
             Err(e) => (String::new(), Err(Fail::args(format!("malformed request: {e}")))),
         };
         let mut reply = envelope(&id, runtime, out);
@@ -3280,7 +3328,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         // CLI-034: outside any Kolux terminal there is no creator, so nothing is made.
         let orphan = dispatch(&ctx, &req("orchestration.task-create", json!({ "spec": "add a test" }))).unwrap_err();
         assert_eq!(orphan.code, "unbound_caller");
@@ -3466,15 +3514,46 @@ mod tests {
     }
 
     #[test]
+    fn a_start_repeated_while_the_first_runs_joins_it() {
+        let key = "orchestration.worker-start|7|C:/repo|{\"spec\":\"join test\"}";
+        let mid = std::cell::Cell::new(None);
+        let first = join_running(key, None, || {
+            mid.set(Some(Instant::now()));
+            Ok(json!({ "dispatchId": "dispatch-1" }))
+        })
+        .unwrap();
+        assert_eq!(first["dispatchId"], "dispatch-1");
+        assert!(first.get("joined").is_none());
+        // Sent while the first was under way: it gets the first one's receipt, no second worker.
+        let again = join_running(key, mid.get(), || panic!("a repeat of a start under way must not start a second worker")).unwrap();
+        assert_eq!(again["dispatchId"], "dispatch-1");
+        assert_eq!(again["joined"], true);
+        // A failure is joined too, with the same error.
+        let bad = "orchestration.worker-start|7|C:/repo|{\"task\":\"task-9\"}";
+        let mid = std::cell::Cell::new(None);
+        let _ = join_running(bad, None, || {
+            mid.set(Some(Instant::now()));
+            Err(Fail::new("failed", "task-9 already has a worker (dispatch-3)"))
+        });
+        assert_eq!(join_running(bad, mid.get(), || panic!("joined")).unwrap_err().message, "task-9 already has a worker (dispatch-3)");
+        // Sent after the first finished, or with other flags, or not over the port: a start of its own.
+        let later = join_running(key, Some(Instant::now()), || Ok(json!({ "dispatchId": "dispatch-2" }))).unwrap();
+        assert_eq!(later["dispatchId"], "dispatch-2");
+        let other = join_running("orchestration.worker-start|7|C:/repo|{\"spec\":\"other\"}", mid.get(), || Ok(json!({ "dispatchId": "dispatch-4" }))).unwrap();
+        assert_eq!(other["dispatchId"], "dispatch-4");
+    }
+
+    #[test]
     fn requests_cross_the_loopback_port_with_the_token() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || serve_loop(listener, "secret", "rt-1", |req| Ok(json!({ "echo": req.args }))));
-        let req = Request { id: "r1".into(), token: "secret".into(), command: "x".into(), cwd: String::new(), args: json!({ "a": 1 }), pane: None, cli: String::new() };
+        std::thread::spawn(move || serve_loop(listener, "secret", "rt-1", |req| Ok(json!({ "echo": req.args, "arrived": req.arrived.is_some() }))));
+        let req = Request { id: "r1".into(), token: "secret".into(), command: "x".into(), cwd: String::new(), args: json!({ "a": 1 }), pane: None, cli: String::new(), arrived: None };
         let v = call(port, &req).unwrap();
         assert_eq!(v["success"], true);
         assert_eq!(v["requestId"], "r1");
         assert_eq!(v["result"]["echo"]["a"], 1);
+        assert_eq!(v["result"]["arrived"], true, "the app stamps when it took the connection");
         assert_eq!(v["meta"]["runtimeId"], "rt-1");
         let bad = Request { token: "wrong".into(), ..req.clone() };
         let v = call(port, &bad).unwrap();
@@ -3508,7 +3587,7 @@ mod tests {
                 // The second request: the app reads it and closes without answering.
             }
         });
-        let req = Request { id: "r1".into(), token: "t".into(), command: "orchestration.reset".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into() };
+        let req = Request { id: "r1".into(), token: "t".into(), command: "orchestration.reset".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None };
         let v = call(port, &req).unwrap();
         assert_eq!(v["error"]["code"], "version_gap", "{v}");
         assert!(v["error"]["message"].as_str().unwrap().contains("Update Kolux"), "{v}");
@@ -3557,7 +3636,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         let done = "1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633a";
         let sent = "2b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633a";
         {
@@ -3633,7 +3712,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
 
         // CLI-015: a relative path counts from the folder the command ran in.
         let added = dispatch(&ctx, &req("repo.add", &dir, json!({ "path": "other" }))).unwrap();
@@ -3722,7 +3801,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         let make = |name: &str| PathBuf::from(dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": name }))).unwrap()["path"].as_str().unwrap());
         let (one, two, quiet) = (make("one"), make("two"), make("quiet"));
         commit(&one, "a.txt", "one\n");
@@ -3791,7 +3870,7 @@ mod tests {
         let notify = |v: Value| events.lock().unwrap().push(v);
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
 
         let made = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "cli one", "setup": "skip" }))).unwrap();
         let path = PathBuf::from(made["path"].as_str().unwrap());
@@ -3973,7 +4052,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: repo.display().to_string(), args, pane: None, cli: VERSION.into() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: repo.display().to_string(), args, pane: None, cli: VERSION.into(), arrived: None };
         let mut open = Vec::new();
         for n in ["a", "b", "c", "d"] {
             let made = dispatch(&ctx, &req("worktree.create", json!({ "name": n, "setup": "skip" }))).unwrap();
@@ -4093,7 +4172,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         let show = |id: &str| dispatch(&ctx, &req("orchestration.request-show", json!({ "request": id }))).unwrap();
         assert_eq!(show("never-sent")["state"], "absent");
         {
