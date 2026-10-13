@@ -1,6 +1,8 @@
 // GIT-042: review notes on Markdown documents. A note quotes the text selected in the rich view,
 // the source editor or the preview, and all notes copy as one Markdown block for an agent.
 
+import { ageLabel } from "../terminal/status";
+
 export type Note = { path: string; line: number; time: number; quote: string; note: string };
 export type Draft = { path: string; line: number; quote: string };
 
@@ -50,4 +52,19 @@ export function domPick(host: Element | null, path: string, text: string): Picke
   if (!draft) return null;
   const r = sel.getRangeAt(0).getBoundingClientRect();
   return { draft, x: r.left, y: r.bottom };
+}
+
+/** EDIT-020: one agent the notes can go to, with how long since its state last changed. */
+export type SendTarget = { key: number; label: string; since: string };
+
+/** EDIT-020: the agent panes running in this worktree (`here` checks the folder and the live
+ * terminal), the most recent state change first. */
+export function sendTargets<P extends { key: number; agent: string; kind?: string; cwd: string | null }>(panes: P[], here: (p: P) => boolean, changed: Record<number, { at: number } | undefined>, now: number, name: (p: P) => string): SendTarget[] {
+  return panes
+    .filter((p) => !p.kind && p.agent !== "shell" && here(p))
+    .sort((a, b) => (changed[b.key]?.at ?? 0) - (changed[a.key]?.at ?? 0))
+    .map((p) => {
+      const at = changed[p.key]?.at;
+      return { key: p.key, label: name(p), since: at === undefined ? "no change yet" : `changed ${ageLabel(at, now)}` };
+    });
 }

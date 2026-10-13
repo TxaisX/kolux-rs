@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { lineOf, noteDraft, notesMarkdown, reviewOn, type Note } from "./notes";
+import { lineOf, noteDraft, notesMarkdown, reviewOn, sendTargets, type Note } from "./notes";
 
 test("GIT-042: a note needs a selection and finds the selected line", () => {
   const text = "# Title\n\nFirst para.\nSecond line with **bold** words.\n";
@@ -23,4 +23,24 @@ test("GIT-042: the Markdown review tools are on unless the setting turns them of
   expect(reviewOn({})).toBe(true);
   expect(reviewOn({ markdownReviewNotes: false })).toBe(false);
   expect(reviewOn({ markdownReviewNotes: true })).toBe(true);
+});
+
+test("EDIT-020: notes find their line whatever the line ends, and only running agents of this worktree are offered, latest change first", () => {
+  expect(lineOf("one\r\ntwo\r\nthree\r\n", "three")).toBe(3);
+  expect(noteDraft("src/a.ts", "", "const x = 1;", 12)).toEqual({ path: "src/a.ts", line: 12, quote: "const x = 1;" });
+  const panes = [
+    { key: 1, agent: "shell", cwd: "W" },
+    { key: 2, agent: "claude", cwd: "W" },
+    { key: 3, agent: "codex", cwd: "W" },
+    { key: 4, agent: "claude", cwd: "OTHER" },
+    { key: 5, agent: "claude", cwd: "W", kind: "editor" },
+    { key: 6, agent: "claude", cwd: "W" },
+  ];
+  const now = 10 * 60000;
+  const got = sendTargets(panes, (p) => p.cwd === "W" && p.key !== 6, { 2: { at: now - 3 * 60000 }, 3: { at: now - 10000 } }, now, (p) => `${p.agent} ${p.key}`);
+  expect(got).toEqual([
+    { key: 3, label: "codex 3", since: "changed just now" },
+    { key: 2, label: "claude 2", since: "changed 3m ago" },
+  ]);
+  expect(sendTargets(panes.slice(1, 2), () => true, {}, now, () => "c")).toEqual([{ key: 2, label: "c", since: "no change yet" }]);
 });

@@ -78,3 +78,12 @@ test("a precheck command and its 1, 2, 5 or 10 minute limit, run only ahead of t
   expect(html).toContain('value="git diff --quiet"');
   expect(html).toMatch(/<option value="300" selected="">5 minutes/);
 });
+
+test("AUTO-004: an automation started by an event opens on Event with no timetable to fill in", () => {
+  const html = render({ id: "auto-2", name: "Review PRs", prompt: "review it", provider: "claude", projectId: "p1", enabled: true, workspaceMode: "existing", trigger: { kind: "event", event: "pr-opened" } });
+  expect(html).toMatch(/<option value="pr-opened" selected="">When a pull request opens/);
+  expect(html).not.toContain("Time zone");
+  expect(html).toContain("keeps running on each event until you pause it");
+  // A new one starts on a timetable.
+  expect(render(null)).toMatch(/<option value="schedule" selected="">On a timetable/);
+});

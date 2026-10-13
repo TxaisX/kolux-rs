@@ -30,6 +30,12 @@ import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { stopLine, type StopInfo } from "./notify";
+import NameField from "./NameField";
+import { handlesIn } from "./tabs";
+import { Kbd, useLabel } from "../keys/KeymapContext";
+
+// TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
+const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
 
 type Status = { kind: "starting" } | { kind: "running"; id: number; account: string | null } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
@@ -80,6 +86,18 @@ type Props = {
   title?: string;
   /** SESS-006: the shell picked in the create menu names itself in the header. */
   shellName?: string;
+  /** TERM-027: the title is one the user (or a seat) set, so Clear Pane Title is offered. */
+  custom?: boolean;
+  /** TERM-027: saves a typed name; undefined gives the automatic title back. */
+  onRename?: (name: string | undefined) => void;
+  /** TERM-027: bumped by the Set Title shortcut to open the name field. */
+  renameAsk?: number;
+  /** TERM-036: the agent's session id is known, so Copy Session ID is offered. */
+  sessionKnown?: boolean;
+  /** TERM-036: copies one of the pane's ids; the window says whether it worked. */
+  onCopyId?: (what: "session" | "terminal" | "pane") => void;
+  /** TERM-096: the opener for a printed handle of an open terminal; undefined for anything else. */
+  findHandle?: (handle: string) => (() => void) | undefined;
   /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
   typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
@@ -87,6 +105,8 @@ type Props = {
   onFocus?: () => void;
   /** Close was asked for; the window decides (TERM-045) and drops the pane, which ends its program. */
   onClose?: () => void;
+  /** SAFE-002: set while the agent waits on its plan; the header then offers Review plan. */
+  onReviewPlan?: () => void;
   /** The plus menu behind the header's "+" button. */
   agents?: AgentInfo[];
   launching?: boolean;
@@ -111,8 +131,11 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
+export default function TerminalPane({ hidden = false, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
+  const handleRef = useRef(findHandle);
+  handleRef.current = findHandle;
   const termRef = useRef<Terminal | null>(null);
   const box = useRef<HTMLElement>(null);
   // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
@@ -127,6 +150,15 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
   const [now, setNow] = useState(() => Date.now());
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
+  // TERM-027: the pane menu and the inline name field.
+  const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
+  const [naming, setNaming] = useState(false);
+  // The menu shows a shortcut only once one is assigned (both start with none).
+  const setKey = useLabel("terminal.setTitle").length > 0;
+  const clearKey = useLabel("terminal.clearPaneTitle").length > 0;
+  useEffect(() => {
+    if (renameAsk > 0 && onRename) setNaming(true);
+  }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
   const idRef = useRef<number | null>(null);
   const keymap = useKeymap();
   const keys = useRef(keymap);
@@ -183,6 +215,17 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
     term.loadAddon(fit);
     term.open(el);
     termRef.current = term;
+    // TERM-096: a printed handle of an open terminal (term-N) is a link that opens its pane.
+    term.registerLinkProvider({
+      provideLinks(y, done) {
+        const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+        const links = handlesIn(text).flatMap(({ start, end, handle }) => {
+          const go = handleRef.current?.(handle);
+          return go ? [{ range: { start: { x: start + 1, y }, end: { x: end, y } }, text: handle, activate: go }] : [];
+        });
+        done(links.length > 0 ? links : undefined);
+      },
+    });
     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon());
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
@@ -357,9 +400,25 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
         <span className="agent-mark" title={agentLabel}>
           <VendorMark agent={agent} size={13} />
         </span>
-        <span className="title" title={cwd ?? undefined}>
-          {title}
-        </span>
+        {naming && onRename ? (
+          <NameField
+            value={title}
+            label="Pane title"
+            onSave={(name) => {
+              setNaming(false);
+              onRename(name);
+              termRef.current?.focus();
+            }}
+            onCancel={() => {
+              setNaming(false);
+              termRef.current?.focus();
+            }}
+          />
+        ) : (
+          <span className="title" title={cwd ?? undefined}>
+            {title}
+          </span>
+        )}
         {branch && (
           <span className="chip" title={branch}>
             {branch}
@@ -389,11 +448,26 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
               {plan}
             </span>
           )}
+          {onReviewPlan && (
+            <button className="btn plan-review-btn" onClick={onReviewPlan} title="Read the plan, comment on it, then approve or ask for changes">
+              Review plan
+            </button>
+          )}
           <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
             <Ring percent={context ?? 0} />
             {Math.round(context ?? 0)}%
           </span>
-          <button className="ib" title="Pane menu (not built yet)">
+          <button
+            className="ib"
+            title="Pane menu"
+            aria-haspopup="menu"
+            aria-expanded={menuAt !== null}
+            disabled={!onRename && !onCopyId}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenuAt({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+            }}
+          >
             <Dots size={12} />
           </button>
           <button
@@ -426,6 +500,53 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
           </button>
         </span>
       </header>
+      {menuAt && (onRename || onCopyId) && (
+        <>
+          <div className="menu-backdrop" onClick={() => setMenuAt(null)} aria-hidden="true" />
+          <div className="menu" role="menu" aria-label="Pane" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
+            {onRename && (
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenuAt(null);
+                  setNaming(true);
+                }}
+              >
+                <span className="name">Set Title…</span>
+                {setKey && <Kbd id="terminal.setTitle" />}
+              </button>
+            )}
+            {onRename && custom && (
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenuAt(null);
+                  onRename(undefined);
+                }}
+              >
+                <span className="name">Clear Pane Title</span>
+                {clearKey && <Kbd id="terminal.clearPaneTitle" />}
+              </button>
+            )}
+            {onCopyId &&
+              COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => (
+                <button
+                  key={what}
+                  role="menuitem"
+                  className="menu-item"
+                  onClick={() => {
+                    setMenuAt(null);
+                    onCopyId(what);
+                  }}
+                >
+                  <span className="name">{label}</span>
+                </button>
+              ))}
+          </div>
+        </>
+      )}
       {plusAt && (
         <PlusMenu
           agents={agents}

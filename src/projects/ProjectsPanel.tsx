@@ -44,6 +44,8 @@ import { GLOSSARY } from "../glossary";
 export type Page = "automations" | "routing" | "tasks";
 
 type Props = {
+  /** EDIT-041: bumped by Open in Code; the selected row is scrolled into sight once it is drawn. */
+  reveal?: number;
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
   openDirs: string[];
   /** PROJ-063: each open folder's strongest agent state and when it last changed. */
@@ -119,8 +121,18 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ reveal = 0, openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
+  // EDIT-041: coming from the Inbox the workspace rows can take seconds to list, so each render
+  // looks for the selected row until it is there, then scrolls to it once.
+  const revealed = useRef(0);
+  useEffect(() => {
+    if (!reveal || revealed.current === reveal) return;
+    const row = document.querySelector(".sidebar :is(button.branch, .sess[role=button]).sel");
+    if (!row) return;
+    revealed.current = reveal;
+    row.scrollIntoView({ block: "nearest" });
+  });
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
   const [plusOpen, setPlusOpen] = useState(false);

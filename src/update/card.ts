@@ -49,6 +49,7 @@ export type Action =
   | { type: "collapse" }
   | { type: "expand" }
   | { type: "dismiss" }
+  | { type: "show" }
   | { type: "tipDismiss" }
   | { type: "popupClose" }
   | { type: "hydrate"; dismissed: string | null; tipDone: boolean };
@@ -163,6 +164,9 @@ export function cardReducer(s: CardState, a: Action): CardState {
         phase: keepFlow ? s.phase : s.phase.kind === "available" ? s.phase : { kind: "idle" },
       };
     }
+    case "show":
+      // VIEW-100: the status bar item brings the card back, expanded, while there is an update to show.
+      return s.phase.kind === "idle" ? s : { ...s, shown: true, collapsed: false };
     case "tipDismiss":
       return { ...s, tipDone: true, tipNow: false };
     case "popupClose":
@@ -188,6 +192,31 @@ export function mainAction(p: Phase): "close" | "download" | "restart" | "retryC
       return "restart";
     case "error":
       return p.retry === "check" ? "retryCheck" : "retryDownload";
+    default:
+      return null;
+  }
+}
+
+export interface BarItem {
+  tone: "info" | "ready" | "error";
+  text: string;
+  title: string;
+}
+
+/** VIEW-100: the status bar's update item; nothing while idle, checking or up to date. */
+export function barItem(p: Phase): BarItem | null {
+  const title = "Click to show the update card";
+  switch (p.kind) {
+    case "available":
+      return { tone: "info", text: `Update ${p.info.version}`, title: `Kolux RS ${p.info.version} is available. ${title}` };
+    case "downloading": {
+      const pct = p.total ? ` · ${Math.min(100, Math.floor((p.received / p.total) * 100))}%` : "";
+      return { tone: "info", text: `Downloading ${p.info.version}${pct}`, title: `Downloading Kolux RS ${p.info.version}. ${title}` };
+    }
+    case "ready":
+      return { tone: "ready", text: "Restart to update", title: `Kolux RS ${p.info.version} is ready to install. ${title}` };
+    case "error":
+      return { tone: "error", text: "Update failed", title: `${p.message} ${title}` };
     default:
       return null;
   }

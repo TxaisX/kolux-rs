@@ -267,8 +267,21 @@ input { font: inherit; }
 .review-pop { position: fixed; z-index: 45; width: 320px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: 12.5px; }
 .review-where { color: var(--fg-muted); font-size: 11.5px; }
 .review-quote { margin: 0; padding: 2px 8px; border-left: 3px solid var(--line-focus); color: var(--fg-row); max-height: 80px; overflow: auto; white-space: pre-wrap; }
+.needs-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 8px 6px; }
+.needs-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--pane-bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.needs-chip svg { color: var(--working-icon); }
+.needs-chip .why { color: var(--fg-muted); }
+.needs-chip:hover, .needs-chip:focus-visible { border-color: var(--line-focus); }
+.name-field { min-width: 0; width: 14em; max-width: 100%; padding: 1px 5px; border: 1px solid var(--line-focus); border-radius: 4px; background: var(--input-bg); color: var(--fg); font: inherit; font-size: 12px; }
+.tab .name-field { width: 10em; }
 .review-tray { position: fixed; z-index: 44; right: 16px; bottom: 36px; width: 340px; max-height: 50vh; overflow: auto; padding: 8px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 12.5px; }
 .review-head { display: flex; align-items: center; gap: 8px; }
+.review-send { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; }
+.review-send-item { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border: none; border-radius: 6px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.review-send-item:hover, .review-send-item:focus-visible { background: var(--row-selected); }
+.review-send-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-hint { position: fixed; z-index: 40; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--pane-bg); color: var(--fg-faint); font-size: 11px; pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+.copy-hint.done { color: var(--fg); border-color: var(--line-focus); }
 .review-count { flex: 1; text-align: left; font-weight: 600; color: var(--fg); }
 .review-md { margin: 8px 0 4px; padding: 8px; max-height: 200px; overflow: auto; background: var(--input-bg); border-radius: 6px; font-size: 11.5px; white-space: pre-wrap; user-select: text; }
 .review-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -528,6 +541,11 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .autos-runs .auto-output { flex-basis: 100%; min-width: 0; max-height: 120px; overflow: auto; margin: 0 0 6px 44px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--fg-faint); white-space: pre-wrap; overflow-wrap: anywhere; }
 .autos-runs .num { width: 34px; color: var(--fg-label); }
 .autos-runs .muted, .autos-none { color: var(--fg-faint); font-size: 12px; }
+.autos-runs:focus-visible { outline: 1px solid var(--line-focus); outline-offset: 2px; }
+.autos-runs li[aria-selected="true"] { background: var(--row-selected); color: var(--fg); }
+.autos-runs li .btn { height: 22px; padding: 0 8px; font-size: 11px; }
+.autos-snapshot { flex-basis: 100%; min-width: 0; margin: 0 0 6px 44px; }
+.autos-snapshot .auto-output { margin-left: 0; }
 /* AUTO-015: the Runs dashboard and a run's own page. */
 .runs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .runs[hidden] { display: none; }
@@ -819,6 +837,12 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 /* APP-054 Resource Manager */
 .statusbar .res-open { color: inherit; font: inherit; padding: 0 4px; border-radius: 4px; }
 .statusbar .res-open:hover, .statusbar .res-open[aria-expanded="true"] { background: var(--row-selected); color: var(--fg); }
+/* VIEW-100: the app update item; green dot when ready, red when it failed. */
+.statusbar .upd-item { color: var(--fg); font: inherit; padding: 0 4px; border-radius: 4px; }
+.statusbar .upd-item:hover { background: var(--row-selected); }
+.statusbar .upd-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
+.statusbar .upd-item.error { color: var(--danger); }
+.statusbar .upd-item.error .dot { background: var(--meter-danger); }
 .res-pop { right: 16px; bottom: 32px; width: min(460px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow-y: auto; }
 .res-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-right: 8px; }
 .res-free { font-size: 12px; color: var(--fg-muted); }
@@ -933,6 +957,13 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .picker-list .menu-item.at { background: var(--row-selected); }
 .picker-list .menu-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; max-width: 60%; }
 .picker-folder { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-faint); }
+/* VIEW-040: a palette row's agent mark and age, coloured as on the tab. */
+.palette-mark { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.palette-mark .badge { display: inline-flex; }
+.palette-mark .badge.working, .palette-mark .badge.unread, .palette-mark .badge.permission { color: var(--working-icon); }
+.palette-mark .badge.done { color: var(--done-icon); }
+.palette-mark .badge.dot { width: 7px; height: 7px; margin: 0 2px; border-radius: 50%; background: var(--working-icon); }
+.palette-age { font-size: 11px; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
 .picker-tip { position: fixed; z-index: 60; max-width: min(640px, 70vw); padding: 4px 8px; border: 1px solid var(--line-focus); border-radius: 6px; background: var(--pane-bg); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; pointer-events: none; }
 .picker-tip-folder { color: var(--fg-muted); }
 /* PROJ-057 / VIEW-037: the worktree palette's section headings and matched letters. */
@@ -1191,3 +1222,70 @@ html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !impor
 @container (max-width: 264px) { .pane-head .word { display: none; } }
 @container (max-width: 204px) { .pane-head .right .ib { display: none; } }
 @container (max-width: 134px) { .pane-head .status, .pane-head .right { display: none; } }
+/* SAFE-002..004: the plan review sheet, from the right edge over the window. */
+.plan-sheet { position: fixed; z-index: 46; top: calc(env(safe-area-inset-top, 0px) + 40px); right: 0; bottom: 24px; width: min(520px, 100vw); display: flex; flex-direction: column; background: var(--pane-bg); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35); font-size: 13px; }
+.plan-sheet-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.plan-sheet-head h3 { margin: 0; font-size: 14px; color: var(--fg); }
+.plan-sheet-head .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-sheet-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 14px; }
+.plan-sheet-note { margin: 8px 14px 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; }
+.plan-block { padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+.plan-block-head { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; }
+.plan-block .md-preview { padding: 0; user-select: text; }
+.plan-comment { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding: 4px 8px; border-left: 2px solid var(--line-focus); background: var(--chip-bg); border-radius: 4px; }
+.plan-comment span { flex: 1; min-width: 0; white-space: pre-wrap; }
+.plan-write { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.plan-write textarea, .plan-sheet-foot textarea { width: 100%; min-height: 54px; resize: vertical; font: inherit; color: var(--fg); background: var(--input-bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+.plan-sheet-foot { padding: 10px 14px; border-top: 1px solid var(--line); }
+.plan-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.plan-review-btn { height: 20px; padding: 0 8px; font-size: 11.5px; }
+/* GIT-001: each file's lines added and removed, and the tree view's folder rows. */
+.scm-lines { display: flex; gap: 4px; flex: none; font: 11px var(--mono-font); }
+.scm-lines .add { color: #73c991; }
+.scm-lines .del { color: #f14c4c; }
+.scm-dir .chev { display: inline-flex; flex: none; width: 10px; color: var(--fg-muted); }
+.scm-dir .chev.shut { transform: rotate(-90deg); }
+.scm-dir .count { flex: none; font-size: 11px; color: var(--fg-muted); }
+
+/* GIT-040 / GIT-041: review notes on diff lines and their Source Control section. */
+.cm-note-gutter .cm-gutterElement { width: 14px; text-align: center; cursor: pointer; }
+.cm-note-gutter .note-plus { opacity: 0; display: inline-block; width: 14px; border-radius: 3px; color: var(--fg); background: var(--line-focus); font-weight: 600; line-height: 1.2; }
+.cm-note-gutter .cm-gutterElement:hover .note-plus { opacity: 1; }
+.diff-note { margin: 4px 12px 6px 8px; padding: 6px 10px; border: 1px solid var(--line-focus); border-left: 3px solid #4f8fd8; border-radius: 6px; background: var(--pane-bg); font-family: var(--ui-font, system-ui, sans-serif); font-size: 12.5px; white-space: pre-wrap; }
+.diff-note-head { display: flex; align-items: center; gap: 6px; color: var(--fg-label); font-size: 11.5px; }
+.diff-note-head .what { flex: 1; }
+.diff-note-edit { width: auto; padding: 0 6px; font-size: 11.5px; }
+.diff-note-text { color: var(--fg); margin-top: 2px; }
+.diff-note-pop { position: fixed; z-index: 41; width: 320px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: 13px; }
+.diff-note-pop .what { color: var(--fg-label); font-size: 12px; }
+.diff-note-pop textarea { min-height: 72px; resize: vertical; }
+.scm-notes .btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.scm-note-file { margin-top: 6px; }
+.scm-note-path { display: flex; align-items: center; gap: 4px; color: var(--fg-label); }
+.scm-note-path .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-note { display: flex; align-items: flex-start; gap: 4px; padding-left: 8px; }
+.scm-note-open { flex: 1; min-width: 0; display: flex; gap: 6px; padding: 2px 4px; border: 0; border-radius: 4px; background: none; color: var(--fg); text-align: left; font: inherit; cursor: pointer; }
+.scm-note-open:hover { background: var(--line); }
+.scm-note-open .line { color: var(--fg-label); font-variant-numeric: tabular-nums; }
+.scm-note-open .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-note-open .sent { color: #73c991; font-size: 11px; }
+.scm-note .ib { width: auto; padding: 0 4px; font-size: 11.5px; }
+/* VIEW-073: the Checks tab. A check's details open under it and can be dragged taller. */
+.checks-sum { padding-top: 4px; }
+.checks-panel { overflow-y: auto; }
+.checks-list { margin: 0 8px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.check-row > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 3px 2px; border-radius: 4px; min-width: 0; }
+.check-row > summary:hover { background: var(--chip-bg); }
+.check-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check-row .wf { color: var(--fg-faint); }
+.check-row .word.failed { color: var(--danger); }
+.check-row .word.passed { color: var(--done); }
+.check-row .word.unresolved { color: var(--working-icon); }
+.check-row .word.running, .check-row .word.skipped, .check-row .word.cancelled { color: var(--fg-label); }
+.check-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--fg-faint); }
+.check-dot.passed { background: var(--done-icon); }
+.check-dot.failed { background: var(--danger); }
+.check-dot.running { background: transparent; box-sizing: border-box; border: 1.5px solid var(--fg-label); }
+.check-dot.unresolved { background: var(--working-icon); }
+.check-detail { margin: 2px 0 6px 14px; padding: 6px 8px; border-left: 1px solid var(--divider); color: var(--fg-label); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; resize: vertical; overflow: auto; min-height: 40px; max-height: 60vh; line-height: 1.4; }
+.check-detail .btn { padding: 2px 8px; font-size: 12px; }

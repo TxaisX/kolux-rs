@@ -45,6 +45,46 @@ pub struct Status {
     pub operation: Option<String>,
     /// GIT-015: conflicted files whose clash markers are gone, so they only need staging.
     pub resolved: Vec<String>,
+    /// GIT-001: the lines each file adds and removes, per section; a binary file has no entry.
+    pub lines: LineCounts,
+}
+
+/// GIT-001: `[added, removed]` by path for the staged, changed and untracked sections.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LineCounts {
+    pub staged: std::collections::BTreeMap<String, [u32; 2]>,
+    pub changed: std::collections::BTreeMap<String, [u32; 2]>,
+    pub untracked: std::collections::BTreeMap<String, [u32; 2]>,
+}
+
+/// `git diff --numstat -M -z` output by path; a rename is keyed by its new path and a binary
+/// file ("-" for both counts) is left out.
+fn numstat(text: &str) -> std::collections::BTreeMap<String, [u32; 2]> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut f = text.split('\0');
+    while let Some(head) = f.next() {
+        let mut p = head.splitn(3, '\t');
+        let (Some(a), Some(r), Some(path)) = (p.next(), p.next(), p.next()) else { continue };
+        // A rename leaves the path empty and gives the old and new paths as the next two fields.
+        let path = if path.is_empty() { f.nth(1).unwrap_or_default() } else { path };
+        if let (Ok(a), Ok(r)) = (a.parse(), r.parse()) {
+            out.insert(path.to_string(), [a, r]);
+        }
+    }
+    out
+}
+
+/// An untracked file's lines, the last one counted without its newline; None for a binary file
+/// (a NUL byte) or one over a megabyte.
+fn file_lines(path: &Path) -> Option<u32> {
+    if std::fs::metadata(path).ok()?.len() > 1_000_000 {
+        return None;
+    }
+    let b = std::fs::read(path).ok()?;
+    if b.contains(&0) {
+        return None;
+    }
+    Some(b.iter().filter(|&&c| c == b'\n').count() as u32 + u32::from(b.last().is_some_and(|&c| c != b'\n')))
 }
 
 /// What a commit attempt came to: `id` is the new commit when it worked; otherwise `output` is
@@ -70,6 +110,10 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
     }
     st.base = Git::detect().ok().and_then(|g| g.default_branch(worktree));
     st.operation = operation(worktree);
+    st.lines.staged = run(&["diff", "--cached", "--numstat", "-M", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    st.lines.changed = run(&["diff", "--numstat", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    // ponytail: the first 2 000 untracked files are counted; a folder of thousands shows the rest bare.
+    st.lines.untracked = st.untracked.iter().take(2_000).filter_map(|c| Some((c.path.clone(), [file_lines(&worktree.join(&c.path))?, 0]))).collect();
     st.resolved = st
         .conflicts
         .iter()
@@ -602,6 +646,89 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
 
+/// VIEW-073: one check on a pull request, in the Checks panel's words.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Check {
+    pub name: String,
+    pub workflow: Option<String>,
+    /// passed, failed, running, skipped, cancelled or unresolved.
+    pub outcome: String,
+    pub link: Option<String>,
+    pub started: Option<String>,
+    pub finished: Option<String>,
+    pub description: Option<String>,
+}
+
+/// VIEW-073: the Checks panel's answer; `pr` is None when the branch has no pull request.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default)]
+pub struct PrChecks {
+    pub pr: Option<Pr>,
+    pub conflict: bool,
+    pub checks: Vec<Check>,
+}
+
+const CHECK_FIELDS: &str = "number,url,state,title,headRefName,isDraft,mergeable,statusCheckRollup";
+
+/// VIEW-073: a check run's status and conclusion, or a commit status's state, as one word. A run
+/// that finished without a conclusion is unresolved, never pending.
+fn check_outcome(v: &serde_json::Value) -> &'static str {
+    let word = |k: &str| v[k].as_str().unwrap_or("").to_ascii_uppercase();
+    if v["__typename"] == "StatusContext" || v.get("status").is_none() {
+        return match word("state").as_str() {
+            "SUCCESS" => "passed",
+            "PENDING" | "EXPECTED" => "running",
+            "FAILURE" | "ERROR" => "failed",
+            _ => "unresolved",
+        };
+    }
+    if word("status") != "COMPLETED" {
+        return "running";
+    }
+    match word("conclusion").as_str() {
+        "SUCCESS" | "NEUTRAL" => "passed",
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
+        "SKIPPED" | "STALE" => "skipped",
+        "CANCELLED" => "cancelled",
+        _ => "unresolved",
+    }
+}
+
+/// VIEW-073: gh's pull request answer, read into the review header, the conflict notice and the checks.
+pub fn checks_from(text: &str) -> Result<PrChecks, String> {
+    let bad = |e: serde_json::Error| format!("gh answered in a form Kolux cannot read: {e}");
+    let v: serde_json::Value = serde_json::from_str(text).map_err(bad)?;
+    let pr: Pr = serde_json::from_value(v.clone()).map_err(bad)?;
+    // gh writes a zero time for a run that has not finished yet.
+    let time = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty() && !t.starts_with("0001-")).map(String::from);
+    let text_of = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty()).map(String::from);
+    let checks = v["statusCheckRollup"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|c| Check {
+                    name: text_of(&c["name"]).or_else(|| text_of(&c["context"])).unwrap_or_else(|| "check".into()),
+                    workflow: text_of(&c["workflowName"]),
+                    outcome: check_outcome(c).into(),
+                    link: text_of(&c["detailsUrl"]).or_else(|| text_of(&c["targetUrl"])),
+                    started: time(&c["startedAt"]),
+                    finished: time(&c["completedAt"]),
+                    description: text_of(&c["description"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(PrChecks { pr: Some(pr), conflict: v["mergeable"] == "CONFLICTING", checks })
+}
+
+/// VIEW-073: the checks of the pull request for `target` (a branch or a hand-linked PR link).
+pub fn pr_checks(gh: &Path, worktree: &Path, target: &str) -> Result<PrChecks, String> {
+    match gh_run(gh, worktree, &["pr", "view", target, "--json", CHECK_FIELDS], None) {
+        Ok(text) => checks_from(&text),
+        Err(e) if e.to_lowercase().contains("no pull requests found") => Ok(PrChecks::default()),
+        Err(e) => Err(gh_words(&e)),
+    }
+}
+
 /// GIT-017: the most diff text a commit-message prompt carries.
 pub const MESSAGE_BUDGET: usize = 24_000;
 
@@ -932,8 +1059,15 @@ pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPo
 }
 
 #[tauri::command]
-pub async fn scm_prs_poll(items: Vec<PollItem>) -> Result<PrPoll, String> {
-    tauri::async_runtime::spawn_blocking(move || Ok(prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400)))).await.map_err(|e| e.to_string())?
+pub async fn scm_prs_poll(app: tauri::AppHandle, items: Vec<PollItem>) -> Result<PrPoll, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400));
+        // AUTO-004: each round is what pull-request-opened automations listen to.
+        crate::automations::on_poll(&app, &out.prs);
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work
@@ -1480,6 +1614,22 @@ pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<Option<P
     .map_err(|e| e.to_string())?
 }
 
+/// VIEW-073: the Checks panel's lookup, for the worktree's branch or its hand-linked pull request.
+#[tauri::command]
+pub async fn scm_pr_checks(worktree: String, linked: Option<String>) -> Result<PrChecks, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let target = match linked {
+            Some(url) if safe_pr_url(url.trim()) => url.trim().to_string(),
+            Some(_) => return Err("The linked pull request is not a pull request link".into()),
+            None => status(dir)?.branch.ok_or("No branch is checked out here")?,
+        };
+        pr_checks(&gh_program()?, dir, &target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn scm_pr_create(worktree: String, title: String, body: String, base: String, draft: bool) -> Result<Pr, String> {
     tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
@@ -1892,6 +2042,26 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn git001_each_change_carries_its_added_and_removed_lines_and_a_binary_file_none() {
+        let dir = temp_repo("lines");
+        commit_file(&dir, "a.txt", "one\ntwo\nthree\n");
+        commit_file(&dir, "old name.txt", "keep\nthis\n");
+        fs::write(dir.join("a.txt"), "one\n2\nthree\nfour\n").unwrap();
+        fs::write(dir.join("b.txt"), "x\n").unwrap();
+        run(&["add", "b.txt"], Some(&dir)).unwrap();
+        run(&["mv", "old name.txt", "new ü.txt"], Some(&dir)).unwrap();
+        fs::write(dir.join("new.txt"), "1\n2\n3").unwrap();
+        fs::write(dir.join("pic.bin"), [0u8, 1, 2, 10, 0]).unwrap();
+        let st = status(&dir).unwrap();
+        assert_eq!(st.lines.changed.get("a.txt"), Some(&[2, 1]));
+        assert_eq!(st.lines.staged.get("b.txt"), Some(&[1, 0]));
+        assert_eq!(st.lines.staged.get("new ü.txt"), Some(&[0, 0]), "a rename counts at its new path");
+        assert_eq!(st.lines.untracked.get("new.txt"), Some(&[3, 0]), "the last line counts without its newline");
+        assert_eq!(st.lines.untracked.get("pic.bin"), None, "a binary file carries no counts");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     fn paths(list: &[Change]) -> Vec<&str> {
         list.iter().map(|c| c.path.as_str()).collect()
     }
@@ -1927,6 +2097,47 @@ mod tests {
         let err = gh_run_for(&gh, &tools, &["pr", "view"], None, std::time::Duration::from_secs(1)).unwrap_err();
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
         assert!(err.contains("did not answer within 1 second"), "{err}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn checks_read_every_kind_and_a_finished_check_without_an_outcome_is_unresolved() {
+        // VIEW-073: gh's statusCheckRollup mixes check runs (status + conclusion) and commit
+        // statuses (state); each reads as one word, and COMPLETED with no conclusion is unresolved.
+        let text = r#"{"number":12,"url":"https://github.com/o/r/pull/12","state":"OPEN","title":"Helper work","headRefName":"helper","isDraft":false,"mergeable":"CONFLICTING","statusCheckRollup":[
+            {"__typename":"CheckRun","name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/o/r/runs/1","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:04:00Z"},
+            {"__typename":"CheckRun","name":"test","workflowName":"CI","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://github.com/o/r/runs/2","startedAt":"2026-10-13T10:00:00Z","completedAt":"0001-01-01T00:00:00Z"},
+            {"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:01:00Z"},
+            {"__typename":"CheckRun","name":"docs","status":"COMPLETED","conclusion":"SKIPPED"},
+            {"__typename":"CheckRun","name":"deploy","status":"COMPLETED","conclusion":"CANCELLED"},
+            {"__typename":"StatusContext","context":"ci/legacy","state":"FAILURE","targetUrl":"https://ci.example/9","description":"2 tests failed","startedAt":"2026-10-13T10:02:00Z"}
+        ]}"#;
+        let got = checks_from(text).unwrap();
+        let pr = got.pr.as_ref().unwrap();
+        assert_eq!((pr.number, pr.title.as_deref()), (12, Some("Helper work")));
+        assert!(got.conflict, "CONFLICTING is a merge conflict notice");
+        let words: Vec<(&str, &str)> = got.checks.iter().map(|c| (c.name.as_str(), c.outcome.as_str())).collect();
+        assert_eq!(words, [("build", "passed"), ("test", "running"), ("lint", "unresolved"), ("docs", "skipped"), ("deploy", "cancelled"), ("ci/legacy", "failed")]);
+        assert_eq!(got.checks[0].workflow.as_deref(), Some("CI"));
+        assert_eq!(got.checks[0].link.as_deref(), Some("https://github.com/o/r/runs/1"));
+        assert_eq!(got.checks[1].finished, None, "gh's zero time for a running check is no finish time");
+        assert_eq!(got.checks[5].description.as_deref(), Some("2 tests failed"));
+        assert_eq!(got.checks[5].link.as_deref(), Some("https://ci.example/9"));
+
+        // A PR without checks, or mergeable, reads as none and no conflict.
+        let bare = checks_from(r#"{"number":3,"url":"https://github.com/o/r/pull/3","state":"OPEN","mergeable":"MERGEABLE","statusCheckRollup":[]}"#).unwrap();
+        assert!(!bare.conflict && bare.checks.is_empty());
+    }
+
+    #[test]
+    fn a_branch_without_a_pull_request_has_no_checks_rather_than_an_error() {
+        // VIEW-073: gh's "no pull requests found" is the plain no-review answer.
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-checks-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let got = pr_checks(&gh, &tools, "feat").unwrap();
+        assert!(got.pr.is_none() && got.checks.is_empty() && !got.conflict);
+        assert!(fs::read_to_string(tools.join("calls.txt")).unwrap().contains("statusCheckRollup"));
         let _ = fs::remove_dir_all(&tools);
     }
 

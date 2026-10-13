@@ -297,8 +297,9 @@ impl Session {
                 self.own = Some("permission");
             }
             "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
-                // A pending permission clears only when that same tool carries on.
-                if self.own == Some("permission") && self.pending != change.tool {
+                // A pending permission clears only when that same tool carries on. The event names the
+                // tool even where the outgoing change does not (PostToolUse), SAFE-007.
+                if self.own == Some("permission") && self.pending != str_of(event, "tool_name").map(|t| trim(t, 60)) {
                     return None;
                 }
                 self.pending = None;
@@ -383,6 +384,43 @@ fn with_sessions<T>(f: impl FnOnce(&mut HashMap<u32, Session>) -> T) -> T {
     f(guard.get_or_insert_with(HashMap::new))
 }
 
+/// SAFE-006: the most characters one status update carrying a plan may take.
+pub const PLAN_STATUS_MAX: usize = 16_000;
+
+/// SAFE-006: trims the plan to the longest prefix that keeps the whole update within
+/// PLAN_STATUS_MAX characters and marks it cut; the one-line summary is never touched. When even an
+/// empty plan would not fit, the plan is left out, so no review is offered.
+pub fn fit_plan(mut s: Status) -> Status {
+    let size = |s: &Status| serde_json::to_string(s).map_or(usize::MAX, |t| t.chars().count());
+    if s.change.plan.is_none() || size(&s) <= PLAN_STATUS_MAX {
+        return s;
+    }
+    let plan = s.change.plan.take().unwrap_or_default();
+    let ends: Vec<usize> = plan.char_indices().map(|(i, _)| i).collect();
+    s.change.plan_cut = true;
+    let fits = |s: &mut Status, n: usize| {
+        s.change.plan = Some(plan[..ends.get(n).copied().unwrap_or(plan.len())].to_string());
+        size(s) <= PLAN_STATUS_MAX
+    };
+    if !fits(&mut s, 0) {
+        s.change.plan = None;
+        s.change.plan_cut = false;
+        return s;
+    }
+    // The whole plan did not fit, so the longest fit is shorter than it; `lo` always fits.
+    let (mut lo, mut hi) = (0, ends.len().saturating_sub(1));
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        if fits(&mut s, mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    fits(&mut s, lo);
+    s
+}
+
 /// Folds an event into the pane's session and builds what the window is told.
 pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value) -> Option<Status> {
     with_sessions(|s| {
@@ -390,7 +428,7 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
         session.terminal = terminal.or(session.terminal);
         let (change, child) = session.apply(agent, event)?;
         crate::activity::note(pane_key, change.state);
-        Some(Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted })
+        Some(fit_plan(Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted }))
     })
 }
 
@@ -473,6 +511,36 @@ mod tests {
     }
     fn state(s: &mut Session, json: &str) -> Option<&'static str> {
         s.apply(Agent::Claude, &ev(json)).map(|(c, _)| c.state)
+    }
+
+    #[test]
+    fn a_plan_too_long_for_one_status_is_cut_to_the_longest_fit_and_says_so() {
+        // SAFE-006: the update carrying the plan stays within 16,000 characters; the summary stays.
+        let status = |plan: &str, detail: &str, cut: bool| Status {
+            pane_key: 1,
+            terminal: Some(2),
+            change: Change { state: "permission", tool: Some("ExitPlanMode".into()), detail: Some(detail.into()), plan: Some(plan.into()), plan_cut: cut, ..Change::default() },
+            children: vec![],
+            stop: None,
+            reply: None,
+            child: None,
+            interrupted: false,
+        };
+        let size = |s: &Status| serde_json::to_string(s).unwrap().chars().count();
+        let long = "1. Read the é file. ".repeat(2000);
+        assert_eq!(long.chars().count(), 40_000);
+        let cut = fit_plan(status(&long, "Exit plan mode", false));
+        let kept = cut.change.plan.clone().unwrap();
+        assert!(cut.change.plan_cut && long.starts_with(&kept) && size(&cut) <= PLAN_STATUS_MAX);
+        assert_eq!(cut.change.detail.as_deref(), Some("Exit plan mode"));
+        assert!(serde_json::to_string(&cut).unwrap().contains(r#""planCut":true"#));
+        let one_more: String = long.chars().take(kept.chars().count() + 1).collect();
+        assert!(size(&status(&one_more, "Exit plan mode", true)) > PLAN_STATUS_MAX, "the longest fit");
+        let short = fit_plan(status("# Plan", "Exit plan mode", false));
+        assert_eq!((short.change.plan.as_deref(), short.change.plan_cut), (Some("# Plan"), false));
+        assert!(!serde_json::to_string(&short).unwrap().contains("planCut"));
+        let crowded = fit_plan(status("# Plan", &"x".repeat(PLAN_STATUS_MAX), false));
+        assert_eq!((crowded.change.plan, crowded.change.plan_cut, crowded.change.detail.map(|d| d.len())), (None, false, Some(PLAN_STATUS_MAX)));
     }
 
     #[test]
@@ -610,6 +678,16 @@ mod tests {
         let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
         assert_eq!(states, [("working", false), ("interrupted", true), ("working", false), ("done", false), ("working", false), ("done", false)]);
         assert_eq!(s.history[0].prompt.as_deref(), Some("long job"));
+    }
+
+    #[test]
+    fn a_plan_approved_in_the_terminal_ends_the_wait_when_its_tool_finishes() {
+        // SAFE-007: Claude's PostToolUse names its tool, so the plan's own wait ends there.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"plan it"}"#);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode","tool_input":{"plan":"1. a"}}"#), Some("permission"));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Read"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"ExitPlanMode","tool_input":{"plan":"1. a"}}"#), Some("working"));
     }
 
     #[test]
