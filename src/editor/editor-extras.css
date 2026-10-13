@@ -12,3 +12,27 @@
 .pane.editor .cm-search label { font-size: 11.5px; color: var(--fg-muted); }
 .pane.editor .cm-searchMatch { background: color-mix(in srgb, var(--warn) 30%, transparent); }
 .pane.editor .cm-searchMatch-selected { background: color-mix(in srgb, var(--warn) 60%, transparent); }
+/* EDIT-017: the find bar over a rendered note (preview and rich view). */
+.pane.editor .note-find { flex: none; display: flex; flex-direction: column; gap: 5px; padding: 6px 8px; background: var(--surface); border-bottom: 1px solid var(--line-subtle); font: 12px var(--ui-font); }
+.note-find .row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.note-find .textfield { font-size: 12px; width: 220px; max-width: 100%; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; }
+.note-find .textfield:focus { border-color: var(--line-focus); outline: none; }
+.note-find .opt { font: 600 11px var(--mono-font); padding: 2px 6px; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--fg-muted); cursor: pointer; }
+.note-find .opt[aria-pressed="true"] { color: var(--fg); border-color: var(--line-focus); background: color-mix(in srgb, var(--line-focus) 25%, transparent); }
+.note-find .count { min-width: 72px; padding: 0 6px; font-size: 11.5px; color: var(--fg-muted); }
+.note-find .ib.up svg { transform: rotate(180deg); }
+.note-find .btn { font-size: 11.5px; padding: 2px 8px; }
+::highlight(kx-find) { background-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+::highlight(kx-find-current) { background-color: color-mix(in srgb, var(--warn) 65%, transparent); }
+/* EDIT-016: the contents panel beside a note. */
+.pane.editor { position: relative; }
+.pane.editor.toc-open .md-rich, .pane.editor.toc-open .md-preview { padding-right: 252px; }
+.pane.editor .note-toc { position: absolute; z-index: 2; right: 0; top: 28px; bottom: 0; width: 230px; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--line-subtle); font: 12px var(--ui-font); }
+.note-toc .head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 6px 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted); }
+.note-toc ul { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 0 6px 12px; list-style: none; }
+.note-toc li { display: flex; align-items: center; min-width: 0; }
+.note-toc .fold { flex: none; width: 16px; height: 20px; display: inline-flex; align-items: center; justify-content: center; padding: 0; background: none; border: 0; color: var(--fg-faint); cursor: pointer; }
+.note-toc .fold.shut svg { transform: rotate(-90deg); }
+.note-toc .entry { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; padding: 3px 6px; background: none; border: 0; border-radius: 5px; color: var(--fg); font: inherit; cursor: pointer; }
+.note-toc .entry:hover { background: var(--row-selected); }
+.pane.editor.preview { word-break: normal; } /* the sidebar's .preview rule breaks words mid-word otherwise */
