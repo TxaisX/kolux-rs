@@ -546,7 +546,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-289 · TERM-036 Copy session, terminal and pane IDs · TERM-096 Links to other terminals and orchestration tasks
 - [x] T-290 · ORCH-043 Kolux checks whether each agent has the orchestration skill
 - [x] T-291-a · AUTO-023 Automations row in the sidebar, off by default · AUTO-024 Hide or tag worktrees made by automations
-- [ ] T-291-b · the rest of T-291-a's cards: the View menu's Appearance tick for the row, and hiding or tagging worktrees made by automations (needs a made-by-automation marker on worktrees, the card properties chooser and View run)
+- [x] T-291-b · the rest of T-291-a's cards: the View menu's Appearance tick for the row, and hiding or tagging worktrees made by automations (needs a made-by-automation marker on worktrees, the card properties chooser and View run) (first part: runs that make their own worktree mark it as made by an automation, the sidebar's Group and sort panel switch that hides those workspaces, and moving to one, for example through the worktree palette, turning the switch off; the View menu's Appearance tick for the Automations row is already on T-248's line)
+- [ ] T-291-c · the rest of T-291-b's cards: the Automation tag as a workspace card property (with the card details chooser, T-266), and proving the hiding switch turns off through View run once View run exists (T-031); the switch-off rule itself is built for any move to such a workspace
 - [ ] T-292 · SKILL-025 Skill freshness pill · SKILL-027 Status bar shows a running skill update · also passes: VIEW-100 Skill and app update progress in the status bar
 
 ### P2 · theme 8 · Release, update and CI pipeline (1 cards)
