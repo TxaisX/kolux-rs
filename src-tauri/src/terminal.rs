@@ -962,6 +962,11 @@ impl Terminals {
         let key = crate::cli::secret();
         let strip_key = crate::claude_key::strip_inherited(program.as_deref(), &env);
         for (command, history_var) in commands.iter_mut().zip(history_vars) {
+            // APP-020 on macOS and Linux: what the login shell sets (read at startup), so tools set up in
+            // a profile script are found as in a terminal outside Kolux.
+            for (k, v) in crate::login_env::get() {
+                command.env(k, v);
+            }
             // ACCT-048: an ordinary terminal's environment: none of Kolux's own runtime or build
             // variables, no conda activation that came along only in part, no prompt-theme wizard.
             for (k, _) in std::env::vars_os() {

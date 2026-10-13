@@ -46,6 +46,7 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod login_env;
 mod lifecycle;
 mod menu;
 mod bulk;
@@ -235,6 +236,8 @@ pub fn run() {
             let job_ok = procs::app_job_start();
             let dir = app.path().app_data_dir()?;
             diag::set_dir(&dir);
+            // T-182 (APP-020, macOS and Linux): the login shell's environment, read in the background.
+            login_env::start();
             // T-283 (BROW-043): an earlier run's leftover browser helpers are closed, on a thread of
             // its own so a hanging listing never holds up start-up.
             browser::helpers::sweep_at_start(&dir);
