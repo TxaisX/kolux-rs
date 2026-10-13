@@ -549,6 +549,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-291-b · the rest of T-291-a's cards: the View menu's Appearance tick for the row, and hiding or tagging worktrees made by automations (needs a made-by-automation marker on worktrees, the card properties chooser and View run) (first part: runs that make their own worktree mark it as made by an automation, the sidebar's Group and sort panel switch that hides those workspaces, and moving to one, for example through the worktree palette, turning the switch off; the View menu's Appearance tick for the Automations row is already on T-248's line)
 - [ ] T-291-c · the rest of T-291-b's cards: the Automation tag as a workspace card property (with the card details chooser, T-266), and proving the hiding switch turns off through View run once View run exists (T-031); the switch-off rule itself is built for any move to such a workspace
 - [ ] T-292 · SKILL-025 Skill freshness pill · SKILL-027 Status bar shows a running skill update · also passes: VIEW-100 Skill and app update progress in the status bar
+- [x] T-347 · fix from the orchestration merge review: panes stop inheriting the old app's KOLUX_USER_DATA_PATH (strip it at pane spawn) and scm.rs saves `link_printed` per key instead of rewriting the whole settings blob (fixes the save race)
 
 ### P2 · theme 8 · Release, update and CI pipeline (1 cards)
 
