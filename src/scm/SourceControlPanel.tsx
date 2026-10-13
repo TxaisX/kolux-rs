@@ -13,7 +13,7 @@
 // ponytail: the list refreshes after each action and every 4 s while the panel is open; the
 // watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033). GIT-021 / GIT-023: the pull-request step looks the
 // branch's pull request up through gh once it is published, and Create pull request opens a composer.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
 import { ChevronDown, Close, FileCode, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
@@ -60,6 +60,8 @@ type Props = {
   onOpenDiff?: (path: string, staged: boolean) => void;
   /** GIT-038: every change in one scrolling tab. */
   onAllChanges?: () => void;
+  /** GIT-041: the review notes section, drawn above History. */
+  notesSection?: ReactNode;
 };
 
 type Asking = { agent: string; prompt: string; remember: boolean; title?: string };
@@ -86,7 +88,7 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, onAllChanges }: Props) {
+export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
@@ -971,6 +973,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                   g === "conflicts" ? conflictCards() : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true),
                 )}
             </div>
+            {notesSection}
             <details className="scm-history" open={histOpen} onToggle={(e) => setHistOpen((e.target as HTMLDetailsElement).open)}>
               <summary>
                 <span>History</span>

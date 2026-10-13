@@ -90,6 +90,14 @@ export const Restore = (p: P) => (
     <path d="M5.5 5.5v-2h7v7h-2" />
   </Glyph>
 );
+/** A bin; the path is shared with the diff note cards, which draw it outside React. */
+export const TRASH_PATH = "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5M7 7v4M9 7v4";
+export const Trash = (p: P) => (
+  <Glyph {...p}>
+    <path d={TRASH_PATH} />
+  </Glyph>
+);
+
 export const Close = (p: P) => (
   <Glyph {...p} strokeWidth={1}>
     <path d="m3.5 3.5 9 9m0-9-9 9" />

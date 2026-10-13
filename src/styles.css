@@ -1189,3 +1189,27 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .scm-dir .chev { display: inline-flex; flex: none; width: 10px; color: var(--fg-muted); }
 .scm-dir .chev.shut { transform: rotate(-90deg); }
 .scm-dir .count { flex: none; font-size: 11px; color: var(--fg-muted); }
+
+/* GIT-040 / GIT-041: review notes on diff lines and their Source Control section. */
+.cm-note-gutter .cm-gutterElement { width: 14px; text-align: center; cursor: pointer; }
+.cm-note-gutter .note-plus { opacity: 0; display: inline-block; width: 14px; border-radius: 3px; color: var(--fg); background: var(--line-focus); font-weight: 600; line-height: 1.2; }
+.cm-note-gutter .cm-gutterElement:hover .note-plus { opacity: 1; }
+.diff-note { margin: 4px 12px 6px 8px; padding: 6px 10px; border: 1px solid var(--line-focus); border-left: 3px solid #4f8fd8; border-radius: 6px; background: var(--pane-bg); font-family: var(--ui-font, system-ui, sans-serif); font-size: 12.5px; white-space: pre-wrap; }
+.diff-note-head { display: flex; align-items: center; gap: 6px; color: var(--fg-label); font-size: 11.5px; }
+.diff-note-head .what { flex: 1; }
+.diff-note-edit { width: auto; padding: 0 6px; font-size: 11.5px; }
+.diff-note-text { color: var(--fg); margin-top: 2px; }
+.diff-note-pop { position: fixed; z-index: 41; width: 320px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: 13px; }
+.diff-note-pop .what { color: var(--fg-label); font-size: 12px; }
+.diff-note-pop textarea { min-height: 72px; resize: vertical; }
+.scm-notes .btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.scm-note-file { margin-top: 6px; }
+.scm-note-path { display: flex; align-items: center; gap: 4px; color: var(--fg-label); }
+.scm-note-path .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-note { display: flex; align-items: flex-start; gap: 4px; padding-left: 8px; }
+.scm-note-open { flex: 1; min-width: 0; display: flex; gap: 6px; padding: 2px 4px; border: 0; border-radius: 4px; background: none; color: var(--fg); text-align: left; font: inherit; cursor: pointer; }
+.scm-note-open:hover { background: var(--line); }
+.scm-note-open .line { color: var(--fg-label); font-variant-numeric: tabular-nums; }
+.scm-note-open .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-note-open .sent { color: #73c991; font-size: 11px; }
+.scm-note .ib { width: auto; padding: 0 4px; font-size: 11.5px; }

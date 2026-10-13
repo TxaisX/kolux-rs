@@ -39,6 +39,8 @@ import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
+import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
+import LineNotes from "./scm/LineNotes";
 import PreviewPane from "./editor/PreviewPane";
 import ReviewNotes from "./editor/ReviewNotes";
 import { reviewOn, selections, type Note, type Picked } from "./editor/notes";
@@ -106,7 +108,7 @@ type KitWait = { role: string; upstream: string; key: number; prompt: string };
 type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number>; prompts: string[] };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -379,6 +381,23 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       .catch((err) => setToast(`Kolux could not set up the sample data: ${String(err)}`))
       .finally(() => setSamplesBusy(false));
   };
+  // GIT-040 / GIT-041: review notes on diff lines, kept per workspace in settings. A save that fails
+  // puts the notes back as they were and says so.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const notesFor = (dir: string | null) => lineNotesOf(settingsRef.current[LINE_NOTES_KEY], dir);
+  const saveNotes = (dir: string, notes: LineNote[]) => {
+    const was = settingsRef.current;
+    const next = { ...was, [LINE_NOTES_KEY]: withLineNotes(was[LINE_NOTES_KEY], dir, notes) };
+    settingsRef.current = next;
+    setSettings(next);
+    saveChanged(was, next).catch((err) => {
+      setSettings((s) => ({ ...s, [LINE_NOTES_KEY]: was[LINE_NOTES_KEY] }));
+      setToast(`The review note was not saved, so the change was undone: ${String(err)}`);
+    });
+  };
+  const putNote = (dir: string, n: LineNote) => saveNotes(dir, [...notesFor(dir).filter((x) => x.id !== n.id), n]);
+  const dropNotes = (dir: string, ids: string[]) => saveNotes(dir, notesFor(dir).filter((x) => !ids.includes(x.id)));
   const saveSetting = (key: string, value: unknown) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
@@ -761,17 +780,21 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // unstaged diffs are separate tabs, and one already open in that cell comes to the front.
   // GIT-037: a click in Source Control opens it as the cell's preview tab, which the next click
   // reuses unless it holds unsaved edits.
-  const openDiff = (path: string, staged: boolean, preview = false) => {
+  const openDiff = (path: string, staged: boolean, preview = false, line?: number) => {
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const jump = line === undefined ? undefined : { line, at: Date.now() };
     const same = here && panes.find((p) => p.kind === "diff" && !!p.staged === staged && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
-    if (same) return setFocused(same.key);
+    if (same) {
+      if (jump) setPanes((ps) => ps.map((p) => (p.key === same.key ? { ...p, jump } : p)));
+      return setFocused(same.key);
+    }
     const old = preview && here && panes.find((p) => p.kind === "diff" && p.preview && groupOf(p) === groupOf(here) && !dirty[p.key]);
     if (old) {
-      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...p, path, staged } : p)));
+      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...p, path, staged, jump } : p)));
       return setFocused(old.key);
     }
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "diff", path, staged, preview: preview || undefined }]);
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "diff", path, staged, preview: preview || undefined, jump }]);
     setFocused(key);
   };
 
@@ -1513,6 +1536,24 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setHook((h) => ({ ...h, [p.key]: "working" }));
     setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
   };
+  // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
+  // pasted message; a note edited while the send was in flight is not marked sent.
+  const sendNotes = async (dir: string): Promise<string | null> => {
+    const notes = notesFor(dir);
+    if (notes.length === 0) return "There are no notes to send.";
+    const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
+    if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
+    const id = ptys.current[agent.key];
+    try {
+      await invoke("terminal_write", { id, data: "\x1b[200~" + noteBlocks(notes, dir) + "\x1b[201~" });
+      await new Promise((r) => setTimeout(r, 300));
+      await invoke("terminal_write", { id, data: "\r" });
+    } catch (err) {
+      return `The notes were not sent: ${String(err)}`;
+    }
+    saveNotes(dir, markSent(notesFor(dir), notes));
+    return null;
+  };
   const reviewPane = panes.find((p) => p.key === reviewing && showsReview(hook[p.key], turn[p.key]));
   // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
   // shows every pane); a finish or bell anywhere else marks tab, pane and workspace row unread
@@ -1933,6 +1974,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onClose={() => closePane(p.key)}
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
+                    notes={notesFor(p.cwd).filter((n) => keyOf(n.path) === keyOf(p.path ?? ""))}
+                    onSaveNote={p.cwd === null ? undefined : (n) => putNote(p.cwd as string, n)}
+                    onDeleteNote={(n) => p.cwd !== null && dropNotes(p.cwd, [n.id])}
+                    jump={p.jump}
                   />
                 ) : p.kind === "changes" && p.cwd ? (
                   <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
@@ -2041,7 +2086,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
             const p = projects.find((x) => x.id === projectOf(activeDir));
             if (p) void invoke<Project>("project_set", { projectId: p.id, workspacesDir: p.workspacesDir ?? "", base }).then((u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x))));
-          }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} view={settings[SCM_VIEW_KEY] === "tree" ? "tree" : "list"} onView={(v) => saveSetting(SCM_VIEW_KEY, v)} onOpenDiff={(path, staged) => activeDir !== null && openDiff(`${activeDir.replace(/[\\/]+$/, "")}/${path}`, staged, true)} onAllChanges={() => void newTab("changes")} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
+          }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} view={settings[SCM_VIEW_KEY] === "tree" ? "tree" : "list"} onView={(v) => saveSetting(SCM_VIEW_KEY, v)} onOpenDiff={(path, staged) => activeDir !== null && openDiff(`${activeDir.replace(/[\\/]+$/, "")}/${path}`, staged, true)} onAllChanges={() => void newTab("changes")} notesSection={activeDir !== null && <LineNotes dir={activeDir} notes={notesFor(activeDir)} onOpen={(n) => openDiff(n.path, n.staged, true, n.end ?? n.line)} onDrop={(ids) => dropNotes(activeDir, ids)} onClearSent={() => saveNotes(activeDir, clearDelivered(notesFor(activeDir)))} onSend={() => sendNotes(activeDir)} />} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
             if (activeDir === null) return "Open a workspace first.";
             try {
               await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
