@@ -42,7 +42,7 @@ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
-import { ADD_PROJECT, kitLaunch, openAt } from "./onboarding/firstRun";
+import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, openAt, type Outcome } from "./onboarding/firstRun";
 import { KITS, VENDORS, RECALL_KEY, assignRoles, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
 import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
@@ -1169,14 +1169,32 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   useEffect(() => {
     invoke<{ step: number } | null>("onboarding_get").then((r) => setWizard(openAt(r)), () => {});
   }, []);
-  const endWizard = (outcome: "completed" | "dismissed") => {
-    setWizard(null);
-    wizardSetup.current = false;
-    invoke("onboarding_close", { outcome }).catch(() => {});
+  // ONB-007: the close is stored before the wizard goes; a failed store keeps it open with a toast,
+  // and the next click on any of its ways out tries that same close again.
+  const [wizardClose] = useState(() =>
+    closer(
+      (outcome) => invoke("onboarding_close", { outcome }),
+      () => {
+        setWizard(null);
+        wizardSetup.current = false;
+      },
+      (err) => setToast(`Kolux could not keep your setup progress (${String(err)}). Click the same button again to try once more.`),
+    ),
+  );
+  const endWizard = (outcome: Outcome, after?: () => void) => wizardClose.end(outcome, after);
+  // ONB-010: armed by Pick a folder, or by Skip while no project exists; the next project added
+  // starts the saved default agent in it, once.
+  const firstFolder = useRef(false);
+  const projectAdded = (dir: string, branch: string | null) => {
+    if (!firstFolder.current) return;
+    firstFolder.current = false;
+    const agent = firstFolderAgent(offeredAgents(agents, settings), defaultAgentId(settings));
+    if (agent) void startIn(agent, dir, branch, "", true);
   };
   // ONB-005: Start kit launches at once in the kit's own sample folder with an AI ready; otherwise
   // the setup dialog opens, the wizard hides behind it, and a start from there completes it.
   const wizardKit = async (id: string) => {
+    if (wizardClose.retry()) return;
     const kit = KITS.find((k) => k.id === id);
     if (!kit) return;
     const sampleDir = await invoke<string>("kit_samples_dir", { kit: id }).catch(() => null);
@@ -1189,6 +1207,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // ONB-005: one plain session on the first available agent (the default first), empty prompt;
   // nothing without an agent and a workspace.
   const wizardSession = async () => {
+    if (wizardClose.retry()) return;
     const agent = menuAgents(offeredAgents(agents, settings), defaultAgentId(settings))[0];
     if (!agent || !activeDir) return;
     if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed");
@@ -1597,6 +1616,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             createName={createName}
             deleteRequest={deleteRequest}
             onStartIn={startIn}
+            onAdded={projectAdded}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
             onIndex={(list, dirs, typed) => {
@@ -1972,10 +1992,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           onKit={(id) => void wizardKit(id)}
           onSession={() => void wizardSession()}
           onPickFolder={() => {
-            endWizard("completed");
-            window.dispatchEvent(new CustomEvent(ADD_PROJECT));
+            if (wizardClose.retry()) return;
+            endWizard("completed", () => {
+              firstFolder.current = true;
+              window.dispatchEvent(new CustomEvent(ADD_PROJECT));
+            });
           }}
-          onClose={() => endWizard("dismissed")}
+          onClose={() => {
+            if (wizardClose.retry()) return;
+            const none = projects.length === 0;
+            endWizard("dismissed", () => (firstFolder.current = none));
+          }}
         />
       )}
       <UpdateCenter />

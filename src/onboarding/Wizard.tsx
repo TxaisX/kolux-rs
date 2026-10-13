@@ -3,6 +3,7 @@
 // hands every real action (samples, kits, a session, Add Project) to App through its props.
 import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import Ask from "../chrome/Ask";
 import { Close, Mark } from "../chrome/icons";
 import { KITS, type Vendor } from "../kits/catalog";
 import { KitCard, KitIcon } from "../kits/Kits";
@@ -10,7 +11,7 @@ import { ConnectGrid } from "../settings/ConnectGrid";
 import { ClaudeCard } from "../settings/SettingsPage";
 import CodexCard from "../settings/CodexCard";
 import GrokCard from "../settings/GrokCard";
-import { chordFires, SCREENS } from "./firstRun";
+import { chordFires, leaveKey, SCREENS } from "./firstRun";
 
 const TILES = [
   { ai: "Claude", doing: "Writing up the findings" },
@@ -41,6 +42,12 @@ type ViewProps = {
   onSecondary: () => void;
   onPickFolder: () => void;
   onClose?: () => void;
+  /** ONB-006: the leave question is showing. */
+  leaving?: boolean;
+  /** ONB-006: a primary click on the dimmed app around the card. */
+  onOutside?: () => void;
+  onSkip?: () => void;
+  onStay?: () => void;
 };
 
 export const mainOff = (at: number, connected: boolean, busy: boolean) => (at === 1 && !connected) || (at === 2 && busy);
@@ -50,7 +57,7 @@ export function WizardView(p: ViewProps) {
   const main = ["Get started", "Continue", p.busy ? "Setting up…" : "Try with sample data", "Start kit"][p.at];
   const secondary = [null, "I’ll do this later", null, "Just open a session"][p.at];
   return (
-    <div className="ask-backdrop onb-backdrop" hidden={p.hidden}>
+    <div className="ask-backdrop onb-backdrop" hidden={p.hidden} onMouseDown={(e) => e.button === 0 && e.target === e.currentTarget && p.onOutside?.()}>
       <div className="onb-drag" data-tauri-drag-region />
       <div className="onb" role="dialog" aria-modal="true" aria-label="Get started with Kolux">
         <div className="onb-head">
@@ -133,6 +140,17 @@ export function WizardView(p: ViewProps) {
           </button>
         </div>
       </div>
+      {p.leaving && (
+        <Ask
+          title="Skip setup?"
+          body="You can pick setup up again any time: open the help menu in the sidebar and choose Onboarding."
+          confirm="Skip"
+          cancel="No, keep going"
+          safe
+          onConfirm={() => p.onSkip?.()}
+          onCancel={() => p.onStay?.()}
+        />
+      )}
     </div>
   );
 }
@@ -150,6 +168,7 @@ type Props = {
   onKit: (kit: string) => void;
   onSession: () => void;
   onPickFolder: () => void;
+  /** ONB-006: Skip in the leave question; the wizard closes as dismissed. */
   onClose: () => void;
 };
 
@@ -160,6 +179,8 @@ export default function Wizard(props: Props) {
   const [kit, setKit] = useState(KITS[0].id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ONB-006: Escape, a click on the dimmed app or the corner close asks first; one question at a time.
+  const [leaving, setLeaving] = useState(false);
   const connected = Object.values(on).some(Boolean);
   const go = (to: number) => {
     // The stored step is the last screen finished (onboarding.rs); a failed save keeps the wizard going.
@@ -188,7 +209,8 @@ export default function Wizard(props: Props) {
   useEffect(() => {
     if (props.hidden) return;
     const key = (e: KeyboardEvent) => {
-      if (!chordFires(e, off)) return;
+      if (leaveKey(e)) return setLeaving(true);
+      if (!chordFires(e, off || leaving)) return;
       e.preventDefault();
       main();
     };
@@ -216,7 +238,14 @@ export default function Wizard(props: Props) {
       onMain={main}
       onSecondary={secondary}
       onPickFolder={props.onPickFolder}
-      onClose={props.onClose}
+      onClose={() => setLeaving(true)}
+      leaving={leaving}
+      onOutside={() => setLeaving(true)}
+      onSkip={() => {
+        setLeaving(false);
+        props.onClose();
+      }}
+      onStay={() => setLeaving(false)}
     />
   );
 }

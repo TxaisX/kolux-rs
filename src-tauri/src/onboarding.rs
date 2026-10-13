@@ -1,6 +1,7 @@
 //! ONB-001..005: the first-run wizard's record in the store, so the wizard opens for a brand-new
-//! profile, comes back on the screen it reached and never returns once closed. The close latch,
-//! the retry toast and the older wizards' progress (ONB-007 rest, ONB-008) are T-208.
+//! profile, comes back on the screen it reached and never returns once closed. ONB-008: a record
+//! from an older version is raised to this one on start (T-208); the close latch and its retry
+//! toast live in the window (firstRun.ts closer).
 
 use crate::state::Store;
 use serde::{Deserialize, Serialize};
@@ -16,8 +17,10 @@ const LAST: i32 = 3;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Onboarding {
+    #[serde(default)]
     pub version: u32,
     /// The last screen finished, 0..=3; -1 when none.
+    #[serde(default = "none_finished")]
     pub step: i32,
     /// Milliseconds since 1970 when the wizard closed; none while it is open.
     #[serde(default)]
@@ -25,10 +28,32 @@ pub struct Onboarding {
     /// "completed" or "dismissed" once closed.
     #[serde(default)]
     pub outcome: Option<String>,
+    /// Fields kept for the checklist and milestones (ONB-011, ONB-013), carried through untouched.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+fn none_finished() -> i32 {
+    -1
+}
+
+fn raw(store: &Store) -> Option<Onboarding> {
+    store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
+}
+
+/// ONB-008: progress held within the four screens, the version raised to this one, and a close
+/// time filled in when an outcome has none. Fields this version does not read are kept as they are.
+fn upgraded(mut rec: Onboarding, now: u64) -> Onboarding {
+    rec.version = VERSION;
+    rec.step = rec.step.clamp(-1, LAST);
+    if rec.outcome.is_some() && rec.closed_at.is_none() {
+        rec.closed_at = Some(now);
+    }
+    rec
 }
 
 fn load(store: &Store) -> Option<Onboarding> {
-    store.get(KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok())
+    raw(store).map(|r| upgraded(r, now_ms()))
 }
 
 fn save(store: &Store, rec: &Onboarding) -> Result<(), String> {
@@ -37,10 +62,11 @@ fn save(store: &Store, rec: &Onboarding) -> Result<(), String> {
 
 /// ONB-001: the profile's first start opens a record; a profile with none counts as done (ONB-008).
 pub fn first_start(store: &Store, starts: u64) -> Result<(), String> {
-    if starts == 1 && load(store).is_none() {
-        save(store, &Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None })?;
+    match raw(store) {
+        None if starts == 1 => save(store, &Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }),
+        Some(old) if upgraded(old.clone(), 0) != old => save(store, &upgraded(old, now_ms())),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Moving on from `step` stores it as the last screen finished; a closed record stays as it is.
@@ -110,7 +136,7 @@ mod tests {
         first_start(&s, 2).unwrap();
         assert_eq!(load(&s), None, "an older profile has no record and never sees the wizard");
         first_start(&s, 1).unwrap();
-        assert_eq!(load(&s), Some(Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None }));
+        assert_eq!(load(&s), Some(Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }));
         save(&s, &stepped(load(&s).unwrap(), 1)).unwrap();
         first_start(&s, 1).unwrap();
         assert_eq!(load(&s).unwrap().step, 1, "an existing record is kept");
@@ -122,7 +148,7 @@ mod tests {
 
     #[test]
     fn steps_stay_in_the_four_screens_and_a_close_is_final() {
-        let open = Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None };
+        let open = Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() };
         assert_eq!(stepped(open.clone(), 9).step, 3);
         assert_eq!(stepped(open.clone(), 1).step, 1);
         let done = closed(stepped(open.clone(), 1), "completed", 50).unwrap();
@@ -132,5 +158,21 @@ mod tests {
         let skipped = closed(stepped(open.clone(), 1), "dismissed", 70).unwrap();
         assert_eq!((skipped.step, skipped.outcome.as_deref()), (1, Some("dismissed")));
         assert!(closed(open, "maybe", 1).unwrap_err().contains("maybe"));
+    }
+
+    #[test]
+    fn an_older_record_is_brought_up_to_date_on_start() {
+        let (s, dir) = store("upgrade");
+        s.set(KEY, r#"{"version":5,"step":9,"outcome":"dismissed","checklist":[true]}"#).unwrap();
+        first_start(&s, 4).unwrap();
+        let rec = load(&s).unwrap();
+        assert_eq!((rec.version, rec.step, rec.outcome.as_deref()), (VERSION, 3, Some("dismissed")));
+        assert!(rec.closed_at.is_some(), "an outcome with no close time gets one");
+        let raw = s.get(KEY).unwrap().unwrap();
+        assert!(raw.contains(r#""version":7"#) && raw.contains(r#""checklist":[true]"#), "the raised version is stored, the rest kept: {raw}");
+        s.set(KEY, r#"{"version":6}"#).unwrap();
+        assert_eq!(load(&s), Some(Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }), "missing fields read as nothing finished");
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

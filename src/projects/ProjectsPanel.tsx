@@ -56,6 +56,8 @@ type Props = {
   /** A click on a row shows that workspace. */
   /** `fresh`: the workspace was just made (TERM-005 seeds its grid). */
   onSelect: (dir: string, branch: string | null, fresh?: boolean) => void;
+  /** A new project was added and its main checkout opened (ONB-010 starts the default agent there once). */
+  onAdded?: (dir: string, branch: string | null) => void;
   /** After a workspace and its folder are gone, so the window drops its panes. */
   onRemoved: (path: string) => void;
   /** The plus menu behind "New session" (T-004): agents found on the PATH, and the launch. */
@@ -114,7 +116,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -278,7 +280,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setShowAdd(false);
     await reload();
     const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
-    if (open) onSelect(open.path, open.branch);
+    if (!open) return;
+    onSelect(open.path, open.branch);
+    onAdded(open.path, open.branch);
   };
   const addPath = async (path: string) => {
     if (!path.trim()) return;

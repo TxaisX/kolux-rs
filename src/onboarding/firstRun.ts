@@ -31,3 +31,44 @@ export const kitLaunch = (dir: string | null, sampleDir: string | null, connecte
 
 /** ONB-004: 'Pick a folder' hands over to the sidebar's Add Project dialog through this window event. */
 export const ADD_PROJECT = "kolux-add-project";
+
+/** ONB-006: Escape asks whether to leave, unless something inside already handled it or a composition is running. */
+export const leaveKey = (e: { key: string; isComposing: boolean; defaultPrevented: boolean }) => e.key === "Escape" && !e.isComposing && !e.defaultPrevented;
+
+export type Outcome = "completed" | "dismissed";
+
+/** ONB-007: closing is latched while it is being stored; a failed store frees the latch and keeps
+ * the close, so the next click on any of the wizard's ways out tries the same close once more. */
+export function closer(store: (outcome: Outcome) => Promise<unknown>, done: () => void, fail: (err: unknown) => void) {
+  let busy = false;
+  let failed: { outcome: Outcome; after: () => void } | null = null;
+  const end = (outcome: Outcome, after: () => void = () => {}) => {
+    if (busy) return;
+    busy = true;
+    store(outcome).then(
+      () => {
+        busy = false;
+        failed = null;
+        done();
+        after();
+      },
+      (err) => {
+        busy = false;
+        failed = { outcome, after };
+        fail(err);
+      },
+    );
+  };
+  /** True when a failed close was tried again instead of the click's own action. */
+  const retry = () => {
+    if (!failed) return false;
+    end(failed.outcome, failed.after);
+    return true;
+  };
+  return { end, retry };
+}
+
+/** ONB-010: the agent the first folder after onboarding starts: the saved default only; none on
+ * automatic (no default) and none for a plain terminal, which the new workspace opens anyway. */
+export const firstFolderAgent = <A extends { id: string; installed: boolean }>(offered: A[], defaultId: string): A | null =>
+  defaultId === "" || defaultId === "terminal" ? null : (offered.find((a) => a.installed && a.id === defaultId) ?? null);

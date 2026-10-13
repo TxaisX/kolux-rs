@@ -1416,6 +1416,14 @@ Choose a kit shows the kit cards with their roles, the app-wide finish switch, S
 launch in the kit's own sample folder with an AI ready, else the setup dialog, behind which the
 wizard hides) and Just open a session. Progress is kept in the store (kv onboarding, version 7).
 
+[accounts] T-208 finishes the wizard's ways out. Escape, a left click on the dimmed app around the
+card or the corner close asks "Skip setup?", pointing to Onboarding in the sidebar help menu, with
+Skip and No, keep going (right clicks and clicks on the card do nothing). The close is stored
+before the wizard goes: a failed store keeps it open with a toast, and the next click tries the
+same close again. A record from an older version is raised to version 7 on start, keeping its other
+fields. After Pick a folder, or Skip while no project exists, the next project added starts the
+saved default agent in it, once.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2563,7 +2571,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-207 · The wizard record is kv `onboarding` {version 7, step = last screen finished (-1 none), closedAt, outcome completed|dismissed}; only start one with no record writes it, so older profiles never see the wizard (the migration of older progress is T-208); a close is final. The wizard opens after the last finished screen. Connected means: Claude's key card connected or about to run out, Codex's card connected, Grok's card connected. Start kit launches straight away only when the open workspace is that kit's own sample folder (which fills every input) and an AI is installed; any other case opens the setup dialog, and a start from there closes the wizard as completed. Just open a session takes the default agent first, else the first installed one that is not switched off, in the open workspace with no branch. The corner close button closes as dismissed with no question for now (ONB 006's ask is T-208). Ctrl+Enter still fires from a checkbox, radio or button, since those take no typing.
 
+- [accounts] T-208 · The corner close asks the same question as Escape and a click outside. Escape or a click outside while the question shows answers No, keep going (it never opens a second copy). The question names the help menu's Onboarding item as ONB 006 and DT-25 say; that item arrives with T-298 (ONB 009). A failed close store keeps the wizard and the close: whichever way out is clicked next (Start kit, Just open a session, Pick a folder, Skip) retries that close and does not repeat its own action, so a kit is never started twice. On start, a record from an older version gets version 7, its step held to -1..3 and a close time when it has an outcome but none; fields Kolux RS does not read yet (checklist ticks, milestones) are kept. ONB 010 is armed by Pick a folder, or by Skip while the project list is empty (a sample opened from the wizard is a project, so it disarms); it lives in the window only, so a relaunch disarms it; the saved default agent starts only when it is installed and not switched off, Auto starts nothing and a plain terminal is what the new workspace opens anyway.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-208 · done: leave question (Escape, click outside, corner close) through Ask's new cancel words and safe confirm; firstRun.ts closer latch with retry, leaveKey, firstFolderAgent; onboarding.rs raises older records and keeps unknown fields; ProjectsPanel onAdded starts the default agent once · evidence/T-208.txt, T-208-*.png
 - 2026-10-12 · [accounts] T-207 · done: `onboarding.rs` record and onboarding_get / _step / _close; `src/onboarding/` Wizard (four screens) and firstRun.ts rules; Connect cards report connected; KitCard split out of the gallery; Add project opens on a window event · evidence/T-207.txt, T-207-*.png
 - 2026-10-12 · [accounts] T-206 · done: `kits.rs` kit_collect / kit_history / kit_open_file, the project-or-samples guard on every kit command, the per-folder and app-wide run history; strip Preview / Open / Collect results / Move to / Restart; Recent kit runs in the gallery; read-only editor and start-URL browser panes for previews · evidence/T-206.txt, T-206-*.png
 - 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png

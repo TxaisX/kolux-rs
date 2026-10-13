@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { chordFires, kitLaunch, openAt, SCREENS } from "./firstRun";
+import { chordFires, closer, firstFolderAgent, kitLaunch, leaveKey, openAt, SCREENS, type Outcome } from "./firstRun";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
@@ -92,4 +92,61 @@ test("ONB-036: the wizard's own words keep to plain words", () => {
     const text = view(at).replace(/<[^>]+>/g, " ");
     expect(jargon(text)).toEqual([]);
   }
+});
+
+test("ONB-006: Escape asks to leave, but not mid-composition or once something inside handled it", () => {
+  const esc = (over: Record<string, unknown> = {}) => ({ key: "Escape", isComposing: false, defaultPrevented: false, ...over });
+  expect(leaveKey(esc())).toBe(true);
+  expect(leaveKey(esc({ isComposing: true }))).toBe(false);
+  expect(leaveKey(esc({ defaultPrevented: true }))).toBe(false);
+  expect(leaveKey(esc({ key: "Enter" }))).toBe(false);
+});
+
+test("ONB-006: the leave question offers Skip and No, keep going, and names the help menu's Onboarding item", () => {
+  const html = view(1, { leaving: true, onSkip() {}, onStay() {} });
+  expect(html).toContain("Skip setup?");
+  expect(html).toContain(">Skip<");
+  expect(html).toContain(">No, keep going<");
+  expect(html).toContain("Onboarding");
+  expect(html).toContain("help menu");
+  expect(view(1)).not.toContain("Skip setup?");
+  expect(jargon(html)).toEqual([]);
+});
+
+test("ONB-007: a close is latched while it stores; a failed store frees it and the next click retries it", async () => {
+  const calls: Outcome[] = [];
+  let fails = 1;
+  let release: () => void = () => {};
+  const store = (o: Outcome) => {
+    calls.push(o);
+    return new Promise<void>((ok, no) => (release = () => (fails-- > 0 ? no(new Error("disk full")) : ok())));
+  };
+  const seen: string[] = [];
+  const c = closer(store, () => seen.push("closed"), (err) => seen.push(String(err)));
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  expect(c.retry()).toBe(false);
+  c.end("completed", () => seen.push("after"));
+  c.end("dismissed");
+  expect(calls).toEqual(["completed"]);
+  release();
+  await flush();
+  expect(seen).toEqual(["Error: disk full"]);
+  expect(c.retry()).toBe(true);
+  expect(calls).toEqual(["completed", "completed"]);
+  release();
+  await flush();
+  expect(seen).toEqual(["Error: disk full", "closed", "after"]);
+  expect(c.retry()).toBe(false);
+});
+
+test("ONB-010: the first folder starts only the saved default agent, never a guess", () => {
+  const agents = [
+    { id: "claude", installed: true },
+    { id: "codex", installed: false },
+  ];
+  expect(firstFolderAgent(agents, "claude")?.id).toBe("claude");
+  expect(firstFolderAgent(agents, "")).toBeNull();
+  expect(firstFolderAgent(agents, "terminal")).toBeNull();
+  expect(firstFolderAgent(agents, "codex")).toBeNull();
+  expect(firstFolderAgent(agents, "grok")).toBeNull();
 });

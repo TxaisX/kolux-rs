@@ -17,11 +17,15 @@ type Props = {
   enter?: boolean;
   /** Offers a don't-ask-again box; its tick reaches `onConfirm` and nowhere else. */
   dontAsk?: boolean;
+  /** The back-out button's words; Cancel unless the prompt names its own. */
+  cancel?: string;
+  /** A confirm that loses nothing (ONB-006 Skip) is not drawn in the danger colour. */
+  safe?: boolean;
   onConfirm: (dontAskAgain: boolean) => void;
   onCancel: () => void;
 };
 
-export default function Ask({ title, body, confirm, enter = false, dontAsk = false, onConfirm, onCancel }: Props) {
+export default function Ask({ title, body, confirm, enter = false, dontAsk = false, cancel: cancelText = "Cancel", safe = false, onConfirm, onCancel }: Props) {
   const [tick, setTick] = useState(false);
   const cancel = useRef<HTMLButtonElement>(null);
   const ok = useRef<HTMLButtonElement>(null);
@@ -50,9 +54,9 @@ export default function Ask({ title, body, confirm, enter = false, dontAsk = fal
         )}
         <div className="btn-row">
           <button ref={cancel} className="btn" onClick={onCancel}>
-            Cancel
+            {cancelText}
           </button>
-          <button ref={ok} className="btn danger" onClick={() => onConfirm(tick)}>
+          <button ref={ok} className={safe ? "btn primary" : "btn danger"} onClick={() => onConfirm(tick)}>
             {confirm}
           </button>
         </div>
