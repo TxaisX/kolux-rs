@@ -434,7 +434,7 @@ Rules: `--cursor` returns only output that came after that point, and `--limit` 
   agent's input box but has not sent yet is labelled separately from terminal output.
   (Kolux RS, T-134-a: the stream is the program's output with escapes removed and a redrawn line
   kept in its last state, not a rendering, so a line editor's redraws can leave traces in it; the
-  screen is the window's xterm rows, which include whatever sits in an agent's input box, so unsent
+  screen is the window's terminal rows, which include whatever sits in an agent's input box, so unsent
   text is not labelled separately, DT-C18; one host, so the older-host warning only covers the
   window not answering within 1.5 s.)
 Acceptance:
@@ -461,7 +461,7 @@ Rules: text followed by Enter sent to an agent counts as a prompt; the receipt r
   tui-idle, plus `--timeout-ms`; a wait that ends blocked without meeting its condition exits
   non-zero.
   (Kolux RS, T-134-a: the receipt comes from the status hooks' turn history, so a pane without hook
-  reports answers `unknown` with a warning; retry receipts live in memory, so a retry after a Kolux
+  reports answers unknown with a warning; retry receipts live in memory, so a retry after a Kolux
   restart sends anew; there is one host and no structured chat session, so those refusals do not
   arise; tui-idle on a pane without hook reports means 3 s without output, warned; permission,
   waiting and blocked are the blocked states.)

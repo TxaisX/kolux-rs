@@ -77,7 +77,7 @@ Rules: a path that leaves the project through a symlink is refused; terminal lin
   for a folder workspace is refused if that workspace's folder changes before it finishes, so
   nothing lands in the wrong place.
   (Kolux RS, T-062-a: the roots are the projects, each project's own workspaces folder and the
-  shared one; a `..` step is refused as text; the place a path really leads to is checked only
+  shared one; a parent-folder step (two dots) is refused as text; the place a path really leads to is checked only
   for reading, writing, listing and as the folder written into, so the link itself can still be
   renamed, trashed or moved; a grant lasts the run; a workspace's folder never changes in Kolux RS,
   so the mid-save refusal has nothing to guard.)
@@ -100,7 +100,7 @@ Rules: launchable files are recognised by type on every platform (programs, scri
   extension; relative paths, missing files, links that are not file links, and file links naming
   another computer are ignored; the same test runs everywhere Kolux hands a file to the system.
   (Kolux RS, T-062-a: the editor's refusal offers "Open this file anyway", which allows that one
-  path for the run through `file_grant`; there are no browser downloads yet.)
+  path for the run through a one-file grant; there are no browser downloads yet.)
 Acceptance:
   - [ ] Click a terminal link to a batch file, a PowerShell script, an executable or a Windows
         shortcut → the file manager opens with it highlighted, and nothing runs.
