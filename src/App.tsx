@@ -29,7 +29,8 @@ import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { closeSet, returnTab, type Which } from "./terminal/tabClose";
-import { applyAppearance, readAppearance } from "./theme";
+import { applyAppearance, readAppearance, showScreen, zoomTerm } from "./theme";
+import { useEscapeLeaves } from "./chrome/fullPage";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, readLook, saveLayout, startScreen, stripOn } from "./settings/general";
@@ -640,6 +641,14 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
+          break;
+        case "view.code":
+          leavePage();
+          break;
+        case "zoom.in":
+        case "zoom.out":
+        case "zoom.reset":
+          zoomTerm(focused, hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset"); // TERM-078
           break;
         case "tab.newTerminal":
           void newTab(null);
@@ -1748,6 +1757,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
   const timed = inbox || board;
+  // VIEW-009: a full page fills the workspace area; Show Code (view.code) and an Escape nothing else used leave it.
+  const fullPage = settingsOpen || (terminals && page !== null) || inbox || screen === "artifacts";
+  const leavePage = () => {
+    setSettingsOpen(false);
+    setPage(null);
+    setScreen("terminals");
+  };
+  useEscapeLeaves(fullPage && !settingsOpen && page !== "automations", leavePage);
+  useEffect(() => showScreen(screen, classic), [screen, classic]); // VIEW-006: each screen's own theme
   useEffect(() => {
     if (!timed) return;
     setNow(Date.now());
@@ -2129,7 +2147,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         }
         screen={screen}
         classic={classic}
-        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
+        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
         {palette && (
           <WorktreePalette
@@ -2688,7 +2706,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             })}
           </div>
         </div>
-        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
+        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open || fullPage} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
           const used = clampWidth(w, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0);
           setDragWidth(done ? null : used);
           if (done) saveRight({ width: used });
