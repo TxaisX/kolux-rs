@@ -172,6 +172,11 @@ export const Undo = (p: P) => (
     <path d="M5.5 4 3 6.5 5.5 9" />
   </Glyph>
 );
+export const Pin = (p: P) => (
+  <Glyph {...p}>
+    <path d="M6 2.5h4l-.5 4 2 2v1h-7v-1l2-2-.5-4ZM8 9.5v4" />
+  </Glyph>
+);
 export const Target = (p: P) => (
   <Glyph {...p}>
     <circle cx="8" cy="8" r="6" />

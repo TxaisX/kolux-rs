@@ -377,6 +377,7 @@ pub fn add_project(git: &Git, store: &Store, path: &Path) -> Result<Project, Str
     crate::visibility::ensure(store, &projects)?;
     projects.insert(0, project.clone());
     save_projects(store, &projects)?;
+    let _ = crate::activity::touch(store, &project.path); // PROJ-051: a new project starts at the top of Recent
     Ok(project)
 }
 
@@ -918,6 +919,7 @@ pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project
     set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
     note_seen(&store, &project, &made.worktree.path)?;
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
     Ok(made)
 }
 
@@ -964,6 +966,7 @@ pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: Stor
     set_name(&store, &made.worktree.path, Some(&shown))?;
     made.worktree.name = Some(shown);
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
     Ok(made)
 }
 /// PROJ-037: an issue or pull request named by its address, as the palette read it.
@@ -1215,6 +1218,7 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
     }
     let project = find_project(&store, &project_id)?;
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
     Ok(made)
 }
 

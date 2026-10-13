@@ -20,10 +20,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
+import { GROUP_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SORT_SETTING, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
-import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
+import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
@@ -201,6 +201,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [filterOpen, setFilterOpen] = useState(false);
   const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
   const [groups, setGroups] = useState<Groups>(NO_GROUPS); // PROJ-014: project groups
+  const [activity, setActivity] = useState<Record<string, number>>({}); // PROJ-051: path key -> last activity
   const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
   const [groupName, setGroupName] = useState("");
   const [groupParent, setGroupParent] = useState("");
@@ -220,11 +221,17 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     for (const [dir, i] of Object.entries(states)) {
       now[dir] = i.state;
       if (dir in was && was[dir] !== i.state && !(activeDir !== null && same(dir, activeDir))) fresh.push(dir);
+      if (dir in was && was[dir] !== i.state) stamp(dir); // PROJ-051: an agent's state change is activity
     }
     seen.current = now;
     for (const dir of fresh) onUnread(dir, true);
   }, [states, activeDir, onUnread]);
 
+  // PROJ-051: stamps a workspace as just used, here at once and in the store for the next start.
+  function stamp(path: string) {
+    setActivity((a) => ({ ...a, [pathKey(path)]: Date.now() }));
+    invoke("activity_touch", { path }).catch(() => {});
+  }
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
   const fail = (err: unknown) => say("error", String(err));
 
@@ -274,6 +281,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setProjects(list);
     const g = await invoke<Groups>("groups_get");
     setGroups((o) => keepNewer(o, g));
+    const a = await invoke<Record<string, number>>("activity_get");
+    setActivity((o) => ({ ...a, ...Object.fromEntries(Object.entries(o).filter(([k, t]) => t > (a[k] ?? 0))) }));
     await refreshWorktrees(list);
   }, [refreshWorktrees]);
 
@@ -991,10 +1000,24 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const setRead = (w: Worktree, read: boolean) => onUnread(w.path, !read);
   const show = (w: Worktree) => {
     setRead(w, true);
+    stamp(w.path);
     onSelect(w.path, w.branch);
   };
   type Entry = { p: Project; w: Worktree };
-  const order = (xs: Entry[]) => (sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry));
+  const seenAt = (path: string) => activity[pathKey(path)] ?? 0;
+  const order = (xs: Entry[]) =>
+    sortBy === "smart" ? smartOrder(xs, (x) => infoOf(x.w)) : sortBy === "activity" ? recentOrder(orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry), (x) => seenAt(x.w.path)) : orderWorktrees(xs.map((x) => x.w)).map((w) => xs.find((x) => x.w === w) as Entry);
+  // PROJ-051: under Recent the projects follow their latest workspace too, so a new one is first.
+  const projectOrder = sortBy === "activity" ? recentOrder(projects, (p) => Math.max(seenAt(p.path), ...(worktrees[p.id] ?? []).map((w) => seenAt(w.path)))) : projects;
+  // PROJ-046: pinned rows (and the workspaces made from them) sit in a section at the top, and
+  // leave their usual place unless the copies setting is on.
+  const pins: string[] = Array.isArray(settings[PIN_SETTING]) ? (settings[PIN_SETTING] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  const copies = settings[PIN_COPIES_SETTING] === true;
+  const everyEntry: Entry[] = projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w })));
+  const pinned = pinnedSet(pins, everyEntry.map((x) => x.w));
+  const isPinned = (w: Worktree) => pins.some((x) => pathKey(x) === pathKey(w.path));
+  const elsewhere = (w: Worktree) => copies || !pinned.has(pathKey(w.path));
+  const togglePin = (w: Worktree) => onSetting(PIN_SETTING, isPinned(w) ? pins.filter((x) => pathKey(x) !== pathKey(w.path)) : [...pins, w.path]);
   const toggleFold = (title: string) => setFolded((f) => new Set(f.has(title) ? [...f].filter((t) => t !== title) : [...f, title]));
 
   // One workspace row: its state dot, name, unread mark, and the Remove and Mark unread buttons;
@@ -1030,6 +1053,19 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           )}
           {pushTag(w)}
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
+          {!asking && (
+            <button
+              className={`ib${isPinned(w) ? " on" : ""}`}
+              title={isPinned(w) ? "Unpin: back to its usual place only" : "Pin to the top of the list"}
+              aria-pressed={isPinned(w)}
+              onClick={(e) => {
+                e.stopPropagation();
+                togglePin(w);
+              }}
+            >
+              <Pin size={11} />
+            </button>
+          )}
           {!asking && (
             <button
               className="ib"
@@ -1148,7 +1184,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const projectBlock = (p: Project) => {
       const list = worktrees[p.id] ?? [];
       const main = list.find((w) => w.isMain);
-      const others = order(list.filter((w) => !w.isMain).map((w) => ({ p, w })));
+      const others = order(list.filter((w) => !w.isMain && elsewhere(w)).map((w) => ({ p, w })));
       const opening = creating === p.id;
       return (
         <div key={p.id}>
@@ -1420,20 +1456,38 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               <select aria-label="sort" className="field" value={sortBy} onChange={(e) => onSetting(SORT_SETTING, e.target.value)}>
                 <option value="smart">Smart: what needs you first</option>
                 <option value="name">Name</option>
+                <option value="activity">Recent: latest activity first</option>
               </select>
+              <label className="check">
+                <input type="checkbox" aria-label="pinned rows also in their group" checked={copies} onChange={(e) => onSetting(PIN_COPIES_SETTING, e.target.checked)} />
+                Pinned rows also show in their usual place
+              </label>
             </div>
           )}
           {creating === "" && nameField(null)}
           {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a project folder; one without Git can start it here.</div>}
 
-          {groupBy === "project" && groupTree(groups, projects).map(drawNode)}
+          {everyEntry.some((x) => pinned.has(pathKey(x.w.path))) && (
+            <div data-group="Pinned" className="pinned">
+              <button className="sb-group" aria-expanded={!folded.has("pinned-section")} onClick={() => toggleFold("pinned-section")}>
+                Pinned
+                <span className="count">{everyEntry.filter((x) => pinned.has(pathKey(x.w.path))).length}</span>
+                <span className="chev">
+                  <ChevronDown size={12} />
+                </span>
+              </button>
+              {!folded.has("pinned-section") &&
+                nestRows(order(everyEntry.filter((x) => pinned.has(pathKey(x.w.path)))).map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p: everyEntry.find((x) => x.w === r.w)?.p as Project, w: r.w }, r.depth, r.kids))}
+            </div>
+          )}
+          {groupBy === "project" && groupTree(groups, projectOrder).map(drawNode)}
 
           {/* PROJ-045: one list across projects, flat or under Status / Pull request headers that fold. */}
           {groupBy !== "project" && creating && nameField(projects.find((p) => p.id === creating) ?? null)}
           {groupBy !== "project" && projects.map(standIn)}
           {groupBy !== "project" &&
             groupRows(
-              order(projects.flatMap((p) => (worktrees[p.id] ?? []).map((w) => ({ p, w })))),
+              order(everyEntry.filter((x) => elsewhere(x.w))),
               groupBy,
               (x) => infoOf(x.w),
               (x) => x.p.name,

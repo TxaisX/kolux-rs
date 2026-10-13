@@ -9,10 +9,14 @@ export type AgentState = "permission" | "blocked" | "waiting" | "interrupted" | 
 export type PrState = "open" | "draft" | "merged" | "closed" | "suppressed" | null;
 export type RowInfo = { state: AgentState; changed: number; pr: PrState };
 export type GroupBy = "none" | "project" | "status" | "pr";
-export type SortBy = "smart" | "name";
+/** "activity" is PROJ-051's Recent; the old stored "recent" is PROJ-050's and moves to Smart once. */
+export type SortBy = "smart" | "name" | "activity";
 
 export const GROUP_SETTING = "workspaceGroupBy";
 export const SORT_SETTING = "workspaceSort";
+/** PROJ-046: the pinned workspaces' paths, and whether a pinned row also shows in its own group. */
+export const PIN_SETTING = "pinnedWorkspaces";
+export const PIN_COPIES_SETTING = "pinnedCopies";
 
 /** Strongest first: a permission request outranks everything. */
 const RANK: AgentState[] = ["permission", "blocked", "waiting", "interrupted", "working", "queued", "done", "idle"];
@@ -66,9 +70,32 @@ export function groupRows<T>(rows: T[], by: GroupBy, info: (row: T) => RowInfo, 
 }
 
 export function sortFromSetting(v: unknown): SortBy {
-  return v === "name" ? "name" : "smart";
+  return v === "name" || v === "activity" ? v : "smart";
 }
 
 export function groupFromSetting(v: unknown): GroupBy {
   return v === "none" || v === "status" || v === "pr" ? v : "project";
+}
+
+/** One key per folder, however Git or Windows spelled it; the backend's activity map uses the same. */
+export function pathKey(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/** PROJ-051: latest activity first; rows never seen keep their order at the end. */
+export function recentOrder<T>(rows: T[], stamp: (row: T) => number): T[] {
+  return [...rows].sort((a, b) => stamp(b) - stamp(a));
+}
+
+/** PROJ-046: the pinned paths and every workspace made from them, at any depth, as path keys. */
+export function pinnedSet(pins: string[], ws: { path: string; parent?: string | null }[]): Set<string> {
+  const out = new Set(pins.map(pathKey));
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const w of ws) {
+      const k = pathKey(w.path);
+      if (w.parent && !out.has(k) && out.has(pathKey(w.parent))) grew = !!out.add(k);
+    }
+  }
+  return out;
 }

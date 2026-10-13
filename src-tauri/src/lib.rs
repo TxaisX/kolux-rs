@@ -15,6 +15,7 @@ mod files;
 mod fsops;
 mod fonts;
 mod git;
+mod activity;
 mod groups;
 mod hooks;
 mod include;
@@ -314,6 +315,8 @@ pub fn run() {
             codex_accounts::codex_account_remove,
             projects::git_first_commit_preview,
             projects::git_start,
+            activity::activity_get,
+            activity::activity_touch,
             groups::groups_get,
             groups::group_create,
             groups::group_rename,

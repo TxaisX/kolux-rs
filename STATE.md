@@ -1460,6 +1460,9 @@ New project makes an empty project with one first commit from a name, in the hom
 T-215-a: the Projects header has a New group button; groups fold, nest inside each other, hold
 projects (chosen in a project's settings), last across restarts even when empty, and delete with
 or without taking their projects out of Kolux (folders stay on disk).
+T-216-a: a pin on each workspace row puts it (with the workspaces made from it) in a Pinned
+section at the top, optionally also in its usual place; Sort > Recent lists by latest activity,
+with a newly added project or workspace on top; both last across restarts.
 
 T-100-a adds per-seat options to the launch screen. A Claude Opus or Sonnet seat gets an effort
 picker, and Opus a fast-mode box (fast mode bills usage credits). After a launch, the launch screen
