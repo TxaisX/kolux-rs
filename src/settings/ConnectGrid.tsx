@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
-import { AttentionNote, openInstallPage, type Attention } from "./Attention";
+import { AttentionNote, CHECK_AGAIN, openInstallPage, type Attention } from "./Attention";
 import type { AgentInfo } from "../launch/PlusMenu";
 
 export type ConnectId = "claude" | "codex" | "grok";
@@ -113,16 +113,19 @@ export function InstallCardView({ id, stage, install, canInstall, onInstall, onC
   );
 }
 
-type Win = { addEventListener: (k: "focus", f: () => void) => void; removeEventListener: (k: "focus", f: () => void) => void; setInterval: (f: () => void, ms: number) => number; clearInterval: (id: number) => void };
+type Win = { addEventListener: (k: string, f: () => void) => void; removeEventListener: (k: string, f: () => void) => void; setInterval: (f: () => void, ms: number) => number; clearInterval: (id: number) => void };
 
-/** ACCT-014: runs `check` when the window gets focus back and every 5 seconds while it is visible;
- *  the returned function stops both. */
-export function liveCheck(check: () => void, win: Win = window, doc: { visibilityState: string } = document): () => void {
+/** ACCT-014: runs `check` when the window gets focus back, when a card's Check again is pressed,
+ *  and every `every` ms while the window is visible (0: no timer, as for the account cards, whose
+ *  own check would start a program per account); the returned function stops all of them. */
+export function liveCheck(check: () => void, win: Win = window, doc: { visibilityState: string } = document, every = 5000): () => void {
   win.addEventListener("focus", check);
-  const t = win.setInterval(() => doc.visibilityState === "visible" && check(), 5000);
+  win.addEventListener(CHECK_AGAIN, check);
+  const t = every > 0 ? win.setInterval(() => doc.visibilityState === "visible" && check(), every) : null;
   return () => {
     win.removeEventListener("focus", check);
-    win.clearInterval(t);
+    win.removeEventListener(CHECK_AGAIN, check);
+    if (t !== null) win.clearInterval(t);
   };
 }
 

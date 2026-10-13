@@ -9,11 +9,11 @@ import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
-import { ConnectGrid, OtherWays, taglineOf } from "./ConnectGrid";
+import { ConnectGrid, liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
 import Ask from "../chrome/Ask";
 import GrokCard from "./GrokCard";
-import { AttentionNote, openInstallPage, type Fix } from "./Attention";
+import { AttentionNote, fixDoes, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
 
@@ -33,7 +33,7 @@ const Activity = lazy(() => import("../usage/Activity"));
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
   const ownLine = card.state === "disconnected" || card.state === "attention" ? ownSignInLine(own) : null;
-  const fix = (f: Fix) => (f === "Open install page" ? void openInstallPage("claude").catch(() => {}) : onAction("connect"));
+  const fix = (f: Fix) => (fixDoes(f) === "install-page" ? void openInstallPage("claude").catch(() => {}) : onAction(fixDoes(f) === "check" ? "cancel" : "connect"));
   const chip = card.state === "connected" || card.state === "warning" ? "Connected" : card.state === "expired" ? "Ran out" : card.state === "connecting" ? "Connecting" : card.state === "attention" ? "Needs attention" : card.state === "reading" ? "" : "Not connected";
   return (
     <section className="conn-card" data-state={card.state} aria-label="Claude">
@@ -104,7 +104,8 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
       .then((s) => setResume(resumeOn(s)))
       .catch(() => {});
     const offs = [listen("claude-key", read), listen("claude-accounts", read)];
-    return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
+    const stop = liveCheck(read, window, document, 0);
+    return () => (stop(), offs.forEach((o) => void o.then((u) => u()).catch(() => {})));
   }, [read]);
   const saveResume = (on: boolean) => {
     setResume(on);

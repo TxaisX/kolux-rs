@@ -54,6 +54,11 @@ pub struct Account {
     pub stale: bool,
 }
 
+/// ACCT-025: each listed account's live sign-in file and its sealed copy in the vault.
+pub fn sign_in_files(store: &Store, profile: &Path) -> Vec<(PathBuf, PathBuf)> {
+    load(store).into_iter().map(|a| (profile.join(FOLDER).join(&a.id).join(CREDENTIALS), profile.join(secrets::VAULT).join(format!("claude-{}.json", a.id)))).collect()
+}
+
 pub fn load(store: &Store) -> Vec<Account> {
     store.get(LIST_KEY).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
 }
@@ -373,10 +378,28 @@ pub fn claude_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns
     Ok(())
 }
 
+/// Stops the running sign-in, or (ACCT-002, ACCT-014: Check again) with nothing running wipes the
+/// leftover needs-attention note; true when the note went, so the card is told to re-read.
+fn cancel(s: &SignIns) -> bool {
+    let running = s.running.lock().map(|r| r.is_some()).unwrap_or(false);
+    match s.cancel.lock().ok().and_then(|c| c.clone()) {
+        Some(flag) if running => {
+            flag.store(true, Ordering::SeqCst);
+            false
+        }
+        _ => {
+            if let Ok(mut g) = s.attention.lock() {
+                *g = None;
+            }
+            true
+        }
+    }
+}
+
 #[tauri::command]
-pub fn claude_account_cancel(sign_ins: tauri::State<'_, SignIns>) {
-    if let Some(flag) = sign_ins.cancel.lock().ok().and_then(|c| c.clone()) {
-        flag.store(true, Ordering::SeqCst);
+pub fn claude_account_cancel(app: AppHandle, sign_ins: tauri::State<'_, SignIns>) {
+    if cancel(&sign_ins) {
+        let _ = app.emit(EVENT, ());
     }
 }
 
@@ -525,6 +548,21 @@ pub fn active_dir(store: &Store) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ACCT-014: Check again routes to Cancel; with nothing running it wipes the stale note.
+    #[test]
+    fn an_idle_cancel_clears_the_note_and_a_running_one_only_flags() {
+        let s = SignIns::default();
+        *s.attention.lock().unwrap() = Some(Attention::new("not-found", "x"));
+        assert!(cancel(&s));
+        assert!(s.attention.lock().unwrap().is_none());
+        let flag = Arc::new(AtomicBool::new(false));
+        *s.running.lock().unwrap() = Some("new".into());
+        *s.cancel.lock().unwrap() = Some(flag.clone());
+        *s.attention.lock().unwrap() = Some(Attention::new("plan", "x"));
+        assert!(!cancel(&s));
+        assert!(flag.load(Ordering::SeqCst) && s.attention.lock().unwrap().is_some());
+    }
 
     const CREDS: &str = r#"{"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh"}}"#;
     const SIGNED_IN: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Example Org"}"#;

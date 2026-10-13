@@ -95,6 +95,11 @@ pub fn mark_sign_in_error(store: &Store, id: &str, error: bool) -> Result<bool, 
     Ok(true)
 }
 
+/// ACCT-025: each listed account's live sign-in file and its sealed copy in the vault.
+pub fn sign_in_files(store: &Store, profile: &Path) -> Vec<(PathBuf, PathBuf)> {
+    load(store).into_iter().map(|a| (Path::new(&a.home).join("auth.json"), profile.join(secrets::VAULT).join(format!("codex-{}.json", a.id)))).collect()
+}
+
 /// The active account's home, if it is still listed and on disk.
 pub fn active_home(store: &Store) -> Option<String> {
     active_account(store).map(|a| a.home)
@@ -304,6 +309,8 @@ pub struct CodexView {
     pub drifted: Vec<String>,
     /// ACCT-019: accounts whose sign-in file has been gone for longer than the grace period.
     pub missing: Vec<String>,
+    /// ACCT-021: why the user's Codex settings cannot be copied into the accounts, if they cannot.
+    pub settings_warning: Option<String>,
 }
 
 #[tauri::command]
@@ -319,7 +326,9 @@ pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::St
         Ok(mut seen) => accounts.iter().filter(|a| missing_now(&mut seen, &a.id, Path::new(&a.home).join("auth.json").exists(), std::time::Instant::now())).map(|a| a.id.clone()).collect(),
         Err(_) => Vec::new(),
     };
+    let settings_warning = user_dir(env.as_deref(), user.as_deref()).and_then(|u| user_settings(&u).err());
     Ok(CodexView {
+        settings_warning,
         drifted,
         missing,
         accounts,
@@ -462,6 +471,61 @@ pub fn user_custom_provider(codex_home_env: Option<&str>, user_home: Option<&Pat
     home.is_some_and(|h| custom_provider(&fs::read_to_string(h.join("config.toml")).unwrap_or_default()))
 }
 
+/// ACCT-021: the user's own Codex settings folder: CODEX_HOME, else .codex in the user's home.
+pub fn user_dir(codex_home_env: Option<&str>, user_home: Option<&Path>) -> Option<PathBuf> {
+    codex_home_env.map(str::trim).filter(|h| !h.is_empty()).map(PathBuf::from).or_else(|| user_home.map(|u| u.join(".codex")))
+}
+
+/// ACCT-021: the user's Codex settings, or the plain reason they cannot be copied.
+fn user_settings(user: &Path) -> Result<toml_edit::DocumentMut, String> {
+    let text = match fs::read_to_string(user.join("config.toml")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("Codex has no settings file (config.toml) yet, so the accounts run on Codex's defaults.".into()),
+        Err(e) => return Err(format!("Codex's settings file could not be read (antivirus or another program may have it locked), so the accounts keep the settings they had: {e}")),
+    };
+    if text.trim().is_empty() {
+        return Err("Codex's settings file is empty, so the accounts run on Codex's defaults.".into());
+    }
+    text.parse().map_err(|_| "Codex's settings file is not valid TOML, so the accounts keep the settings they had.".to_string())
+}
+
+/// ACCT-021: before a launch, the user's Codex settings are copied into an account's home. The
+/// home keeps Kolux's sign-in line, the project trust Codex wrote there and Kolux's hook trust
+/// (the home's entry wins). True when the home's file changed; an error is the warning to show,
+/// and the home is then left as it was.
+/// ponytail: a trust entry Codex writes between the last read and the rename is lost; the file is
+/// read again just before writing and the copy redone up to three times, a file lock if that shows.
+pub fn sync_settings(user: &Path, home: &Path) -> Result<bool, String> {
+    let mut doc = user_settings(user)?;
+    doc["cli_auth_credentials_store"] = toml_edit::value("file");
+    let file = home.join("config.toml");
+    for _ in 0..3 {
+        let old = fs::read_to_string(&file).unwrap_or_default();
+        let mine: toml_edit::DocumentMut = old.parse().unwrap_or_default();
+        let mut out = doc.clone();
+        for key in ["projects", "hooks"] {
+            let Some(kept) = mine.get(key).and_then(toml_edit::Item::as_table) else { continue };
+            if !out.get(key).is_some_and(toml_edit::Item::is_table) {
+                out[key] = toml_edit::table();
+            }
+            let into = out[key].as_table_mut().expect("a table was just put here");
+            for (k, v) in kept.iter() {
+                into.insert(k, v.clone());
+            }
+        }
+        let text = out.to_string();
+        if text == old {
+            return Ok(false);
+        }
+        if fs::read_to_string(&file).unwrap_or_default() != old {
+            continue;
+        }
+        crate::trust::write_whole(&file, &text)?;
+        return Ok(true);
+    }
+    Err("Codex kept changing this account's settings file, so the copy was skipped this time.".into())
+}
+
 /// Deletes a folder, retrying for about two seconds while Windows still holds a file in it.
 pub fn remove_dir_patiently(dir: &Path) -> std::io::Result<()> {
     let mut tries = 0;
@@ -529,6 +593,55 @@ pub fn codex_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ACCT-021: the user's settings reach the account's home; the sign-in line, the trust Codex
+    // wrote for a project and Kolux's hook trust stay; a later edit is picked up next time.
+    #[test]
+    fn the_users_codex_settings_are_copied_without_touching_trust() {
+        let dir = crate::test_dir::temp("codex-sync");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        fs::create_dir_all(&user).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        fs::write(user.join("config.toml"), "model = \"o3\"\n[projects.'C:\\work']\ntrust_level = \"untrusted\"\n[tui]\nnotifications = true\n").unwrap();
+        fs::write(home.join("config.toml"), format!("{HOME_CONFIG}[projects.'C:\\work']\ntrust_level = \"trusted\"\n[projects.'D:\\x']\ntrust_level = \"trusted\"\n[hooks.state]\nk = 1\n")).unwrap();
+        assert_eq!(sync_settings(&user, &home), Ok(true));
+        let doc: toml_edit::DocumentMut = fs::read_to_string(home.join("config.toml")).unwrap().parse().unwrap();
+        assert_eq!(doc["model"].as_str(), Some("o3"));
+        assert_eq!(doc["cli_auth_credentials_store"].as_str(), Some("file"));
+        assert_eq!(doc["projects"]["C:\\work"]["trust_level"].as_str(), Some("trusted"), "the home's trust entry wins");
+        assert_eq!(doc["projects"]["D:\\x"]["trust_level"].as_str(), Some("trusted"));
+        assert_eq!(doc["hooks"]["state"]["k"].as_integer(), Some(1));
+        assert_eq!(doc["tui"]["notifications"].as_bool(), Some(true));
+        assert!(!config_drift(&home));
+        assert_eq!(sync_settings(&user, &home), Ok(false), "nothing new: the file is left as it is");
+        fs::write(user.join("config.toml"), "model = \"o4\"\n").unwrap();
+        assert_eq!(sync_settings(&user, &home), Ok(true));
+        let doc: toml_edit::DocumentMut = fs::read_to_string(home.join("config.toml")).unwrap().parse().unwrap();
+        assert_eq!((doc["model"].as_str(), doc["projects"]["D:\\x"]["trust_level"].as_str()), (Some("o4"), Some("trusted")));
+    }
+
+    // ACCT-021: a missing, empty, unreadable or broken settings file is a plain warning and the
+    // home is left alone, so the launch goes on.
+    #[test]
+    fn a_settings_file_that_cannot_be_copied_is_a_warning_and_the_home_is_kept() {
+        let dir = crate::test_dir::temp("codex-sync-bad");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        fs::create_dir_all(&user).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("config.toml"), HOME_CONFIG).unwrap();
+        let warn = |w: &str| sync_settings(&user, &home).unwrap_err().contains(w);
+        assert!(warn("no settings file"));
+        fs::write(user.join("config.toml"), " \n").unwrap();
+        assert!(warn("is empty"));
+        fs::write(user.join("config.toml"), "model = \n").unwrap();
+        assert!(warn("not valid TOML"));
+        fs::remove_file(user.join("config.toml")).unwrap();
+        fs::create_dir_all(user.join("config.toml")).unwrap();
+        assert!(warn("could not be read"));
+        assert_eq!(fs::read_to_string(home.join("config.toml")).unwrap(), HOME_CONFIG);
+        assert_eq!(user_dir(Some(" "), Some(&dir)), Some(dir.join(".codex")));
+        assert_eq!(user_dir(Some("E:\\c"), Some(&dir)), Some(PathBuf::from("E:\\c")));
+    }
 
     fn temp(name: &str) -> crate::test_dir::TempDir {
         crate::test_dir::temp(&format!("codex-acct-{name}"))

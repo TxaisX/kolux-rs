@@ -3,7 +3,7 @@ import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
 import { CodexCardView, codexHeadline, codexTrouble, type CodexView } from "./CodexCard";
 
-const off: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [] };
+const off: CodexView = { accounts: [], active: null, systemDefault: "signed-out", signingIn: null, inBrowser: false, deviceLink: null, deviceCode: null, attention: null, drifted: [], missing: [], settingsWarning: null };
 const kim = { id: "c1", email: "kim@example.com", home: "h1", lastSignIn: 1, signInError: false };
 const html = (view: CodexView) => renderToString(createElement(CodexCardView, { view, onAction: () => {} }));
 
@@ -108,4 +108,11 @@ test("T-138-b: naming a row shows its name field in place", () => {
 
 test("T-138-b: the headline names the active account by its name too", () => {
   expect(codexHeadline({ ...off, accounts: [{ ...kim, label: "Work" }], active: "c1" })).toBe("Connected · Work · kim@example.com");
+});
+
+// ACCT-021: when the user's Codex settings cannot be copied, the section says why.
+test("a settings copy problem is shown in the accounts section", () => {
+  const view: CodexView = { ...off, accounts: [kim], active: "c1" };
+  expect(html(view)).not.toContain("is empty");
+  expect(html({ ...view, settingsWarning: "Codex's settings file is empty, so the accounts run on Codex's defaults." })).toContain("is empty");
 });

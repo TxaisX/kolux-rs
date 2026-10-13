@@ -11,10 +11,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
-import { AttentionNote, fixFor, openInstallPage, type Attention } from "./Attention";
+import { AttentionNote, fixDoes, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
-import { OtherWays, taglineOf } from "./ConnectGrid";
+import { liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
 import Ask, { type Question } from "../chrome/Ask";
 import { CONNECT } from "../glossary";
@@ -34,6 +34,8 @@ export type CodexView = {
   drifted: string[];
   /** ACCT-019: accounts whose sign-in file has been gone longer than the grace period. */
   missing: string[];
+  /** ACCT-021: why the user's Codex settings cannot be copied into the accounts, if they cannot. */
+  settingsWarning: string | null;
 };
 export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "name"; id: string } | { kind: "label"; id: string; label: string } | { kind: "again"; id: string } | { kind: "install" } | { kind: "disconnect" };
 
@@ -167,10 +169,11 @@ export function CodexCardView({ view, error, confirming = null, pending = false,
           {view.accounts.some((a) => view.drifted.includes(a.id)) && (
             <p className="conn-detail warn">Codex's settings file for a marked account was changed, so Codex may keep its sign-in where Kolux cannot see it. Sign in again puts Kolux's settings back.</p>
           )}
+          {view.settingsWarning && <p className="conn-detail warn">{view.settingsWarning}</p>}
         </div>
       )}
       {!busy && view.accounts.length === 0 && view.systemDefault !== "signed-out" && <p className="conn-detail">{CONNECT.codex}</p>}
-      <AttentionNote attention={view.attention} route="codex" busy={pending} onFix={(f) => onAction(f === "Open install page" ? { kind: "install" } : { kind: "connect" })} />
+      <AttentionNote attention={view.attention} route="codex" busy={pending} onFix={(f) => onAction({ kind: fixDoes(f) === "install-page" ? "install" : fixDoes(f) === "check" ? "cancel" : "connect" })} />
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}
@@ -234,11 +237,8 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
       .then((un) => (stop = un))
       .catch(() => {});
     // ACCT-020: a sign-out made in a plain terminal shows as soon as Kolux is back in front.
-    window.addEventListener("focus", read);
-    return () => {
-      stop();
-      window.removeEventListener("focus", read);
-    };
+    const off = liveCheck(read, window, document, 0);
+    return () => (stop(), off());
   }, [read]);
   const [ask, setAsk] = useState<Question | null>(null);
   const act = (a: CodexAction) => {

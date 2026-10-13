@@ -370,6 +370,16 @@ pub fn run() {
                 activity::save(&app.state::<Mutex<Store>>(), true);
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
+                // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's,
+                // each step given two seconds. Settings need no step: every change is already on disk.
+                if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
+                    let steps = [codex_accounts::sign_in_files(&store, &profile), claude_accounts::sign_in_files(&store, &profile)];
+                    drop(store);
+                    for pairs in steps {
+                        let p = profile.clone();
+                        let _ = secrets::within(std::time::Duration::from_secs(2), move || secrets::save_changed(&pairs, &p));
+                    }
+                }
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
                     let _ = std::fs::remove_file(dir.join(cli::FILE));

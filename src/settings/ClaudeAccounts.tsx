@@ -11,7 +11,8 @@ import { useCallback, useEffect, useState } from "react";
 import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AttentionNote, openInstallPage, type Attention } from "./Attention";
+import { AttentionNote, fixDoes, openInstallPage, type Attention } from "./Attention";
+import { liveCheck } from "./ConnectGrid";
 
 export type Account = { id: string; email: string | null; organization: string | null; configDir: string; lastSignIn: number; stale: boolean };
 export type AccountsView = {
@@ -85,7 +86,7 @@ export function ClaudeAccountsView({ view, error, confirming = null, onAction }:
         attention={view.attention}
         route="claude-account"
         busy={busy}
-        onFix={(f) => onAction(f === "Use a 1-year key instead" ? { kind: "key" } : f === "Open install page" ? { kind: "install" } : { kind: "add" })}
+        onFix={(f) => onAction({ kind: ({ key: "key", "install-page": "install", check: "cancel", connect: "add" } as const)[fixDoes(f)] })}
       />
       {error && (
         <p className="conn-detail warn" role="alert">
@@ -136,7 +137,10 @@ export default function ClaudeAccounts() {
     listen("claude-accounts", read)
       .then((un) => (stop = un))
       .catch(() => {});
-    return () => stop();
+    // ACCT-014: re-read when Kolux is back in front or Check again is pressed (no timer: the
+    // per-account check starts a program per account, so it stays on its own schedule).
+    const off = liveCheck(read, window, document, 0);
+    return () => (stop(), off());
   }, [read]);
   const act = (a: AccountAction) => {
     setError(null);

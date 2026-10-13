@@ -446,6 +446,14 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     }
     // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it.
     if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
+        // ACCT-021: the user's own Codex settings first; a failed copy never stops the launch.
+        let user = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from);
+        let own = crate::codex_accounts::user_dir(std::env::var(crate::codex_accounts::HOME_ENV).ok().as_deref(), user.as_deref());
+        if let Some(own) = own.filter(|o| o.as_path() != std::path::Path::new(home)) {
+            if let Err(e) = crate::codex_accounts::sync_settings(&own, std::path::Path::new(home)) {
+                eprintln!("kolux-rs: codex settings: {e}");
+            }
+        }
         crate::hooks::install_codex_home(std::path::Path::new(home));
     }
     let id = terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)?;
