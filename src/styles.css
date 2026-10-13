@@ -775,7 +775,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .kit-strip-row.can:hover, .kit-strip-row.can:focus-visible { background: var(--row-selected); outline: none; }
 .kit-strip-state { color: var(--fg-muted); }
 .kit-strip-row.done .kit-strip-state { color: var(--fg); }
-.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state { color: var(--warn); }
+.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state, .kit-strip-row.limit .kit-strip-state, .kit-strip-row.signin .kit-strip-state { color: var(--warn); }
 .kit-strip-row { flex-wrap: wrap; }
 .kit-strip-files { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: flex-end; flex-basis: 100%; padding-bottom: 4px; }
 .kit-strip-file { display: inline-flex; gap: 4px; align-items: center; }

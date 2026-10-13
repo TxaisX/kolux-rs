@@ -1365,6 +1365,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   };
   // SKILL-011: Restart and Move to start one seat for the role on the chosen AI and make it the
   // role's session; with the settings unreadable nothing starts.
+  /** SKILL-011: why a kit seat's hooks say it is stopped, while it is. */
+  const kitStop = (k: number) => {
+    const cause = hook[k] === "blocked" ? turn[k]?.stop?.cause : undefined;
+    return cause === "limit" || cause === "signin" ? cause : null;
+  };
   const kitRestart = async (i: number, ai: string) => {
     const dir = activeDir;
     const check = kitCheck;
@@ -1678,7 +1683,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               {page === null && activeDir && kitCheck && (
                 <KitStrip
                   check={kitCheck}
-                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k], ai: aiOf(panes.find((p) => p.key === k) ?? { agent: "shell", program: null }) }))}
+                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k], stop: kitStop(k), ai: aiOf(panes.find((p) => p.key === k) ?? { agent: "shell", program: null }) }))}
                   sent={kitRuns.current[activeDir]?.sent ?? {}}
                   now={Date.now()}
                   folded={kitFolded}
@@ -1689,6 +1694,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                   onPreview={kitPreview}
                   onOpenFile={kitOpenFile}
                   onRestart={(i, ai) => void kitRestart(i, ai)}
+                  onSignIn={() => openSettings("accounts")}
                   onFocusSeat={(key) => {
                     setActiveDir(activeDir);
                     setFocused(key);
