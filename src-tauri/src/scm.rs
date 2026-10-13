@@ -224,6 +224,58 @@ pub fn remote(worktree: &Path, action: &str) -> Result<ActionOutcome, String> {
     Ok(ActionOutcome { ok: true, output: output.trim().to_string() })
 }
 
+/// VIEW-066: where a push goes: the remote git pushes this branch to, and the repository its push
+/// address names.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushTarget {
+    pub remote: String,
+    pub repo: Option<String>,
+}
+
+/// VIEW-066: the branch's push remote, else `remote.pushDefault`, else the branch's own remote,
+/// else origin, else the only remote. `None` when the repository has no remote at all.
+pub fn push_target(worktree: &Path) -> Result<Option<PushTarget>, String> {
+    let remotes: Vec<String> = run(&["remote"], Some(worktree))?.lines().map(String::from).collect();
+    let branch = run(&["symbolic-ref", "--short", "-q", "HEAD"], Some(worktree)).ok().filter(|b| !b.is_empty());
+    let mut keys = Vec::new();
+    if let Some(b) = &branch {
+        keys.push(format!("branch.{b}.pushRemote"));
+    }
+    keys.push("remote.pushDefault".to_string());
+    if let Some(b) = &branch {
+        keys.push(format!("branch.{b}.remote"));
+    }
+    let configured = keys.iter().find_map(|k| run(&["config", "--get", k], Some(worktree)).ok().filter(|r| remotes.contains(r)));
+    let fallback = || remotes.iter().find(|r| *r == "origin").cloned().or_else(|| (remotes.len() == 1).then(|| remotes[0].clone()));
+    let Some(remote) = configured.or_else(fallback) else { return Ok(None) };
+    let url = run(&["remote", "get-url", "--push", &remote], Some(worktree)).unwrap_or_default();
+    Ok(Some(PushTarget { repo: repo_name(&url), remote }))
+}
+
+/// The `owner/name` (the last two parts of the path) a remote address names, whatever form it
+/// takes: `scheme://[user[:password]@]host[:port]/path` or `[user@]host:path`. A local path, a
+/// `file://` address or a path of one part names none. A password in the address never comes out.
+pub fn repo_name(url: &str) -> Option<String> {
+    let url = url.trim();
+    let path = match url.split_once("://") {
+        Some(("file", _)) => return None,
+        Some((_, rest)) => rest.split_once('/')?.1,
+        None => {
+            let (host, path) = url.split_once(':')?;
+            // A one-letter "host" is a Windows drive; a slash before the colon is a local path.
+            if host.len() <= 1 || host.contains('/') || host.contains('\\') {
+                return None;
+            }
+            path
+        }
+    };
+    let path = path.trim_end_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+    (parts.len() >= 2).then(|| parts[parts.len() - 2..].join("/"))
+}
+
 /// Parses porcelain v2 with NUL separators, so names with spaces, quotes or non-ASCII letters
 /// come through as they are. A file changed in both the index and the tree is in both lists.
 pub fn parse_status(text: &str) -> Status {
@@ -352,6 +404,11 @@ pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool) -> Result<(), S
 #[tauri::command]
 pub fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
     commit(Path::new(&worktree), &message)
+}
+
+#[tauri::command]
+pub fn scm_push_target(worktree: String) -> Result<Option<PushTarget>, String> {
+    push_target(Path::new(&worktree))
 }
 
 #[tauri::command]
@@ -616,5 +673,29 @@ mod tests {
         for p in ["src/main.rs", "README.md", "src/contest.ts", "testing.md", "latest/x.rs"] {
             assert_eq!(kind(p), Kind::Source, "{p}");
         }
+    }
+
+    #[test]
+    fn view066_the_push_target_names_the_repository_whatever_form_its_address_takes() {
+        for (url, want) in [
+            ("https://github.com/txaisx/kolux.git", Some("txaisx/kolux")),
+            ("https://user:secret@github.com/txaisx/kolux/", Some("txaisx/kolux")),
+            ("git@github.com:txaisx/kolux.git", Some("txaisx/kolux")),
+            ("ssh://git@github.com:22/txaisx/kolux.git", Some("txaisx/kolux")),
+            ("git://example.com/group/sub/kolux", Some("sub/kolux")),
+            ("C:/repos/kolux.git", None),
+            ("/srv/git/kolux.git", None),
+            ("https://example.com/kolux.git", None),
+        ] {
+            assert_eq!(repo_name(url).as_deref(), want, "{url}");
+        }
+        let dir = temp_repo("push-target");
+        assert_eq!(push_target(&dir).unwrap(), None, "no remote, no target");
+        run(&["remote", "add", "origin", "https://github.com/kolux/kolux.git"], Some(&dir)).unwrap();
+        assert_eq!(push_target(&dir).unwrap(), Some(PushTarget { remote: "origin".into(), repo: Some("kolux/kolux".into()) }));
+        run(&["remote", "add", "fork", "git@github.com:txaisx/kolux.git"], Some(&dir)).unwrap();
+        run(&["config", "branch.main.pushRemote", "fork"], Some(&dir)).unwrap();
+        assert_eq!(push_target(&dir).unwrap(), Some(PushTarget { remote: "fork".into(), repo: Some("txaisx/kolux".into()) }));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

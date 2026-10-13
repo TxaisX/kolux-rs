@@ -1,0 +1,21 @@
+T-168 live proof (VIEW-066), lane release dev app, 2026-10-13, dark mode, 1920 on the second screen.
+
+Setup (throwaway, G:/Temp/release-T-168, deleted afterwards): proj with origin = a local bare repo,
+a second clone pushed "teammate" so the remote is ahead, proj committed "mine" (1 ahead, remote
+has a commit proj lacks). Remote "fork" = git@github.com:txaisx/kolux-demo.git (never pushed to).
+
+1. Push target names the fork (branch.main.pushRemote = fork), Remote menu read through CDP:
+   ["Remote · origin/main","Pushes to txaisx/kolux-demo (fork)","Push 1 commit",...]
+   Screenshot: evidence/T-168-push-target.png
+2. pushRemote unset (push goes to the local origin), main button "Push 1" pressed:
+   title "Push 1 failed"; prompt "The remote has commits this branch does not have yet. Pull them
+   in first, then push again."; buttons ["Pull first, then push","Fix with AI","Dismiss"];
+   git output " ! [rejected]        main -> main (fetch first)".
+   9 s later (two 4 s status refreshes) the prompt is still there: true.
+   Screenshot: evidence/T-168-pull-first.png
+3. "Pull first, then push" pressed: failure gone, note "Pull, then push: done"; the bare remote:
+   97769f2 Merge branch 'main' of G:/Temp/release-T-168/bare / 0ae5be6 mine / 805af9c teammate / f2f3e55 first
+4. Second rejection forced, then Dismiss: before true, after false (the error stays until dismissed).
+
+Profile restored: every file "same". Not built (follow-ups T-168-b, T-168-c): the Agents tab of
+past sessions, preferences across windows, and the hide-AI-actions setting.

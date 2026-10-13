@@ -17,7 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select } from "./model";
+import { behindRejection, pushTargetLabel, type PushTarget, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -44,7 +44,8 @@ type Props = {
 
 type Asking = { agent: string; prompt: string; remember: boolean };
 
-type Failure = { title: string; output: string };
+/** VIEW-066: `pullFirst` when git refused a push because the remote has commits this branch lacks. */
+type Failure = { title: string; output: string; pullFirst?: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
 export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction }: Props) {
@@ -81,6 +82,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<{ left: number; top: number } | null>(null);
+  const [target, setTarget] = useState<PushTarget | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const remoteButton = useRef<HTMLButtonElement>(null);
@@ -102,6 +104,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     setFailure(null);
     setInfo(null);
     setMenu(null);
+    setTarget(null);
     setSelected([]);
     setAnchor(null);
     void load();
@@ -160,7 +163,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
         setFailure(null);
         setInfo(`${label}: done`);
       } else {
-        setFailure({ title: `${label} failed`, output: out.output });
+        setFailure({ title: `${label} failed`, output: out.output, pullFirst: action === "push" && behindRejection(out.output) });
       }
     });
 
@@ -182,6 +185,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const openMenu = () => {
     const r = remoteButton.current?.getBoundingClientRect();
     if (r) setMenu({ left: Math.max(8, r.right - 250), top: r.bottom + 4 });
+    if (dir !== null) void invoke<PushTarget | null>("scm_push_target", { worktree: dir }).then(setTarget, () => setTarget(null));
   };
 
   const pick = (path: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
@@ -291,6 +295,11 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                 <div className="menu-backdrop" onClick={() => setMenu(null)} aria-hidden="true" />
                 <div className="menu" role="menu" aria-label="Remote actions" style={{ left: menu.left, top: menu.top }}>
                   <div className="menu-title">{status?.upstream ? `Remote · ${status.upstream}` : "Remote"}</div>
+                  {target && (
+                    <div className="menu-title" data-push-target>
+                      Pushes to {pushTargetLabel(target)}
+                    </div>
+                  )}
                   {remoteItems(status).map((item) => (
                     <button
                       key={item.id}
@@ -322,9 +331,24 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                   <summary>{failure.title}</summary>
                   <pre>{failure.output || "git gave no reason"}</pre>
                 </details>
-                <button className="btn" onClick={() => onFix(failure.output)}>
-                  Fix with AI
-                </button>
+                {failure.pullFirst && (
+                  <div data-recovery="pull-first">
+                    The remote has commits this branch does not have yet. Pull them in first, then push again.
+                  </div>
+                )}
+                <div className="btn-row">
+                  {failure.pullFirst && (
+                    <button className="btn primary" disabled={busy} onClick={() => void remote("sync", "Pull, then push")}>
+                      Pull first, then push
+                    </button>
+                  )}
+                  <button className="btn" onClick={() => onFix(failure.output)}>
+                    Fix with AI
+                  </button>
+                  <button className="btn" title="Hide this error" onClick={() => setFailure(null)}>
+                    Dismiss
+                  </button>
+                </div>
               </div>
             )}
             {error && <div className="note error">{error}</div>}

@@ -171,3 +171,17 @@ export const SCM_AGENT_KEY = "scmAgent";
 /** VIEW-069: the agent saved for Source Control's agent actions, while it is still installed. */
 export const savedFixAgent = <A extends { id: string; installed: boolean }>(agents: A[], saved: unknown): A | null =>
   typeof saved === "string" ? (agents.find((a) => a.id === saved && a.installed) ?? null) : null;
+
+/** VIEW-066: where a push goes: the remote, and the owner/name its push address names. */
+export type PushTarget = { remote: string; repo: string | null };
+
+/** VIEW-066: the push target as the remote menu names it, so a push to a fork shows the fork. */
+export function pushTargetLabel(t: PushTarget | null): string | null {
+  return t ? (t.repo ? `${t.repo} (${t.remote})` : t.remote) : null;
+}
+
+/** VIEW-066: git refused the push because the remote has commits this branch does not have yet,
+ * so pulling first is the way out. A refused lease (`stale info`) is not this case. */
+export function behindRejection(output: string): boolean {
+  return /\[rejected\].*\((fetch first|non-fast-forward)\)/.test(output);
+}

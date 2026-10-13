@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select } from "./model";
+import { behindRejection, pushTargetLabel, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select } from "./model";
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 
@@ -139,4 +139,17 @@ test("GIT-002: the bulk bar counts the selected rows each action covers, in disp
   expect(b.stage).toEqual(["x1", "c1", "u1"]);
   expect(b.unstage).toEqual(["s1"]);
   expect(bulk(s, []).present).toEqual([]);
+});
+
+// VIEW-066: a push refused because the remote has commits this branch lacks offers to pull first,
+// and the push target names the repository the push goes to (a fork shows as the fork).
+test("view066 a behind rejection offers a pull first and the push target names the fork", () => {
+  const behind = ["To github.com:txaisx/kolux.git", " ! [rejected]        main -> main (fetch first)", "error: failed to push some refs"].join(String.fromCharCode(10));
+  expect(behindRejection(behind)).toBe(true);
+  expect(behindRejection(" ! [rejected]        main -> main (non-fast-forward)")).toBe(true);
+  expect(behindRejection(" ! [rejected]        main -> main (stale info)")).toBe(false);
+  expect(behindRejection("fatal: Authentication failed")).toBe(false);
+  expect(pushTargetLabel({ remote: "fork", repo: "txaisx/kolux" })).toBe("txaisx/kolux (fork)");
+  expect(pushTargetLabel({ remote: "backup", repo: null })).toBe("backup");
+  expect(pushTargetLabel(null)).toBe(null);
 });
