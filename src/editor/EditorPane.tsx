@@ -5,6 +5,8 @@
 // three times, then the body says why and offers Retry; a failed save is a toast and the
 // marker stays. A markdown file opens in a rich view (EDIT-012, markdown.ts) with a Rich |
 // Source switch; the source view is the CodeMirror one, which keeps holding the text throughout.
+// EDIT-007: Copy Context copies the selection under its path and line range, with a hint beside a
+// selection it applies to; EDIT-020: review notes take a selection from any file, not just Markdown.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
@@ -17,9 +19,14 @@ import { Close, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, loadText, relay, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections } from "./notes";
+import { contextText } from "./copyContext";
+import { shortPath } from "./diffNotes";
+import { useLabel } from "../keys/KeymapContext";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
+/** EDIT-007: Copy Context for each open editor pane; false when this tab cannot copy that way. */
+export const copiers = new Map<number, () => boolean>();
 
 const lang = new Compartment();
 export const look = EditorView.theme(
@@ -37,9 +44,9 @@ export const look = EditorView.theme(
 );
 
 /** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
-type Props = { id: number; path: string; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
+type Props = { id: number; path: string; root?: string | null; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
 
-export default function EditorPane({ id, path, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
+export default function EditorPane({ id, path, root = null, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +65,17 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
   const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
   const [richError, setRichError] = useState<string | null>(null);
   const [richTries, setRichTries] = useState(0);
+  // EDIT-007: the hint beside a selection Copy Context applies to, gone once that selection is copied.
+  const copyKey = useLabel("editor.copyContext").join("+");
+  const [hint, setHint] = useState<{ x: number; y: number; sel: string } | null>(null);
+  const [copiedSel, setCopiedSel] = useState<string | null>(null);
+  const [flash, setFlash] = useState<{ x: number; y: number } | null>(null);
+  const place = useRef((_v: EditorView) => {});
+  place.current = (v) => {
+    const { from, to } = v.state.selection.main;
+    const c = from !== to && v.hasFocus ? v.coordsAtPos(to) : null;
+    setHint(c && contextText(v.state.doc, from, to, "").header ? { x: c.right, y: c.bottom, sel: `${from}-${to}` } : null);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -75,7 +93,7 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
           doc: text,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr)))],
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr))), EditorView.updateListener.of((u) => (u.selectionSet || u.docChanged || u.focusChanged || u.geometryChanged) && place.current(u.view)), EditorView.domEventHandlers({ scroll: (_e, v) => void place.current(v) })],
         });
         view.current = made;
         attach(path, made, text);
@@ -165,9 +183,8 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
 
   const name = baseName(path);
   const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
-  // GIT-042: the add-note shortcut reads this tab's selection (Markdown files only).
+  // GIT-042, EDIT-020: the add-note shortcut reads this tab's selection, in any file.
   useEffect(() => {
-    if (!md) return;
     selections.set(id, () => {
       const cm = view.current;
       if (!cm) return null;
@@ -179,6 +196,24 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
     });
     return () => void selections.delete(id);
   }, [md, id, path, shown]);
+  useEffect(() => {
+    copiers.set(id, () => {
+      const cm = view.current;
+      if (!cm || shown !== "source") return false;
+      const { from, to } = cm.state.selection.main;
+      const c = cm.coordsAtPos(to);
+      navigator.clipboard.writeText(contextText(cm.state.doc, from, to, shortPath(path, root)).text).then(
+        () => {
+          setCopiedSel(`${from}-${to}`);
+          setFlash(c ? { x: c.right, y: c.bottom } : null);
+          setTimeout(() => setFlash(null), 1500);
+        },
+        (err) => report.current.onToast?.(`Nothing was copied: ${String(err)}`),
+      );
+      return true;
+    });
+    return () => void copiers.delete(id);
+  }, [id, path, root, shown]);
   return (
     <section className={`pane editor${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} data-kind="editor" data-key={id}>
       <header className="pane-head">
@@ -246,6 +281,16 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
         </div>
       )}
       <div ref={host} className="pane-body" hidden={shown !== "source"} />
+      {!hidden && shown === "source" && hint && copyKey && copiedSel !== hint.sel && !flash && (
+        <div className="copy-hint" style={{ left: hint.x + 8, top: hint.y + 2 }}>
+          {copyKey} copies with path and lines
+        </div>
+      )}
+      {!hidden && flash && (
+        <div className="copy-hint done" role="status" style={{ left: flash.x + 8, top: flash.y + 2 }}>
+          Copied with path and lines
+        </div>
+      )}
       {md && <div ref={richHost} className="pane-body md-rich" contentEditable suppressContentEditableWarning spellCheck hidden={shown !== "rich"} aria-label={`${name}, rich view`} />}
     </section>
   );

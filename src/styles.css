@@ -267,6 +267,12 @@ input { font: inherit; }
 .review-quote { margin: 0; padding: 2px 8px; border-left: 3px solid var(--line-focus); color: var(--fg-row); max-height: 80px; overflow: auto; white-space: pre-wrap; }
 .review-tray { position: fixed; z-index: 44; right: 16px; bottom: 36px; width: 340px; max-height: 50vh; overflow: auto; padding: 8px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 12.5px; }
 .review-head { display: flex; align-items: center; gap: 8px; }
+.review-send { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; }
+.review-send-item { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border: none; border-radius: 6px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.review-send-item:hover, .review-send-item:focus-visible { background: var(--row-selected); }
+.review-send-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-hint { position: fixed; z-index: 40; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--pane-bg); color: var(--fg-faint); font-size: 11px; pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+.copy-hint.done { color: var(--fg); border-color: var(--line-focus); }
 .review-count { flex: 1; text-align: left; font-weight: 600; color: var(--fg); }
 .review-md { margin: 8px 0 4px; padding: 8px; max-height: 200px; overflow: auto; background: var(--input-bg); border-radius: 6px; font-size: 11.5px; white-space: pre-wrap; user-select: text; }
 .review-row { display: flex; align-items: center; gap: 6px; min-width: 0; }

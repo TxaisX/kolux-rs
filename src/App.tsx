@@ -44,7 +44,8 @@ import LineNotes from "./scm/LineNotes";
 import ChecksPanel from "./scm/ChecksPanel";
 import PreviewPane from "./editor/PreviewPane";
 import ReviewNotes from "./editor/ReviewNotes";
-import { reviewOn, selections, type Note, type Picked } from "./editor/notes";
+import { copiers } from "./editor/EditorPane";
+import { notesMarkdown, reviewOn, selections, sendTargets, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
@@ -255,6 +256,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // GIT-042: review notes on Markdown, kept until copied or cleared.
   const [notes, setNotes] = useState<Note[]>([]);
   const [picked, setPicked] = useState<Picked | null>(null);
+  const [sendMenu, setSendMenu] = useState(false);
   const toastTimer = useRef<number | null>(null);
   const setToast = (text: string) => {
     setToastText(text);
@@ -584,7 +586,16 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "tab.newBrowser":
           void newTab("browser");
           break;
+        case "editor.copyContext":
+          if (!copiers.get(focused)?.()) return;
+          break;
+        case "sourceControl.sendReviewNotes":
+          if (!reviewOn(settings) || notes.length === 0) return;
+          setSendMenu(true);
+          break;
         case "editor.addReviewNote": {
+          // EDIT-020: holding the keys adds one note.
+          if (e.repeat) break;
           // With nothing selected, or the review tools off, the shortcut does nothing.
           const got = reviewOn(settings) ? selections.get(focused)?.() : null;
           if (!got) return;
@@ -1546,20 +1557,38 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   };
   // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
   // pasted message; a note edited while the send was in flight is not marked sent.
+  const pasteInto = async (id: number, text: string) => {
+    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" });
+    await new Promise((r) => setTimeout(r, 300));
+    await invoke("terminal_write", { id, data: "\r" });
+  };
   const sendNotes = async (dir: string): Promise<string | null> => {
     const notes = notesFor(dir);
     if (notes.length === 0) return "There are no notes to send.";
     const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
     if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
-    const id = ptys.current[agent.key];
     try {
-      await invoke("terminal_write", { id, data: "\x1b[200~" + noteBlocks(notes, dir) + "\x1b[201~" });
-      await new Promise((r) => setTimeout(r, 300));
-      await invoke("terminal_write", { id, data: "\r" });
+      await pasteInto(ptys.current[agent.key], noteBlocks(notes, dir));
     } catch (err) {
       return `The notes were not sent: ${String(err)}`;
     }
     saveNotes(dir, markSent(notesFor(dir), notes));
+    return null;
+  };
+  // EDIT-020: the agents in this worktree the Markdown and file notes can go to.
+  const inWorktree = (p: Pane) => activeDir !== null && sameDir(p.cwd, activeDir) && ptys.current[p.key] !== undefined;
+  const reviewTargets = sendMenu ? sendTargets(panes, inWorktree, stamp, Date.now(), (p) => tabName(p, titles)) : [];
+  // The chosen agent is checked again at the click; a failed delivery keeps the notes.
+  const sendReview = async (key: number): Promise<string | null> => {
+    const p = panesRef.current.find((x) => x.key === key);
+    if (!p || !inWorktree(p)) return "That agent is no longer running, so nothing was sent. The notes are kept.";
+    try {
+      await pasteInto(ptys.current[key], notesMarkdown(notes));
+    } catch (err) {
+      return `The notes were not sent, so they are kept: ${String(err)}`;
+    }
+    setNotes([]);
+    setToast(`The review notes were sent to ${tabName(p, titles)}.`);
     return null;
   };
   const reviewPane = reviewing && panes.find((p) => p.key === reviewing.key);
@@ -1965,6 +1994,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     key={p.key}
                     id={p.key}
                     path={p.path}
+                    root={p.cwd}
                     readOnly={p.kitPreview}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
@@ -2203,6 +2233,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           onCancel={() => setPicked(null)}
           onRemove={(i) => setNotes((ns) => ns.filter((_, k) => k !== i))}
           onClear={() => setNotes([])}
+          targets={reviewTargets}
+          menu={sendMenu}
+          onMenu={setSendMenu}
+          onSend={sendReview}
         />
       )}
       {readStatusBar(settings).visible && (
