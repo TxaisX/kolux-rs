@@ -135,8 +135,8 @@ test("SET-023: a custom scheme can be picked for either mode; a removed one fall
 });
 
 // TERM-097 / TERM-078 (T-144-b)
-test("terminal font defaults to size 14, line height 1, normal and bold, and keeps saved values in range", () => {
-  expect(readAppearance({})).toMatchObject({ termFont: "", termSize: 14, termLineHeight: 1, termWeight: "normal", termWeightBold: "bold" });
+test("terminal font defaults to size 13 (T-144-e: day one looks like today's 13 pt terminal), line height 1, normal and bold, and keeps saved values in range", () => {
+  expect(readAppearance({})).toMatchObject({ termFont: "", termSize: 13, termLineHeight: 1, termWeight: "normal", termWeightBold: "bold" });
   const a = readAppearance({ terminalFont: " Fira Code ", terminalFontSize: 99, terminalLineHeight: 1.25, terminalFontWeight: 300, terminalFontWeightBold: "heavy" });
   expect(a).toMatchObject({ termFont: "Fira Code", termSize: 32, termLineHeight: 1.3, termWeight: "300", termWeightBold: "bold" });
   expect(writeAppearance({}, a)).toMatchObject({ terminalFont: "Fira Code", terminalFontSize: 32, terminalFontWeight: "300" });
@@ -149,13 +149,13 @@ test("the editor font follows the terminal font unless it has its own", () => {
 });
 
 test("zooming in twice then reset returns to the configured size, and only the zoomed pane changes", () => {
-  expect(termFont(7).fontSize).toBe(14);
+  expect(termFont(7).fontSize).toBe(13);
+  expect(zoomTerm(7, "in")).toBe(14);
   expect(zoomTerm(7, "in")).toBe(15);
-  expect(zoomTerm(7, "in")).toBe(16);
-  expect(termFont(7)).toMatchObject({ fontSize: 16, lineHeight: 1, fontWeight: "normal", fontWeightBold: "bold" });
-  expect(termFont(8).fontSize, "another pane").toBe(14);
-  expect(zoomTerm(7, "reset")).toBe(14);
-  expect(termFont(7).fontSize).toBe(14);
+  expect(termFont(7)).toMatchObject({ fontSize: 15, lineHeight: 1, fontWeight: "normal", fontWeightBold: "bold" });
+  expect(termFont(8).fontSize, "another pane").toBe(13);
+  expect(zoomTerm(7, "reset")).toBe(13);
+  expect(termFont(7).fontSize).toBe(13);
   for (let i = 0; i < 20; i++) zoomTerm(8, "out");
   expect(termFont(8).fontSize, "floor").toBe(6);
   zoomTerm(8, "reset");

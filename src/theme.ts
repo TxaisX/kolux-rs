@@ -112,7 +112,7 @@ export type FontWeight = (typeof WEIGHTS)[number];
 const weightOr = (v: unknown, dflt: FontWeight): FontWeight => (typeof v === "string" && (WEIGHTS as readonly string[]).includes(v) ? (v as FontWeight) : typeof v === "number" && (WEIGHTS as readonly string[]).includes(String(v)) ? (String(v) as FontWeight) : dflt);
 /** The settings fields the appearance lives in. */
 export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont", dividerWidth: "paneDividerWidth", dividerDark: "paneDividerDark", dividerLight: "paneDividerLight", paneDim: "paneDim", termFont: "terminalFont", termSize: "terminalFontSize", termLineHeight: "terminalLineHeight", termWeight: "terminalFontWeight", termWeightBold: "terminalFontWeightBold", screens: "screenThemes" } as const;
-export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0], dividerWidth: [2, 12, 6], paneDim: [30, 100, 100], termSize: [8, 32, 14], termLineHeight: [1, 2, 1] } as const;
+export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0], dividerWidth: [2, 12, 6], paneDim: [30, 100, 100], termSize: [8, 32, 13], termLineHeight: [1, 2, 1] } as const;
 /** A divider colour is #rrggbb or empty (the window shows through, as DESIGN.md measured). */
 const hexOrEmpty = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim().toLowerCase() : "");
 
