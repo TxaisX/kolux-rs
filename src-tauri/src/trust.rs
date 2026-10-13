@@ -49,12 +49,53 @@ fn checked_keys(paths: &[PathBuf], key: fn(&Path) -> Result<String, String>) -> 
 }
 
 /// Whole file at once, then a rename: a crash mid-write can never leave an agent half a file.
+/// The target's bytes are read first and read again just before the rename; when the program
+/// that owns the file (Claude Code rewrites .claude.json often) changed it in between, nothing is
+/// replaced and the error says so. The bytes being replaced are kept once as `<name>.bak-kolux`.
 pub(crate) fn write_whole(file: &Path, text: &str) -> Result<(), String> {
+    write_whole_with(file, text, || {})
+}
+
+/// `write_whole` with `between` run after the temporary file is on disk, before the re-read, so a
+/// test can change the target at the worst moment.
+fn write_whole_with(file: &Path, text: &str, between: impl FnOnce()) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
+    let read = |f: &Path| match std::fs::read(f) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", f.display())),
+    };
+    let first = read(file)?;
     let tmp = file.with_extension("kolux-tmp");
-    std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let written = (|| {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", tmp.display()));
+    }
+    between();
+    let again = read(file).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })?;
+    if again != first {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{} was changed by another program while Kolux was saving it, so Kolux left it as it is; try again", file.display()));
+    }
+    if let Some(bytes) = &first {
+        let mut name = file.file_name().unwrap_or_default().to_os_string();
+        name.push(".bak-kolux");
+        let backup = file.with_file_name(name);
+        if let Err(e) = std::fs::write(&backup, bytes) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("could not keep a backup at {}: {e}", backup.display()));
+        }
+    }
     std::fs::rename(&tmp, file).map_err(|e| format!("{}: {e}", file.display()))
 }
 
@@ -173,6 +214,32 @@ pub fn trust_folders_cmd(store: tauri::State<'_, std::sync::Mutex<crate::state::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_whole_leaves_the_file_alone_when_another_program_changed_it_meanwhile() {
+        let d = temp("race");
+        let file = d.join(".claude.json");
+        std::fs::write(&file, r#"{"before":1}"#).unwrap();
+        let err = write_whole_with(&file, r#"{"kolux":1}"#, || std::fs::write(&file, r#"{"claude":2}"#).unwrap()).unwrap_err();
+        assert!(err.contains("changed by another program"), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"{"claude":2}"#, "the other program's write is kept");
+        assert!(!file.with_extension("kolux-tmp").exists(), "no temporary file is left behind");
+        assert!(!d.join(".claude.json.bak-kolux").exists(), "nothing was replaced, so no backup");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn write_whole_keeps_one_backup_of_the_bytes_it_replaced() {
+        let d = temp("backup");
+        let file = d.join(".claude.json");
+        write_whole(&file, "first").unwrap();
+        assert!(!d.join(".claude.json.bak-kolux").exists(), "a new file has nothing to back up");
+        write_whole(&file, "second").unwrap();
+        write_whole(&file, "third").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "third");
+        assert_eq!(std::fs::read_to_string(d.join(".claude.json.bak-kolux")).unwrap(), "second", "one generation: the bytes just replaced");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn temp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kolux-rs-trust-{tag}-{}", std::process::id()));
