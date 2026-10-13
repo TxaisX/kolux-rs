@@ -18,6 +18,10 @@ export type Status = {
   changed: Change[];
   untracked: Change[];
   conflicts: Change[];
+  /** GIT-015: the merge, rebase, cherry-pick or revert stopped part-way. */
+  operation: string | null;
+  /** GIT-015: conflicted files with their clash markers gone, waiting to be staged. */
+  resolved: string[];
 };
 
 /** GIT-065: whether a workspace's commits are on its remote (`scm_pushed`). */
@@ -32,7 +36,7 @@ export function pushBadge(p: Pushed | undefined): { text: string; tone: "good" |
   return p.count > 0 ? { text: `unpublished \u00b7 ${p.count}`, tone: "warn" } : null;
 }
 
-export const emptyStatus: Status = { branch: null, upstream: null, ahead: 0, behind: 0, rewritten: false, base: null, head: null, staged: [], changed: [], untracked: [], conflicts: [] };
+export const emptyStatus: Status = { branch: null, upstream: null, ahead: 0, behind: 0, rewritten: false, base: null, head: null, staged: [], changed: [], untracked: [], conflicts: [], operation: null, resolved: [] };
 
 /** What a commit attempt came to (GIT-004): `id` when it worked, else git's words and whether a hook refused. */
 export type CommitOutcome = { id: string | null; blocked: boolean; output: string };
@@ -206,7 +210,19 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
 export type Lines = { added: number; removed: number };
 
 /** VIEW-068: the branch against `against` (the pinned base, the upstream or the default branch). */
-export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines };
+export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines; files: number; committed: Change[] };
+
+/** GIT-011: the branch row's file count. */
+export const filesWord = (n: number): string => `${n} ${n === 1 ? "file" : "files"} changed`;
+
+const CLASHES: Record<string, string> = { UU: "changed on both sides", AA: "added on both sides", DD: "deleted on both sides", DU: "deleted on one side", UD: "deleted on one side", AU: "added on one side", UA: "added on one side" };
+/** GIT-015: the kind of clash, from git's two-letter conflict code. */
+export const clashWord = (code: string): string => CLASHES[code] ?? "in conflict";
+/** GIT-015: the abort button names the operation it ends; none without one. */
+export const abortLabel = (op: string | null | undefined): string | null => (op ? `Abort ${op}` : null);
+/** GIT-015: the most conflict cards drawn; the rest are counted. */
+export const CONFLICT_CAP = 100;
+export const capped = <T>(rows: T[], cap: number): { shown: T[]; more: number } => ({ shown: rows.slice(0, cap), more: Math.max(0, rows.length - cap) });
 
 /** GIT-066: the settings key of the order the Source Control groups are listed in. */
 export const SCM_GROUP_ORDER_KEY = "scmGroupOrder";

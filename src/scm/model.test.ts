@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { graph, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -178,7 +178,7 @@ test("the remote menu carries counts and gives every disabled item its reason", 
   expect(by(null).push.reason).toBe("Loading");
 });
 
-const sum = (over: Partial<Summary> = {}): Summary => ({ against: "main", ahead: 1, behind: 0, source: { added: 10, removed: 0 }, tests: { added: 0, removed: 0 }, generated: { added: 0, removed: 0 }, ...over });
+const sum = (over: Partial<Summary> = {}): Summary => ({ against: "main", ahead: 1, behind: 0, source: { added: 10, removed: 0 }, tests: { added: 0, removed: 0 }, generated: { added: 0, removed: 0 }, files: 1, committed: [], ...over });
 
 test("VIEW-068: the branch summary totals its rows, in full with grouped digits", () => {
   expect(summaryTotal(sum())).toEqual({ added: 10, removed: 0 });
@@ -229,4 +229,26 @@ test("VIEW-069: the resolve-conflicts prompt names the files, and a saved agent 
   expect(savedFixAgent([claude, codex], "codex")).toBe(null);
   expect(savedFixAgent([claude, codex], undefined)).toBe(null);
   expect(savedFixAgent([claude, codex], 7)).toBe(null);
+});
+
+test("GIT-015: conflict cards name the clash and the abort matches the operation", () => {
+  expect(clashWord("UU")).toBe("changed on both sides");
+  expect(clashWord("AA")).toBe("added on both sides");
+  expect(clashWord("DU")).toBe("deleted on one side");
+  expect(clashWord("UD")).toBe("deleted on one side");
+  expect(clashWord("AU")).toBe("added on one side");
+  expect(clashWord("DD")).toBe("deleted on both sides");
+  expect(abortLabel("merge")).toBe("Abort merge");
+  expect(abortLabel("rebase")).toBe("Abort rebase");
+  expect(abortLabel("cherry-pick")).toBe("Abort cherry-pick");
+  expect(abortLabel(null)).toBeNull();
+  const many = Array.from({ length: 130 }, (_, i) => ({ path: `f${i}`, status: "UU", from: null }));
+  expect(capped(many, CONFLICT_CAP).shown).toHaveLength(100);
+  expect(capped(many, CONFLICT_CAP).more).toBe(30);
+  expect(capped(many.slice(0, 3), CONFLICT_CAP)).toEqual({ shown: many.slice(0, 3), more: 0 });
+});
+
+test("GIT-011: the branch row reads the files changed against its base", () => {
+  expect(filesWord(1)).toBe("1 file changed");
+  expect(filesWord(5)).toBe("5 files changed");
 });

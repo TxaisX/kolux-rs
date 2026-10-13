@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -28,6 +28,8 @@ type Props = {
   onFix: (output: string) => void;
   /** VIEW-068: the base pinned for the workspace's project, which the summary measures against. */
   pinnedBase: string | null;
+  /** GIT-011: Change Base Ref pins a new base for the workspace's project (blank goes back to the default). */
+  onChangeBase?: (base: string) => void;
   /** VIEW-068: the off-by-default setting to measure the summary against the upstream instead. */
   againstUpstream: boolean;
   /** GIT-066: the saved group order (`SCM_GROUP_ORDER_KEY`). */
@@ -70,7 +72,7 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
+export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
@@ -138,6 +140,8 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   // VIEW-068: the branch summary is measured while the panel is open, when HEAD moves and at
   // least every 30 s; the last one stays on screen while the next is worked out.
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [measureTick, setMeasureTick] = useState(0);
+  const [baseDraft, setBaseDraft] = useState<string | null>(null);
   useEffect(() => setSummary(null), [dir]);
   const head = status?.head ?? null;
   useEffect(() => {
@@ -149,7 +153,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     measure();
     const timer = window.setInterval(measure, 30000);
     return () => window.clearInterval(timer);
-  }, [dir, head, pinnedBase, againstUpstream]);
+  }, [dir, head, pinnedBase, againstUpstream, measureTick]);
 
   /** Runs one back-end call with the busy flag held, then reloads. */
   const guarded = async (work: () => Promise<void>) => {
@@ -165,6 +169,43 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
       setBusy(false);
       await load();
     }
+  };
+  const abortOp = (op: string) =>
+    guarded(async () => {
+      await invoke("scm_abort", { worktree: dir });
+      setInfo(`${abortLabel(op)}: the workspace is back where it was`);
+    });
+  // GIT-015: a card per conflicted file with its kind of clash, and the abort that matches the
+  // operation in progress; a long list draws the first CONFLICT_CAP.
+  const conflictCards = () => {
+    if (!status || (status.conflicts.length === 0 && !status.operation)) return null;
+    const { shown, more } = capped(status.conflicts, CONFLICT_CAP);
+    return (
+      <div className="scm-sec-wrap" data-section="Conflicts">
+        <div className="scm-sec">
+          <span>{status.conflicts.length > 0 ? "Conflicts" : `${status.operation} in progress`}</span>
+          {status.conflicts.length > 0 && <span className="count">{status.conflicts.length}</span>}
+          {status.operation && (
+            <button className="btn" data-abort={status.operation} disabled={busy} onClick={() => void abortOp(status.operation ?? "")}>
+              {abortLabel(status.operation)}
+            </button>
+          )}
+        </div>
+        {shown.map((r) => (
+          <div key={r.path} className="scm-row scm-clash" data-clash={r.status} title={r.path}>
+            <span className="path">{r.path}</span>
+            <span className="clash">
+              {clashWord(r.status)}
+              {status.resolved.includes(r.path) ? " · resolved here, stage it" : ""}
+            </span>
+            <button className="ib" title="Stage as resolved" disabled={busy} onClick={() => void stage([r.path], true)}>
+              <Plus />
+            </button>
+          </div>
+        ))}
+        {more > 0 && <div className="sb-hint">and {more} more</div>}
+      </div>
+    );
   };
   const stage = (paths: string[], on: boolean) => paths.length > 0 && guarded(() => invoke("scm_stage", { worktree: dir, paths, on }));
   const commit = () =>
@@ -386,6 +427,9 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                   <span className="ab">
                     ↑{summary.ahead} ↓{summary.behind} {summary.against}
                   </span>
+                  <span className="files" data-files={summary.files}>
+                    {filesWord(summary.files)}
+                  </span>
                   <span className="lines">
                     <span className="add">+{grouped(summaryTotal(summary).added)}</span> <span className="del">−{grouped(summaryTotal(summary).removed)}</span>
                   </span>
@@ -401,6 +445,52 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                   <input type="checkbox" aria-label="compare with the upstream" checked={againstUpstream} onChange={(e) => onAgainstUpstream(e.target.checked)} />
                   Compare with the upstream{pinnedBase ? ` (the pinned base ${pinnedBase} wins)` : ""}
                 </label>
+                <div className="btn-row" data-base-ref>
+                  {baseDraft === null ? (
+                    <>
+                      {onChangeBase && (
+                        <button className="btn" onClick={() => setBaseDraft(pinnedBase ?? "")}>
+                          Change Base Ref…
+                        </button>
+                      )}
+                      <button className="btn" onClick={() => setMeasureTick((t) => t + 1)}>
+                        Refresh branch compare
+                      </button>
+                    </>
+                  ) : (
+                    <form
+                      className="btn-row"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        onChangeBase?.(baseDraft);
+                        setBaseDraft(null);
+                      }}
+                    >
+                      <input className="field" aria-label="base ref" placeholder={`blank: ${status?.base ?? "the default branch"}`} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} autoFocus />
+                      <button className="btn primary" type="submit">
+                        Compare
+                      </button>
+                      <button className="btn" type="button" onClick={() => setBaseDraft(null)}>
+                        Cancel
+                      </button>
+                    </form>
+                  )}
+                </div>
+                {summary.committed.length > 0 && (
+                  <div className="scm-sec-wrap" data-committed>
+                    <div className="scm-sec">
+                      <span>Committed on this branch</span>
+                      <span className="count">{summary.files}</span>
+                    </div>
+                    {summary.committed.map((r) => (
+                      <div key={r.path} className="scm-row" title={r.from ? `${r.from} → ${r.path}` : r.path}>
+                        <span className="letter">{r.status}</span>
+                        <span className="path">{r.from ? `${r.from} → ${r.path}` : r.path}</span>
+                      </div>
+                    ))}
+                    {summary.files > summary.committed.length && <div className="sb-hint">and {summary.files - summary.committed.length} more</div>}
+                  </div>
+                )}
               </details>
             )}
             <div className="scm-commit">
@@ -646,7 +736,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}
               {status &&
                 scmGroups(groupOrder).map((g) =>
-                  g === "conflicts" ? section("Conflicts", status.conflicts, true) : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true),
+                  g === "conflicts" ? conflictCards() : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true),
                 )}
             </div>
             <details className="scm-history" open={histOpen} onToggle={(e) => setHistOpen((e.target as HTMLDetailsElement).open)}>

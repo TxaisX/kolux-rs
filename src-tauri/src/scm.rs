@@ -39,6 +39,11 @@ pub struct Status {
     pub changed: Vec<Change>,
     pub untracked: Vec<Change>,
     pub conflicts: Vec<Change>,
+    /// GIT-015: the operation stopped part-way (merge, rebase, cherry-pick or revert); None
+    /// when there is none.
+    pub operation: Option<String>,
+    /// GIT-015: conflicted files whose clash markers are gone, so they only need staging.
+    pub resolved: Vec<String>,
 }
 
 /// What a commit attempt came to: `id` is the new commit when it worked; otherwise `output` is
@@ -63,7 +68,34 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
         st.rewritten = run(&["cherry", "HEAD", "@{upstream}"], Some(worktree)).is_ok_and(|t| !t.is_empty() && t.lines().all(|l| l.starts_with('-')));
     }
     st.base = Git::detect().ok().and_then(|g| g.default_branch(worktree));
+    st.operation = operation(worktree);
+    st.resolved = st
+        .conflicts
+        .iter()
+        .filter(|c| matches!(c.status.as_str(), "UU" | "AA"))
+        .filter(|c| std::fs::read_to_string(worktree.join(&c.path)).is_ok_and(|t| !t.lines().any(|l| l.starts_with("<<<<<<<"))))
+        .map(|c| c.path.clone())
+        .collect();
     Ok(st)
+}
+
+/// GIT-015: which operation is stopped part-way, from the markers git leaves in this worktree's
+/// own git folder (a linked worktree has its own).
+fn operation(worktree: &Path) -> Option<String> {
+    const MARKS: [(&str, &str); 5] = [("rebase-merge", "rebase"), ("rebase-apply", "rebase"), ("MERGE_HEAD", "merge"), ("CHERRY_PICK_HEAD", "cherry-pick"), ("REVERT_HEAD", "revert")];
+    let mut args = vec!["rev-parse"];
+    for (mark, _) in MARKS {
+        args.extend(["--git-path", mark]);
+    }
+    let out = run(&args, Some(worktree)).ok()?;
+    out.lines().zip(MARKS).find(|(p, _)| worktree.join(p.trim()).exists()).map(|(_, (_, op))| op.to_string())
+}
+
+/// GIT-015: aborts whichever operation is in progress, putting the worktree back where it was
+/// before it began.
+pub fn abort(worktree: &Path) -> Result<(), String> {
+    let op = operation(worktree).ok_or("Nothing to abort: no merge, rebase, cherry-pick or revert is in progress")?;
+    run(&[op.as_str(), "--abort"], Some(worktree)).map(|_| ())
 }
 
 /// GIT-065: whether a workspace's commits are on its remote, for the sidebar badge. `state` is
@@ -120,7 +152,14 @@ pub struct Summary {
     pub source: Lines,
     pub tests: Lines,
     pub generated: Lines,
+    /// GIT-011: how many files the branch's own commits touched since it parted from the base.
+    pub files: u32,
+    /// GIT-011: those files, the first `COMMITTED_CAP` of them.
+    pub committed: Vec<Change>,
 }
+
+/// GIT-011: the most committed files sent to the window; the count stays whole.
+const COMMITTED_CAP: usize = 1000;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Kind {
@@ -204,6 +243,11 @@ pub fn summary(worktree: &Path, pinned: Option<&str>, upstream: bool) -> Result<
     let mut n = counts.split_whitespace().map(|x| x.parse::<u32>().unwrap_or(0));
     let (behind, ahead) = (n.next().unwrap_or(0), n.next().unwrap_or(0));
     let mut s = Summary { against, ahead, behind, ..Summary::default() };
+    // ponytail: an enormous branch still counts every line; a time limit on the counting comes
+    // when a real branch stalls the panel.
+    s.committed = name_status(&run(&["diff", "--name-status", "-M", "-z", &range], Some(worktree))?);
+    s.files = s.committed.len() as u32;
+    s.committed.truncate(COMMITTED_CAP);
     for line in run(&["diff", "--numstat", "--no-renames", "-z", &range], Some(worktree))?.split('\0').filter(|l| !l.is_empty()) {
         let mut f = line.splitn(3, '\t');
         let (Some(a), Some(r), Some(path)) = (f.next(), f.next(), f.next()) else { continue };
@@ -740,7 +784,11 @@ pub fn commit_files(worktree: &Path, hash: &str) -> Result<Vec<Change>, String> 
     if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("That is not a commit id".into());
     }
-    let text = run(&["diff-tree", "--no-commit-id", "-r", "--root", "-M", "--name-status", "-z", hash], Some(worktree))?;
+    Ok(name_status(&run(&["diff-tree", "--no-commit-id", "-r", "--root", "-M", "--name-status", "-z", hash], Some(worktree))?))
+}
+
+/// `--name-status -z` output as changes; a rename or copy carries the name it came from.
+fn name_status(text: &str) -> Vec<Change> {
     let mut parts = text.split('\0').filter(|p| !p.is_empty());
     let mut out = Vec::new();
     while let Some(code) = parts.next() {
@@ -753,7 +801,7 @@ pub fn commit_files(worktree: &Path, hash: &str) -> Result<Vec<Change>, String> 
             out.push(Change { path: path.to_string(), status: letter, from: None });
         }
     }
-    Ok(out)
+    out
 }
 
 #[tauri::command]
@@ -803,7 +851,7 @@ pub fn parse_status(text: &str) -> Status {
                 let from = if kind == "2" { items.next() } else { None };
                 let (x, y) = (xy.chars().next().unwrap_or('.'), xy.chars().nth(1).unwrap_or('.'));
                 if kind == "u" {
-                    st.conflicts.push(change(path, 'X', None));
+                    st.conflicts.push(Change { path: path.to_string(), status: xy.to_string(), from: None });
                     continue;
                 }
                 if x != '.' {
@@ -884,6 +932,11 @@ pub fn scm_status(worktree: String) -> Result<Status, String> {
 #[tauri::command]
 pub fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
     summary(Path::new(&worktree), pinned.as_deref(), upstream)
+}
+
+#[tauri::command]
+pub fn scm_abort(worktree: String) -> Result<(), String> {
+    abort(Path::new(&worktree))
 }
 
 #[tauri::command]
@@ -1453,6 +1506,72 @@ mod tests {
         let s = summary(&repo, None, true).unwrap();
         assert_eq!((s.against.as_str(), s.ahead, s.behind, s.source), ("origin/feat", 1, 0, Lines { added: 1, removed: 3 }));
         assert_eq!(status(&repo).unwrap().head, Some(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap().trim().to_string()));
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git011_the_branch_row_counts_files_against_the_base_and_lists_the_committed_ones() {
+        let repo = temp_repo("git011");
+        run(&["checkout", "-q", "-b", "feat"], Some(&repo)).unwrap();
+        // Three commits that touch five files read 3 ahead and 5 files changed.
+        fs::write(repo.join("a.txt"), "a\n").unwrap();
+        fs::write(repo.join("b.txt"), "b\n").unwrap();
+        commit_file(&repo, "c.txt", "c\n");
+        commit_file(&repo, "d.txt", "d\n");
+        fs::write(repo.join("a.txt"), "a2\n").unwrap();
+        commit_file(&repo, "README.md", "changed\n");
+        let s = summary(&repo, None, false).unwrap();
+        assert_eq!((s.ahead, s.files), (3, 5));
+        let mut names = paths(&s.committed);
+        names.sort();
+        assert_eq!(names, ["README.md", "a.txt", "b.txt", "c.txt", "d.txt"]);
+        assert_eq!(s.committed.iter().find(|c| c.path == "README.md").unwrap().status, "M");
+        assert_eq!(s.committed.iter().find(|c| c.path == "d.txt").unwrap().status, "A");
+        // Pointing the base at another branch changes the counts and the committed files.
+        run(&["branch", "mid", "HEAD~1"], Some(&repo)).unwrap();
+        let s = summary(&repo, Some("mid"), false).unwrap();
+        assert_eq!((s.against.as_str(), s.ahead, s.files), ("mid", 1, 2));
+        let mut names = paths(&s.committed);
+        names.sort();
+        assert_eq!(names, ["README.md", "a.txt"]);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git015_conflicts_name_their_clash_and_abort_puts_the_repository_back() {
+        let repo = temp_repo("git015");
+        run(&["checkout", "-q", "-b", "other"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "theirs\n");
+        commit_file(&repo, "new.txt", "theirs\n");
+        run(&["checkout", "-q", "main"], Some(&repo)).unwrap();
+        commit_file(&repo, "README.md", "ours\n");
+        commit_file(&repo, "new.txt", "ours\n");
+        let before = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
+        assert!(abort(&repo).unwrap_err().contains("Nothing"));
+        assert!(run(&["merge", "other"], Some(&repo)).is_err());
+        let st = status(&repo).unwrap();
+        assert_eq!(st.operation.as_deref(), Some("merge"));
+        let mut clashes: Vec<(&str, &str)> = st.conflicts.iter().map(|c| (c.path.as_str(), c.status.as_str())).collect();
+        clashes.sort();
+        assert_eq!(clashes, [("README.md", "UU"), ("new.txt", "AA")]);
+        assert!(st.resolved.is_empty());
+        // A file fixed by hand reads as resolved here before it is staged.
+        fs::write(repo.join("README.md"), "both\n").unwrap();
+        assert_eq!(status(&repo).unwrap().resolved, ["README.md"]);
+        // Abort puts the repository back where it was before the merge.
+        abort(&repo).unwrap();
+        let st = status(&repo).unwrap();
+        assert_eq!((st.operation.clone(), st.conflicts.len(), st.changed.len()), (None, 0, 0));
+        assert_eq!(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap(), before);
+        // A rebase is aborted as a rebase.
+        run(&["checkout", "-q", "other"], Some(&repo)).unwrap();
+        let other = run(&["rev-parse", "HEAD"], Some(&repo)).unwrap();
+        assert!(run(&["rebase", "main"], Some(&repo)).is_err());
+        assert_eq!(status(&repo).unwrap().operation.as_deref(), Some("rebase"));
+        abort(&repo).unwrap();
+        let st = status(&repo).unwrap();
+        assert_eq!((st.operation, st.branch.as_deref()), (None, Some("other")));
+        assert_eq!(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap(), other);
         let _ = fs::remove_dir_all(&repo);
     }
 
