@@ -334,7 +334,9 @@ pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
-            w.number = origins.get(&name_key(&w.path)).and_then(item_number);
+            let origin = origins.get(&name_key(&w.path));
+            w.number = origin.and_then(item_number);
+            w.comment = origin.and_then(|o| o["comment"].as_str()).filter(|c| !c.trim().is_empty()).map(String::from);
             w
         })
         .collect())

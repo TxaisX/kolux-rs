@@ -12,7 +12,7 @@ import { sameDir } from "../workspaces";
 /** A row the window supplies: its section, what it shows, and what Enter does. `parent` is the
  * project a row belongs to (matched after the row's own text), `dir` the folder it stands for
  * (for recency and its repository), `needs` what must be open for it to run. */
-export type PaletteItem = { section: string; label: string; hint?: string; parent?: string; dir?: string; repo?: string; needs?: "worktree"; run: () => void };
+export type PaletteItem = { section: string; label: string; hint?: string; parent?: string; dir?: string; repo?: string; number?: number; needs?: "worktree"; run: () => void };
 
 /** VIEW-041: one filter chip. Values of one field mean any of them; different fields must all match. */
 export type Chip = { field: "repo" | "section"; value: string };
@@ -47,12 +47,14 @@ export function worktreeItems(projects: Project[], lists: Record<string, Worktre
   for (const p of projects) {
     const ws = (lists[p.id] ?? []).filter((w) => typed || w.isMain || !w.hidden);
     const num = (w: Worktree) => (w.number ? ` · #${w.number}` : "");
-    for (const w of ws) out.push({ section: "Worktrees", label: worktreeLabel(w), hint: (w.branch ?? "detached") + num(w), parent: p.name, dir: w.path, repo: p.id, run: () => go(w) });
+    const number = (w: Worktree) => w.number ?? undefined;
+    // EDIT-047: the comment it was made with is shown, and found, after the branch
+    for (const w of ws) out.push({ section: "Worktrees", label: worktreeLabel(w), hint: (w.branch ?? "detached") + num(w) + (w.comment ? ` · ${w.comment}` : ""), parent: p.name, dir: w.path, repo: p.id, number: number(w), run: () => go(w) });
     const main = ws.find((w) => w.isMain) ?? ws[0];
     if (main) out.push({ section: "Projects", label: p.name, hint: p.path, dir: main.path, repo: p.id, run: () => go(main) });
     for (const w of ws) {
       const pr = prOf(w.path);
-      if (pr && pr !== "suppressed") out.push({ section: "Pull requests", label: `${w.branch ?? worktreeLabel(w)}`, hint: `${pr} pull request${num(w)}`, parent: p.name, dir: w.path, repo: p.id, run: () => go(w) });
+      if (pr && pr !== "suppressed") out.push({ section: "Pull requests", label: `${w.branch ?? worktreeLabel(w)}`, hint: `${pr} pull request${num(w)}`, parent: p.name, dir: w.path, repo: p.id, number: number(w), run: () => go(w) });
     }
   }
   return out;
@@ -87,7 +89,8 @@ export function repoOptions(projects: Project[], lists: Record<string, Worktree[
  * built once per open if lists of tens of thousands ever appear. */
 const BUDGET_MS = 40;
 
-/** VIEW-038: the rows that match every word. With no query: section order as listed. With one:
+/** VIEW-038: the rows that match every word. With no query: section order, the one used last first
+ * (EDIT-047), then as listed. With one: the worktree linked to a typed number first (EDIT-047), then
  * own-field matches before project-only ones, then exact intent, whole word, start of a word,
  * inside or forgiven; on a tie open tabs, then the one used last. Sections follow their best row. */
 export function paletteRows(items: PaletteItem[], query: string, recent: string[] = [], hasWorktree = true): Row[] {
@@ -100,11 +103,11 @@ export function paletteRows(items: PaletteItem[], query: string, recent: string[
     const own = it.hint ? `${it.label} ${it.hint}` : it.label;
     const hit = scoreText(it.parent ? `${own} · ${it.parent}` : own, own.length, words);
     if (!hit) continue;
-    const intent = words.length > 0 && fold(it.label).trim() === words.join(" ") ? 4 : hit.tier;
+    const intent = words.length === 1 && it.number !== undefined && words[0] === String(it.number) ? 5 : words.length > 0 && fold(it.label).trim() === words.join(" ") ? 4 : hit.tier;
     const used = it.dir ? recent.findIndex((d) => sameDir(d, it.dir!)) : -1;
     const row: Row = { ...it, spans: hit.spans, off: it.needs === "worktree" && !hasWorktree };
     const section = SECTIONS.indexOf(it.section as (typeof SECTIONS)[number]);
-    scored.push({ row, key: words.length === 0 ? [-section, -i] : [hit.own ? 1 : 0, intent, it.section === "Open tabs" ? 1 : 0, used < 0 ? -1e9 : -used, -i] });
+    scored.push({ row, key: words.length === 0 ? [-section, used < 0 ? -1e9 : -used, -i] : [hit.own ? 1 : 0, intent, it.section === "Open tabs" ? 1 : 0, used < 0 ? -1e9 : -used, -i] });
   }
   scored.sort((a, b) => {
     for (let k = 0; k < a.key.length; k++) if (a.key[k] !== b.key[k]) return b.key[k] - a.key[k];

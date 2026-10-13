@@ -560,7 +560,7 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
         if !Path::new(&path).is_dir() {
             return Err(Stop::Skipped(format!("its worktree {path} is gone")));
         }
-        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, number: None }
+        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, number: None, comment: None }
     };
     let _ = crate::trust::trust_folders(&l.claude_config, &agent, &[PathBuf::from(&wt.path), PathBuf::from(&project.path)]);
     if new_per_run {
@@ -767,7 +767,7 @@ mod tests {
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
 
-        let wt = Worktree { name: Some("run-1".into()), branch: Some("b".into()), head: String::new(), is_main: false, path: "C:/w/run-1".into(), parent: None, locked: None, hidden: false, kind: String::new(), source: None, number: None };
+        let wt = Worktree { name: Some("run-1".into()), branch: Some("b".into()), head: String::new(), is_main: false, path: "C:/w/run-1".into(), parent: None, locked: None, hidden: false, kind: String::new(), source: None, number: None, comment: None };
         assert_eq!(created_event("p1", &wt, &json!({ "runSetup": true }))["setup"], json!("run"));
         assert_eq!(created_event("p1", &wt, &json!({ "runSetup": false }))["setup"], json!("skip"));
         let old = created_event("p1", &wt, &json!({ "name": "made before the choice existed" }));

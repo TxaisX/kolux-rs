@@ -252,7 +252,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-113-b · The cleanup half of the failed-scan card on T-113-a: cleanup offers and removes only worktrees Kolux can show it made (its origin record), and a worktree Kolux did not create is left in place; built with the cleanup dialog on T-162
 - [x] T-114 · AUTO-010 Choose whether per-run worktrees run the project setup
 - [x] T-115-a · EDIT-040 [compat] Per-workspace handoff note that can be given to an agent
-- [ ] T-115-b · EDIT-047 Worktree switcher search in the Mod+J palette (needs the worktree palette on T-098)
+- [x] T-115-b · EDIT-047 Worktree switcher search in the Mod+J palette (needs the worktree palette on T-098)
 - [x] T-116-a · SET-031 Git & worktrees page: branch names and source control defaults (the next-branch sample, the refused and only-slashes prefix notes, and Default compare base; in the sidebar gear until the Settings page, T-054)
 - [ ] T-116-b · The rest of the Git & worktrees card on T-116-a: renaming branches after the work done on them (needs the agent status hooks, T-025..T-030), updating the local base branch before a worktree is made (off by default), how the source control view opens (list and group order, with T-033's tree view), and the AI help for commit messages and other source control actions with its recipe and extra-arguments checks (with the AI source-control actions); all on the Settings page (T-054)
 - [ ] T-116-c · SET-033 Per-repository page: base branch, setup script, folder (needs the Settings page, T-054, and a setup run: the Setup tab on T-107-b, and the prompt on T-156 before a shared script runs)

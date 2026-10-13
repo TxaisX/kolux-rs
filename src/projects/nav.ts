@@ -1,5 +1,6 @@
 // PROJ-055 / VIEW-046: moving between workspaces by keyboard, and the back / forward history.
 // PROJ-057 / VIEW-037: the worktree palette's word matching. Pure, so the rules are tested alone.
+import { shortcodes, workItem } from "./model";
 
 export type NavHow = { step: 1 | -1 } | { index: number };
 
@@ -52,11 +53,12 @@ export function fold(text: string): string {
   return out;
 }
 
-/** The query's words, folded; `#` is dropped from a word with digits, filler words when others remain. */
+/** The query's words, folded; `#` is dropped from a word with digits, filler words when others remain.
+ * EDIT-047: an emoji shortcode becomes its emoji, and a pull request or issue link its number. */
 export function queryWords(q: string): string[] {
-  const all = fold(q)
+  const all = fold(shortcodes(q))
     .split(/\s+/)
-    .map((w) => (/\d/.test(w) ? w.replace(/^#+/, "") : w))
+    .map((w) => String(workItem(w)?.number ?? (/\d/.test(w) ? w.replace(/^#+/, "") : w)))
     .filter(Boolean);
   const kept = all.filter((w) => !FILLER.has(w));
   return kept.length > 0 ? kept : all;

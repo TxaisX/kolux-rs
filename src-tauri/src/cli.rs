@@ -1553,12 +1553,8 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             if a["runHooks"].as_bool().unwrap_or(false) {
                 setup = "run".into();
             }
-            let mut warnings = Vec::new();
-            if text("comment").is_some() {
-                warnings.push("--comment: recorded with the worktree's origin, shown nowhere yet");
-            }
             obj.insert("setup".into(), json!(setup));
-            obj.insert("warnings".into(), json!(warnings));
+            obj.insert("warnings".into(), json!([]));
             (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": made, "agent": agent, "prompt": text("prompt").unwrap_or_default(), "activate": activate, "setup": setup }));
             Ok(result)
         }
@@ -3720,11 +3716,16 @@ mod tests {
         assert_eq!(child["parent"], json!(path.display().to_string()));
         assert_eq!(child["issue"], 12);
         assert_eq!(child["comment"], "from a test");
-        // T-014-b-fix: flags nobody acts on yet are named, not swallowed.
-        let warned = child["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(warned.len(), 1, "{warned:?}");
-        assert!(warned[0].starts_with("--comment"), "{warned:?}");
+        // EDIT-047: the comment is no longer inert: the worktree palette shows it and finds the worktree by it.
+        assert_eq!(child["warnings"], json!([]));
         let child_path = child["path"].as_str().unwrap().to_string();
+        {
+            let st = store.lock().unwrap();
+            let project = projects::load_projects(&st).into_iter().next().unwrap();
+            let listed = projects::list_workspaces(&git_, &st, &project).unwrap();
+            let row = listed.iter().find(|w| projects::same_folder(Path::new(&w.path), Path::new(&child_path))).unwrap();
+            assert_eq!((row.comment.as_deref(), row.number), (Some("from a test"), Some(12)));
+        }
         let stored = projects::origin(&store.lock().unwrap(), &child_path).unwrap();
         assert_eq!(stored["parent"], json!(path.display().to_string()));
         assert_eq!(stored["cwd"], json!(dir.display().to_string()));

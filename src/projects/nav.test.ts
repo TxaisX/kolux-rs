@@ -132,3 +132,26 @@ test("VIEW-042: worktree-only actions are not runnable without a worktree", () =
   expect(paletteRows(items, "", [], false).map((r) => [r.label, r.off])).toEqual([["Remove this workspace", true], ["New session", false]]);
   expect(paletteRows(items, "", [], true).every((r) => !r.off)).toBe(true);
 });
+
+test("EDIT-047: the palette finds a worktree by number, link, shortcode, comment, and recent ones lead an empty box", () => {
+  const p: Project = { ...proj, id: "p1", name: "app" };
+  const list: Worktree[] = [
+    { path: "C:/src/app", branch: "main", head: "1", isMain: true },
+    { path: "C:/ws/app/typo", branch: "fix-12-typo", head: "2", isMain: false },
+    { path: "C:/ws/app/pay", branch: "pay-flow", head: "3", isMain: false, number: 12, comment: "flaky checkout test" },
+    { path: "C:/ws/app/ship", branch: "ship", head: "4", isMain: false, name: "\u{1F680} launch" },
+  ];
+  const items = worktreeItems([p], { p1: list }, true, () => null, () => {});
+  const first = (q: string) => paletteRows(items, q).filter((r) => r.section === "Worktrees")[0]?.dir;
+  expect(first("12")).toBe("C:/ws/app/pay");
+  expect(first("#12")).toBe("C:/ws/app/pay");
+  expect(first("https://github.com/o/app/pull/12")).toBe("C:/ws/app/pay");
+  expect(first(":rocket:")).toBe("C:/ws/app/ship");
+  expect(first("flaky")).toBe("C:/ws/app/pay");
+  expect(first("app pay")).toBe("C:/ws/app/pay");
+  // every word has to land: "pay" fits one worktree, "zebra" none, so nothing is listed
+  expect(paletteRows(items, "pay zebra")).toEqual([]);
+  // an empty box: the worktree used last leads its section
+  const empty = paletteRows(items, "", ["C:/ws/app/ship", "C:/ws/app/typo"]).filter((r) => r.section === "Worktrees");
+  expect(empty.map((r) => r.dir)).toEqual(["C:/ws/app/ship", "C:/ws/app/typo", "C:/src/app", "C:/ws/app/pay"]);
+});
