@@ -82,13 +82,13 @@ import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
-import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
+import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
 import { FINISH_FIELD, STOPPED_FIELD } from "./settings/NotificationSwitches";
 import { marksUnread, tabBadge, tabMenu as tabMenuItems, waitingInGrid, type Badge } from "./terminal/tabs";
 import NameField from "./terminal/NameField";
-import { Bell, Globe, StatusGlyph } from "./chrome/icons";
+import { Bell, Globe, Spinner, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
@@ -98,7 +98,7 @@ import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine, t
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type PendingCreate, type Project, type SetupLine, type SetupWhere, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -278,6 +278,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
+  const [standIns, setStandIns] = useState<PendingCreate[]>([]); // PROJ-020: creates Git is still working on
   const [stacked, setStacked] = useState<Record<string, boolean>>(layout?.stacked ?? {}); // TERM-006: a single pane split down makes a stacked pair
   const [createName, setCreateName] = useState(""); // PROJ-057: the palette's typed name, prefilled there
   const [palette, setPalette] = useState(false); // PROJ-057 / VIEW-037: the worktree palette is open
@@ -617,6 +618,9 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         case "view.tasks":
           setScreen("terminals");
           setPage((p) => (terminals && p === "tasks" ? null : "tasks"));
+          break;
+        case "sidebar.sleeping.toggle":
+          saveSetting(SHOW_SLEEPING_SETTING, !showSleepingFrom(settings[SHOW_SLEEPING_SETTING]));
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
@@ -1051,6 +1055,55 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     }
     return key;
   };
+  // PROJ-033 / SESS-037: the setup script runs in a Setup terminal of the new workspace: a tab
+  // beside its first pane, or a cell of its own to the right or below. `then` runs once it ends
+  // (the agent waiting for setup), whatever its exit code, and lands as a tab beside it.
+  const afterSetup = useRef<Record<number, () => void>>({});
+  const startSetup = (dir: string, branch: string | null, line: SetupLine, where: SetupWhere, show: boolean, then?: () => Promise<number | null> | void) => {
+    const key = nextKey.current++;
+    setPanes((ps) => {
+      const cells = cellsOf(panesIn(ps, dir));
+      const tab = where === "tab" || cells.length >= MAX_PANES;
+      if (!tab && where === "down" && cells.length === 1) setStacked((st) => ({ ...st, [dir]: true }));
+      return [...ps, { key, cwd: dir, branch, agent: "shell", program: line.program, args: line.args, title: "Setup", word: line.program.split(/[\\/]/).pop()?.replace(/\.exe$/i, ""), group: tab ? cells[0]?.group : undefined }];
+    });
+    if (then)
+      afterSetup.current[key] = () =>
+        void Promise.resolve(then()).then((k) => {
+          if (typeof k === "number") setPanes((ps) => ps.map((p) => (p.key === k ? { ...p, group: groupOf(ps.find((x) => x.key === key) ?? p) } : p)));
+        });
+    if (show) {
+      setActiveDir(dir);
+      setFocused(key);
+    }
+  };
+  // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
+  const runSetup = (dir: string, branch: string | null) =>
+    invoke<SetupLine | null>("workspace_setup", { path: dir })
+      .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
+      .catch((err) => setNotice(String(err)));
+  // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
+  const fromItem = (item: WorkItem) => {
+    setToast(`Making a workspace from ${item.kind === "pull" ? "pull request" : "issue"} #${item.number}…`);
+    invoke<Created>("workspace_from_item", { item })
+      .then((made) => {
+        setRefresh((n) => n + 1);
+        cli.current.select(made.path, made.branch, true);
+        void runSetup(made.path, made.branch);
+      })
+      .catch((err) => setNotice(String(err)));
+  };
+  // VIEW-042: a name typed in the palette is made at once in that project; the palette has closed.
+  const fromName = (projectId: string, name: string) => {
+    setToast(`Making the workspace ${name}…`);
+    invoke<Created>("workspace_create", { projectId, name, base: null, branch: null, parent: null, ticket: null, issue: null })
+      .then((made) => {
+        setRefresh((n) => n + 1);
+        cli.current.select(made.path, made.branch, true);
+        void runSetup(made.path, made.branch);
+      })
+      .catch((err) => setNotice(String(err)));
+  };
   // VIEW-011: the open page is written down, so it is shown again after a restart.
   useEffect(() => {
     if ((settings[OPEN_PAGE_FIELD] ?? null) !== page) saveSetting(OPEN_PAGE_FIELD, page);
@@ -1104,6 +1157,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         hint: p.cwd ? folderName(p.cwd) : "Home",
         // VIEW-040: the tab's own badge, with how long it has been in that state.
         ...(!p.kind ? { mark: tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key]), since: stamp[p.key]?.at ?? 0 } : {}),
+        dir: p.cwd ?? undefined,
         run: () => {
           setScreen("terminals");
           if (!sameDir(p.cwd, activeDir)) {
@@ -1116,6 +1170,18 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
     { section: "Quick actions", label: "New session", run: () => addChooser() },
+    // VIEW-042: actions on the worktree in front, not runnable while none is open
+    { section: "Quick actions", label: "Source control for this workspace", needs: "worktree", run: () => showRight("scm") },
+    {
+      section: "Quick actions",
+      label: "Delete this workspace",
+      needs: "worktree",
+      run: () => {
+        setScreen("terminals");
+        setSidebarOpen(true);
+        setDeleteRequest((n) => n + 1);
+      },
+    },
     {
       section: "Quick actions",
       label: "New workspace",
@@ -1132,15 +1198,20 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   // unless it was the one removed, then it falls back to the home group.
   // PROJ-070: the removed one gives way to the sibling used last that still has panes; the shown
   // workspace is read when the delete finishes, so a user who went elsewhere meanwhile stays there.
-  const removed = (path: string) => {
-    const left = withoutDir(panes, path);
-    const pid = projectOf(path);
-    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !sameDir(d, path) && panesIn(left, d).length > 0).map(([d]) => d);
-    const next = activeAfterRemove(activeRef.current, path, recentDirs.current, siblings);
+  // PROJ-053: putting workspaces to sleep closes their panes the same way, all at once.
+  const removedAll = (paths: string[]) => {
+    if (paths.length === 0) return;
+    const left = paths.reduce((ps, d) => withoutDir(ps, d), panes);
+    const gone = (d: string) => paths.some((x) => sameDir(d, x));
+    const pid = projectOf(paths[0]);
+    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !gone(d) && panesIn(left, d).length > 0).map(([d]) => d);
+    const hit = paths.find((x) => activeRef.current !== null && activeAfterRemove(activeRef.current, x) !== activeRef.current);
+    const next = hit === undefined ? activeRef.current : activeAfterRemove(activeRef.current, hit, recentDirs.current.filter((d) => !gone(d)), siblings);
     setPanes(left);
     setActiveDir(next);
     setFocused((f) => focusIn(left, next, f));
   };
+  const removed = (path: string) => removedAll([path]);
 
   // PROJ-077: a workspace made or removed from the command line shows up like one made here;
   // the handlers are read through a ref so the one listener never goes stale.
@@ -1178,8 +1249,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     const key = keyOfHandle(handle);
     setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title: title ?? undefined } : p)));
   };
-  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, dropPane: (_k: number) => {} });
-  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, dropPane: (k: number) => dropPane(k) };
+  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
+  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
   useEffect(() => {
     const off = listen<CliWorkspace>("cli-workspace", (e) => {
       const p = e.payload;
@@ -1190,6 +1261,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       if (p.kind === "terminal-switch") return c.termSwitch(p.handle);
       if (p.kind === "terminal-close") return p.handles.map(c.keyOfHandle).filter(Number.isFinite).forEach(c.dropPane);
       setRefresh((n) => n + 1);
+      if (p.kind === "repo" || p.kind === "changed") return;
       if (p.kind === "removed") {
         cli.current.removed(p.path);
         return;
@@ -1207,6 +1279,9 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
       if (a) void cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate);
       else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
+      // PROJ-033: a workspace made from the command line runs its setup script in a background tab
+      // unless it was told to skip it.
+      if (p.setup !== "skip") void cli.current.runSetup(p.worktree.path, p.worktree.branch);
     });
     return () => {
       off.then((f) => f()).catch(() => undefined);
@@ -1943,12 +2018,19 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
               const mark = dirMark(row?.state ?? null, [...unreadDirs].some((x) => sameDir(x, d)));
               return mark ? { mark, since: row?.changed ?? 0 } : null;
             }}
+            recent={recentDirs.current}
+            scope={[]}
+            hasWorktree={activeDir !== null && projectOf(activeDir) !== null}
             onWorktree={(w) => {
               setScreen("terminals");
               select(w.path, w.branch ?? null);
             }}
-            onCreate={(name) => {
+            onCreate={(name, repo) => {
               setScreen("terminals");
+              const item = workItem(name);
+              if (item) return fromItem(item);
+              const pid = repo ?? projectOf(activeDir) ?? projectFor(null);
+              if (pid) return fromName(pid, name);
               setSidebarOpen(true);
               setCreateName(name);
               setCreateRequest((n) => n + 1);
@@ -2034,6 +2116,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}
+            onSleep={removedAll}
             nest={settings[NESTING_KEY] !== false}
             onNest={(on) => {
               const next = { ...settings, [NESTING_KEY]: on };
@@ -2060,6 +2143,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
             onAdded={projectAdded}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
+            onPending={setStandIns}
+            onSetup={startSetup}
             onIndex={(list, dirs, typed) => {
               setProjects(list);
               setOwner(dirs);
@@ -2233,6 +2318,19 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                   <span className="name">{tabName(p, titles)}</span>
                   <span className="why">{hook[p.key] === "permission" ? "needs permission" : "asked a question"}</span>
                 </button>
+              ))}
+            </div>
+          )}
+          {terminals && page === null && standIns.length > 0 && (
+            // PROJ-020: a stand-in tab for each workspace Git is still making; it gives way to
+            // the workspace's own tabs once it opens, and never pulls focus.
+            <div className="tabs standins" role="tablist" aria-label="Workspaces being created">
+              {standIns.map((c) => (
+                <div key={c.ticket} role="tab" aria-selected={false} aria-busy="true" className="tab standin" data-standin={c.name} title={`Git is making ${c.name}; it opens when it is ready`}>
+                  <Spinner size={12} />
+                  <span className="tab-name">{c.name}</span>
+                  <span className="hint">creating…</span>
+                </div>
               ))}
             </div>
           )}
@@ -2413,6 +2511,11 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                       if (on) setStamp((m) => (m[p.key] ? m : { ...m, [p.key]: { at: Date.now(), interrupted: false } }));
                       // The program is gone: its last hook state goes with it.
                       if (!on && p.key in hookRef.current) setHook((h) => Object.fromEntries(Object.entries(h).filter(([k]) => Number(k) !== p.key)));
+                      const then = !on && runRef.current[p.key] && afterSetup.current[p.key];
+                      if (then) {
+                        delete afterSetup.current[p.key];
+                        then();
+                      }
                     }}
                     hook={hook[p.key]}
                     crew={crew[p.key]}
@@ -2428,7 +2531,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                     }}
                     account={p.account}
                     notice={noticeFor(p)}
-                    onFailed={(error) => failedPane(p.key, error)}
+                    onFailed={(error) => {
+                      failedPane(p.key, error);
+                      const then = afterSetup.current[p.key];
+                      delete afterSetup.current[p.key];
+                      then?.();
+                    }}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title || nameOf(names, p.cwd)}
                     custom={!!p.title}

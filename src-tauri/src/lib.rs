@@ -18,6 +18,7 @@ mod files;
 mod fsops;
 mod fonts;
 mod git;
+mod groups;
 mod hooks;
 mod include;
 // T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
@@ -29,6 +30,7 @@ mod keybindings;
 mod kits;
 mod links;
 mod names;
+mod newproject;
 mod notifications;
 mod onboarding;
 mod orchestration;
@@ -37,7 +39,9 @@ mod protected;
 mod resources;
 mod projects;
 mod scm;
+mod pr_checkout;
 mod pty;
+mod setup;
 mod routing;
 mod schedule;
 mod resume;
@@ -259,12 +263,23 @@ pub fn run() {
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,
+            projects::workspace_create_cancel,
+            projects::workspace_prs,
+            projects::workspace_open_pr,
+            projects::workspace_from_item,
+            projects::workspace_items,
+            projects::workspace_item,
+            setup::workspace_setup,
+            setup::setup_imports_list,
+            setup::setup_import,
             projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,
             projects::workspace_unseen,
             projects::workspace_seen,
             projects::workspace_hide,
+            projects::workspace_rename,
+            projects::workspace_sleep,
             projects::visibility_get,
             projects::visibility_set,
             projects::visibility_root_add,
@@ -356,6 +371,19 @@ pub fn run() {
             codex_accounts::codex_account_remove,
             projects::git_first_commit_preview,
             projects::git_start,
+            activity::activity_get,
+            activity::activity_touch,
+            groups::groups_get,
+            groups::group_create,
+            groups::group_rename,
+            groups::group_nest,
+            groups::group_put,
+            groups::group_delete,
+            newproject::clone_suggest,
+            newproject::project_clone,
+            newproject::clone_cancel,
+            newproject::project_new_defaults,
+            newproject::project_create,
             kits::kit_samples,
             kits::kit_samples_dir,
             kits::kit_check,

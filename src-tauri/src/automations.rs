@@ -218,6 +218,8 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         ("workspace", workspace),
         // Empty means the project's default branch (AUTO-005).
         ("baseBranch", json!(text("baseBranch"))),
+        // AUTO-010: only a new worktree runs the project setup, and only when chosen.
+        ("runSetup", json!(mode == "new-per-run" && input["runSetup"].as_bool().unwrap_or(false))),
         ("trigger", timing["trigger"].clone()),
         ("nextRunAt", timing["nextRunAt"].clone()),
         ("missedRunGraceMinutes", json!(grace)),
@@ -633,6 +635,13 @@ fn folder_name(path: &str) -> String {
     Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
+/// The window's notice that a run made its worktree. AUTO-010: it runs the project setup only when
+/// the automation chose that; one saved before the choice existed skips it.
+fn created_event(project_id: &str, wt: &Worktree, auto: &Value) -> Value {
+    let setup = if auto["runSetup"].as_bool() == Some(true) { "run" } else { "skip" };
+    json!({ "kind": "created", "projectId": project_id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup })
+}
+
 /// Finds or makes the run's workspace and asks the window to start the agent there.
 fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, String), Stop> {
     let agent = auto["provider"].as_str().unwrap_or_default().to_string();
@@ -661,11 +670,11 @@ fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, 
         if !Path::new(&path).is_dir() {
             return Err(Stop::Skipped(format!("its worktree {path} is gone")));
         }
-        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None }
+        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None }
     };
     let _ = crate::trust::trust_folders(&l.claude_config, &agent, &[PathBuf::from(&wt.path), PathBuf::from(&project.path)]);
     if new_per_run {
-        (l.notify)(crate::cli::EVENT, json!({ "kind": "created", "projectId": project.id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false }));
+        (l.notify)(crate::cli::EVENT, created_event(&project.id, &wt, auto));
     }
     (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
     Ok((wt, project.id))
@@ -974,6 +983,34 @@ mod tests {
 
     fn form(ws: &Path, schedule: Value) -> Value {
         json!({ "requestId": "r1", "name": "Morning", "prompt": "check", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": ws.to_string_lossy(), "schedule": schedule })
+    }
+
+    #[test]
+    fn auto010_a_new_per_run_worktree_runs_the_setup_only_when_chosen_and_old_ones_skip() {
+        let dir = temp("auto010");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let schedule = json!({ "preset": "weekdays", "time": "09:00", "timezone": "UTC" });
+        let mut f = form(&dir, schedule.clone());
+        f["workspaceMode"] = json!("new-per-run");
+        f["runSetup"] = json!(true);
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(true));
+        let mut f = form(&dir, schedule.clone());
+        f["requestId"] = json!("r2");
+        f["runSetup"] = json!(true);
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(false), "an existing worktree never runs setup again");
+        let mut f = form(&dir, schedule);
+        f["requestId"] = json!("r3");
+        f["workspaceMode"] = json!("new-per-run");
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(false), "no choice sent is skip");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let wt = Worktree { name: Some("run-1".into()), branch: Some("b".into()), head: String::new(), is_main: false, path: "C:/w/run-1".into(), parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None };
+        assert_eq!(created_event("p1", &wt, &json!({ "runSetup": true }))["setup"], json!("run"));
+        assert_eq!(created_event("p1", &wt, &json!({ "runSetup": false }))["setup"], json!("skip"));
+        let old = created_event("p1", &wt, &json!({ "name": "made before the choice existed" }));
+        assert_eq!((old["setup"].as_str(), old["kind"].as_str(), old["worktree"]["path"].as_str()), (Some("skip"), Some("created"), Some("C:/w/run-1")));
     }
 
     #[test]

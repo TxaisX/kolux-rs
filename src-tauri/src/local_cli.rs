@@ -126,6 +126,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("worktree ps", "List worktrees with what is running in them."),
     ("worktree show", "Show one worktree."),
     ("worktree current", "Show the worktree this terminal is in."),
+    ("worktree set", "Change a worktree's display name, linked issue, comment or parent."),
     ("worktree changes", "List what a worktree changed against its base."),
     ("worktree overlap", "List other worktrees touching the same files, and whether a merge would conflict."),
     ("orchestration run-create", "Open a Run and attach this terminal to it as the coordinator."),

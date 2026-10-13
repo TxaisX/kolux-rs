@@ -180,6 +180,11 @@ export const Undo = (p: P) => (
     <path d="M5.5 4 3 6.5 5.5 9" />
   </Glyph>
 );
+export const Pin = (p: P) => (
+  <Glyph {...p}>
+    <path d="M6 2.5h4l-.5 4 2 2v1h-7v-1l2-2-.5-4ZM8 9.5v4" />
+  </Glyph>
+);
 export const Target = (p: P) => (
   <Glyph {...p}>
     <circle cx="8" cy="8" r="6" />
@@ -273,6 +278,11 @@ export const Chip = (p: P) => (
 export const Cup = (p: P) => (
   <Glyph {...p}>
     <path d="M3 5.5h8v4a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-4ZM11 7h1.5a1.5 1.5 0 0 1 0 3H11" />
+  </Glyph>
+);
+export const Moon = (p: P) => (
+  <Glyph {...p}>
+    <path d="M12.5 9.5A5 5 0 0 1 6.5 3.5a5 5 0 1 0 6 6Z" />
   </Glyph>
 );
 export const Clock = (p: P) => (

@@ -17,6 +17,7 @@ import Ask from "../chrome/Ask";
 import GrokCard from "./GrokCard";
 import { AttentionNote, fixDoes, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
+import RepoPage from "./RepoPage";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
 
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
@@ -160,17 +161,6 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
 
 const later = <p className="conn-detail">Nothing to set here yet.</p>;
 
-function RepoPage({ project }: { project: Project }) {
-  return (
-    <section className="conn-card" data-section="repo">
-      <h2 className="conn-name">{project.name}</h2>
-      <p className="conn-detail">Folder: {project.path}</p>
-      <p className="conn-detail">Workspaces folder: {project.workspacesDir || "the global one (Git & worktrees)"}</p>
-      <p className="conn-detail">New workspaces start from: {project.base || "the default branch"}</p>
-    </section>
-  );
-}
-
 /** Scrolls a section of the open page into view once it is drawn (pages load lazily). */
 function useScrollTo(section: string | undefined, page: Page, n: number) {
   useEffect(() => {
@@ -279,7 +269,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
             </>
           )}
           {page === "safety" && later}
-          {repo && <RepoPage project={repo} />}
+          {repo && <RepoPage project={repo} onSaved={(u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x)))} />}
         </Suspense>
       </main>
     </div>

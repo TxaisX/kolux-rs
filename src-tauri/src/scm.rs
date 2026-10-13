@@ -538,11 +538,12 @@ pub fn gh_login() -> Option<String> {
     (out.status.success() && !login.is_empty()).then_some(login)
 }
 
-fn gh_program() -> Result<std::path::PathBuf, String> {
-    // Development builds only: KOLUX_DEV_GH names a stand-in gh for live proofs, since the
-    // registry's search path (which finds the real gh) comes before the process PATH.
+pub(crate) fn gh_program() -> Result<std::path::PathBuf, String> {
+    // Development builds only: KOLUX_DEV_GH (or the worktrees lane's KOLUX_RS_GH) names a stand-in
+    // gh for live proofs, since the registry's search path (which finds the real gh) comes before
+    // the process PATH.
     #[cfg(debug_assertions)]
-    if let Some(p) = std::env::var_os("KOLUX_DEV_GH") {
+    if let Some(p) = std::env::var_os("KOLUX_DEV_GH").or_else(|| std::env::var_os("KOLUX_RS_GH")) {
         return Ok(p.into());
     }
     crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
@@ -553,7 +554,7 @@ const GH_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Runs gh in the worktree with every prompt off; `input` goes to standard input. A failure
 /// carries what gh printed.
-fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
+pub(crate) fn gh_run(program: &Path, worktree: &Path, args: &[&str], input: Option<&str>) -> Result<String, String> {
     gh_run_for(program, worktree, args, input, GH_LIMIT)
 }
 

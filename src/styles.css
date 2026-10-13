@@ -157,11 +157,17 @@ input { font: inherit; }
 .sb-group .chev { display: inline-flex; margin-left: auto; transition: transform 0.15s; }
 .sb-group[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 .sess .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sess .ib { opacity: 0; width: 22px; height: 22px; }
+.sess input.rename { flex: 1; min-width: 0; height: 22px; padding: 0 6px; border-radius: 5px; border: 1px solid var(--line-focus); background: var(--input-bg); color: var(--fg); font: inherit; }
+/* The row actions take no room until the row is hovered or focused, so names show in full at rest. */
+.sess .ib { display: none; width: 22px; height: 22px; }
 .sess:hover { background: #1f1f1f; }
-.sess:hover .ib { opacity: 1; }
+.sess:hover .ib, .sess:focus-within .ib { display: inline-flex; }
 .sess.sel { background: var(--row-selected); color: var(--fg); }
 .sess.pending { opacity: 0.6; }
+/* PROJ-020: the stand-in tabs above the panes while Git makes a workspace. */
+.tabs.standins { margin: 0 0 6px; }
+.tab.standin { opacity: 0.7; padding-right: 10px; }
+.tab.standin .hint { color: var(--fg-icon-dim); }
 .sess .fold { width: 14px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: #797979; flex: none; }
 .sess .fold:hover { color: var(--fg); }
 .sess .fold.shut svg { transform: rotate(-90deg); }
@@ -760,6 +766,12 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .ask.start-git { width: min(520px, calc(100vw - 32px)); }
 .first-files { list-style: none; margin: 0 0 8px; padding: 6px; max-height: 18rem; overflow: auto; border: 1px solid var(--line-subtle); border-radius: 6px; font-size: 12px; }
 .first-files label { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; min-width: 0; }
+/* VIEW-112: setup commands offered from another tool's file */
+.import-offer { border: 1px solid var(--line-subtle); border-radius: 6px; padding: 8px 10px; margin: 0 0 10px; min-width: 0; }
+.import-file { font-weight: 600; font-size: 12px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.import-label { font-size: 11px; color: var(--fg-muted); margin: 6px 0 2px; }
+.import-script { margin: 0; padding: 6px 8px; max-height: 10rem; overflow: auto; font-size: 12px; border-radius: 4px; background: var(--input-bg); font-family: var(--mono-font); white-space: pre; }
+.import-refused { color: var(--warn); }
 .first-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-row); }
 .first-secret { margin-left: auto; flex: none; color: var(--fg-muted); font-size: 11px; }
 /* SKILL-002..005: the starter-kit gallery and a kit's setup */
@@ -826,6 +838,11 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .add-choice-hint { font-size: 11px; opacity: 0.75; }
 .add-more { display: flex; gap: 8px; }
 .add-more .add-choice { flex: 1; }
+.add-form { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.add-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-muted); }
+.add-label .field { margin: 0; }
+.add-progress { font: 11px var(--mono-font); overflow-wrap: anywhere; }
+.add-error { margin: 0; font-size: 12px; color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .ask-check { display: flex; align-items: center; gap: 6px; margin: -6px 0 14px; font-size: 12px; color: var(--fg-muted); }
 .ask-list { margin: 0 0 14px; padding: 0 0 0 18px; max-height: min(40vh, 240px); overflow: auto; font: 11.5px var(--mono-font); color: var(--fg-muted); }
 .ask-list li { overflow-wrap: anywhere; }
@@ -871,6 +888,9 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .pick-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pick-item .hint { margin-left: auto; flex: none; font-size: 11px; color: var(--fg-muted); }
 .pick-item mark { background: none; color: var(--fg); font-weight: 700; text-decoration: underline; }
+/* SESS-036: the issues and pull requests the composer name field suggests. */
+button.pick-item { width: 100%; text-align: left; font: inherit; }
+button.pick-item:hover, button.pick-item:focus-visible { background: var(--input-bg); outline: 1px solid var(--line-focus); }
 .composer-advanced { display: flex; flex-direction: column; gap: 6px; }
 .field.multi.grow { field-sizing: content; max-height: 160px; resize: none; }
 .composer .btn-row { flex-wrap: wrap; align-items: center; }
@@ -973,6 +993,11 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 /* PROJ-057 / VIEW-037: the worktree palette's section headings and matched letters. */
 .palette-section { padding: 6px 10px 2px; font-size: 11px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.04em; }
 .palette mark { background: none; color: var(--fg); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+/* VIEW-041: the palette's filter chips; VIEW-042: an action that needs an open worktree. */
+.palette-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px; }
+.palette-chips select { font-size: 12px; color: var(--fg-muted); background: none; border: 1px solid var(--line-subtle); border-radius: 6px; padding: 1px 4px; }
+.palette-chip { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--row-selected); color: var(--fg); }
+.picker-list .menu-item.off { color: var(--fg-disabled); cursor: default; }
 .md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
 
 /* EDIT-027: the diff tab. Its body scrolls (both columns move together in side by side). */
@@ -1293,3 +1318,7 @@ html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !impor
 .check-dot.unresolved { background: var(--working-icon); }
 .check-detail { margin: 2px 0 6px 14px; padding: 6px 8px; border-left: 1px solid var(--divider); color: var(--fg-label); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; resize: vertical; overflow: auto; min-height: 40px; max-height: 60vh; line-height: 1.4; }
 .check-detail .btn { padding: 2px 8px; font-size: 12px; }
+/* PROJ-014: project groups in the sidebar */
+.sb-group-row { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+.sb-group-row .sb-group { flex: 1; min-width: 0; }
+.proj-group-kids { padding-left: 8px; }

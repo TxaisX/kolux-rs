@@ -11,7 +11,7 @@ const ids = (r: ReturnType<typeof rows>) => r.map((x) => x.id);
 
 test("every command is listed under its area with its chords and badges", () => {
   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
-  expect(all.length).toBe(127);
+  expect(all.length).toBe(128);
   const by = (id: string) => all.find((r) => r.id === id)!;
   expect(by("terminal.clear")).toMatchObject({ area: "Terminal", labels: ["Ctrl+K"], badges: [] });
   expect(by("zoom.reset").badges).toEqual(["Modified"]);
@@ -27,7 +27,7 @@ test("every command is listed under its area with its chords and badges", () => 
 
 test("filters: all, modified, unassigned, conflicting", () => {
   const all = rows({ keybindings: { "zoom.reset": "Mod+Alt+0", "zoom.in": null, "view.tasks": "Mod+P" } });
-  expect(filterRows(all, "all", "").length).toBe(127);
+  expect(filterRows(all, "all", "").length).toBe(128);
   expect(ids(filterRows(all, "modified", ""))).toEqual(["zoom.in", "zoom.reset"]);
   expect(filterRows(all, "unassigned", "").every((r) => r.labels.length === 0)).toBe(true);
   expect(ids(filterRows(all, "unassigned", ""))).toContain("zoom.in");

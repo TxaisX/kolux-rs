@@ -3,7 +3,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import AutomationDialog from "./AutomationDialog";
+import AutomationDialog, { setupChoice } from "./AutomationDialog";
 import type { Automation } from "./model";
 import { templates } from "./timetable";
 
@@ -86,4 +86,13 @@ test("AUTO-004: an automation started by an event opens on Event with no timetab
   expect(html).toContain("keeps running on each event until you pause it");
   // A new one starts on a timetable.
   expect(render(null)).toMatch(/<option value="schedule" selected="">On a timetable/);
+});
+
+test("AUTO-010: the setup choice shows only for a new worktree per run in a project with a setup", () => {
+  expect(setupChoice("new-per-run", true, true)).toBe(true);
+  expect(setupChoice("new-per-run", true, false)).toBe(false);
+  expect(setupChoice("new-per-run", false, true), "no setup at all: no option").toBeNull();
+  expect(setupChoice("new-per-run", null, true), "not known yet: no option").toBeNull();
+  expect(setupChoice("existing", true, true), "an existing worktree never runs setup again").toBeNull();
+  expect(render(null)).not.toContain("Run the project setup");
 });
