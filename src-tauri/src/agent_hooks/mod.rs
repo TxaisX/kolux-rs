@@ -185,20 +185,78 @@ pub fn backup_of(file: &Path) -> PathBuf {
 /// Keeps a copy of `file` from before Kolux's first install; a copy already there is never
 /// replaced, and a missing file has nothing to keep. A copy that cannot be made, or that does not
 /// hash the same as the file, stops the install. T-152 (2): a new copy returns the sha256 of the
-/// file and of the copy, for the caller to record.
-pub fn back_up(file: &Path) -> Result<Option<(String, String)>, String> {
+/// file and of the copy, written to `record` before the copy takes its name (a rebuilt record
+/// returns `None`; it is logged here).
+///
+/// T-152-b (3): on EVERY install the copy already there is checked against `record`: a record
+/// with no line for this copy is rebuilt from the copy and the file as they are (only when the
+/// copy still reads as JSON), and a copy whose hash differs from its record stops the install.
+/// The new copy is written to a temp name and synced to disk, the record is written (and synced),
+/// and only then is the copy renamed into place, so a failed record write never leaves a copy
+/// that the next install would trust.
+pub fn back_up(file: &Path, record: &Path) -> Result<Option<(String, String)>, String> {
     let copy = backup_of(file);
-    if copy.exists() || !file.exists() {
+    let refuse = |e: String| format!("could not keep a copy of {} ({e}); hooks not installed", file.display());
+    if copy.exists() {
+        let have = sha256(&copy).map_err(refuse)?;
+        return match recorded(record, &copy) {
+            Some(want) if want == have => Ok(None),
+            Some(want) => Err(format!(
+                "the kept copy {} hashes {have} but its record {} says {want}; the copy is damaged, so hooks are not installed",
+                copy.display(),
+                record.display()
+            )),
+            None => {
+                let parses = fs::read(&copy).ok().is_some_and(|b| serde_json::from_slice::<Value>(&b).is_ok());
+                if !parses {
+                    return Err(format!("the kept copy {} (sha256 {have}) has no record in {} and is not JSON; hooks not installed", copy.display(), record.display()));
+                }
+                let now = if file.exists() { sha256(file).map_err(refuse)? } else { "missing".into() };
+                write_record(record, file, &now, &copy, &have).map_err(refuse)?;
+                eprintln!("kolux-rs: claude hooks: rebuilt the copy's record: sha256 file now {now}, kept copy {have}");
+                Ok(None)
+            }
+        };
+    }
+    if !file.exists() {
         return Ok(None);
     }
-    let refuse = |e: String| format!("could not keep a copy of {} ({e}); hooks not installed", file.display());
-    fs::copy(file, &copy).map_err(|e| refuse(e.to_string()))?;
-    let (a, b) = (sha256(file).map_err(refuse)?, sha256(&copy).map_err(refuse)?);
-    if a != b {
-        let _ = fs::remove_file(&copy);
-        return Err(refuse(format!("the copy hashes {b}, the file {a}")));
+    let bytes = fs::read(file).map_err(|e| refuse(e.to_string()))?;
+    let tmp = copy.with_extension("bak-kolux.kolux-rs-tmp");
+    let made = fs::File::create(&tmp).and_then(|mut f| f.write_all(&bytes).and_then(|_| f.sync_all())).map_err(|e| e.to_string()).and_then(|_| {
+        let (a, b) = (sha256(file)?, sha256(&tmp)?);
+        if a != b {
+            return Err(format!("the copy hashes {b}, the file {a}"));
+        }
+        write_record(record, file, &a, &copy, &b)?;
+        fs::rename(&tmp, &copy).map_err(|e| e.to_string())?;
+        Ok((a, b))
+    });
+    if made.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    Ok(Some((a, b)))
+    made.map(Some).map_err(refuse)
+}
+
+/// The copy's hash as `record` holds it (`<sha256>  <path>` lines), `None` when it has no line for `copy`.
+fn recorded(record: &Path, copy: &Path) -> Option<String> {
+    let text = fs::read_to_string(record).ok()?;
+    let name = copy.display().to_string();
+    text.lines().find_map(|l| l.split_once("  ").filter(|(h, p)| *p == name && h.len() == 64).map(|(h, _)| h.to_string()))
+}
+
+/// Both hashes, written through a synced temp file and renamed over the record.
+fn write_record(record: &Path, file: &Path, original: &str, copy: &Path, kept: &str) -> Result<(), String> {
+    let text = format!("{original}  {}\n{kept}  {}\n", file.display(), copy.display());
+    let tmp = record.with_extension("sha256.kolux-rs-tmp");
+    let fail = |e: std::io::Error| format!("the copy's record {}: {e}", record.display());
+    if let Some(dir) = record.parent() {
+        fs::create_dir_all(dir).map_err(fail)?;
+    }
+    fs::File::create(&tmp).and_then(|mut f| f.write_all(text.as_bytes()).and_then(|_| f.sync_all())).and_then(|_| fs::rename(&tmp, record)).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        fail(e)
+    })
 }
 
 fn sha256(file: &Path) -> Result<String, String> {
@@ -320,9 +378,8 @@ pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
     // T-152 (3): a file that is not JSON is refused before anything is written, the copy included.
     let text = read_opt(file)?;
     let had: Option<Value> = text.as_deref().map(serde_json::from_str).transpose().map_err(|e| format!("{} is not JSON ({e}); hooks not installed", file.display()))?;
-    if let Some((original, copy)) = back_up(file)? {
-        let record = format!("{original}  {}\n{copy}  {}\n", file.display(), backup_of(file).display());
-        fs::write(dir.join(BACKUP_RECORD), &record).map_err(|e| format!("claude settings copy record: {e}"))?;
+    // T-152-b (3): the copy is verified against its record on every install, not only the first.
+    if let Some((original, copy)) = back_up(file, &dir.join(BACKUP_RECORD))? {
         eprintln!("kolux-rs: claude hooks: kept a copy before the first write: sha256 original {original}, backup {copy}");
     }
     // T-152 (4): the status line slot as the user had it (`null`: none), put back whole on removal,

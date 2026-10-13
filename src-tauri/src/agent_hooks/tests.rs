@@ -100,19 +100,19 @@ fn stat_005_removal_gives_back_the_users_file() {
 fn claude_settings_are_copied_once_before_the_first_install() {
     let dir = temp("backup");
     let file = dir.join("settings.json");
-    back_up(&file).unwrap();
+    back_up(&file, &dir.join(BACKUP_RECORD)).unwrap();
     assert!(!backup_of(&file).exists(), "no file, nothing to keep");
     fs::write(&file, "{\"model\":\"opus\"}").unwrap();
-    back_up(&file).unwrap();
+    back_up(&file, &dir.join(BACKUP_RECORD)).unwrap();
     assert_eq!(backup_of(&file), dir.join("settings.json.bak-kolux"));
     assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), "{\"model\":\"opus\"}");
     fs::write(&file, "{\"model\":\"later\"}").unwrap();
-    back_up(&file).unwrap();
+    back_up(&file, &dir.join(BACKUP_RECORD)).unwrap();
     assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), "{\"model\":\"opus\"}", "the first copy is never replaced");
     // A copy that cannot be made stops the install.
     let folder = dir.join("odd.json");
     fs::create_dir_all(&folder).unwrap();
-    assert!(back_up(&folder).unwrap_err().contains("hooks not installed"));
+    assert!(back_up(&folder, &dir.join(BACKUP_RECORD)).unwrap_err().contains("hooks not installed"));
 }
 
 #[test]
@@ -494,7 +494,7 @@ fn t_152_2_the_first_write_keeps_a_hashed_copy_and_a_failed_copy_stops_the_insta
     // A copy that cannot be made: the settings file is left exactly as it was.
     let folder = dir.join("other").join("settings.json");
     fs::create_dir_all(&folder).unwrap();
-    assert!(back_up(&folder).unwrap_err().contains("hooks not installed"));
+    assert!(back_up(&folder, &dir.join(BACKUP_RECORD)).unwrap_err().contains("hooks not installed"));
     assert!(install_claude_at(&home, &folder).is_err());
     assert!(!backup_of(&folder).exists());
 }
@@ -668,4 +668,66 @@ fn t_152_6_a_codex_hooks_file_with_empty_hooks_comes_back_byte_for_byte() {
         assert!(!remove_codex(&managed).unwrap(), "nothing of Kolux's: nothing written");
         assert_eq!(fs::read_to_string(managed.join("hooks.json")).unwrap(), text);
     }
+}
+
+#[test]
+fn t_152_b_3_the_kept_copy_is_checked_against_its_record_on_every_install() {
+    let dir = temp("t152b-record");
+    let (home, file) = (dir.join("home"), dir.join("settings.json"));
+    let record = home.join(SCRIPT_DIR).join(BACKUP_RECORD);
+    let user = shaped();
+    fs::write(&file, &user).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    let off = |f: &Path| remove_claude(f, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+    off(&file);
+    assert_eq!(fs::read_to_string(&file).unwrap(), user);
+    // A missing record is rebuilt from the copy and the file as they are, both lines.
+    fs::remove_file(&record).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    let rebuilt = fs::read_to_string(&record).unwrap();
+    println!("rebuilt record:\n{rebuilt}");
+    let lines: Vec<&str> = rebuilt.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[1].starts_with(&sha256(&backup_of(&file)).unwrap()) && lines[1].ends_with(&backup_of(&file).display().to_string()));
+    assert!(lines[0].ends_with(&file.display().to_string()));
+    off(&file);
+    // A torn copy (truncated) is refused, naming both hashes and both paths; nothing is written.
+    let whole = sha256(&backup_of(&file)).unwrap();
+    fs::write(backup_of(&file), &user.as_bytes()[..user.len() / 2]).unwrap();
+    let torn = sha256(&backup_of(&file)).unwrap();
+    let before = fs::read(&file).unwrap();
+    let err = install_claude_at(&home, &file).unwrap_err();
+    println!("{err}");
+    for part in [whole.as_str(), torn.as_str(), &backup_of(&file).display().to_string(), &record.display().to_string()] {
+        assert!(err.contains(part), "{err} names {part}");
+    }
+    assert_eq!(fs::read(&file).unwrap(), before, "a refused install writes nothing");
+    // A torn copy with no record is not trusted either: it is not JSON, so no record is rebuilt.
+    fs::remove_file(&record).unwrap();
+    assert!(install_claude_at(&home, &file).unwrap_err().contains("not JSON"));
+    assert!(!record.exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_3_a_failed_record_write_leaves_no_copy_the_next_install_trusts() {
+    let dir = temp("t152b-record-fail");
+    let file = dir.join("settings.json");
+    fs::write(&file, "{\"model\":\"opus\"}\n").unwrap();
+    // The record's path is a folder, so writing it fails.
+    let record = dir.join("record");
+    fs::create_dir_all(&record).unwrap();
+    let err = back_up(&file, &record).unwrap_err();
+    println!("{err}");
+    assert!(err.contains("hooks not installed"));
+    assert!(!backup_of(&file).exists(), "no copy under the kept name");
+    let left: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(left.iter().all(|n| !n.contains("bak-kolux")), "no temp copy left: {left:?}");
+    // Once the record can be written, the copy is made, synced, recorded and verified next time.
+    fs::remove_dir_all(&record).unwrap();
+    let (a, b) = back_up(&file, &record).unwrap().unwrap();
+    assert_eq!(a, b);
+    assert_eq!(fs::read(backup_of(&file)).unwrap(), fs::read(&file).unwrap());
+    assert!(back_up(&file, &record).unwrap().is_none(), "an existing copy matching its record is kept");
+    let _ = fs::remove_dir_all(&dir);
 }

@@ -96,3 +96,44 @@ Runtime, with the marker (proof.sh run 2, after the fence change):
     kolux-rs: claude hooks: installed
     cmp: post-off file byte-identical to the copy
     off-state sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e bytes 10077
+
+===================================================================================================
+Item 3 (FIX-BEFORE 3): the kept copy is verified against its record on every install
+===================================================================================================
+Code: back_up(file, record) runs on EVERY install. A copy already there is hashed and compared with
+its line in claude-settings.sha256: equal -> kept; different -> the install is refused naming both
+hashes and both paths; no line for it -> the record is rebuilt from the copy and the file as they are
+(only when the copy still parses as JSON; a torn copy without a record is refused too). A new copy is
+written to a temp name through File + sync_all, hash-checked, the record is written through a synced
+temp file and renamed, and only then does the copy take its .bak-kolux name, so a failed record write
+leaves no copy that a later install would trust.
+
+Unit (cargo test t_152_b_3 -- --nocapture --test-threads=1, scratch env):
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+  running 2 tests
+  test hooks::agent_hooks::tests::t_152_b_3_a_failed_record_write_leaves_no_copy_the_next_install_trusts ... could not keep a copy of G:\Temp\kolux-rs-agent-hooks-t152b-record-fail-64340\settings.json (the copy's record G:\Temp\kolux-rs-agent-hooks-t152b-record-fail-64340\record: Access is denied. (os error 5)); hooks not installed
+  ok
+  test hooks::agent_hooks::tests::t_152_b_3_the_kept_copy_is_checked_against_its_record_on_every_install ... kolux-rs: claude hooks: kept a copy before the first write: sha256 original a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7, backup a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7
+  kolux-rs: claude hooks: rebuilt the copy's record: sha256 file now a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7, kept copy a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7
+  rebuilt record:
+  a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7  G:\Temp\kolux-rs-agent-hooks-t152b-record-64340\settings.json
+  a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7  G:\Temp\kolux-rs-agent-hooks-t152b-record-64340\settings.json.bak-kolux
+  the kept copy G:\Temp\kolux-rs-agent-hooks-t152b-record-64340\settings.json.bak-kolux hashes b79dfbfa9ec1a73628a97e30525ef392b4452b152d1dd704a05386748f51adc2 but its record G:\Temp\kolux-rs-agent-hooks-t152b-record-64340\home\.kolux-rs/agent-hooks\claude-settings.sha256 says a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7; the copy is damaged, so hooks are not installed
+  ok
+  test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 491 filtered out; finished in 0.07s
+
+Runtime on the real-shape copy (kolux-dev, scratch env, proof.sh run 3 then by hand):
+    kolux-rs: claude hooks: kept a copy before the first write: sha256 original 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e, backup 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+    kolux-rs: claude hooks: installed
+    cmp: post-off file byte-identical to the copy
+    off-state sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e bytes 10077
+    claude-settings.sha256 record present: 2 lines
+  .bak-kolux truncated to 5000 bytes, then on:
+    kolux-rs: claude hooks: the kept copy G:\Temp\hooks-t152b\claude-config\settings.json.bak-kolux hashes b6bac177b80a83cd60d938933c060896e709ff135de8a2474120ed169e621dd3 but its record G:\Temp\hooks-t152b\home\.kolux-rs/agent-hooks\claude-settings.sha256 says 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e; the copy is damaged, so hooks are not installed
+    kolux-rs: codex hooks: not written (Codex hooks wait for T-025-e)
+    settings.json after the refused on: 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e (unchanged)
+  copy restored, record deleted, then on:
+    kolux-rs: claude hooks: rebuilt the copy's record: sha256 file now 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e, kept copy 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+    kolux-rs: claude hooks: installed
+    kolux-rs: codex hooks: not written (Codex hooks wait for T-025-e)
+    after off: settings.json 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
