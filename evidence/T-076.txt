@@ -1,0 +1,151 @@
+T-076 · CLI-012 kolux status · live proof · 2026-10-13 · lane/cli (base 2e6821b)
+
+Binary: src-tauri/target/debug/kolux.exe, built by
+  cargo build --manifest-path src-tauri/Cargo.toml --bin kolux --features release-cli
+App: src-tauri/target/debug/kolux-rs.exe (dev build) with vite on 1432, CDP 9250, window moved to X=-1920.
+Scratch environment for the app AND every CLI call below (helper st.sh):
+  every KOLUX_* variable unset first (this shell runs inside the old app, whose KOLUX_USER_DATA_PATH would win, COMPAT 7)
+  CLAUDE_CONFIG_DIR, CODEX_HOME under G:/Temp/cli-t076/live/tmp; USERPROFILE=HOME=G:/Temp/cli-t076/live/home (AppData/Roaming + Local made, .kolux-rs-scratch marker)
+  KOLUX_APP_DIR=G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke
+The startup file is <app dir>/cli.json {port, token, pid}; the token is never printed here.
+Exit codes (COMPAT 2.5): 0 running; 1 not-running, stale, graph-not-ready.
+--json: CLI-004 envelope, success true for every state, state in result.state; runtimeId = pid only when running.
+
+=== (a) no app: not-running ===
+$ KOLUX_APP_DIR=G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke src-tauri/target/debug/kolux.exe status
+not-running: Kolux is not running
+exit code: 1
+$ src-tauri/target/debug/kolux.exe status --json
+{
+  "requestId": "9a30-18de3aa06718e050",
+  "success": true,
+  "result": {
+    "state": "not-running",
+    "startupFile": "G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke\\cli.json"
+  },
+  "meta": {
+    "runtimeId": ""
+  }
+}
+exit code: 1
+$ node -e (parse the envelope, print result.state)
+parsed: success=true state=not-running runtimeId=""
+
+=== (b) app up on 1432/9250, polled right after cli.json appeared ===
+$ KOLUX_APP_DIR=G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke src-tauri/target/debug/kolux.exe status
+running: Kolux is up and ready (pid 39132)
+exit code: 0
+$ src-tauri/target/debug/kolux.exe status --json
+{
+  "requestId": "d77c-18de3ac51e9e61b8",
+  "success": true,
+  "result": {
+    "state": "running",
+    "startupFile": "G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke\\cli.json",
+    "pid": 39132,
+    "port": 65197,
+    "version": "0.1.0",
+    "graphReady": true
+  },
+  "meta": {
+    "runtimeId": "39132"
+  }
+}
+exit code: 0
+$ node -e (parse the envelope, print result.state)
+parsed: success=true state=running runtimeId="39132"
+
+=== (b) app up: running ===
+$ KOLUX_APP_DIR=G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke src-tauri/target/debug/kolux.exe status
+running: Kolux is up and ready (pid 39132)
+exit code: 0
+$ src-tauri/target/debug/kolux.exe status --json
+{
+  "requestId": "9f9c-18de3ac6690e7b10",
+  "success": true,
+  "result": {
+    "state": "running",
+    "startupFile": "G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke\\cli.json",
+    "pid": 39132,
+    "port": 65197,
+    "version": "0.1.0",
+    "graphReady": true
+  },
+  "meta": {
+    "runtimeId": "39132"
+  }
+}
+exit code: 0
+$ node -e (parse the envelope, print result.state)
+parsed: success=true state=running runtimeId="39132"
+
+=== (c) app killed hard (taskkill /F /T /PID of my own scratch app): stale ===
+$ taskkill /F /T /PID 39132
+SUCCESS: The process with PID 61484 (child process of PID 60756) has been terminated.
+SUCCESS: The process with PID 6068 (child process of PID 60756) has been terminated.
+SUCCESS: The process with PID 440 (child process of PID 60756) has been terminated.
+SUCCESS: The process with PID 54388 (child process of PID 60756) has been terminated.
+SUCCESS: The process with PID 56168 (child process of PID 60756) has been terminated.
+SUCCESS: The process with PID 60756 (child process of PID 39132) has been terminated.
+SUCCESS: The process with PID 28396 (child process of PID 39132) has been terminated.
+SUCCESS: The process with PID 28384 (child process of PID 39132) has been terminated.
+SUCCESS: The process with PID 34692 (child process of PID 39132) has been terminated.
+SUCCESS: The process with PID 57416 (child process of PID 39132) has been terminated.
+SUCCESS: The process with PID 39132 (child process of PID 53232) has been terminated.
+$ ls <app dir>  (the startup file stays behind)
+cli.json
+$ KOLUX_APP_DIR=G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke src-tauri/target/debug/kolux.exe status
+stale: Kolux left its startup file behind but nothing answers (pid 39132); run kolux-dev open to start it again
+exit code: 1
+$ src-tauri/target/debug/kolux.exe status --json
+{
+  "requestId": "c938-18de3ac92666e8e4",
+  "success": true,
+  "result": {
+    "state": "stale",
+    "startupFile": "G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke\\cli.json",
+    "pid": 39132,
+    "port": 65197,
+    "detail": "No connection could be made because the target machine actively refused it. (os error 10061)"
+  },
+  "meta": {
+    "runtimeId": ""
+  }
+}
+exit code: 1
+$ node -e (parse the envelope, print result.state)
+parsed: success=true state=stale runtimeId=""
+
+=== (e) app restarted, then closed cleanly: startup file removed, back to not-running ===
+$ (app restarted, pid 50368)
+$ KOLUX_APP_DIR=G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke src-tauri/target/debug/kolux.exe status
+running: Kolux is up and ready (pid 50368)
+exit code: 0
+$ graceful close: (Get-Process -Id 50368).CloseMainWindow()
+True
+app exited
+$ ls <app dir> | grep cli.json
+(no cli.json: removed on clean quit)
+$ KOLUX_APP_DIR=G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke src-tauri/target/debug/kolux.exe status
+not-running: Kolux is not running
+exit code: 1
+$ src-tauri/target/debug/kolux.exe status --json
+{
+  "requestId": "e454-18de3acebc19deb4",
+  "success": true,
+  "result": {
+    "state": "not-running",
+    "startupFile": "G:/Temp/cli-t076/live/home/AppData/Roaming/com.txaisxiong.kolux-rs.cli.smoke\\cli.json"
+  },
+  "meta": {
+    "runtimeId": ""
+  }
+}
+exit code: 1
+$ node -e (parse the envelope, print result.state)
+parsed: success=true state=not-running runtimeId=""
+
+=== graph-not-ready ===
+Not caught live: the warm-up (one worktree scan per project) finished before the first poll in (b) on this scratch profile with no projects.
+Covered by the unit test cli::tests::cli012_status_tells_running_not_running_stale_and_graph_not_ready_apart:
+a real serve_loop listener answers app.status with graphReady false -> graph-not-ready (exit 1), then after the flag flips -> running (exit 0).
