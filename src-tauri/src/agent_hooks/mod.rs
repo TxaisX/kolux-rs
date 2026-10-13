@@ -310,5 +310,7 @@ pub fn agent_hooks_sync(store: tauri::State<'_, std::sync::Mutex<crate::state::S
     Ok(())
 }
 
+pub mod saved;
+
 #[cfg(test)]
 mod tests;

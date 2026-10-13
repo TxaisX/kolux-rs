@@ -170,6 +170,11 @@ pub fn run() {
             automations::start_clock(app.handle().clone());
             // Agents report their status through hooks (STAT-001): the listener, then the scripts
             // and each found, switched-on agent's entries (STAT-004), off the launch path.
+            // STAT-006 / STAT-030: the last run's statuses, with what hooks held while Kolux was
+            // closed, are read before the listener opens.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                hooks::agent_hooks::saved::startup(&store, &dir);
+            }
             let hooks = hooks::serve(app.handle().clone(), &dir)?;
             app.manage(hooks);
             let settings = app.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default();
@@ -229,6 +234,8 @@ pub fn run() {
             save_settings,
             settings_patch,
             hooks::agent_hooks::agent_hooks_sync,
+            hooks::agent_hooks::saved::agent_status_saved,
+            hooks::agent_hooks::saved::agent_resumable,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -395,6 +402,10 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 // USAGE-011: open turns end and the counts are written; no batched save follows.
                 activity::save(&app.state::<Mutex<Store>>(), true);
+                // STAT-037: the agents still mid-task are recorded before their terminals end.
+                if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                    hooks::agent_hooks::saved::at_quit(&store);
+                }
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
                 app.state::<Terminals>().kill_all();

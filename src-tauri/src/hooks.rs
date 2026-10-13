@@ -422,6 +422,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
             let (code, status) = answer(&req, token);
             if let Some(status) = status {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
+                agent_hooks::saved::note(app, &req.path, &req.body, &status);
                 let _ = app.emit(EVENT, status);
             }
             code
@@ -488,26 +489,62 @@ pub fn status_command(script: &str, prev: &str) -> String {
     format!("k=\"${{TMPDIR:-/tmp}}/kolux-rs-status-$$\"; cat >\"$k\"; \"{script}\" <\"$k\" >/dev/null 2>&1; [ -f \"{prev}\" ] && sh \"{prev}\" <\"$k\"; rm -f \"$k\"; exit 0")
 }
 
+/// STAT-006: outside a Kolux pane the script leaves before reading stdin; the address comes from
+/// the endpoint file (agents that strip the token variables included), else the variables; the
+/// event is posted with the system curl inside 1.5 s; one Kolux cannot take or answer it is
+/// appended, one whole line, to the holding file beside the endpoint file (`spool`), for the next
+/// start. Delayed expansion is off, the agent's home path loses quotes and a trailing backslash,
+/// and no parenthesised block holds a path, so `!`, `&` and `)` in paths change nothing.
 fn script(agent: &str, route: &str) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
-    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\" --data-binary @- -o NUL \"http://127.0.0.1:%KP%/{route}\" >NUL 2>&1");
-    [
+    let post = format!("%SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %KC%\" --data-binary \"@%KF%\" -o NUL \"http://127.0.0.1:%KP%/{route}\" >NUL 2>&1");
+    // A status-line reading is only worth its moment: it is never held for later.
+    let spool = route != "claude-status";
+    let record = format!("<nul set /p \"={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\" >\"%KF%.line\"");
+    let keep = format!("for %%d in (\"%KE%\") do set \"KS=%%~dpd{}\"", agent_hooks::saved::SPOOL_FILE);
+    let mut lines = vec![
         "@echo off",
         head.as_str(),
+        "setlocal DisableDelayedExpansion",
         "rem Outside a Kolux pane there is nothing to report: leave before reading stdin.",
         "if \"%KOLUX_PANE_KEY%\"==\"\" exit /b 0",
-        "if \"%KOLUX_AGENT_HOOK_PORT%\"==\"\" exit /b 0",
-        "if \"%KOLUX_AGENT_HOOK_TOKEN%\"==\"\" exit /b 0",
-        "setlocal",
+        "if \"%KOLUX_HOOK_IDENTITY%\"==\"\" exit /b 0",
         "set \"KP=%KOLUX_AGENT_HOOK_PORT%\"",
         "set \"KT=%KOLUX_AGENT_HOOK_TOKEN%\"",
+        "set \"KE=%KOLUX_HOOK_ENDPOINT%\"",
         "rem The endpoint file names the Kolux running now, so a pane outlives a Kolux restart.",
-        "if not \"%KOLUX_HOOK_ENDPOINT%\"==\"\" if exist \"%KOLUX_HOOK_ENDPOINT%\" for /f \"usebackq tokens=1,2\" %%a in (\"%KOLUX_HOOK_ENDPOINT%\") do (set \"KP=%%a\" & set \"KT=%%b\")",
+        "if defined KE if exist \"%KE%\" for /f \"usebackq tokens=1,2\" %%a in (\"%KE%\") do (set \"KP=%%a\" & set \"KT=%%b\")",
+        "set \"KC=%CLAUDE_CONFIG_DIR%\"",
+        "if defined KC set \"KC=%KC:\"=%\"",
+        "if defined KC if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        "set \"KN=%TIME::=%\"",
+        "set \"KN=%KN:.=%\"",
+        "set \"KN=%KN:,=%\"",
+        "set \"KN=%KN: =%\"",
+        ":name",
+        "set \"KF=%TEMP%\\kolux-rs-hook-%KOLUX_PANE_KEY%-%KN%-%RANDOM%.json\"",
+        "if exist \"%KF%\" goto name",
+        "%SystemRoot%\\System32\\more.com >\"%KF%\"",
+        "if not defined KP goto spool",
+        "if not defined KT goto spool",
         post.as_str(),
-        "exit /b 0",
-        "",
-    ]
-    .join("\r\n")
+        "if not errorlevel 1 goto done",
+        ":spool",
+    ];
+    if spool {
+        lines.extend([
+            "rem Kolux is closed or not answering: the event waits, one whole line, for the next start.",
+            "if not defined KE goto done",
+            "for %%z in (\"%KF%\") do if %%~zz==0 goto done",
+            keep.as_str(),
+            record.as_str(),
+            "type \"%KF%\" >>\"%KF%.line\"",
+            "echo(>>\"%KF%.line\"",
+            "type \"%KF%.line\" >>\"%KS%\"",
+        ]);
+    }
+    lines.extend([":done", "del \"%KF%\" \"%KF%.line\" >NUL 2>&1", "exit /b 0", ""]);
+    lines.join("\r\n")
 }
 
 /// Writes the script under `home` (only when it changed) and returns its path with forward slashes.
@@ -1016,7 +1053,8 @@ mod tests {
         let status = write_status_script(&dir).unwrap();
         assert!(status.ends_with(".kolux-rs/agent-hooks/claude-status.cmd"));
         let text = std::fs::read_to_string(&status).unwrap();
-        assert!(text.contains("%KP%/claude-status\"") && text.contains("-H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\""), "{text}");
+        assert!(text.contains("%KP%/claude-status\"") && text.contains("set \"KC=%CLAUDE_CONFIG_DIR%\"") && text.contains("-H \"X-Kolux-Config: %KC%\""), "{text}");
+        assert!(!text.contains(agent_hooks::saved::SPOOL_FILE), "a status-line reading is never held for later");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
