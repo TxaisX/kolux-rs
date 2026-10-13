@@ -276,7 +276,15 @@ impl Terminals {
     /// cannot be told), `Some(Some(agent))` for a program Kolux started (USAGE-007).
     pub fn program(&self, id: u32) -> Option<Option<&'static str>> {
         let inner = self.inner.lock().ok()?;
-        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent))
+        // ACCT-050: a shell credits the agent the user started in it by hand.
+        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent).or_else(|| crate::foreground::found(id)))
+    }
+
+    /// ACCT-050: every shell session (no program of Kolux's own) with its process id and
+    /// foreground process group.
+    pub fn shells(&self) -> Vec<(u32, Option<u32>, Option<i32>)> {
+        let Ok(inner) = self.inner.lock() else { return Vec::new() };
+        inner.sessions.iter().filter(|(id, _)| !inner.marks.contains_key(id)).map(|(id, s)| (*id, s.pid(), s.foreground_group())).collect()
     }
 
     /// How long the program in `id` has printed nothing (since it started, when it never has), for

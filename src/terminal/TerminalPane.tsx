@@ -3,7 +3,7 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { crewLabel, crewLine, headerOf, type Crew } from "./status";
+import { crewLabel, crewLine, foundAgent, headerOf, type Crew } from "./status";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
@@ -114,6 +114,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const [now, setNow] = useState(() => Date.now());
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
+  // ACCT-050: the agent the user started by hand in this shell, as Rust recognises it.
+  const [found, setFound] = useState<Agent | null>(null);
   const idRef = useRef<number | null>(null);
   const keymap = useKeymap();
   const keys = useRef(keymap);
@@ -211,6 +213,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             sawOutput();
           }),
         ),
+        await listen<{ terminal: number; agent: string | null }>("pane-agent", (e) =>
+          mine(e.payload.terminal, () => setFound(foundAgent(e.payload.agent))),
+        ),
         await listen<ExitEvent>("terminal-exit", (e) =>
           mine(e.payload.id, () => {
             ended = true;
@@ -289,7 +294,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     if (hook === "done") setFinishedAt((t) => t ?? Date.now());
     else if (hook === "working") setFinishedAt(null);
   }, [hook]);
-  const header = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  // A shell pane running an agent the user started by hand reads as that agent's session.
+  const shown: Agent = agent === "shell" && found ? found : agent;
+  const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
   const { word, tone, glyph, age, needsYou } = header;
   const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;
   const needs = useRef(onNeedsYou);
@@ -301,18 +308,18 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   // The seat's job title names the pane; else the workspace folder (an agent launch's creature
   // name); else "Terminal N" (SESS-024).
   const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
-  const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
+  const agentLabel = shown === "shell" ? "Plain shell" : programWord(shown);
   // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
   const model = agent === "shell" ? null : modelOf(args);
 
   return (
-    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
+    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} style={card?.column ? { gridColumn: card.column } : undefined}>
       <header className="pane-head">
         <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>
         <span className="agent-mark" title={agentLabel}>
-          <VendorMark agent={agent} size={13} />
+          <VendorMark agent={shown} size={13} />
         </span>
         <span className="title" title={cwd ?? undefined}>
           {title}
@@ -324,7 +331,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
         <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
-          {shellName ?? (agent === "shell" && !program && started ? shellWord(started) : programWord(agent))}
+          {shellName ?? (shown === "shell" && !program && started ? shellWord(started) : programWord(shown))}
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`} data-tip={explain}>

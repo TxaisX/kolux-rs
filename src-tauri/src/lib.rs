@@ -27,6 +27,7 @@ mod names;
 mod notifications;
 mod onboarding;
 mod orchestration;
+mod foreground;
 mod procs;
 mod resources;
 mod projects;
@@ -198,6 +199,12 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(15));
                 resume::tick(&handle, &log_dir);
+            });
+            // ACCT-050: an agent started by hand in a shell pane is recognised within a few seconds.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                foreground::poll(&handle);
             });
             // USAGE-011: changed activity counts are saved in batches.
             let handle = app.handle().clone();

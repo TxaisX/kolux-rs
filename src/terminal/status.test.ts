@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { VOCAB, ageLabel, headerOf, nextNeedsYou, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
+import { VOCAB, ageLabel, foundAgent, headerOf, nextNeedsYou, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
 
 test("a plain shell reads as a terminal with a neutral status; an agent's word is tinted (TERM-020, TERM-021)", () => {
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ word: "Ready", tone: "", needsYou: false });
@@ -83,4 +83,14 @@ test("the pane header is the vocabulary applied to what the pane knows: hook sta
   expect(headerOf("claude", "failed", undefined, false, null, 0)).toMatchObject({ state: "failed", glyph: "failed" });
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ state: "idle", word: "Ready", glyph: "idle" });
   expect(headerOf("shell", "ended", 2, false, 0, 0)).toMatchObject({ state: "stopped", word: "Ended (2)", explain: "Stopped: exit code 2" });
+});
+
+test("a shell pane takes the header of an agent started in it by hand, and only one it can mark (ACCT-050)", () => {
+  expect(foundAgent("claude")).toBe("claude");
+  expect(foundAgent("codex")).toBe("codex");
+  expect(foundAgent("grok")).toBeNull();
+  expect(foundAgent(null)).toBeNull();
+  // Once found, the pane reads as the agent: its hook state shows, not "Ready".
+  expect(headerOf(foundAgent("claude") ?? "shell", "running", undefined, false, null, 0, "waiting").state).toBe("waiting");
+  expect(headerOf(foundAgent(null) ?? "shell", "running", undefined, false, null, 0, "waiting").word).toBe("Ready");
 });

@@ -318,6 +318,18 @@ impl PtySession {
         self.pid
     }
 
+    /// ACCT-050: the terminal's foreground process group (not on Windows, which has none).
+    pub fn foreground_group(&self) -> Option<i32> {
+        #[cfg(unix)]
+        {
+            self.master.as_ref().and_then(|m| m.process_group_leader())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// Ends the program: closes its input, forces it to stop, releases the PTY so the reader
     /// thread can finish.
     pub fn kill(&mut self) {
