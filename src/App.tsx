@@ -43,6 +43,7 @@ import Explorer from "./editor/Explorer";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking } from "./terminal/grid";
+import { gpuOn } from "./terminal/renderer";
 import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
@@ -1367,6 +1368,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                   </div>
                 </div>
               )}
+              {/* TERM-017: cells are keyed by group and panes by key, and a split only inserts, so a
+                  pane's terminal is never remounted (never respawned) by a layout change. */}
               {cells.map((c) => {
                 // VIEW-015: on the Agents screen the picked session is the one shown, whatever tab its cell had in front.
                 const mine = agentsScreen && c.panes.some((p) => p.key === selected);
@@ -1469,6 +1472,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                   <TerminalPane
                     key={p.key}
                     hidden={!board && p.key !== active}
+                    gpu={gpuOn(settings)}
                     card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
                     cwd={p.cwd}
                     branch={p.branch}

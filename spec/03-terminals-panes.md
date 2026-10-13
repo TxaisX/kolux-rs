@@ -301,6 +301,8 @@ User does: splits, rearranges, applies presets or restores the app.
 User sees: each running program stays in its pane; nothing restarts or duplicates.
 Rules: a split, move or preset never respawns an existing session; output from one session never
   shows up in another pane; duplicate replays into the same pane are suppressed.
+  (Kolux RS, T-067: the app keys every cell by its group id and every pane by its pane key, so a split
+  or move re-parents the existing terminal host instead of remounting it; nothing respawns.)
 Acceptance:
   - [ ] After 10 random splits and moves, each pane still shows its own session.
   - [ ] Text printed in one pane never shows up in any other pane after splits and moves.
@@ -315,6 +317,8 @@ Rules: Copy: Cmd+C on macOS; Ctrl+Shift+C on Windows/Linux, and Ctrl+C when text
   failure the selection is kept and one notice shows (repeated failures are throttled); an empty
   selection never reports success; focus returns to the pane after copying; on macOS the copy
   shortcut follows the letter the keyboard layout produces, not the physical key position.
+  (Kolux RS, T-067: Ctrl+C with nothing selected is the interrupt and reaches the program; a refused
+  clipboard shows one notice per 5 s in the pane header and keeps the selection; focus returns to the pane.)
 Acceptance:
   - [ ] With the clipboard locked by another app, copying shows a failure notice and the selection
       remains.
@@ -331,6 +335,10 @@ Rules: Auto uses GPU rendering when supported, otherwise plain rendering; on/off
   failure does not make later terminals slow to open; glyph caches reset after paste bursts and
   system resume to clear garbled text; a program's synchronized frame is shown whole, including when
   a hidden pane is revealed.
+  (Kolux RS, T-067: the switch "Draw terminals with the GPU" is auto (on) or plain (off); there is no
+  separate force-on beyond auto, see DT-C26. Synchronized frames are handled by xterm itself. The cap counts
+  live WebGL contexts; a lost context frees its slot. Glyph atlas reset after a paste over 2 KB and after a
+  heartbeat gap over 30 s. Shells that stall at process start are a terminal-start problem, carried into T-166.)
 Acceptance:
   - [ ] Opening 10 terminals never shows blank panes.
   - [ ] With more than 6 terminals visible, the panes beyond the cap draw on the plain path and
@@ -346,6 +354,8 @@ Rules: a background host keeps sessions alive while the app is closed; scrollbac
   quit and relaunch; restored panes accept input straight away; the focused pane and an expanded
   pane come back as they were; terminals created from the command line or by automation are restored
   too.
+  (Kolux RS, T-067: not built. Tabs, splits, focus and agent sessions come back through the saved layout
+  and session resume; the background host, scrollback and running programs wait for Txais's call.)
 Acceptance:
   - [ ] Quit with a build running; reopen; the build output continues in the same pane.
   - [ ] Restored panes accept typing at once and the pane that had focus before quitting has it

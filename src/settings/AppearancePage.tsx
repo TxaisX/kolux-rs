@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
+import { GPU_FIELD, gpuOn } from "../terminal/renderer";
 import { schemeOptions, SchemeList } from "./SchemePicker";
 import { useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
@@ -277,6 +278,16 @@ function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings
             <span>{c.label}</span>
           </label>
         ))}
+      </section>
+      <section className="conn-card" data-section="terminal-drawing">
+        <h2 className="conn-name">Terminal drawing</h2>
+        <label className="conn-switch">
+          <input type="checkbox" role="switch" checked={gpuOn(settings)} onChange={(e) => void save({ [GPU_FIELD]: e.target.checked })} />
+          <span>
+            Draw terminals with the GPU
+            <small>Up to six at a time; the rest, and every terminal when this is off, draw the plain way. Applies to terminals opened from now on.</small>
+          </span>
+        </label>
       </section>
       <section className="conn-card" data-section="status-bar">
         <h2 className="conn-name">Status bar</h2>

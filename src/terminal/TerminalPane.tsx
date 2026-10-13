@@ -12,7 +12,8 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { attachRenderer, type RendererMode } from "./renderer";
+import { attachRenderer, watchResume, type RendererMode } from "./renderer";
+import { copySelection } from "./copy";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
@@ -39,6 +40,8 @@ export type PaneNotice = { title: string; body: string; primary: string; onPrima
 type Props = {
   /** Kept mounted but not shown: another workspace is in front (PROJ-066). */
   hidden?: boolean;
+  /** TERM-103: false draws plain; true tries the GPU path (six panes at most, the rest plain). */
+  gpu?: boolean;
   /** VIEW-024: the saved agent's name, shown in the header in place of the program word. */
   name?: string;
   cwd?: string | null;
@@ -109,13 +112,20 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const [glow, setGlow] = useState(false); // TERM-023: finished while not focused
   const [now, setNow] = useState(() => Date.now());
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
+  // TERM-065: a short line in the header when the clipboard refused a copy; the selection stays.
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 6000);
+    return () => clearTimeout(t);
+  }, [flash]);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   const idRef = useRef<number | null>(null);
   const keymap = useKeymap();
@@ -172,7 +182,7 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
-    const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon());
+    const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu);
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
     fit.fit();
@@ -202,8 +212,33 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
       }, 1500);
     };
     // TERM-068 lives in paste.ts (tested there); the paste chords are left to the browser instead of xterm.
-    const pasting = attachPaste(term.textarea, (text) => term.paste(text), () => pending !== null);
-    term.attachCustomKeyEventHandler((e) => !(e.type === "keydown" && matchEvent(keys.current, e, ["terminal"])?.id === "terminal.paste"));
+    const pasting = attachPaste(
+      term.textarea,
+      (text) => {
+        term.paste(text);
+        // TERM-103: a paste burst fills the glyph atlas with one-off runs; start it fresh afterwards.
+        if (text.length > 2048) choice.clearGlyphs();
+      },
+      () => pending !== null,
+    );
+    // TERM-065: the copy chord copies a selection and gives the keyboard back; Ctrl+C with nothing
+    // selected is the program's interrupt and goes through untouched. Nothing selected under
+    // Ctrl+Shift+C does nothing and says nothing.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      const id = matchEvent(keys.current, e, ["terminal"])?.id;
+      if (id === "terminal.paste") return false;
+      if (id === "terminal.selectAll") {
+        e.preventDefault();
+        term.selectAll();
+        return false;
+      }
+      if (id !== "terminal.copySelection") return true;
+      if (!term.hasSelection()) return !(e.shiftKey || e.metaKey);
+      e.preventDefault();
+      void copySelection(term, (text) => navigator.clipboard.writeText(text), setFlash);
+      return false;
+    });
 
     (async () => {
       unlisteners.push(
@@ -274,12 +309,16 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
       mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
+    // TERM-103: after the machine slept the GPU's glyph atlas may be stale; a late heartbeat says so.
+    const sleep = watchResume(() => choice.clearGlyphs());
+    const beat = setInterval(sleep.tick, 5000);
 
     return () => {
       alive = false;
       window.removeEventListener(DIVIDER_DONE, resize);
       window.removeEventListener(TERMINAL_EVENT, recolour);
       mode.dispose();
+      clearInterval(beat);
       clearTimeout(quiet);
       observer.disconnect();
       unlisteners.forEach((u) => u());
@@ -343,6 +382,11 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
         <span className={`status ${tone}`} data-tip={explain}>
           {word}
         </span>
+        {flash && (
+          <span className="status attention" role="status">
+            {flash}
+          </span>
+        )}
         {crew && crew.length > 0 && (
           <span className="crew" title={crew.map(crewLine).join("\n")}>
             {crewLabel(crew)}
