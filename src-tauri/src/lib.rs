@@ -97,6 +97,28 @@ const QUIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 #[derive(Default)]
 struct Closing(std::sync::atomic::AtomicU32, std::sync::atomic::AtomicU32);
 
+/// APP-006: set once a quit or restart has been asked for, so the last window closing on the way
+/// out never holds the app open.
+static QUIT_UNDER_WAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// APP-006: whether the app stays running when it is asked to exit. `code` is None when the last
+/// window closed and Some when a quit or restart asked. Only macOS keeps an app with no windows.
+fn keeps_running(mac: bool, code: Option<i32>, quitting: bool) -> bool {
+    mac && code.is_none() && !quitting
+}
+
+/// APP-006 on macOS: clicking the Dock icon of an app with no window opens a fresh main window.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn reopen_main(app: &tauri::AppHandle) {
+    if app.webview_windows().is_empty() {
+        if let Some(config) = app.config().app.windows.first() {
+            if let Err(e) = tauri::WebviewWindowBuilder::from_config(app, config).and_then(|b| b.build()) {
+                eprintln!("reopen: the window could not be made again: {e}");
+            }
+        }
+    }
+}
+
 /// APP-006: the window's close handler heard the request (it then asks, or closes).
 /// APP-021: what the startup check could not repair, for the window to name.
 struct StartupProblems(Vec<String>);
@@ -449,6 +471,19 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                use std::sync::atomic::Ordering::SeqCst;
+                if code.is_some() {
+                    QUIT_UNDER_WAY.store(true, SeqCst);
+                }
+                if keeps_running(cfg!(target_os = "macos"), *code, QUIT_UNDER_WAY.load(SeqCst)) {
+                    api.prevent_exit();
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = &event {
+                reopen_main(app);
+            }
             if let tauri::RunEvent::Exit = event {
                 // APP-006: whatever hangs below, the process is gone at the deadline.
                 std::thread::spawn(|| {
@@ -478,4 +513,19 @@ pub fn run() {
                 update::install_on_quit(app);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// APP-006: closing the last window quits on Windows and Linux; on macOS the app keeps running,
+    /// unless a quit is already under way.
+    #[test]
+    fn app006_only_macos_keeps_running_when_the_last_window_closes_and_a_quit_still_quits() {
+        assert!(!keeps_running(false, None, false), "Windows and Linux: the last window closing quits");
+        assert!(keeps_running(true, None, false), "macOS: the app stays in the dock");
+        assert!(!keeps_running(true, None, true), "macOS: a quit under way finishes");
+        assert!(!keeps_running(true, Some(0), false), "macOS: an explicit quit or restart finishes");
+    }
 }
