@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { between, dirAt, DRAFT, flatten, isWsl, movesInto, redoOf, tops, undoOf, type Node } from "./Explorer";
+import { between, dirAt, DRAFT, flatten, isWsl, movesInto, redoOf, relocate, tops, undoOf, type Node } from "./Explorer";
 
 const dir = (path: string): Node => ({ name: path.split("/").pop()!, path, kind: "dir" });
 const file = (path: string): Node => ({ name: path.split("/").pop()!, path, kind: "file" });
@@ -67,5 +67,21 @@ describe("explorer file operations", () => {
   it("moves a folder chosen with its own children once, and skips what is already there", () => {
     expect(movesInto(["/r/d", "/r/d/g.ts", "/r/f.ts", "/r/e/h.ts"], "/r/e")).toEqual([["/r/d", "/r/e"], ["/r/f.ts", "/r/e"]]);
     expect(movesInto(["/r/e"], "/r/e")).toEqual([]);
+  });
+});
+
+describe("open tabs follow a rename or a move (EDIT-032)", () => {
+  const moves: [string, string][] = [
+    ["C:/w/notes/a.md", "C:/w/notes/b.md"],
+    ["C:/w/old", "C:/w/sub/old"],
+  ];
+  it("gives a renamed file its new path, whatever the case and slashes of the tab's copy", () => {
+    expect(relocate("C:/w/notes/a.md", moves)).toBe("C:/w/notes/b.md");
+    expect(relocate("c:/W/NOTES/a.md", moves)).toBe("C:/w/notes/b.md");
+  });
+  it("carries files inside a moved folder along, and leaves the rest alone", () => {
+    expect(relocate("C:/w/old/deep/x.ts", moves)).toBe("C:/w/sub/old/deep/x.ts");
+    expect(relocate("C:/w/older/x.ts", moves)).toBe("C:/w/older/x.ts");
+    expect(relocate("C:/w/notes/a.md.bak", moves)).toBe("C:/w/notes/a.md.bak");
   });
 });

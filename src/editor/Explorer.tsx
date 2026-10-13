@@ -16,6 +16,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Close, FileCode, FolderPlus, Plus } from "../chrome/icons";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
+import { keyOf } from "./buffers";
 
 export type Node = { name: string; path: string; kind: "dir" | "file" | "link" };
 export type Row = { node: Node; depth: number; parent: string | null };
@@ -56,6 +57,12 @@ export const between = (rows: Row[], a: number, b: number) => rows.slice(Math.mi
 export const parentOf = (path: string) => path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")));
 export const baseName = (path: string) => path.slice(Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")) + 1);
 const inside = (p: string, dir: string) => p.startsWith(dir + "\\") || p.startsWith(dir + "/");
+/** EDIT-032: where a path is after these moves ([from, to]; a moved folder carries what is inside it). */
+export const relocate = (path: string, moves: [string, string][]) =>
+  moves.reduce((p, [a, b]) => {
+    const k = keyOf(p), ka = keyOf(a);
+    return k === ka ? b : inside(k, ka) ? b + p.slice(a.length) : p;
+  }, path);
 /** A selection to delete: a folder chosen along with things inside it goes once, as the folder. */
 export const tops = (paths: string[]) => paths.filter((p) => p !== DRAFT && !paths.some((q) => q !== p && inside(p, q)));
 /** The call that undoes an action, and the one that does it again. */
@@ -98,9 +105,9 @@ export function dirAt(rows: Row[], i: number, root: string, isDir: (n: Node) => 
 export const movesInto = (paths: string[], dir: string): [string, string][] => tops(paths).filter((p) => p !== dir && parentOf(p) !== dir).map((p) => [p, dir]);
 const EDGE = 24; // px from the tree's top or bottom where a drag scrolls it
 
-type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; onClose: () => void };
+type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: string) => void; onClose: () => void; onMoved?: (moves: [string, string][]) => void };
 
-export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Props) {
+export default function Explorer({ root, hidden, focusAsk, onOpen, onClose, onMoved }: Props) {
   const keymap = useKeymap();
   const [kids, setKids] = useState<Record<string, Node[] | undefined>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
@@ -215,9 +222,10 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
       void load(d.dir).then(() => pick(path));
     }, fail);
   };
-  /** Open folders that moved or were renamed stay open at their new paths. */
+  /** Open folders that moved or were renamed stay open at their new paths, and so do open tabs (EDIT-032). */
   const follow = (moves: [string, string][], also?: string) => {
-    const to = (p: string) => moves.reduce((q, [a, b]) => (q === a || inside(q, a) ? b + q.slice(a.length) : q), p);
+    if (moves.length) onMoved?.(moves);
+    const to = (p: string) => relocate(p, moves);
     const next = new Set([...open].map(to));
     if (also && also !== root) next.add(also);
     setOpen(next);

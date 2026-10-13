@@ -437,6 +437,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
 
+> 2026-10-13 · T-177-e · the EDIT-032 spec card and the repo's own Explorer.tsx, EditorPane.tsx, buffers.ts, autosave.ts, session.ts, fsops.rs and App.tsx. Nothing from the old app.
 > 2026-10-13 · T-177-d · the EDIT-028 spec card and the repo's own DiffPane.tsx, DiffPane.test.ts and notify.ts/notify.test.ts. Nothing from the old app.
 > 2026-10-13 · T-177-c · the EDIT-019 spec card and COMPAT row, the repo's own markdown.ts, EditorPane.tsx, PreviewPane.tsx, DiffPane.tsx (menu pattern) and styles.css; Lexical's published type file for $convertFromMarkdownString (shouldMergeAdjacentLines) and the CommonMark spec it cites. Nothing from the old app.
 > 2026-10-12 · T-177-b · the EDIT-004 spec card (with EDIT-003 for the banner), the repo's own buffers.ts, autosave.ts, EditorPane.tsx, App.tsx, workspaces.ts and src-tauri/src/projects.rs, lib.rs. FNV-1a is the public-domain hash from its published description. Nothing from the old app.

@@ -18,7 +18,7 @@ import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
-import { attach, baseName, detach, diskNews, isDirty, keepMine, loadText, relay, replaceAll, save, subscribe } from "./buffers";
+import { attach, baseName, detach, diskNews, draftOf, isDirty, keyOf, keepMine, loadText, relay, replaceAll, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, planRich, rewrite, RICH_LIMIT, splitFront, unsupported } from "./markdown";
 import { resumeAutosave, stopAutosave, watchAutosave } from "./autosave";
 import { hashText, type Mode, type Start } from "./session";
@@ -44,11 +44,14 @@ export const look = EditorView.theme(
   { dark: true },
 );
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null; start?: Start };
+type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null; start?: Start; movedFrom?: string };
 
-export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null, start }: Props) {
+export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null, start, movedFrom }: Props) {
   // EDIT-004: a restored tab's draft, caret and view mode, used by its first load only.
   const first = useRef(start);
+  // EDIT-032: what the tab held when its file last closed in it; a rename or move (movedFrom) takes it along.
+  const left = useRef<(Start & { from: string }) | null>(null);
+  const carried = () => (movedFrom && left.current?.from === keyOf(movedFrom) ? left.current : undefined);
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,8 +92,9 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     loadText(() => invoke<string>("file_read", { path })).then(
       (text) => {
         if (!alive) return;
-        const begin = first.current;
+        const begin = first.current ?? carried();
         first.current = undefined;
+        left.current = null;
         const doc = begin?.draft ?? text;
         made = new EditorView({
           doc,
@@ -137,6 +141,9 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       looks.delete(id);
       off();
       if (made) {
+        // Every keystroke up to this moment, so typing while a move finishes is kept.
+        const d = draftOf(path);
+        left.current = { from: keyOf(path), draft: d?.text, base: d ? hashText(d.disk) : undefined, caret: made.state.selection.main.head, mode: modeNow.current };
         detach(path, made);
         made.destroy();
       }
@@ -155,7 +162,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
   useEffect(() => {
     if (lastPath.current === path) return;
     lastPath.current = path;
-    setMode(isMarkdown(path) ? "rich" : "source");
+    setMode(isMarkdown(path) ? (carried()?.mode ?? "rich") : "source");
     setBigOk(false);
     setBanner(null);
     setMoved(null);

@@ -46,7 +46,7 @@ import KitStrip, { useKitCheck } from "./kits/KitStrip";
 import { datedName, matchSeats, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
-import Explorer from "./editor/Explorer";
+import Explorer, { relocate } from "./editor/Explorer";
 import { isMarkdown } from "./editor/markdown";
 import { autosaveOf } from "./editor/autosave";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -95,7 +95,7 @@ type KitWait = { role: string; upstream: string; key: number; prompt: string };
 type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number> };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string; start?: Start };
+type Pane = { movedFrom?: string; key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string; start?: Start };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -682,6 +682,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "editor", path }]);
     setFocused(key);
   };
+
+  // EDIT-032: an editor or preview tab follows its file when the explorer renames or moves it.
+  const filesMoved = (moves: [string, string][]) =>
+    setPanes((ps) => ps.map((p) => ((p.kind !== "editor" && p.kind !== "preview") || !p.path || relocate(p.path, moves) === p.path ? p : { ...p, path: relocate(p.path, moves), movedFrom: p.path, start: undefined })));
 
   // EDIT-027: a changed file's diff opens as a tab beside the focused pane; its staged and
   // unstaged diffs are separate tabs, and one already open in that cell comes to the front.
@@ -1713,6 +1717,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onToast={setToast}
                     autosave={autosaveOf(settings)}
                     start={p.start}
+                    movedFrom={p.movedFrom}
                   />
                 ) : p.kind === "diff" && p.path ? (
                   <DiffPane
@@ -1832,7 +1837,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             }
           }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
-        {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
+        {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} onMoved={filesMoved} />}
       </div>
       {kits && kits.kit === null && <KitGallery connected={kitAIs} onPick={pickKit} onClose={() => setKits(null)} />}
       {kits && kits.kit !== null && (() => {
