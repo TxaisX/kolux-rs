@@ -112,6 +112,7 @@ pub fn run() {
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
+            app.manage(links::Grants::default());
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
             if let Some(w) = app.get_webview_window("main") {
@@ -279,7 +280,7 @@ pub fn run() {
             files::diff_image,
             files::dir_list,
             files::path_kind,
-            links::open_path,
+            links::open_path, links::file_grant,
             fsops::fs_create,
             fsops::fs_rename,
             fsops::fs_trash,

@@ -1,14 +1,16 @@
 //! SAFE-021 / SAFE-022: paths the interface hands to the system. A path on another machine is
 //! refused as text, before any filesystem call, so Windows never offers the user's credentials to
 //! that host; a file link aimed at a program, script, installer or shortcut is revealed in its
-//! folder instead of run. `refuse_host` guards every command that takes a path from the
-//! interface; `open_path` is the one door for handing a file to the system.
+//! folder instead of run. EDIT-045: `fence` guards every command that takes a path from the
+//! interface: inside a registered root (or granted exactly, through `file_grant`), never out
+//! through a link; `open_path` is the one door for handing a file to the system.
 //!
 //! ponytail: there are no terminal or note links yet; when they land they call `open_path` and
 //! need nothing of their own. On Linux a reveal opens the folder without selecting the file; the
 //! FileManager1 D-Bus call would select it.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// File types that run when opened: programs, scripts, installers, shortcuts, macro documents and
@@ -29,10 +31,16 @@ const PROGRAMS: &[&str] = &[
     "crt", "cer", "der", "p7b", "p7c", "pfx", "p12", "xnk", "shb", "shs", "prf", "prg", "pcd", "vsmacros", "vsw",
 ];
 
-/// Every registered root a share path may live under: the projects and the workspaces folder.
+/// Every registered root: the projects, a project's own workspaces folder, and the shared one.
 pub fn roots(store: &Mutex<crate::state::Store>) -> Vec<String> {
     let s = store.lock().unwrap_or_else(|e| e.into_inner());
-    let mut v: Vec<String> = crate::projects::load_projects(&s).into_iter().map(|p| p.path).collect();
+    let mut v = Vec::new();
+    for p in crate::projects::load_projects(&s) {
+        if let Some(own) = p.workspaces_dir.as_deref().map(str::trim).filter(|o| !o.is_empty()) {
+            v.push(Path::new(&p.path).join(own).to_string_lossy().into_owned());
+        }
+        v.push(p.path);
+    }
     v.push(crate::projects::workspaces_dir(&s).to_string_lossy().into_owned());
     v
 }
@@ -125,6 +133,106 @@ fn decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// EDIT-045: paths allowed one at a time for this run, each exactly as granted, nothing beneath it.
+#[derive(Default)]
+pub struct Grants(pub Mutex<HashSet<String>>);
+
+impl Grants {
+    pub fn snapshot(&self) -> HashSet<String> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+/// One spelling for comparing paths: Windows folds slashes and case, POSIX keeps both.
+pub fn fence_key(path: &str) -> String {
+    if cfg!(windows) {
+        crate::projects::name_key(path)
+    } else {
+        path.trim_end_matches('/').to_string()
+    }
+}
+
+/// Is `key` one of `roots` or beneath one? A sibling whose name merely starts the same is not.
+fn under(key: &str, roots: &[String]) -> bool {
+    let sep = if cfg!(windows) { '\\' } else { '/' };
+    roots.iter().map(|r| fence_key(r)).any(|r| key == r || key.strip_prefix(r.as_str()).is_some_and(|rest| rest.starts_with(sep)))
+}
+
+/// Where `path` really leads: its deepest existing ancestor with every link resolved, and the
+/// rest of the name appended (a file about to be written does not exist yet).
+fn real(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if let Ok(c) = std::fs::canonicalize(&cur) {
+            let mut out = c;
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match (cur.file_name(), cur.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name.to_os_string());
+                cur = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// A canonical path as text without Windows' long-path prefix, so it compares with what the user typed.
+fn plain(p: PathBuf) -> String {
+    let s = p.to_string_lossy().into_owned();
+    if let Some(r) = s.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{r}")
+    } else if let Some(r) = s.strip_prefix("\\\\?\\") {
+        r.to_string()
+    } else {
+        s
+    }
+}
+
+/// EDIT-045: the file fence. `path` must be a full path on this machine inside one of `roots`
+/// (the projects, their workspaces folders and the shared one), or granted exactly; a `..` step is
+/// refused as text. With `follow`, the place the path really leads to (every link resolved) must
+/// still be inside a root, so a link out of a project is refused for reading, writing and listing;
+/// without it the entry itself is acted on (rename, trash, move), so only its folder must be inside.
+pub fn fence(path: &str, roots: &[String], grants: &HashSet<String>, follow: bool) -> Result<PathBuf, String> {
+    refuse_host(path, roots)?;
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err(format!("{path} is not a full path"));
+    }
+    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(format!("{path} climbs out with ..; Kolux reads and writes only inside your projects"));
+    }
+    let key = fence_key(path);
+    if grants.contains(&key) {
+        return Ok(p.to_path_buf());
+    }
+    if !under(&key, roots) {
+        return Err(format!("{path} is outside your projects; Kolux reads and writes only inside them"));
+    }
+    let probe = if follow { p } else { p.parent().unwrap_or(p) };
+    let real_roots: Vec<String> = roots.iter().map(|r| plain(real(Path::new(r)))).collect();
+    if !under(&fence_key(&plain(real(probe))), &real_roots) {
+        return Err(format!("{path} leads outside your projects through a link"));
+    }
+    Ok(p.to_path_buf())
+}
+
+/// EDIT-045: allows `path` for this run, that exact path and nothing beneath it.
+#[tauri::command]
+pub fn file_grant(store: tauri::State<'_, Mutex<crate::state::Store>>, grants: tauri::State<'_, Grants>, path: String) -> Result<(), String> {
+    refuse_host(&path, &roots(&store))?;
+    if !Path::new(&path).is_absolute() {
+        return Err(format!("{path} is not a full path"));
+    }
+    grants.0.lock().unwrap_or_else(|e| e.into_inner()).insert(fence_key(&path));
+    Ok(())
 }
 
 /// SAFE-022: a file name of a type that runs when opened. On Windows an alternate-data-stream
@@ -271,6 +379,56 @@ mod tests {
         assert!(t.elapsed() < std::time::Duration::from_millis(500));
         assert!(err.contains("another computer"), "{err}");
         assert_eq!(refuse_host(r"C:\a.txt", &[]), Ok(()));
+    }
+
+    #[test]
+    fn edit045_file_access_stays_inside_the_roots_and_a_link_out_is_refused_unless_granted_exactly() {
+        let base = std::env::temp_dir().join(format!("krs-fence-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("project");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(outside.join("deep")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "a").unwrap();
+        std::fs::write(outside.join("secret.txt"), "s").unwrap();
+        std::fs::write(outside.join("deep/inner.txt"), "i").unwrap();
+        let link = |name: &str, to: &Path| {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(to, root.join(name)).unwrap();
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_file(to, root.join(name)).unwrap();
+        };
+        link("escape", &outside.join("secret.txt"));
+        link("inner", &root.join("src/a.rs"));
+        let roots = vec![root.to_string_lossy().into_owned()];
+        let s = |p: &Path| p.to_string_lossy().into_owned();
+        let none = std::collections::HashSet::new();
+        // Inside: an existing file, a file not yet written, a link that stays inside.
+        assert!(fence(&s(&root.join("src/a.rs")), &roots, &none, true).is_ok());
+        assert!(fence(&s(&root.join("src/new.rs")), &roots, &none, true).is_ok());
+        assert!(fence(&s(&root.join("inner")), &roots, &none, true).is_ok());
+        assert!(fence(&s(&root), &roots, &none, true).is_ok(), "the root itself");
+        // Outside: refused before the disk is touched, and a climb out of the root too.
+        let err = fence(&s(&outside.join("secret.txt")), &roots, &none, true).unwrap_err();
+        assert!(err.contains("outside your projects"), "{err}");
+        assert!(fence(&s(&root.join("..").join("outside").join("secret.txt")), &roots, &none, true).is_err(), "a .. step out");
+        assert!(fence(&s(&base.join("project-two")), &roots, &none, true).is_err(), "a sibling that merely starts with the root's name");
+        assert!(fence("src/a.rs", &roots, &none, true).unwrap_err().contains("not a full path"));
+        // A link that leads out: refused when followed, fine when the entry itself is acted on.
+        let err = fence(&s(&root.join("escape")), &roots, &none, true).unwrap_err();
+        assert!(err.contains("through a link"), "{err}");
+        assert!(fence(&s(&root.join("escape")), &roots, &none, false).is_ok(), "renaming or trashing the link itself");
+        // A grant covers that exact path and nothing beneath it.
+        let mut granted = std::collections::HashSet::new();
+        granted.insert(fence_key(&s(&outside.join("deep"))));
+        granted.insert(fence_key(&s(&root.join("escape"))));
+        assert!(fence(&s(&outside.join("deep")), &roots, &granted, true).is_ok());
+        assert!(fence(&s(&outside.join("deep/inner.txt")), &roots, &granted, true).is_err(), "nothing beneath a granted path");
+        assert!(fence(&s(&root.join("escape")), &roots, &granted, true).is_ok(), "the link itself granted");
+        // Hosts stay refused as text, grant or not.
+        granted.insert(fence_key("\\\\kolux-no-such-host\\share\\x.txt"));
+        assert!(fence("\\\\kolux-no-such-host\\share\\x.txt", &roots, &granted, true).unwrap_err().contains("another computer"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

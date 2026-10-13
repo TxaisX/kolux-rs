@@ -1,7 +1,8 @@
 // Reading and saving the text of a file shown in an editor tab (EDIT-001). A save goes to a
 // temporary file beside the target and is then moved over it, so a failed write never leaves a
-// half-written file behind. Fencing file access to the user's projects is EDIT-045 (T-062);
-// large and binary files are EDIT-046 (T-178).
+// half-written file behind. EDIT-045: every path from the interface goes through `links::fence`
+// first (inside a project or granted exactly, never out through a link); large and binary files
+// are EDIT-046 (T-178).
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -25,17 +26,19 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     fs::rename(&temp, path).map_err(fail)
 }
 
-/// SAFE-021: a path on another machine is refused before the disk is touched.
+type Store<'a> = tauri::State<'a, std::sync::Mutex<crate::state::Store>>;
+type Grants<'a> = tauri::State<'a, crate::links::Grants>;
+
+/// SAFE-021 / EDIT-045: a path on another machine, outside the projects, or leading out through a
+/// link is refused before the file is touched.
 #[tauri::command]
-pub fn file_read(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String) -> Result<String, String> {
-    crate::links::refuse_host(&path, &crate::links::roots(&store))?;
-    read_text(Path::new(&path))
+pub fn file_read(store: Store<'_>, grants: Grants<'_>, path: String) -> Result<String, String> {
+    read_text(&crate::links::fence(&path, &crate::links::roots(&store), &grants.snapshot(), true)?)
 }
 
 #[tauri::command]
-pub fn file_write(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String, text: String) -> Result<(), String> {
-    crate::links::refuse_host(&path, &crate::links::roots(&store))?;
-    write_text(Path::new(&path), &text)
+pub fn file_write(store: Store<'_>, grants: Grants<'_>, path: String, text: String) -> Result<(), String> {
+    write_text(&crate::links::fence(&path, &crate::links::roots(&store), &grants.snapshot(), true)?, &text)
 }
 
 /// The worktree's markdown files for the Mod+Shift+O picker (EDIT-012), at most 2000 of them.
@@ -253,19 +256,20 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-pub fn dir_list(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String) -> Result<Vec<DirEntry>, String> {
-    crate::links::refuse_host(&path, &crate::links::roots(&store))?;
-    list_dir(Path::new(&path))
+pub fn dir_list(store: Store<'_>, grants: Grants<'_>, path: String) -> Result<Vec<DirEntry>, String> {
+    list_dir(&crate::links::fence(&path, &crate::links::roots(&store), &grants.snapshot(), true)?)
 }
 
-/// What a path really is: "remote" (another machine, never looked up; SAFE-021), else following
-/// links "dir", "file" or "missing".
+/// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not
+/// in a project, or out through a link; EDIT-045), else following links "dir", "file" or "missing".
 #[tauri::command]
-pub fn path_kind(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String) -> &'static str {
-    if crate::links::host_path(&path, &crate::links::roots(&store)) {
-        return "remote";
+pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String) -> &'static str {
+    let roots = crate::links::roots(&store);
+    match crate::links::fence(&path, &roots, &grants.snapshot(), true) {
+        Ok(p) => kind_of(&p),
+        Err(_) if crate::links::host_path(&path, &roots) => "remote",
+        Err(_) => "outside",
     }
-    kind_of(Path::new(&path))
 }
 
 pub fn kind_of(path: &Path) -> &'static str {
