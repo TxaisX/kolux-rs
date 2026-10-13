@@ -47,7 +47,7 @@ type ViewProps = {
   onFilters: (f: Partial<Filters>) => void;
 };
 
-function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+export function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
   return (
     <div className="ta-stat">
       <span className="ta-stat-label">{label}</span>

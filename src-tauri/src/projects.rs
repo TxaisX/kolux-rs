@@ -90,7 +90,7 @@ pub const REFRESH_BASE_SETTING: &str = "refreshBaseFirst";
 pub const MAX_USER_PREFIX: usize = 40;
 
 /// Compares two folders the way Windows does: same canonical path, letter case ignored.
-fn same_folder(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase();
     norm(a) == norm(b)
 }

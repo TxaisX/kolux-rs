@@ -3,16 +3,17 @@ import { readNotifications, testPlan } from "./notifications";
 
 test("SET-034: with nothing saved, every kind is on except the bell, focused worktrees stay quiet, full volume, system sound", () => {
   const n = readNotifications({});
-  expect(n.kinds).toEqual({ notifyTaskComplete: true, notifyBell: false, notifyAgentStopped: true, notifyUsage: true });
+  // one switch per kind: the finish and stop kinds are the keys the notifications read (STAT-041, STAT-023)
+  expect(n.kinds).toEqual({ notifyOnFinish: true, notifyBell: false, notifyOnStopped: true });
   expect(n.suppressFocused).toBe(true);
   expect(n.sound).toBe("system");
   expect(n.volume).toBe(100);
 });
 
 test("SET-034: saved choices are read back; a broken volume or sound falls back to the default", () => {
-  const n = readNotifications({ notifyBell: true, notifyUsage: false, notificationSound: "chime", notificationVolume: 35 });
+  const n = readNotifications({ notifyBell: true, notifyOnStopped: false, notificationSound: "chime", notificationVolume: 35 });
   expect(n.kinds.notifyBell).toBe(true);
-  expect(n.kinds.notifyUsage).toBe(false);
+  expect(n.kinds.notifyOnStopped).toBe(false);
   expect(n.sound).toBe("chime");
   expect(n.volume).toBe(35);
   expect(readNotifications({ notificationVolume: 400, notificationSound: "trumpet" })).toMatchObject({ volume: 100, sound: "system" });

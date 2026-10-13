@@ -8,9 +8,11 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Book, Box, Close, Funnel, Megaphone, Merge, Pulse, Table } from "../chrome/icons";
 import { CATEGORY_NAME, KITS, RESULTS_FOLDER, VENDOR_NAME, assignRoles, extOf, fillEmpty, firstDropped, isWorkbook, recalled, sampleValues, unquote, type Kit, type Vendor } from "./catalog";
 import { sameDir } from "../workspaces";
+import type { Past } from "./run";
 
 export const OPEN_KITS = "kolux-open-kits";
-export const openKits = () => window.dispatchEvent(new CustomEvent(OPEN_KITS));
+/** The gallery, or with `kit` that kit's setup; `chooser` is the chooser pane it came from (SESS-019), closed once the kit starts. */
+export const openKits = (kit?: string, chooser?: number) => window.dispatchEvent(new CustomEvent(OPEN_KITS, { detail: kit ? { kit, chooser } : undefined }));
 
 const ICONS: Record<string, (p: { size?: number }) => ReactElement> = { spreadsheet: Table, "tidy-merge": Merge, marketing: Megaphone, research: Book, sales: Funnel, weekly: Pulse };
 export const KitIcon = ({ id, size = 18 }: { id: string; size?: number }) => {
@@ -32,7 +34,58 @@ function RoleList({ kit, connected }: { kit: Kit; connected: Vendor[] }) {
   );
 }
 
-export function KitGallery({ connected, onPick, onClose }: { connected: Vendor[]; onPick: (id: string) => void; onClose: () => void }) {
+/** SKILL-014: recent kit runs, newest first; nothing at all while there are none. */
+export function RecentRuns({ runs, onResults, onProject }: { runs: Past[]; onResults: (run: Past) => void; onProject: (run: Past) => void }) {
+  if (runs.length === 0) return null;
+  return (
+    <section className="kit-recent" aria-label="Recent kit runs">
+      <h3 className="kit-recent-title">Recent kit runs</h3>
+      <ul className="kit-recent-list">
+        {runs.map((r) => (
+          <li key={`${r.dir}|${r.kit}|${r.started}`} className="kit-recent-row">
+            <span className="kit-icon">
+              <KitIcon id={r.kit} size={16} />
+            </span>
+            <span className="kit-recent-name">
+              <span className="kit-recent-kit">{KITS.find((k) => k.id === r.kit)?.title ?? r.title}</span>
+              <span className="kit-recent-dir" title={r.dir}>
+                {r.dir}
+              </span>
+            </span>
+            <button className="btn small" onClick={() => onResults(r)}>
+              Open results
+            </button>
+            <button className="btn small" onClick={() => onProject(r)}>
+              Open project
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+type GalleryProps = { connected: Vendor[]; onPick: (id: string) => void; onClose: () => void; recent?: Past[]; onResults?: (run: Past) => void; onProject?: (run: Past) => void };
+
+/** One kit's card; `selected` makes it a choice that shows pressed (the first-run wizard, ONB-005). */
+export function KitCard({ kit: k, connected, selected, onPick }: { kit: Kit; connected: Vendor[]; selected?: boolean; onPick: (id: string) => void }) {
+  return (
+    <button className="kit-card" aria-label={k.title} aria-pressed={selected} onClick={() => onPick(k.id)}>
+      <span className="kit-top">
+        <span className="kit-icon">
+          <KitIcon id={k.id} />
+        </span>
+        <span className="kit-badge">{CATEGORY_NAME[k.category]}</span>
+        <span className="kit-time">about {k.minutes} min</span>
+      </span>
+      <span className="kit-title">{k.title}</span>
+      <span className="kit-sum">{k.summary}</span>
+      <RoleList kit={k} connected={connected} />
+    </button>
+  );
+}
+
+export function KitGallery({ connected, onPick, onClose, recent = [], onResults = () => {}, onProject = () => {} }: GalleryProps) {
   return (
     <div className="ask-backdrop" onMouseDown={onClose}>
       <div className="kits" role="dialog" aria-modal="true" aria-label="Starter kits" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && onClose()}>
@@ -45,20 +98,10 @@ export function KitGallery({ connected, onPick, onClose }: { connected: Vendor[]
         <p className="ask-body">A ready-made job for three AIs, each in its own role, on your own files.</p>
         <div className="kit-grid">
           {KITS.map((k) => (
-            <button key={k.id} className="kit-card" aria-label={k.title} onClick={() => onPick(k.id)}>
-              <span className="kit-top">
-                <span className="kit-icon">
-                  <KitIcon id={k.id} />
-                </span>
-                <span className="kit-badge">{CATEGORY_NAME[k.category]}</span>
-                <span className="kit-time">about {k.minutes} min</span>
-              </span>
-              <span className="kit-title">{k.title}</span>
-              <span className="kit-sum">{k.summary}</span>
-              <RoleList kit={k} connected={connected} />
-            </button>
+            <KitCard key={k.id} kit={k} connected={connected} onPick={onPick} />
           ))}
         </div>
+        <RecentRuns runs={recent} onResults={onResults} onProject={onProject} />
       </div>
     </div>
   );

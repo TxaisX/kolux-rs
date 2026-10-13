@@ -11,7 +11,6 @@ import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
 import { Segmented } from "./GeneralPage";
-import { TITLE_BAR_FIELD, titleBarButton } from "./general";
 import { applyLanguage, LANGUAGE_FIELD, LANGUAGES, savedLanguage, systemLanguage, type LanguageChoice } from "../language";
 
 const MODE_LABEL: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
@@ -324,34 +323,15 @@ function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings
   );
 }
 
-/** VIEW-011: the title-bar page buttons, each off by default. */
-export function TitleBarView({ automations, onAutomations }: { automations: boolean; onAutomations: (on: boolean) => void }) {
-  return (
-    <section className="conn-card" data-section="title-bar">
-      <h2 className="conn-name">Title bar</h2>
-      <label className="conn-switch">
-        <input type="checkbox" role="switch" checked={automations} onChange={(e) => onAutomations(e.target.checked)} />
-        <span>
-          Automations button
-          <small>A button in the title bar that opens the Automations page.</small>
-        </span>
-      </label>
-    </section>
-  );
-}
 
 export default function AppearancePage() {
   const [look, setLook] = useState<Appearance | null>(null);
-  const [automations, setAutomations] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const status = useSettings();
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => {
     invoke<Record<string, unknown>>("get_settings")
-      .then((s) => {
-        setLook(readAppearance(s));
-        setAutomations(titleBarButton(s, "automations"));
-      })
+      .then((s) => setLook(readAppearance(s)))
       .catch((e) => setError(String(e)));
     return () => window.clearTimeout(timer.current);
   }, []);
@@ -365,17 +345,10 @@ export default function AppearancePage() {
         .catch((e) => setError(String(e)));
     }, 250);
   };
-  const toggle = (on: boolean) => {
-    setAutomations(on);
-    invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [TITLE_BAR_FIELD.automations]: on } }))
-      .catch((e) => setError(String(e)));
-  };
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
       {look && <AppearanceView look={look} onChange={change} languagePart={status.settings && <LanguageView value={savedLanguage(status.settings[LANGUAGE_FIELD])} onPick={(v) => { applyLanguage(v); void status.save({ [LANGUAGE_FIELD]: v }); }} />} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
-      {automations !== null && <TitleBarView automations={automations} onAutomations={toggle} />}
     </>
   );
 }

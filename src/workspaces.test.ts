@@ -63,3 +63,13 @@ test("a pane's header takes the typed workspace name of its folder, whatever the
   expect(nameOf(names, "C:\\ws\\app\\other")).toBeUndefined();
   expect(nameOf(names, null)).toBeUndefined();
 });
+
+// USAGE-017: usage is credited to the worktree that really contains it: a path that only looks
+// alike, one that climbs out with "..", and another drive get no credit; "." and ".." inside the
+// worktree still count.
+test("a path that climbs out of a folder is not inside it", () => {
+  expect(underDir("C:/repo/ws/alpha/../beta", "C:/repo/ws/alpha")).toBe(false);
+  expect(underDir("C:/repo/ws/alpha/src/.././lib", "C:/repo/ws/alpha/")).toBe(true);
+  expect(underDir("D:/repo/ws/alpha", "C:/repo/ws/alpha")).toBe(false);
+  expect(underDir("C:/repo/ws/alpha-2", "C:/repo/ws/alpha")).toBe(false);
+});

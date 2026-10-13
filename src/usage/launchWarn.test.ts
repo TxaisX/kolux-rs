@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { launchWarnings, type ProviderUsage } from "./launchWarn";
+import { claudeFigures, launchWarnings, type ProviderUsage } from "./launchWarn";
 
 const now = new Date(2026, 9, 11, 12, 0);
 const at = (h: number) => new Date(2026, 9, 11, h, 30).getTime() / 1000;
@@ -29,4 +29,12 @@ test("under 80%, no figures, or an agent with no usage source: no line", () => {
 test("the shortest window with a figure is the one checked: a busy week behind a quiet 5 hours does not warn", () => {
   expect(launchWarnings(["claude"], { claude: claude(10, 95) }, now)).toEqual([]);
   expect(launchWarnings(["codex"], { codex: codex(95) }, now)).toHaveLength(1);
+});
+
+test("Claude's read limits feed the warning as its 5-hour and weekly windows; no limits give no figures", () => {
+  const u = claudeFigures([{ kind: "seven_day", usedPercent: 40, resetsAt: null }, { kind: "five_hour", usedPercent: 91, resetsAt: at(14) }]);
+  expect(u?.fiveHour?.usedPercent).toBe(91);
+  expect(u?.weekly?.usedPercent).toBe(40);
+  expect(launchWarnings(["claude"], { claude: u }, now)[0]).toContain("Claude has used 91% of its 5-hour window");
+  expect(claudeFigures([])).toBeUndefined();
 });

@@ -80,6 +80,18 @@ pub fn pane_env(program: Option<&str>, key_mode: bool, active_dir: Option<String
     active_dir.map(|d| (CONFIG_ENV, d))
 }
 
+/// ACCT-024: the variables in the user's own per-agent settings that would sign a Claude pane in
+/// past its managed account. An empty value blanks the variable and is fine; so is anything that is
+/// not a sign-in, such as a custom endpoint. Windows compares names without case.
+pub fn sign_in_overrides(own_env: &[(String, String)], windows: bool) -> Vec<String> {
+    const SIGN_INS: [&str; 3] = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", crate::claude_key::ENV];
+    own_env
+        .iter()
+        .filter(|(k, v)| !v.is_empty() && SIGN_INS.iter().any(|s| if windows { s.eq_ignore_ascii_case(k) } else { s == k }))
+        .map(|(k, _)| k.clone())
+        .collect()
+}
+
 fn text<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter().find_map(|k| v.get(*k).and_then(Value::as_str)).filter(|s| !s.trim().is_empty())
 }
@@ -517,9 +529,9 @@ mod tests {
     const CREDS: &str = r#"{"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh"}}"#;
     const SIGNED_IN: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Example Org"}"#;
 
-    fn profile(tag: &str) -> (PathBuf, Mutex<Store>) {
-        let dir = std::env::temp_dir().join(format!("kolux-claude-accounts-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+    /// The folder goes when the test ends, after the store in it has closed.
+    fn profile(tag: &str) -> (crate::test_dir::TempDir, Mutex<Store>) {
+        let dir = crate::test_dir::temp(&format!("claude-accounts-{tag}"));
         let store = Store::open(&dir).unwrap();
         (dir, Mutex::new(store))
     }
@@ -543,7 +555,6 @@ mod tests {
         let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Second Org"}"#;
         sign_in(&store, &dir, "a3", false, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
         assert_eq!(load(&store.lock().unwrap()).len(), 2, "one email in two organisations is two accounts");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -566,7 +577,6 @@ mod tests {
         assert_eq!(active(&s), None, "the system default can be picked again");
         assert!(remove(&s, &dir, "a2").is_err());
         drop(s);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -579,7 +589,6 @@ mod tests {
         assert!(!vault.contains("fake-refresh"), "the kept copy is sealed");
         assert_eq!(load(&store.lock().unwrap()), vec![a.clone()]);
         assert_eq!(active(&store.lock().unwrap()), None, "adding does not change the active account");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -597,7 +606,6 @@ mod tests {
         assert!(!serde_json::from_str::<Account>(r#"{"id":"x","email":null,"organization":null,"configDir":"d","lastSignIn":1}"#).unwrap().stale);
         sign_in(&store, &dir, "a1", true, 8, writes(r#"{"claudeAiOauth":{"accessToken":"fake-2"}}"#, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
         assert!(!load(&store.lock().unwrap())[0].stale, "Sign in again clears it");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -610,7 +618,6 @@ mod tests {
         assert_eq!(err.reason, "sign-in-refused", "a refused sign-in offers Try again");
         assert!(load(&store.lock().unwrap()).is_empty());
         assert!(!dir.join(FOLDER).join("a1").exists() && !dir.join(FOLDER).join("a2").exists(), "no partial folder left");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -628,7 +635,6 @@ mod tests {
         // The same credentials as before are never taken as a new sign-in.
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
         assert_eq!(load(&store.lock().unwrap())[0].last_sign_in, 7, "the row is unchanged");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -661,5 +667,15 @@ mod tests {
     fn upkeep_is_left_to_claude_code_unless_turned_off() {
         assert!(upkeep_left_to_claude(&json!({})));
         assert!(!upkeep_left_to_claude(&json!({ UPKEEP_FIELD: false })));
+    }
+
+    #[test]
+    fn acct_024_own_settings_that_sign_in_are_named() {
+        let env = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
+        let found = sign_in_overrides(&env(&[("ANTHROPIC_API_KEY", "sk-made-up"), ("ANTHROPIC_BASE_URL", "https://proxy.example"), ("ANTHROPIC_AUTH_TOKEN", "")]), false);
+        assert_eq!(found, vec!["ANTHROPIC_API_KEY".to_string()], "an endpoint is fine, a blanked token is fine");
+        assert_eq!(sign_in_overrides(&env(&[("anthropic_auth_token", "t")]), true), vec!["anthropic_auth_token".to_string()], "Windows names ignore case");
+        assert!(sign_in_overrides(&env(&[("anthropic_auth_token", "t")]), false).is_empty(), "elsewhere names are exact");
+        assert_eq!(sign_in_overrides(&env(&[("CLAUDE_CODE_OAUTH_TOKEN", "t")]), false).len(), 1);
     }
 }

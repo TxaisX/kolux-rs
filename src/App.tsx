@@ -29,7 +29,7 @@ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
-import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, titleBarButton } from "./settings/general";
+import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
@@ -42,16 +42,17 @@ import ReviewNotes from "./editor/ReviewNotes";
 import { reviewOn, selections, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
-import { KitGallery, KitSetup, OPEN_KITS } from "./kits/Kits";
-import { KITS, VENDORS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
+import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
+import Wizard from "./onboarding/Wizard";
+import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, openAt, type Outcome } from "./onboarding/firstRun";
+import { KITS, VENDORS, RECALL_KEY, assignRoles, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
-import { datedName, matchSeats, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
+import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
 import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
-import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
@@ -95,10 +96,11 @@ export type ShellTarget = { dir: string | null; branch: string | null };
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
 /** SKILL-008: a seat waiting for the role it depends on. */
 type KitWait = { role: string; upstream: string; key: number; prompt: string };
-type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number> };
+/** A kit run started in this window; `prompts` are each role's first message, kept for Restart and Move to (SKILL-011). */
+type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number>; prompts: string[] };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; kitPreview?: boolean; staged?: boolean; ask?: string };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -318,8 +320,21 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const kitRuns = useRef<Record<string, KitRun>>({});
   const [kitTick, setKitTick] = useState(0);
   const [kitFolded, setKitFolded] = useState(false);
+  // SKILL-014: the recent kit runs the gallery lists, read each time it opens.
+  const [kitRecent, setKitRecent] = useState<Past[]>([]);
+  const galleryOpen = kits !== null && kits.kit === null;
   useEffect(() => {
-    const show = () => setKits((k) => k ?? { kit: null, sampleDir: null });
+    if (galleryOpen) invoke<Past[]>("kit_history").then(setKitRecent, () => setKitRecent([]));
+  }, [galleryOpen]);
+  // SESS-019: a chooser's Set up kit names the kit and the chooser, which closes once the kit starts.
+  const chooserSetup = useRef<number | null>(null);
+  useEffect(() => {
+    const show = (e: Event) => {
+      const from = (e as CustomEvent<{ kit: string; chooser?: number } | undefined>).detail;
+      if (!from) return setKits((k) => k ?? { kit: null, sampleDir: null });
+      chooserSetup.current = from.chooser ?? null;
+      pickKit(from.kit);
+    };
     window.addEventListener(OPEN_KITS, show);
     return () => window.removeEventListener(OPEN_KITS, show);
   }, []);
@@ -330,13 +345,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setKits({ kit: id, sampleDir: null });
     invoke<string>("kit_samples_dir", { kit: id }).then((d) => setKits((k) => (k?.kit === id ? { ...k, sampleDir: d } : k)), () => {});
   };
+  // ONB-004 opens a sample the same way, with no launch window (select opens one plain tab).
+  const openSamples = async (id: string) => {
+    const p = await invoke<{ path: string; name: string }>("kit_samples", { kit: id });
+    setRefresh((n) => n + 1);
+    select(p.path, null);
+  };
   const trySamples = (id: string) => {
     setSamplesBusy(true);
-    invoke<{ path: string; name: string }>("kit_samples", { kit: id })
-      .then((p) => {
-        setRefresh((n) => n + 1);
-        select(p.path, null);
-      })
+    openSamples(id)
       .catch((err) => setToast(`Kolux could not set up the sample data: ${String(err)}`))
       .finally(() => setSamplesBusy(false));
   };
@@ -676,7 +693,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       return;
     }
     if (what === "file") {
-      const path = await open({ multiple: false, directory: false, defaultPath: activeDir ?? undefined, title: "Open a file" }).catch(() => null);
+      // ACCT-055: Kolux shows the picker itself, so only the chosen file is granted to the window.
+      const path = await invoke<string | null>("file_pick", { defaultPath: activeDir }).catch((err) => (setToast(String(err)), null));
       if (typeof path === "string") openFile(path);
       return;
     }
@@ -1105,20 +1123,26 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // SKILL-006: Start kit. One titled seat per role in the project's own checkout (never a
   // worktree), the waiting roles idle with no prompt; earlier results kept in a dated copy and the
   // run recorded first. A folder holding another kit's run asks inline before anything starts.
-  const startKit = async (kit: Kit, values: Record<string, string>, assigned: (Vendor | null)[], dir: string) => {
+  /** Resolves true once at least one of the kit's AIs started. */
+  const startKit = async (kit: Kit, values: Record<string, string>, assigned: (Vendor | null)[], dir: string): Promise<boolean> => {
     const before = await invoke<RunCheck | null>("kit_check", { dir }).catch(() => null);
     if (before && before.record.kit !== kit.id && kitConflict === null) {
       const other = KITS.find((k) => k.id === before.record.kit)?.title ?? before.record.title;
       setKitConflict(`This folder holds the results of \u201c${other}\u201d. Starting \u201c${kit.title}\u201d here puts both kits' results side by side.`);
-      return;
+      return false;
     }
     setKitConflict(null);
     setKits(null);
     const roles = kit.roles.map((r, i) => ({ id: r.id, ai: assigned[i] ?? "" }));
     const earlierName = datedName(before?.record.title ?? "Earlier run", before?.record.started ?? Date.now());
-    const prep = await invoke<{ started: number; earlier: string | null; earlierError: string | null; recordError: string | null }>("kit_prepare", { dir, kit: kit.id, title: kit.title, roles, earlierName }).catch(
-      (err) => ({ started: Date.now(), earlier: null, earlierError: null, recordError: String(err) }),
-    );
+    // SKILL-015: a folder that is not a project or under samples, or an unknown kit, starts nothing.
+    let prep: { started: number; earlier: string | null; earlierError: string | null; recordError: string | null };
+    try {
+      prep = await invoke("kit_prepare", { dir, kit: kit.id, title: kit.title, roles, earlierName });
+    } catch (err) {
+      setToast(`The kit did not start: ${String(err)}`);
+      return false;
+    }
     // An idle, empty first tab is reused for the first seat.
     const here = panesIn(panes, dir);
     const first = here.length === 1 && here[0].agent === "shell" && !here[0].program ? here[0] : null;
@@ -1130,9 +1154,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const branch = here[0]?.branch ?? null;
     const keys: (number | null)[] = [];
     const waiting: KitWait[] = [];
+    const prompts: string[] = [];
     for (const [i, role] of kit.roles.entries()) {
       const agent = agents.find((x) => x.id === assigned[i] && x.installed);
       const prompt = rolePrompt(kit, role, values);
+      prompts.push(prompt);
       if (!agent) {
         keys.push(null);
         continue;
@@ -1144,10 +1170,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const started = keys.filter((k) => k !== null).length;
     if (started === 0) {
       setToast("Not one AI started for the kit, so nothing is running.");
-      return;
+      return false;
     }
     // The role-to-session mapping is kept only when every seat started.
-    kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {} };
+    kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {}, prompts };
     setKitTick((n) => n + 1);
     const words = [`${started} ${started === 1 ? "AI is" : "AIs are"} on the kit; most kits need 5 to 20 minutes.`];
     if (prep.earlier) words.push(`The last run's results were copied to kit-results\\${prep.earlier}.`);
@@ -1155,6 +1181,57 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     if (prep.recordError) words.push(`Kolux could not write the kit's run record, so its results may not be tracked: ${prep.recordError}`);
     if (started < keys.length) words.push(`${keys.length - started} of its roles did not start.`);
     setToast(words.join(" "));
+    return true;
+  };
+
+  // ONB-001..005: the first-run wizard floats over the app while its record says it is open.
+  const [wizard, setWizard] = useState<number | null>(null);
+  const wizardSetup = useRef(false);
+  useEffect(() => {
+    invoke<{ step: number } | null>("onboarding_get").then((r) => setWizard(openAt(r)), () => {});
+  }, []);
+  // ONB-007: the close is stored before the wizard goes; a failed store keeps it open with a toast,
+  // and the next click on any of its ways out tries that same close again.
+  const [wizardClose] = useState(() =>
+    closer(
+      (outcome) => invoke("onboarding_close", { outcome }),
+      () => {
+        setWizard(null);
+        wizardSetup.current = false;
+      },
+      (err) => setToast(`Kolux could not keep your setup progress (${String(err)}). Click the same button again to try once more.`),
+    ),
+  );
+  const endWizard = (outcome: Outcome, after?: () => void) => wizardClose.end(outcome, after);
+  // ONB-010: armed by Pick a folder, or by Skip while no project exists; the next project added
+  // starts the saved default agent in it, once.
+  const firstFolder = useRef(false);
+  const projectAdded = (dir: string, branch: string | null) => {
+    if (!firstFolder.current) return;
+    firstFolder.current = false;
+    const agent = firstFolderAgent(offeredAgents(agents, settings), defaultAgentId(settings));
+    if (agent) void startIn(agent, dir, branch, "", true);
+  };
+  // ONB-005: Start kit launches at once in the kit's own sample folder with an AI ready; otherwise
+  // the setup dialog opens, the wizard hides behind it, and a start from there completes it.
+  const wizardKit = async (id: string) => {
+    if (wizardClose.retry()) return;
+    const kit = KITS.find((k) => k.id === id);
+    if (!kit) return;
+    const sampleDir = await invoke<string>("kit_samples_dir", { kit: id }).catch(() => null);
+    if (activeDir && kitLaunch(activeDir, sampleDir, kitAIs) === "launch") {
+      if (await startKit(kit, startValues(kit, activeDir, sampleDir, settings), assignRoles(kit, kitAIs), activeDir)) return endWizard("completed");
+    } else setKitConflict(null);
+    wizardSetup.current = true;
+    setKits({ kit: id, sampleDir });
+  };
+  // ONB-005: one plain session on the first available agent (the default first), empty prompt;
+  // nothing without an agent and a workspace.
+  const wizardSession = async () => {
+    if (wizardClose.retry()) return;
+    const agent = menuAgents(offeredAgents(agents, settings), defaultAgentId(settings))[0];
+    if (!agent || !activeDir) return;
+    if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed");
   };
 
   // SKILL-008: a waiting role gets its prompt once the role it waits on has written this run's
@@ -1248,6 +1325,71 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         panesIn(panes, activeDir).filter((p) => !p.kind).map((p) => ({ key: p.key, ai: aiOf(p) })),
       )
     : [];
+  // SKILL-013: Collect results copies every role's declared files into one dated folder.
+  const kitCollect = async () => {
+    if (!activeDir || !kitCheck) return;
+    const kit = KITS.find((k) => k.id === kitCheck.record.kit);
+    if (!kit) return setToast("Kolux does not know this kit any more, so it cannot collect its results.");
+    const roles = kit.roles.map((r) => ({ id: r.id, title: r.title, files: r.delivers }));
+    try {
+      const got = await invoke<{ folder: string; copied: string[]; missing: string[] }>("kit_collect", { dir: activeDir, roles, name: datedName(kit.title, Date.now()) });
+      const miss = got.missing.length ? ` ${got.missing.length} ${got.missing.length === 1 ? "file was" : "files were"} not there: ${got.missing.join(", ")}.` : "";
+      setToast(`Collected ${got.copied.length} ${got.copied.length === 1 ? "file" : "files"} into kit-results\\${got.folder}, with a README and a Results page.${miss}`);
+    } catch (err) {
+      setToast(`Kolux could not collect the results this time: ${String(err)}`);
+    }
+  };
+  // SKILL-012: Preview shows a result beside the role's session, in a split of its own that the
+  // next preview uses again; it never replaces the AI's tab.
+  const kitPreview = (i: number, file: string) => {
+    const role = kitCheck?.record.roles[i];
+    if (!activeDir || !role) return;
+    const path = `${activeDir.replace(/[\\/]+$/, "")}\\kit-results\\${role.id}\\${file}`;
+    const here = panesIn(panes, activeDir);
+    const old = here.find((p) => p.kitPreview);
+    const pane: Pane = { key: nextKey.current++, cwd: activeDir, branch: here[0]?.branch ?? null, agent: "shell", program: null, args: [], kind: previewKind(file), path, kitPreview: true };
+    if (old) {
+      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...pane, group: groupOf(old) } : p)));
+    } else {
+      const shown = cellsOf(here);
+      if (shown.length >= MAX_PANES) return setToast(`A workspace holds up to ${MAX_PANES} panes; close one to preview ${file}.`);
+      const seat = panes.find((p) => p.key === kitSeats[i]);
+      const at = seat ? splitIndex(shown.map((c) => c.group), groupOf(seat), "right", columnsFor(shown.length + 1, false)) : shown.length;
+      setPanes(insertBefore(panes, shown[at]?.panes[0], pane));
+    }
+    setFocused(pane.key);
+  };
+  const kitOpenFile = (i: number, file: string) => {
+    const role = kitCheck?.record.roles[i];
+    if (activeDir && role) invoke("kit_open_file", { dir: activeDir, role: role.id, file }).catch((err) => setToast(`Kolux could not open ${file}: ${String(err)}`));
+  };
+  // SKILL-011: Restart and Move to start one seat for the role on the chosen AI and make it the
+  // role's session; with the settings unreadable nothing starts.
+  const kitRestart = async (i: number, ai: string) => {
+    const dir = activeDir;
+    const check = kitCheck;
+    const kit = check && KITS.find((k) => k.id === check.record.kit);
+    const role = kit?.roles[i];
+    if (!dir || !check || !kit || !role) return;
+    try {
+      await invoke("get_settings");
+    } catch (err) {
+      return setToast(`Nothing started: Kolux could not read its settings (${String(err)}).`);
+    }
+    const agent = agents.find((x) => x.id === ai && x.installed);
+    if (!agent) return setToast(`${ai} is not installed, so the ${role.title} role cannot start there.`);
+    const run = kitRuns.current[dir];
+    const prompt = run?.started === check.record.started ? run.prompts[i] : undefined;
+    if (!run || prompt === undefined) return setToast("Kolux no longer holds this run's inputs; start the kit again from Starter kits.");
+    const waits = !!role.waitsFor && !roleDone(check, role.waitsFor);
+    const key = await startIn(agent, dir, panesIn(panes, dir)[0]?.branch ?? null, waits ? "" : prompt, true, [], seatTitle(role, agent.id as Vendor));
+    if (key === null) return;
+    run.seats = (run.seats ?? kitSeats).map((k, n) => (n === i ? key : k));
+    run.waiting = run.waiting.filter((w) => w.role !== role.id);
+    if (waits && role.waitsFor) run.waiting.push({ role: role.id, upstream: role.waitsFor, key, prompt });
+    else run.sent[role.id] = Date.now();
+    setKitTick((n) => n + 1);
+  };
   const terminals = screen === "terminals";
   const board = screen === "board";
   const inbox = screen === "inbox";
@@ -1415,7 +1557,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       <TopBar
         appName={chromeShown(settings, "titleBarAppName")}
         automations={
-          titleBarButton(settings, "automations")
+          chromeShown(settings, "automationsButton")
             ? {
                 open: terminals && page === "automations",
                 onToggle: () => {
@@ -1427,7 +1569,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         }
         screen={screen}
         classic={classic}
-        onScreen={setScreen} installed={installedIds} onSettings={() => setSettingsOpen(true)} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
+        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body">
         {palette && (
           <WorktreePalette
@@ -1495,6 +1637,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             createName={createName}
             deleteRequest={deleteRequest}
             onStartIn={startIn}
+            onAdded={projectAdded}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
             onIndex={(list, dirs, typed) => {
@@ -1535,12 +1678,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               {page === null && activeDir && kitCheck && (
                 <KitStrip
                   check={kitCheck}
-                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k] }))}
+                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k], ai: aiOf(panes.find((p) => p.key === k) ?? { agent: "shell", program: null }) }))}
                   sent={kitRuns.current[activeDir]?.sent ?? {}}
                   now={Date.now()}
                   folded={kitFolded}
                   onFold={setKitFolded}
-                  onOpen={() => invoke("kit_open_results", { dir: activeDir }).catch((err) => setToast(`Kolux could not open the results folder: ${String(err)}`))}
+                  onOpen={() => invoke("kit_open_results", { dir: activeDir, folder: null }).catch((err) => setToast(`Kolux could not open the results folder: ${String(err)}`))}
+                  connected={kitAIs}
+                  onCollect={() => void kitCollect()}
+                  onPreview={kitPreview}
+                  onOpenFile={kitOpenFile}
+                  onRestart={(i, ai) => void kitRestart(i, ai)}
                   onFocusSeat={(key) => {
                     setActiveDir(activeDir);
                     setFocused(key);
@@ -1665,12 +1813,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || settingsOpen || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} url={p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.kind === "editor" && p.path ? (
                   <EditorPane
                     key={p.key}
                     id={p.key}
                     path={p.path}
+                    readOnly={p.kitPreview}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
@@ -1717,6 +1866,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
                     task={p.task ?? ""}
                     onTask={(task) => setChooser(p.key, { task })}
+                    kit={p.kit ?? null}
+                    onKit={(kit) => setChooser(p.key, { kit })}
+                    vendors={kitAIs}
                     onStart={(s) => void startSeats(p.key, s)}
                     copies={p.copies ?? defaultCopies(p.seats.length, inGitFor(p))}
                     inGit={inGitFor(p)}
@@ -1807,7 +1959,23 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
         </RightSidebar>
       </div>
-      {kits && kits.kit === null && <KitGallery connected={kitAIs} onPick={pickKit} onClose={() => setKits(null)} />}
+      {kits && kits.kit === null && (
+        <KitGallery
+          connected={kitAIs}
+          onPick={pickKit}
+          onClose={() => setKits(null)}
+          recent={kitRecent}
+          onResults={(r) => invoke("kit_open_results", { dir: r.dir, folder: r.collected }).catch((err) => (setKits(null), setToast(`Kolux could not open the results of ${r.title}: ${String(err)}`)))}
+          onProject={(r) => {
+            const project = projects.find((p) => sameDir(p.path, r.dir));
+            // The toast shows under the gallery, so the gallery closes for it.
+            setKits(null);
+            if (!project) return setToast(`No project in Kolux matches ${r.dir} any more; add the folder again to open it.`);
+            setScreen("terminals");
+            setActiveDir(project.path);
+          }}
+        />
+      )}
       {kits && kits.kit !== null && (() => {
         const kit = KITS.find((k) => k.id === kits.kit)!;
         return (
@@ -1828,16 +1996,48 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onClose={() => {
               setKitConflict(null);
               setKits(null);
+              wizardSetup.current = false;
+              chooserSetup.current = null;
             }}
             onStart={(values, assigned) => {
+              const fromWizard = wizardSetup.current;
+              const chooser = chooserSetup.current;
               // SKILL-005: real inputs are remembered for this workspace; a sample workspace's are not.
               const real = !!activeDir && !sameDir(activeDir, kits.sampleDir);
               if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
-              if (activeDir) void startKit(kit, values, assigned, activeDir);
+              if (activeDir)
+                void startKit(kit, values, assigned, activeDir).then((ok) => {
+                  if (ok && fromWizard) endWizard("completed");
+                  if (ok && chooser !== null) closePane(chooser);
+                });
             }}
           />
         );
       })()}
+      {wizard !== null && (
+        <Wizard
+          start={wizard}
+          vendors={kitAIs}
+          ping={settings[FINISH_FIELD] !== false}
+          onPing={(on) => saveSetting(FINISH_FIELD, on)}
+          hidden={kits !== null}
+          onSample={openSamples}
+          onKit={(id) => void wizardKit(id)}
+          onSession={() => void wizardSession()}
+          onPickFolder={() => {
+            if (wizardClose.retry()) return;
+            endWizard("completed", () => {
+              firstFolder.current = true;
+              window.dispatchEvent(new CustomEvent(ADD_PROJECT));
+            });
+          }}
+          onClose={() => {
+            if (wizardClose.retry()) return;
+            const none = projects.length === 0;
+            endWizard("dismissed", () => (firstFolder.current = none));
+          }}
+        />
+      )}
       <UpdateCenter />
       {reviewOn(settings) && (
         <ReviewNotes

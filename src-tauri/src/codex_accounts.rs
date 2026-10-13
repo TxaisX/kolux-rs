@@ -100,6 +100,33 @@ pub fn active_home(store: &Store) -> Option<String> {
     active_account(store).map(|a| a.home)
 }
 
+/// ACCT-024: how long a new Codex pane waits for the chosen account's sign-in to be in place.
+pub const SIGN_IN_WAIT: Duration = Duration::from_secs(2);
+
+/// ACCT-024: the Codex home a new pane runs in. `active` reads the chosen account's home and is
+/// asked again every `step`, so an account changed while the pane waits wins. No sign-in after
+/// `wait`: the system-default login (`None`), or, when the choice changed and the new one has no
+/// sign-in either, an error asking the user to open the pane again.
+pub fn ready_home(mut active: impl FnMut() -> Option<String>, signed_in: impl Fn(&str) -> bool, wait: Duration, step: Duration) -> Result<Option<String>, String> {
+    let started = std::time::Instant::now();
+    let first = active();
+    let mut home = first.clone();
+    loop {
+        match home.as_deref() {
+            None => return Ok(None),
+            Some(h) if signed_in(h) => return Ok(home),
+            _ if started.elapsed() >= wait => break,
+            _ => std::thread::sleep(step),
+        }
+        home = active();
+    }
+    if home == first {
+        Ok(None)
+    } else {
+        Err("The Codex account changed while this pane was starting, and the new one is not signed in yet. Open it again.".into())
+    }
+}
+
 /// The variable a new pane gets: only a Codex pane, only with an active account.
 pub fn pane_env(program: Option<&str>, home: Option<String>) -> Option<(&'static str, String)> {
     if crate::agents::credited_agent(program?) != Some("codex") {
@@ -503,11 +530,8 @@ pub fn codex_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>
 mod tests {
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("kolux-codex-acct-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn temp(name: &str) -> crate::test_dir::TempDir {
+        crate::test_dir::temp(&format!("codex-acct-{name}"))
     }
 
     fn token(email: &str) -> String {
@@ -644,7 +668,8 @@ mod tests {
     #[test]
     fn disconnect_deletes_only_what_kolux_made_for_the_account() {
         let profile = temp("disconnect");
-        let own = temp("remove-own").join(".codex");
+        let own_user = temp("remove-own");
+        let own = own_user.join(".codex");
         fs::create_dir_all(&own).unwrap();
         fs::write(own.join("auth.json"), token("me@example.com")).unwrap();
         let before = fs::read(own.join("auth.json")).unwrap();
@@ -736,5 +761,30 @@ mod tests {
         assert_eq!(e, "Sign-in cancelled.");
         assert!(profile.join(FOLDER).join("c3").join("auth.json").exists(), "a home with a working sign-in stays");
         assert!(load(&store.lock().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn acct_024_a_codex_pane_waits_for_the_chosen_sign_in() {
+        use std::cell::RefCell;
+        let quick = (Duration::from_millis(40), Duration::from_millis(5));
+        // already signed in: no wait
+        assert_eq!(ready_home(|| Some("a".into()), |h| h == "a", quick.0, quick.1), Ok(Some("a".into())));
+        // no managed account: the system default, at once
+        assert_eq!(ready_home(|| None, |_| false, quick.0, quick.1), Ok(None));
+        // the sign-in lands while waiting
+        let n = RefCell::new(0);
+        assert_eq!(ready_home(|| Some("a".into()), |_| { *n.borrow_mut() += 1; *n.borrow() > 3 }, quick.0, quick.1), Ok(Some("a".into())));
+        // never lands: the pane starts on the system-default login instead of hanging
+        let asked = std::time::Instant::now();
+        assert_eq!(ready_home(|| Some("a".into()), |_| false, quick.0, quick.1), Ok(None));
+        assert!(asked.elapsed() < Duration::from_secs(1));
+        // the account is changed while waiting: the new one wins
+        let calls = RefCell::new(0);
+        let switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
+        assert_eq!(ready_home(switching, |h| h == "b", quick.0, quick.1), Ok(Some("b".into())));
+        // one choice after another without a sign-in: not started, asked to open it again
+        let calls = RefCell::new(0);
+        let switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
+        assert!(ready_home(switching, |_| false, quick.0, quick.1).unwrap_err().contains("Open it again"));
     }
 }

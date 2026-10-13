@@ -2,6 +2,9 @@
 // the rules are tested on their own; App starts the seats and KitStrip draws the rows.
 import { RESULTS_FOLDER, VENDOR_NAME, type Kit, type KitRole, type Vendor } from "./catalog";
 
+/** SKILL-014: one run in the history across projects (newest 50 kept by the app). */
+export type Past = { dir: string; kit: string; title: string; started: number; collected: string | null };
+
 /** COMPAT: each role finishes by writing this marker in its own folder. */
 export const MARKER = "DONE";
 
@@ -42,7 +45,7 @@ export function datedName(title: string, ms: number): string {
 export const roleDone = (check: RunCheck, roleId: string) => (check.files[roleId]?.[MARKER] ?? -1) >= check.record.started;
 
 /** A session as the strip sees it. */
-export type SeatInfo = { key: number; running?: boolean; needs?: boolean };
+export type SeatInfo = { key: number; running?: boolean; needs?: boolean; ai?: string | null };
 export type RowState = "not-ready" | "waiting" | "working" | "done" | "left" | "needs" | "stopped";
 export type RoleRow = { state: RowState; text: string; key: number | null };
 
@@ -77,3 +80,10 @@ export function matchSeats(record: RunRecord, saved: (number | null)[] | null, p
     return p.key;
   });
 }
+
+/** SKILL-012: how a result previews: HTML in the browser pane, Markdown rendered, the rest in a
+ * read-only editor tab. */
+export const previewKind = (file: string): "browser" | "preview" | "editor" => (/\.html?$/i.test(file) ? "browser" : /\.(md|markdown)$/i.test(file) ? "preview" : "editor");
+
+/** SKILL-011: a stopped role can move to every other connected AI. */
+export const moveTargets = (current: string | null, connected: Vendor[]): Vendor[] => connected.filter((v) => v !== current);

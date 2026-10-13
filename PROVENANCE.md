@@ -482,3 +482,25 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 >   The parser reads only the fields it needs, ignores the rest, and skips a line, record or file that does not fit; the test fixtures and the live-check logs are invented records with these field names. That cached input is part of Codex's input count and reasoning part of output follows OpenAI's public usage-object docs. No outside source and no old Kolux source read.
 
 > 2026-10-12 · T-137-a · rules from the USAGE-014 / USAGE-015 cards. Prices from two public pages read 2026-10-12: Anthropic's https://platform.claude.com/docs/en/about-claude/pricing (model table, cache multipliers, long-context section) and OpenAI's https://developers.openai.com/api/docs/pricing (Standard tier text-token table, short and long context, "Long context: >272K input tokens"). Model ids follow the public naming on those pages. No log value read (the stand-in logs are invented), no old Kolux source read.
+
+> 2026-10-12 · T-206 · rules from the SKILL-011..015 cards; pulldown-cmark 0.13 API (Parser, Options, Event, Tag, html::push_html) from its public docs.rs pages via context7; sha2 0.10 public docs; no old Kolux source read
+
+> 2026-10-12 · T-207 · rules from the ONB-001..005 cards; CSS backdrop-filter and prefers-reduced-motion from public MDN docs; no old Kolux source read
+
+> 2026-10-12 · T-208 · rules from the ONB-006, 007, 008, 010 and 012 cards and DT-25; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-201-b · rules from the SESS-017 and SESS-019 cards; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-153-b · rules from the VIEW-089 and VIEW-099 cards; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-154-b · rules from the ACCT-055 card; tauri-plugin-dialog 2.8.1 Rust API (FileDialogBuilder::blocking_pick_file, set_directory, set_title) read from its public crate source in the local cargo registry; no old Kolux source read
+
+> 2026-10-12 · T-171 · rules from the ACCT-014 and ACCT-024 cards and COMPAT 5.7; no outside source used; no old Kolux source read
+
+> 2026-10-12 · T-170 · rules from the USAGE-016 and USAGE-017 cards; log field names as recorded in section 5 (T-136-b); test records invented; no old Kolux source read
+
+> 2026-10-12 · T-136-c · rules from the USAGE-011 card and SET-006; hook event names from this tree's own hooks.rs; no outside source used; no old Kolux source read
+
+> 2026-10-12 · T-137-b / T-139-c · source check only: docs.x.ai/build/cli/reference and docs.x.ai/build/features/status-line read; neither documents Grok credit figures or a session-file format; nothing built or copied
+
+> 2026-10-12 · T-339 · rules from SET-020, VIEW-011, VIEW-116, USAGE-010, ORCH-031 and ACCT-001 cards and DT-A6; no outside source used; no old Kolux source read

@@ -1041,7 +1041,15 @@ fn text_of(command: &str, r: &Value) -> String {
             mail_lines(&msgs, &mut out);
             out.join("\n")
         }
-        "orchestration.reset" => format!("cleared {}: {} task(s), {} dispatch(es), {} message(s), {} run(s)", s("scope"), r["tasks"], r["dispatches"], r["messages"], r["runs"]),
+        "orchestration.reset" => {
+            // ORCH-031: what each scope took and what it left
+            let what = match s("scope").as_str() {
+                "tasks" => "the tasks, workers and gates went; Runs and mail are kept",
+                "messages" => "the mail and delivery positions went; Runs and tasks are kept",
+                _ => "everything went; ids keep counting up",
+            };
+            format!("cleared {}: {} task(s), {} dispatch(es), {} message(s), {} run(s); {what}", s("scope"), r["tasks"], r["dispatches"], r["messages"], r["runs"])
+        }
         "app.open" if r["started"] == Value::Bool(true) => "Kolux started and is ready".into(),
         "app.open" => "Kolux is ready; its window is in front".into(),
         _ if r["branchKept"] == true => format!("removed {}; branch {} kept", s("path"), s("branch")),
@@ -3491,8 +3499,11 @@ mod tests {
         assert!(load_list(&store.lock().unwrap(), TASKS_KEY).is_empty() && load_list(&store.lock().unwrap(), DISPATCHES_KEY).is_empty());
         assert_eq!(show(done)["state"], "absent");
         assert_eq!(show(sent)["state"], "completed", "a tasks reset leaves the messages' answers");
-        assert!(text_of("orchestration.reset", &v).starts_with("cleared tasks"));
-        dispatch(&ctx, &req("orchestration.reset", json!({ "messages": true }))).unwrap();
+        let said = text_of("orchestration.reset", &v);
+        assert!(said.starts_with("cleared tasks") && said.ends_with("the tasks, workers and gates went; Runs and mail are kept"), "{said}");
+        let v = dispatch(&ctx, &req("orchestration.reset", json!({ "messages": true }))).unwrap();
+        assert!(text_of("orchestration.reset", &v).ends_with("the mail and delivery positions went; Runs and tasks are kept"));
+        assert!(text_of("orchestration.reset", &json!({ "scope": "all", "tasks": 0, "dispatches": 0, "messages": 0, "runs": 0 })).ends_with("everything went; ids keep counting up"));
         assert_eq!(show(sent)["state"], "absent");
         let e = dispatch(&ctx, &req("orchestration.reset", json!({}))).unwrap_err();
         assert!(e.message.contains("exactly one scope"));

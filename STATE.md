@@ -3,9 +3,9 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-013-c · The two rules of the create-workspace card that T-013 left out (a creation overtaken by a newer one is cancelled and its half-made checkout removed; a stand-in tab while Git works)
-Done: 191 / 457 tasks  ·  P0 parity: 0/228 cards
+Done: 201 / 469 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 457 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 469 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
@@ -38,7 +38,12 @@ shortcuts (`~\.kolux\keybindings.json`, 127 command ids) are the user's own and 
 Source Control panel stages, commits, pushes and pulls. `kolux-dev worktree create / rm` and
 `kolux-dev orchestration worker-start` (flag checking only) drive it from a terminal. Settings has
 AI connections: Claude keys and managed accounts, Codex sign-in, sealed secrets, lapsed sign-ins
-flagged in the main window. A 24 px status bar shows On, memory use, shell and plug counts.
+flagged in the main window. A 24 px status bar shows On, memory use, shell and plug counts. Starter kits
+run three AIs on one job: the strip above the sessions previews or opens each role's files,
+collects them into one dated folder with a README and a Results page, and restarts or moves a
+stopped role; the kit gallery lists the recent runs. A brand-new profile opens a four-screen
+first-run card (welcome, connect an AI, your work, choose a kit) that can start a kit on sample
+data.
 
 What works today: the window has no Windows title bar; Kolux draws its own 36 px top bar with the
 six-spoke mark, a sidebar toggle, the centred Agents / Board / Terminals switcher (Terminals is the
@@ -1533,6 +1538,75 @@ default, or every local use), a green bar per day, a list by model and the 10 mo
 sessions. Costs are worked out from Anthropic's and OpenAI's public price pages (read 2026-10-12);
 a model with no known price shows n/a and the total is marked partial, a guessed one says inferred.
 
+[accounts] T-206 finishes the kit strip. Each done role lists its files with Preview and Open:
+Preview shows a Markdown file read-only, or a web page in a browser tab, beside the role's
+session in one split that the next preview reuses; Open hands the file to Windows. Collect
+results copies every role's files into one dated folder under kit-results with a README (who made
+what, what was missing, a SHA-256 hash per file) and a Results page that shows the Markdown as
+text with any script or javascript: link taken out. A stopped role can be restarted or moved to
+another connected AI. The kit gallery lists the last 50 runs across projects with Open results
+and Open project. Kits now refuse a folder that is not a project or under the samples folder.
+
+[accounts] T-207 adds the first-run wizard. A brand-new profile opens a card over the dimmed,
+blurred app: Kolux mark, four progress bars with tooltips, one of four, a heading, a scrolling
+body and a footer whose main button carries a Ctrl+Enter chip (the chord fires it, never from a
+text field or mid-composition, never while it is off). Welcome shows Claude, Codex and Grok tiles
+with pulsing dots (still under reduced motion). Connect an AI reuses the Settings Connect cards and
+keeps Continue locked until one reports connected; I'll do this later moves on. Your work offers
+Pick a folder (closes as completed and opens Add project) or the six samples, spreadsheet first;
+Try with sample data opens the sample as the workspace with one plain tab and pre-selects its kit.
+Choose a kit shows the kit cards with their roles, the app-wide finish switch, Start kit (straight
+launch in the kit's own sample folder with an AI ready, else the setup dialog, behind which the
+wizard hides) and Just open a session. Progress is kept in the store (kv onboarding, version 7).
+
+[accounts] T-208 finishes the wizard's ways out. Escape, a left click on the dimmed app around the
+card or the corner close asks "Skip setup?", pointing to Onboarding in the sidebar help menu, with
+Skip and No, keep going (right clicks and clicks on the card do nothing). The close is stored
+before the wizard goes: a failed store keeps it open with a toast, and the next click tries the
+same close again. A record from an older version is raised to version 7 on start, keeping its other
+fields. After Pick a folder, or Skip while no project exists, the next project added starts the
+saved default agent in it, once.
+
+[accounts] T-201-b gives the chooser pane the older launch dialog's kit row: the six starter kits
+and See all kits (the gallery). Choosing a kit folds Advanced (shape, count, folders), lists the
+kit's roles with the AI each gets, and turns Start into Set up kit, which opens that kit's setup;
+a kit started from there closes the chooser. Choosing it again clears it and puts the seats back.
+The footer counts the sessions and names the first seat (or role) still lacking an AI or a model.
+
+[accounts] T-153-b: End in the Resource Manager reads the sessions again before it asks; a
+session that has already ended drops from the list with no question, and a failed read still
+asks, so nothing is ended unasked. The past-session files (VIEW-089) wait for the Agents tab
+(T-153-d) and Manage Sessions waits for the background host (T-153-e).
+
+[accounts] T-154-b: the app window now reads, saves and lists files only inside your projects
+and their worktrees. Open a file shows Kolux's own picker, and the one file you pick opens even
+outside a project, but nothing else in its folder does. Network shares, a whole drive and links
+that point out of a project are turned down with a plain message.
+
+[accounts] T-171: the AI connection cards now notice by themselves when an agent is installed
+or removed outside Kolux (every 5 seconds while the window is visible, and at once when it gets
+focus back). New Claude panes no longer pick up a 1-year key Kolux itself was started with
+unless key mode is on; with a managed Claude account, a pane whose own settings set an Anthropic
+key or token is not started and says which override to remove. A new Codex pane waits about two
+seconds for the chosen account's sign-in, then starts on the system login instead of hanging.
+
+[accounts] T-170: Usage no longer counts a forked or copied Claude or Codex session twice. The
+turns a fork copied stay credited to the original session; if the original file is deleted they
+move to the copy that is left, so the total stays the same. Rescans skip files that did not change,
+nested folders are read, Codex accounts whose folder points outside Kolux's own storage are not
+followed, and results saved by the older scan are rebuilt once.
+
+[accounts] T-136-c: the Usage page now opens with three cards counting Kolux's own activity:
+agents started, time agents spent working and pull requests created, with the date counting began.
+Before any agent has run it invites you to start the first one. The counts come from the agents'
+own status reports, so reloading the window never adds a turn, and they survive quitting Kolux
+while an agent is busy.
+
+[accounts] T-339 (cleanup): the Automations button now has one switch, Show Automations button in
+Settings > Appearance, which governs the title-bar and sidebar buttons together (the separate Title
+bar card is gone). The Notifications page lists each kind once. The launch screen now warns about
+Claude's usage as well as Codex's. kolux-dev orchestration reset says what each scope cleared and kept.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2728,7 +2802,41 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-137-a · Prices come from the public pages read 2026-10-12 (platform.claude.com pricing; developers.openai.com pricing, Standard tier) and live in `src/usage/pricing.ts` as dated entries; a later price change adds an entry with its first day. Kolux scope counts a log record when its working folder is a registered project's folder, that project's own workspaces folder or the global workspaces folder (no git call per open). A model is matched after dropping a provider prefix, a context tag such as [1m], a release date and an effort ending (low / medium / high / xhigh / max / minimal / none); "-codex" and "-max" variants then fall back to their base model (gpt-5.1-codex-max to gpt-5.1) and are labelled inferred, and an unknown release takes the nearest known release of its family at or below it, so a newer point release gets the family's current price and an older one never a newer price. A bare alias (opus, sonnet[1m]) takes its tier's newest price, inferred. The current Anthropic page lists no long-context surcharge for any model but Haiku 5.5 (prompts over 100k), so none is charged; OpenAI's long-context prices apply to prompts over 272k, a new fourth prompt-size band in the scan. A model whose page shows no cached price (the pro models) pays the full input price for cached input. Codex cache writes stay inside fresh input at the input price; OpenAI's newest models list a cache-write price 1.25x input, so their estimates can run slightly low. Charts of more than a year draw one bar per week.
 
+- [accounts] T-206 · Move to and Restart show on any stopped kit row (the usage-limit and sign-in states are not in the window yet, T-206-b); both need the run's first messages, which only the window that started the run holds, so after a restart they say to start the kit again. A declared file that is a link, or any path that leaves the role's folder, counts as missing and is never copied. The run history lives in the app store (kv kit_history, newest 50) and in each folder's run record; a record over 256 KB or that does not parse is ignored. Results.html is a standalone page with a no-scripts content policy; Markdown is rendered with pulldown-cmark with raw HTML shown as text. The embedded browser hides while the kits window is open (it drew over it), and the gallery closes before its own error toasts so they can be read.
+
+- [accounts] T-207 · The wizard record is kv `onboarding` {version 7, step = last screen finished (-1 none), closedAt, outcome completed|dismissed}; only start one with no record writes it, so older profiles never see the wizard (the migration of older progress is T-208); a close is final. The wizard opens after the last finished screen. Connected means: Claude's key card connected or about to run out, Codex's card connected, Grok's card connected. Start kit launches straight away only when the open workspace is that kit's own sample folder (which fills every input) and an AI is installed; any other case opens the setup dialog, and a start from there closes the wizard as completed. Just open a session takes the default agent first, else the first installed one that is not switched off, in the open workspace with no branch. The corner close button closes as dismissed with no question for now (ONB 006's ask is T-208). Ctrl+Enter still fires from a checkbox, radio or button, since those take no typing.
+
+- [accounts] T-208 · The corner close asks the same question as Escape and a click outside. Escape or a click outside while the question shows answers No, keep going (it never opens a second copy). The question names the help menu's Onboarding item as ONB 006 and DT-25 say; that item arrives with T-298 (ONB 009). A failed close store keeps the wizard and the close: whichever way out is clicked next (Start kit, Just open a session, Pick a folder, Skip) retries that close and does not repeat its own action, so a kit is never started twice. On start, a record from an older version gets version 7, its step held to -1..3 and a close time when it has an outcome but none; fields Kolux RS does not read yet (checklist ticks, milestones) are kept. ONB 010 is armed by Pick a folder, or by Skip while the project list is empty (a sample opened from the wizard is a project, so it disarms); it lives in the window only, so a relaunch disarms it; the saved default agent starts only when it is installed and not switched off, Auto starts nothing and a plain terminal is what the new workspace opens anyway.
+
+- [accounts] T-201-b · SESS 019's older launch dialog is the chooser pane (SESS 007), the only launch surface until T-046 builds the new look's page. A chosen kit replaces the seat list and the shared task box with its roles, because a kit's prompts come from its own setup; Advanced can still be unfolded with a kit chosen, under a line saying it applies once the kit is cleared, and choosing a kit again folds it. The kit row is a toggle: the pressed kit clicked again clears it. Set up kit opens the kit's setup dialog (inputs come from there, SKILL-004) and is disabled while a role has no AI; the chooser closes only when that kit really starts. The footer count reads "N sessions" plus, for the first unfinished seat, "still needs an AI" or "still needs a model". Every child row of the chooser keeps its height (no squashed task box when the pane is short).
+
+- [accounts] T-153-b · End skips its question only when a fresh read no longer lists the session; a failed read asks. Kolux RS sessions belong to the panes that opened them and end with the window, so the card's "nothing shown attached until the window has loaded its workspaces" and "sessions no window owns" only apply once T-067's background host exists (T-153-e). The per-row End stays the user's own explicit choice for every session, agent-owned ones included; the never-offered rule is about Manage Sessions' cleanup (T-153-e).
+
+- [accounts] T-154-b · The fence (fence.rs) covers file_read, file_write, dir_list, file_list, md_list, md_new, diff_sides, diff_image, git_changes and change_entries. Roots are the stored projects, then, on a miss, every worktree Git lists for them (re-read at most every 3 s). Every path is resolved through its links before the check, a path that does not exist yet through its folder; the command then uses the caller's own spelling. A network share, a drive root and a folder are never a root or a grant. Picked files are granted exactly, newest 100 kept, in memory only for now (a restored tab for a picked file is refused after a restart; T-154-c). Open a file moved from the window's dialog to a Kolux command (file_pick) so the window cannot grant itself a file; the other pickers (project folders, kit inputs, artifacts) still use the window's dialog, since they grant nothing. A project added at a drive root gives no file access, by the card's drive-root rule.
+
+- [accounts] T-171 · ACCT-014: the backup check runs on the connection grid (ConnectGrid) only, so it runs only while that page is open; it re-reads agent detection and install state, and a changed detection result is sent to every window as agents-changed. Account cards are not re-checked every 5 s, since a Claude account check starts a program per account (T-171-b covers their focus refresh). ACCT-024: the sign-in variables are ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN; terminal_spawn became an async command so the Codex wait (re-reading the active account every 100 ms) does not hold up the window; when the account changed during the wait and the new one also has no sign-in, the pane is refused with "Open it again".
+
+- [accounts] T-170 · USAGE-016/017: files are read oldest first (creation time, then change time, then path) and a reply (Claude message id) or token event (Codex time plus running total) held by several files counts for the first; the per-file memory (size and change time) lives in memory only, so the first scan after a restart reads every file once (T-170-b keeps it across restarts). The saved results carry a format mark (2) and anything else is thrown away and rescanned. The computer's own Codex folder is always <user folder>/.codex/sessions, whatever CODEX_HOME says; a managed home counts only when its resolved sessions folder lies inside <app data>/codex-accounts. Worktree credit (Kolux scope) now works out "." and ".." before comparing, so a path that climbs out of a worktree gets no credit.
+
+- [accounts] T-136-c · USAGE-011: an agent turn starts when a pane's hook-fed state becomes working from no open turn and ends on done or interrupted (a SessionStart reads done), or when its terminal ends; waiting, permission and blocked close the working stretch without ending the turn. Counting runs in the app's back end from the hook events, so a window reload or reconnect restates nothing. Counts live under the store key activityCounts, saved every 5 s when changed and once at quit after open turns are closed; a batched save never follows the one at quit. The page keeps its Settings name Usage (SET-006 lists it so), and the palette's Settings entries already take "usage" straight there. The invitation is text only, pointing at New session, since no window event opens the new-session chooser.
+
+- [accounts] T-137-b / T-139-c · 2026-10-12 source check: xAI's public Grok Build docs (docs.x.ai/build/cli/reference, docs.x.ai/build/features/status-line) document no usage, credit or allowance figures and no session-file format; the status-line input names only model.display_name, context_window.used_percentage, workspace.branch and cwd, and its built-in cost item has no documented field. The credits commands found elsewhere come from third-party tools, not xAI. Both tasks stay open until xAI publishes a source; nothing was built.
+
+- [accounts] T-339 · One field per window item: `automationsButton` (SET-020, on by default per DT-A6) is also VIEW-011's title-bar button, so `titleBarAutomations` and the Title bar card are gone; a saved `titleBarAutomations` is ignored. The notification kind switches keep `notifyOnFinish` and `notifyOnStopped` (the Notifications card's own switches); `notifyUsage` is dropped as the Usage alerts section is that switch. Claude's launch figures are its five_hour and seven_day limits, published from the same read as the top-bar pill. The CLI reset summary keeps its counts and adds what went and what stayed: tasks clears tasks, workers and gates and keeps Runs and mail; messages clears the mail and delivery positions and keeps Runs and tasks; all clears everything and ids keep counting up. The Codex accounts list was not moved by T-138 or T-138-b (it is still inside the Codex card); moving it is T-138-c.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-339 · done: CloseAsk folded into chrome/Ask (OK-only when confirm is null); duplicate notification switches removed; claudeFigures / publishClaude in launchWarn.ts fed by ClaudePill; TopBar onSettings dropped; titleBarButton and the Title bar card removed, automationsButton drives the title-bar button; reset summary explains each scope; test_dir.rs guard for the account and usage tests; T-138-c split for the Codex list move · evidence/T-339.txt, T-339-1-one-automations-switch.png, T-339-2-switch-off-no-button.png, T-339-3-notification-switches-once.png
+- 2026-10-12 · [accounts] T-137-b, T-139-c · not built: no public xAI source for Grok credit figures or the Grok session file (checked docs.x.ai); left unticked
+- 2026-10-12 · [accounts] T-136-c · done (part): activity.rs (turns, working stretches, batched and quit saves), status.rs and terminal.rs feed it, src/usage/Activity.tsx headline cards and invitation · evidence/T-136-c.txt, T-136-c-1-first-run-invitation.png, T-136-c-2-two-turns-after-reload.png, T-136-c-3-counts-intact-after-quit.png
+- 2026-10-12 · [accounts] T-170 · done (part): token_usage claude_file/codex_file/merge, per-file Cache, codex_roots, format mark; workspaces trim resolves . and .. · evidence/T-170.txt, T-170-1-fork-counted-once.png, T-170-2-original-gone-total-kept.png
+- 2026-10-12 · [accounts] T-171 · done (part): ConnectGrid liveCheck (5 s while visible, on focus, changes broadcast); claude_key::strip_inherited, claude_accounts::sign_in_overrides, codex_accounts::ready_home wired in terminal_spawn · evidence/T-171.txt, T-171-1-grok-not-installed.png, T-171-2-grok-found-without-reload.png
+- 2026-10-12 · [accounts] T-154-b · done: `src-tauri/src/fence.rs` (projects, worktrees and exact grants; shares, drive roots and links refused); file commands fenced; Open a file uses file_pick · evidence/T-154-b.txt, T-154-b-1-picker.png
+- 2026-10-12 · [accounts] T-153-c · skipped this batch, left open: VIEW-054 is built or marked SKIPPED only after Txais clicks through the installed app (DT-37), which the clean-room rule bars the builder from
+- 2026-10-12 · [accounts] T-153-b · done: `src/status/resources.ts` endNeedsAsk; Resource Manager End reads again before asking · evidence/T-153-b.txt, T-153-b-*.png
+- 2026-10-12 · [accounts] T-201-b · done: kit row, Advanced fold, kit roles and Set up kit in `src/launch/ChooserPane.tsx`; `seatGap` in seats.ts; `openKits(kit, chooser)` opens one kit's setup and App closes the chooser once it starts; Grok docs link · evidence/T-201-b.txt, T-201-b-*.png
+- 2026-10-12 · [accounts] T-208 · done: leave question (Escape, click outside, corner close) through Ask's new cancel words and safe confirm; firstRun.ts closer latch with retry, leaveKey, firstFolderAgent; onboarding.rs raises older records and keeps unknown fields; ProjectsPanel onAdded starts the default agent once · evidence/T-208.txt, T-208-*.png
+- 2026-10-12 · [accounts] T-207 · done: `onboarding.rs` record and onboarding_get / _step / _close; `src/onboarding/` Wizard (four screens) and firstRun.ts rules; Connect cards report connected; KitCard split out of the gallery; Add project opens on a window event · evidence/T-207.txt, T-207-*.png
+- 2026-10-12 · [accounts] T-206 · done: `kits.rs` kit_collect / kit_history / kit_open_file, the project-or-samples guard on every kit command, the per-folder and app-wide run history; strip Preview / Open / Collect results / Move to / Restart; Recent kit runs in the gallery; read-only editor and start-URL browser panes for previews · evidence/T-206.txt, T-206-*.png
 - 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png
 - 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
 - 2026-10-12 · [core] T-043-d · done: sign-in upkeep switch, lapsed warnings follow it, check on switch-off; Kolux-side renewal dropped (DT-C16); keychain rules → T-043-e; evidence/T-043-d-upkeep.png

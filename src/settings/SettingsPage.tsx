@@ -11,7 +11,7 @@ import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
 import { ConnectGrid, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
-import CloseAsk from "../terminal/CloseAsk";
+import Ask from "../chrome/Ask";
 import GrokCard from "./GrokCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
@@ -28,6 +28,7 @@ const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
 const AgentsPage = lazy(() => import("./AgentsPage"));
 const TokenAnalytics = lazy(() => import("../usage/TokenAnalytics"));
+const Activity = lazy(() => import("../usage/Activity"));
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
@@ -79,8 +80,11 @@ export const claudeDisconnect = {
   confirm: "Disconnect",
 };
 
-function ClaudeCard() {
+/** `onConnected`: told whether Claude counts as connected each time that changes (ONB-003). */
+export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: boolean) => void } = {}) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
+  const on = ["connected", "warning"].includes(keyCard(status).state);
+  useEffect(() => onConnected(on), [onConnected, on]);
   const [own, setOwn] = useState<OwnSignIn | null>(null);
   const [resume, setResume] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -138,7 +142,7 @@ function ClaudeCard() {
     <>
       <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />
       {asking && (
-        <CloseAsk
+        <Ask
           {...claudeDisconnect}
           onCancel={() => setAsking(false)}
           onConfirm={() => {
@@ -265,6 +269,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           )}
           {page === "usage" && (
             <>
+              <Activity />
               <p className="settings-sub">What your agents used, read from the logs they keep on this computer.</p>
               <TokenAnalytics />
             </>

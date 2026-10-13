@@ -17,11 +17,13 @@ import { openSettings } from "../settings/pages";
 import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
+import { KitIcon, openKits } from "../kits/Kits";
+import { KITS, VENDOR_NAME, assignRoles, type Vendor } from "../kits/catalog";
 import { canLaunch, FEATURED, type AgentPass } from "./agents";
-import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
+import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
 
 /** Agents whose own page `open_install_page` knows (agents.rs `install_page`). */
-const DOC_PAGES = ["claude", "codex"];
+const DOC_PAGES = ["claude", "codex", "grok"];
 
 /** SESS-017: the featured three first (a missing one only once detection is done), the other
  * installed agents behind the fold, and whether no AI was found at all. */
@@ -68,9 +70,25 @@ type Props = {
   /** SESS-021: this project's last lineup, when it has one worth offering; applied only on the click. */
   lastLineup?: Lineup | null;
   onUseLineup?: () => void;
+  /** SESS-019: the starter kit picked in this chooser (null for none), the pick or clear, and the AIs that can take kit roles. */
+  kit?: string | null;
+  onKit?: (kit: string | null) => void;
+  vendors?: Vendor[];
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, detecting = false, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, detecting = false, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup, kit = null, onKit = () => {}, vendors = [] }: Props) {
+  // SESS-019: a chosen kit folds Advanced (shape, count, folders) and takes the seats' place.
+  const chosen = KITS.find((k) => k.id === kit) ?? null;
+  const [unfold, setUnfold] = useState(false);
+  const advanced = !chosen || unfold;
+  const chooseKit = (id: string) => {
+    setUnfold(false);
+    onKit(id === kit ? null : id);
+  };
+  const roleAIs = chosen ? assignRoles(chosen, vendors) : [];
+  const missingRole = chosen?.roles.find((_, i) => roleAIs[i] === null);
+  const gap = chosen ? (missingRole ? `${missingRole.title} still needs an AI` : null) : seatGap(seats);
+  const sessions = chosen ? chosen.roles.length : seats.length;
   const lineup = seatAgents(agents, detecting);
   // SESS-017: which seats show the folded agents; a seat already using one shows them anyway.
   const [unfolded, setUnfolded] = useState<number[]>([]);
@@ -136,7 +154,7 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
         </span>
       </header>
       <div className="chooser-body">
-        <p className="caption">Every seat starts blank. Kolux never picks an AI or a model for you.</p>
+        <p className="caption">{chosen ? "A kit gives each of its roles one of the AIs you have connected." : "Every seat starts blank. Kolux never picks an AI or a model for you."}</p>
         {pass?.error ? (
           <p className="caption warn" role="alert">
             Kolux could not look for agents ({pass.error}). Nothing can start until a search succeeds.
@@ -151,6 +169,24 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
             </button>
           </div>
         )}
+        <div className="count-row" role="group" aria-label="Starter kits">
+          <span className="label">Kits</span>
+          {KITS.map((k) => (
+            <button key={k.id} className="btn small" aria-pressed={k.id === kit} title={k.summary} onClick={() => chooseKit(k.id)}>
+              <KitIcon id={k.id} size={13} />
+              {k.title}
+            </button>
+          ))}
+          <button className="btn link" onClick={() => openKits()}>
+            See all kits
+          </button>
+        </div>
+        <button className="btn link chooser-advanced" aria-expanded={advanced} onClick={() => setUnfold(!advanced)}>
+          Advanced
+        </button>
+        {advanced && chosen && <p className="caption">A kit sets its own sessions; these apply once the kit is cleared.</p>}
+        {advanced && (
+        <>
         <div className="count-row" role="group" aria-label="Launch shape">
           <span className="label">Shape</span>
           {SHAPES.map((s) => (
@@ -255,6 +291,18 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
             </button>
           </div>
         )}
+        </>
+        )}
+        {chosen ? (
+          <ul className="seats kit-roles" aria-label={`${chosen.title}: roles`}>
+            {chosen.roles.map((r, i) => (
+              <li key={r.id} className="seat">
+                <span className="seat-title">{r.title}</span> <span className="caption">{roleAIs[i] ? VENDOR_NAME[roleAIs[i]!] : "No AI connected for this role"}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+        <>
         <textarea
           className="seat-prompt"
           rows={2}
@@ -373,8 +421,13 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
             </div>
           ))}
         </div>
+        </>
+        )}
       </div>
       <footer className="chooser-foot">
+        <div className="caption chooser-count" role="status">
+          {`${sessions} ${sessions === 1 ? "session" : "sessions"}${gap ? ` · ${gap}` : ""}`}
+        </div>
         {warnings.map((w) => (
           <div key={w} className="note warn" role="status">
             {w}
@@ -386,9 +439,15 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
               {pass?.looking ? "Looking…" : "Refresh agents"}
             </button>
           )}
+          {chosen ? (
+            <button className="btn primary" disabled={!!gap || busy} onClick={() => openKits(chosen.id, number)} title={gap ? "Connect an AI in Settings first" : "Open the kit's setup to give it its files"}>
+              Set up kit
+            </button>
+          ) : (
           <button className="btn primary" disabled={!ready} onClick={() => onStart(seats)} title={ready ? "Start every seat" : !searched ? "Waiting for a search for agents that succeeds" : "Pick an AI and a model (or Terminal) for every seat first"}>
             {busy ? "Starting…" : `Start${seats.length > 1 ? ` ${seats.length}` : ""}`}
           </button>
+          )}
         </div>
       </footer>
     </section>

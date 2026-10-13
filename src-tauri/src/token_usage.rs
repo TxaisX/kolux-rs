@@ -43,6 +43,8 @@ pub struct Row {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Saved {
+    /// USAGE-017: the format mark; results saved in any other format are thrown away and rebuilt.
+    pub format: u32,
     pub scanned_at: u64,
     pub rows: Vec<Row>,
     /// Why the latest scan failed; the rows are then the last good ones.
@@ -50,7 +52,8 @@ pub struct Saved {
 }
 
 /// One reply's counts before bucketing.
-struct Turn {
+#[derive(Clone)]
+pub struct Turn {
     at: u64,
     session: String,
     model: String,
@@ -101,101 +104,133 @@ fn bucket(turns: impl IntoIterator<Item = Turn>, tz: &jiff::tz::TimeZone) -> Vec
     out
 }
 
-/// Claude Code transcripts, as (file name, text). A reply is counted once by its message id, the
-/// last piece written winning, so streamed pieces and turns copied into a fork are not added twice.
-/// ponytail: which copy of a forked turn gets the credit, deleted originals and unchanged-file
-/// skipping are T-170 (USAGE-016).
-pub fn claude_rows(files: &[(String, String)], tz: &jiff::tz::TimeZone) -> Vec<Row> {
+/// One Claude Code transcript's replies by message id, the last piece written winning, so the
+/// streamed pieces of one reply are merged into one.
+fn claude_file(name: &str, text: &str) -> Vec<(String, Turn)> {
     let mut turns: HashMap<String, Turn> = HashMap::new();
-    for (name, text) in files {
-        for (i, v) in records(text).enumerate() {
-            let Some(usage) = v.get("message").and_then(|m| m.get("usage")).filter(|u| u.is_object()) else { continue };
-            let Some(at) = s(&v, "timestamp").and_then(crate::capture::parse_time) else { continue };
-            let msg = &v["message"];
-            let id = s(msg, "id").or_else(|| s(&v, "requestId")).or_else(|| s(&v, "uuid")).map(String::from).unwrap_or_else(|| format!("{name}:{i}"));
-            let split = usage.get("cache_creation").filter(|c| c.is_object());
-            let lifetimes = split.map(|c| n(c, "ephemeral_5m_input_tokens") + n(c, "ephemeral_1h_input_tokens")).unwrap_or(0);
-            let cache_write = if usage.get("cache_creation_input_tokens").is_some_and(Value::is_u64) { n(usage, "cache_creation_input_tokens") } else { lifetimes };
-            let output = n(usage, "output_tokens");
-            let thinking = usage.get("output_tokens_details").map(|d| n(d, "thinking_tokens")).unwrap_or(0);
-            turns.insert(
-                id,
-                Turn {
-                    at,
-                    session: s(&v, "sessionId").map(String::from).unwrap_or_else(|| stem(name)),
-                    model: s(msg, "model").unwrap_or("unknown").into(),
-                    cwd: s(&v, "cwd").unwrap_or_default().into(),
-                    input: n(usage, "input_tokens"),
-                    output,
-                    cache_read: n(usage, "cache_read_input_tokens"),
-                    cache_write,
-                    cache_write_1h: split.map(|c| n(c, "ephemeral_1h_input_tokens")).unwrap_or(0).min(cache_write),
-                    reasoning: thinking.min(output),
-                },
-            );
-        }
+    for (i, v) in records(text).enumerate() {
+        let Some(usage) = v.get("message").and_then(|m| m.get("usage")).filter(|u| u.is_object()) else { continue };
+        let Some(at) = s(&v, "timestamp").and_then(crate::capture::parse_time) else { continue };
+        let msg = &v["message"];
+        let id = s(msg, "id").or_else(|| s(&v, "requestId")).or_else(|| s(&v, "uuid")).map(String::from).unwrap_or_else(|| format!("{name}:{i}"));
+        let split = usage.get("cache_creation").filter(|c| c.is_object());
+        let lifetimes = split.map(|c| n(c, "ephemeral_5m_input_tokens") + n(c, "ephemeral_1h_input_tokens")).unwrap_or(0);
+        let cache_write = if usage.get("cache_creation_input_tokens").is_some_and(Value::is_u64) { n(usage, "cache_creation_input_tokens") } else { lifetimes };
+        let output = n(usage, "output_tokens");
+        let thinking = usage.get("output_tokens_details").map(|d| n(d, "thinking_tokens")).unwrap_or(0);
+        turns.insert(
+            id,
+            Turn {
+                at,
+                session: s(&v, "sessionId").map(String::from).unwrap_or_else(|| stem(name)),
+                model: s(msg, "model").unwrap_or("unknown").into(),
+                cwd: s(&v, "cwd").unwrap_or_default().into(),
+                input: n(usage, "input_tokens"),
+                output,
+                cache_read: n(usage, "cache_read_input_tokens"),
+                cache_write,
+                cache_write_1h: split.map(|c| n(c, "ephemeral_1h_input_tokens")).unwrap_or(0).min(cache_write),
+                reasoning: thinking.min(output),
+            },
+        );
     }
-    bucket(turns.into_values(), tz)
+    turns.into_iter().collect()
 }
 
-/// Codex session logs, as (file name, text). A token event is counted by its own last-turn figures,
-/// and only when the running total moved, so a repeated event adds nothing and the first event of a
-/// resumed session is not taken as its whole history. Cached input is part of Codex's input count.
-/// ponytail: forks, aliases and per-worktree credit are T-170 (USAGE-017).
-pub fn codex_rows(files: &[(String, String)], tz: &jiff::tz::TimeZone) -> Vec<Row> {
+/// One Codex session log's token events, keyed by their time and running total. An event counts by
+/// its own last-turn figures, and only when the running total moved, so a repeated event adds
+/// nothing and the first event of a resumed session is not taken as its whole history. Cached input
+/// is part of Codex's input count.
+fn codex_file(name: &str, text: &str) -> Vec<(String, Turn)> {
     let mut turns = Vec::new();
-    for (name, text) in files {
-        let (mut session, mut model, mut cwd) = (None::<String>, "unknown".to_string(), String::new());
-        let mut prev: Option<Value> = None;
-        for (i, v) in records(text).enumerate() {
-            let Some(p) = v.get("payload").filter(|p| p.is_object()) else { continue };
-            if let Some(m) = s(p, "model") {
-                model = m.into();
-            }
-            if let Some(c) = s(p, "cwd") {
-                cwd = c.into();
-            }
-            if session.is_none() {
-                session = s(p, "session_id").or_else(|| if i == 0 { s(p, "id") } else { None }).map(String::from);
-            }
-            let Some(info) = p.get("info").filter(|x| x.is_object()) else { continue };
-            let Some(total) = info.get("total_token_usage").filter(|x| x.is_object()) else { continue };
-            if prev.as_ref() == Some(total) {
+    let (mut session, mut model, mut cwd) = (None::<String>, "unknown".to_string(), String::new());
+    let mut prev: Option<Value> = None;
+    for (i, v) in records(text).enumerate() {
+        let Some(p) = v.get("payload").filter(|p| p.is_object()) else { continue };
+        if let Some(m) = s(p, "model") {
+            model = m.into();
+        }
+        if let Some(c) = s(p, "cwd") {
+            cwd = c.into();
+        }
+        if session.is_none() {
+            session = s(p, "session_id").or_else(|| if i == 0 { s(p, "id") } else { None }).map(String::from);
+        }
+        let Some(info) = p.get("info").filter(|x| x.is_object()) else { continue };
+        let Some(total) = info.get("total_token_usage").filter(|x| x.is_object()) else { continue };
+        if prev.as_ref() == Some(total) {
+            continue;
+        }
+        let last = match (info.get("last_token_usage").filter(|x| x.is_object()), &prev) {
+            (Some(l), _) => l.clone(),
+            // no last-turn figures: the step since the previous running total
+            (None, Some(before)) => serde_json::json!({
+                "input_tokens": n(total, "input_tokens").saturating_sub(n(before, "input_tokens")),
+                "cached_input_tokens": n(total, "cached_input_tokens").saturating_sub(n(before, "cached_input_tokens")),
+                "output_tokens": n(total, "output_tokens").saturating_sub(n(before, "output_tokens")),
+                "reasoning_output_tokens": n(total, "reasoning_output_tokens").saturating_sub(n(before, "reasoning_output_tokens")),
+            }),
+            (None, None) => {
+                prev = Some(total.clone());
                 continue;
             }
-            let last = match (info.get("last_token_usage").filter(|x| x.is_object()), &prev) {
-                (Some(l), _) => l.clone(),
-                // no last-turn figures: the step since the previous running total
-                (None, Some(before)) => serde_json::json!({
-                    "input_tokens": n(total, "input_tokens").saturating_sub(n(before, "input_tokens")),
-                    "cached_input_tokens": n(total, "cached_input_tokens").saturating_sub(n(before, "cached_input_tokens")),
-                    "output_tokens": n(total, "output_tokens").saturating_sub(n(before, "output_tokens")),
-                    "reasoning_output_tokens": n(total, "reasoning_output_tokens").saturating_sub(n(before, "reasoning_output_tokens")),
-                }),
-                (None, None) => {
-                    prev = Some(total.clone());
-                    continue;
-                }
-            };
-            prev = Some(total.clone());
-            let Some(at) = s(&v, "timestamp").and_then(crate::capture::parse_time) else { continue };
-            let (input, output) = (n(&last, "input_tokens"), n(&last, "output_tokens"));
-            let cached = n(&last, "cached_input_tokens").min(input);
-            turns.push(Turn {
-                at,
-                session: session.clone().unwrap_or_else(|| stem(name)),
-                model: model.clone(),
-                cwd: cwd.clone(),
-                input: input - cached,
-                output,
-                cache_read: cached,
-                cache_write: 0,
-                cache_write_1h: 0,
-                reasoning: n(&last, "reasoning_output_tokens").min(output),
-            });
-        }
+        };
+        prev = Some(total.clone());
+        let Some(stamp) = s(&v, "timestamp") else { continue };
+        let Some(at) = crate::capture::parse_time(stamp) else { continue };
+        let (input, output) = (n(&last, "input_tokens"), n(&last, "output_tokens"));
+        let cached = n(&last, "cached_input_tokens").min(input);
+        let turn = Turn {
+            at,
+            session: session.clone().unwrap_or_else(|| stem(name)),
+            model: model.clone(),
+            cwd: cwd.clone(),
+            input: input - cached,
+            output,
+            cache_read: cached,
+            cache_write: 0,
+            cache_write_1h: 0,
+            reasoning: n(&last, "reasoning_output_tokens").min(output),
+        };
+        turns.push((format!("{stamp}|{total}"), turn));
     }
-    bucket(turns, tz)
+    turns
+}
+
+/// USAGE-016 / USAGE-017: files in credit order, oldest first. A reply or token event that several
+/// files hold, as a fork, a copy or a resumed session carries the earlier ones, counts once, for the
+/// first file that holds it; once that file is gone the next copy carries it.
+fn merge<'a>(files: impl IntoIterator<Item = &'a [(String, Turn)]>) -> Vec<Turn> {
+    let mut seen = HashSet::new();
+    files.into_iter().flatten().filter(|(k, _)| seen.insert(k.clone())).map(|(_, t)| t.clone()).collect()
+}
+
+/// Claude Code transcripts, as (file name, text), in credit order.
+#[cfg(test)]
+pub fn claude_rows(files: &[(String, String)], tz: &jiff::tz::TimeZone) -> Vec<Row> {
+    let parsed: Vec<_> = files.iter().map(|(name, text)| claude_file(name, text)).collect();
+    bucket(merge(parsed.iter().map(Vec::as_slice)), tz)
+}
+
+/// Codex session logs, as (file name, text), in credit order.
+#[cfg(test)]
+pub fn codex_rows(files: &[(String, String)], tz: &jiff::tz::TimeZone) -> Vec<Row> {
+    let parsed: Vec<_> = files.iter().map(|(name, text)| codex_file(name, text)).collect();
+    bucket(merge(parsed.iter().map(Vec::as_slice)), tz)
+}
+
+/// USAGE-016: what each log file held at its last read (size and change time), so a file unchanged
+/// since is not read again and the results of files that did not change are kept.
+/// ponytail: held in memory, so the first scan after a restart reads every file once; save it with
+/// the results if that first scan proves slow.
+#[derive(Default)]
+pub struct Cache(HashMap<PathBuf, Seen>);
+/// A file's size, change time and keyed turns at its last read.
+type Seen = (u64, Option<std::time::SystemTime>, Vec<(String, Turn)>);
+
+fn caches() -> &'static Mutex<HashMap<String, Cache>> {
+    static CACHES: std::sync::OnceLock<Mutex<HashMap<String, Cache>>> = std::sync::OnceLock::new();
+    CACHES.get_or_init(Default::default)
 }
 
 /// Scans in flight, by provider. A request for one already running waits for it and reads its result.
@@ -235,8 +270,13 @@ pub fn tracking_of(choice: Option<bool>, has_saved: bool) -> bool {
     choice.unwrap_or(has_saved)
 }
 
+/// The format saved results are written in now (2: forks and copies counted once).
+pub const FORMAT: u32 = 2;
+fn parse_saved(text: &str) -> Option<Saved> {
+    serde_json::from_str::<Saved>(text).ok().filter(|s| s.format == FORMAT)
+}
 fn saved(store: &Store, provider: &str) -> Option<Saved> {
-    store.get(&key_saved(provider)).ok().flatten().and_then(|t| serde_json::from_str(&t).ok())
+    store.get(&key_saved(provider)).ok().flatten().and_then(|t| parse_saved(&t))
 }
 fn choices(store: &Store) -> serde_json::Map<String, Value> {
     store.get(KEY_TRACKING).ok().flatten().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
@@ -254,18 +294,35 @@ fn jsonl_under(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The log folders a provider's scan reads.
-fn roots(store: &Store, provider: &str) -> Vec<PathBuf> {
-    if provider == "claude" {
-        return crate::capture::claude_dir().map(|d| d.join("projects")).into_iter().collect();
+/// USAGE-017: the computer's own Codex sessions folder (a CODEX_HOME override in the surrounding
+/// environment does not move it) and each managed account's, only while that home and its sessions
+/// folder resolve inside Kolux's own account storage; folders that lead to the same place are read
+/// once.
+pub fn codex_roots(user_home: Option<&Path>, profile: Option<&Path>, homes: &[String]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = user_home.and_then(|h| h.join(".codex").join("sessions").canonicalize().ok()).into_iter().collect();
+    if let Some(storage) = profile.and_then(|p| p.join(crate::codex_accounts::FOLDER).canonicalize().ok()) {
+        out.extend(homes.iter().filter_map(|h| Path::new(h).join("sessions").canonicalize().ok()).filter(|d| d.starts_with(&storage)));
     }
-    let mut out: Vec<PathBuf> = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(|h| PathBuf::from(h).join(".codex").join("sessions")).into_iter().collect();
-    out.extend(crate::codex_accounts::load(store).into_iter().map(|a| PathBuf::from(a.home).join("sessions")));
+    let mut seen = HashSet::new();
+    out.retain(|d| seen.insert(d.clone()));
     out
 }
 
-/// Reads one provider's logs. None of its folders being there is a failure, so saved figures stay.
-fn scan(roots: &[PathBuf], provider: &str) -> Result<Vec<Row>, String> {
+/// The log folders a provider's scan reads; `profile` is Kolux's own data folder.
+fn roots(store: &Store, provider: &str, profile: Option<&Path>) -> Vec<PathBuf> {
+    if provider == "claude" {
+        return crate::capture::claude_dir().map(|d| d.join("projects")).into_iter().collect();
+    }
+    let user = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+    let homes: Vec<String> = crate::codex_accounts::load(store).into_iter().map(|a| a.home).collect();
+    codex_roots(user.as_deref(), profile, &homes)
+}
+
+/// Reads one provider's logs, any depth, oldest file first so an original keeps the credit for
+/// what its forks copied. A file unchanged since the last scan is taken from `cache`. Gives the
+/// rows and how many files were read. None of the folders being there is a failure, so saved
+/// figures stay.
+fn scan(roots: &[PathBuf], provider: &str, cache: &mut Cache) -> Result<(Vec<Row>, usize), String> {
     let present: Vec<&PathBuf> = roots.iter().filter(|r| r.is_dir()).collect();
     if present.is_empty() {
         return Err(if provider == "claude" { "its projects folder is not there" } else { "its sessions folder is not there" }.into());
@@ -274,9 +331,26 @@ fn scan(roots: &[PathBuf], provider: &str) -> Result<Vec<Row>, String> {
     for r in present {
         jsonl_under(r, &mut paths);
     }
-    let files: Vec<(String, String)> = paths.iter().filter_map(|p| std::fs::read_to_string(p).ok().map(|t| (p.file_name().unwrap_or_default().to_string_lossy().into_owned(), t))).collect();
-    let tz = jiff::tz::TimeZone::system();
-    Ok(if provider == "claude" { claude_rows(&files, &tz) } else { codex_rows(&files, &tz) })
+    let mut files: Vec<(PathBuf, std::fs::Metadata)> = paths.into_iter().filter_map(|p| std::fs::metadata(&p).ok().map(|m| (p, m))).collect();
+    files.sort_by_cached_key(|(p, m)| (m.created().or_else(|_| m.modified()).ok(), p.clone()));
+    let (mut read, mut order, mut next) = (0, Vec::new(), HashMap::new());
+    for (p, m) in files {
+        let (len, at) = (m.len(), m.modified().ok());
+        let turns = match cache.0.remove(&p) {
+            Some((l, a, t)) if (l, a) == (len, at) => t,
+            _ => {
+                let Ok(text) = std::fs::read_to_string(&p) else { continue };
+                read += 1;
+                let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                if provider == "claude" { claude_file(&name, &text) } else { codex_file(&name, &text) }
+            }
+        };
+        order.push(p.clone());
+        next.insert(p, (len, at, turns));
+    }
+    let turns = merge(order.iter().filter_map(|p| next.get(p)).map(|(_, _, t)| t.as_slice()));
+    cache.0 = next;
+    Ok((bucket(turns, &jiff::tz::TimeZone::system()), read))
 }
 
 #[derive(Serialize)]
@@ -317,17 +391,21 @@ pub async fn token_usage_scan(app: tauri::AppHandle, provider: String) -> Result
     }
     tauri::async_runtime::spawn_blocking(move || {
         let store = app.state::<Mutex<Store>>();
+        let profile = app.path().app_data_dir().ok();
         app.state::<Flights>().run(&provider, || {
             let dirs = match store.lock() {
-                Ok(s) => roots(&s, &provider),
+                Ok(s) => roots(&s, &provider, profile.as_deref()),
                 Err(_) => return,
             };
-            let result = scan(&dirs, &provider);
+            let result = {
+                let mut all = caches().lock().unwrap_or_else(|e| e.into_inner());
+                scan(&dirs, &provider, all.entry(provider.clone()).or_default()).map(|(rows, _)| rows)
+            };
             let Ok(s) = store.lock() else { return };
             let before = saved(&s, &provider);
             let next = match result {
-                Ok(rows) => Saved { scanned_at: crate::artifacts::now_ms(), rows, error: None },
-                Err(e) => Saved { error: Some(e), ..before.unwrap_or_default() },
+                Ok(rows) => Saved { format: FORMAT, scanned_at: crate::artifacts::now_ms(), rows, error: None },
+                Err(e) => Saved { format: FORMAT, error: Some(e), ..before.unwrap_or_default() },
             };
             let _ = s.set(&key_saved(&provider), &serde_json::to_string(&next).unwrap_or_default());
         });
@@ -377,8 +455,8 @@ mod tests {
         assert_eq!(sum(|r| r.output), 8);
         assert_eq!(sum(|r| r.cache_read), 100);
         assert_eq!(sum(|r| r.cache_write), 45);
-        // m1's fork copy names no lifetimes; m2's 1-hour count above its total is cut back to the total.
-        assert_eq!(sum(|r| r.cache_write_1h), 5);
+        // the original keeps m1 (30 of an hour); m2's 1-hour count above its total is cut back to the total.
+        assert_eq!(sum(|r| r.cache_write_1h), 35);
         assert!(rows.iter().all(|r| r.day == "2026-03-01" && r.model == "claude-model-x"));
     }
 
@@ -460,5 +538,92 @@ mod tests {
         assert!(tracking_of(None, true));
         assert!(!tracking_of(Some(false), true));
         assert!(tracking_of(Some(true), false));
+    }
+
+    fn temp(tag: &str) -> crate::test_dir::TempDir {
+        crate::test_dir::temp(&format!("usage-{tag}"))
+    }
+    fn write(path: &Path, lines: &[Value]) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+    }
+    fn in_session(mut v: Value, session: &str) -> Value {
+        v["sessionId"] = json!(session);
+        v
+    }
+    fn total(rows: &[Row]) -> u64 {
+        rows.iter().map(|r| r.input + r.output).sum()
+    }
+
+    #[test]
+    fn usage_016_forked_turns_count_once_and_stay_counted_when_the_original_goes() {
+        let t = temp("fork");
+        let projects = t.0.join("projects");
+        let a = reply("m1", "2026-03-01T09:00:00Z", json!({ "input_tokens": 10, "output_tokens": 1 }));
+        let b = reply("m2", "2026-03-01T09:01:00Z", json!({ "input_tokens": 20, "output_tokens": 2 }));
+        let c = reply("m3", "2026-03-01T09:02:00Z", json!({ "input_tokens": 40, "output_tokens": 4 }));
+        let original = projects.join("C--work-app").join("s-1.jsonl");
+        write(&original, &[a.clone(), b.clone()]);
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // the fork copies the first two turns, then goes on with its own
+        write(&projects.join("C--work-app").join("deep").join("s-2.jsonl"), &[in_session(a, "s-2"), in_session(b, "s-2"), in_session(c, "s-2")]);
+        let mut cache = Cache::default();
+        let (rows, read) = scan(std::slice::from_ref(&projects), "claude", &mut cache).unwrap();
+        assert_eq!((total(&rows), read), (77, 2), "copied turns once, nested folders read");
+        let by = |rows: &[Row], s: &str| rows.iter().filter(|r| r.session == s).map(|r| r.input + r.output).sum::<u64>();
+        assert_eq!((by(&rows, "s-1"), by(&rows, "s-2")), (33, 44), "the copies stay with the original");
+        std::fs::remove_file(&original).unwrap();
+        let (rows, read) = scan(std::slice::from_ref(&projects), "claude", &mut cache).unwrap();
+        assert_eq!((total(&rows), by(&rows, "s-2"), read), (77, 77, 0), "the remaining copy now carries them, nothing re-read");
+    }
+
+    #[test]
+    fn usage_016_unchanged_files_are_not_read_again() {
+        let t = temp("unchanged");
+        let root = t.0.join("projects");
+        let one = root.join("p").join("one.jsonl");
+        write(&one, &[reply("m1", "2026-03-01T09:00:00Z", json!({ "input_tokens": 10, "output_tokens": 1 }))]);
+        write(&root.join("p").join("two.jsonl"), &[reply("m2", "2026-03-01T09:00:00Z", json!({ "input_tokens": 5, "output_tokens": 0 }))]);
+        let mut cache = Cache::default();
+        assert_eq!(scan(std::slice::from_ref(&root), "claude", &mut cache).unwrap().1, 2);
+        assert_eq!(scan(std::slice::from_ref(&root), "claude", &mut cache).unwrap().1, 0);
+        write(&one, &[reply("m1", "2026-03-01T09:00:00Z", json!({ "input_tokens": 10, "output_tokens": 1 })), reply("m9", "2026-03-01T09:05:00Z", json!({ "input_tokens": 100, "output_tokens": 0 }))]);
+        let (rows, read) = scan(std::slice::from_ref(&root), "claude", &mut cache).unwrap();
+        assert_eq!((read, total(&rows)), (1, 116), "only the changed file is read; the other file's results are kept");
+    }
+
+    #[test]
+    fn usage_017_a_forked_codex_session_counts_its_copied_events_once() {
+        let meta = |id: &str| json!({ "timestamp": "2026-03-01T09:00:00Z", "type": "meta", "payload": { "session_id": id, "cwd": "C:/work/app", "model": "codex-model-y" } });
+        let e1 = event("2026-03-01T09:01:00Z", counts(100, 0, 10, 0), counts(100, 0, 10, 0));
+        let e2 = event("2026-03-01T09:02:00Z", counts(300, 0, 30, 0), counts(200, 0, 20, 0));
+        let e3 = event("2026-03-01T09:03:00Z", counts(700, 0, 70, 0), counts(400, 0, 40, 0));
+        let rows = codex_rows(&[file("a.jsonl", &[meta("cx-1"), e1.clone(), e2.clone()]), file("b.jsonl", &[meta("cx-2"), e1, e2, e3])], &TimeZone::UTC);
+        assert_eq!(total(&rows), 770, "the fork adds only its own event");
+        assert_eq!(rows.iter().filter(|r| r.session == "cx-2").map(|r| r.input + r.output).sum::<u64>(), 440);
+    }
+
+    #[test]
+    fn usage_017_codex_scan_follows_only_homes_inside_kolux_storage_and_reads_aliases_once() {
+        let t = temp("roots");
+        let profile = t.0.join("profile");
+        let own = t.0.join("user").join(".codex");
+        let inside = profile.join(crate::codex_accounts::FOLDER).join("x1");
+        let outside = t.0.join("elsewhere").join("x2");
+        for d in [own.join("sessions"), inside.join("sessions"), outside.join("sessions")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let alias = profile.join(crate::codex_accounts::FOLDER).join(".").join("x1");
+        let homes = vec![inside.to_string_lossy().into_owned(), alias.to_string_lossy().into_owned(), outside.to_string_lossy().into_owned()];
+        let roots = codex_roots(Some(&t.0.join("user")), Some(&profile), &homes);
+        let canon = |p: &Path| p.canonicalize().unwrap();
+        assert_eq!(roots, vec![canon(&own.join("sessions")), canon(&inside.join("sessions"))]);
+    }
+
+    #[test]
+    fn usage_017_saved_results_in_an_older_format_are_rebuilt() {
+        assert!(parse_saved(r#"{"scannedAt":1,"rows":[],"error":null}"#).is_none(), "no format mark: thrown away");
+        let now = serde_json::to_string(&Saved { format: FORMAT, scanned_at: 2, ..Saved::default() }).unwrap();
+        assert_eq!(parse_saved(&now).map(|s| s.scanned_at), Some(2));
     }
 }
