@@ -138,6 +138,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            procs::app_job_start(); // APP-053: everything the app starts from here on ends with it.
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
