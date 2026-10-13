@@ -337,6 +337,8 @@ pub fn run() {
             onboarding::onboarding_get,
             onboarding::onboarding_step,
             onboarding::onboarding_close,
+            onboarding::onboarding_reopen,
+            onboarding::onboarding_milestone,
             files::file_read,
             files::file_write,
             files::file_pick,

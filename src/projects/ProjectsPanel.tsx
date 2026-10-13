@@ -29,7 +29,7 @@ import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
-import { ADD_PROJECT } from "../onboarding/firstRun";
+import { ADD_PROJECT, REOPEN_WIZARD } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
 import AutomationsRow from "./AutomationsRow";
@@ -153,6 +153,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [showAdd, setShowAdd] = useState(false);
   // PROJ-002: the Add Project dialog, from the folder button or the composer's Add project item.
   const [adding, setAdding] = useState(false);
+  const [help, setHelp] = useState<DOMRect | null>(null);
   // ONB-004: the first-run wizard's 'Pick a folder' opens Add Project here.
   useEffect(() => {
     const open = () => setAdding(true);
@@ -1237,9 +1238,29 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />
           </button>
-          <button className="ib" title="Help (not built yet)">
+          {/* APP-010: the help menu; only Onboarding (ONB-009) so far, the rest of its items are T-248. */}
+          <button className="ib" title="Help" aria-haspopup="menu" aria-expanded={help !== null} onClick={(e) => setHelp(help ? null : e.currentTarget.getBoundingClientRect())}>
             <Help />
           </button>
+          {help && (
+            <>
+              <div className="menu-backdrop" onClick={() => setHelp(null)} />
+              <div className="menu" role="menu" aria-label="Help" style={{ left: help.left, bottom: window.innerHeight - help.top + 4 }} onKeyDown={(e) => e.key === "Escape" && setHelp(null)}>
+                <div className="menu-title">Help</div>
+                <button
+                  className="menu-item"
+                  role="menuitem"
+                  autoFocus
+                  onClick={() => {
+                    setHelp(null);
+                    window.dispatchEvent(new CustomEvent(REOPEN_WIZARD));
+                  }}
+                >
+                  <span className="name">Onboarding</span>
+                </button>
+              </div>
+            </>
+          )}
           <button className="upd" title="Check for a newer version of Kolux RS" onClick={requestUpdateCheck}>
             <Refresh size={13} />
             Check for updates

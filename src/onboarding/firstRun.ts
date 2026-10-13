@@ -37,6 +37,22 @@ export const leaveKey = (e: { key: string; isComposing: boolean; defaultPrevente
 
 export type Outcome = "completed" | "dismissed";
 
+/** ONB-009: the help menu's Onboarding item asks the window to start the wizard over through this event. */
+export const REOPEN_WIZARD = "kolux-reopen-wizard";
+
+/** ONB-009: true for a click that counts; one less than half a second after the click before it does not. */
+export function oneClick(gap = 500) {
+  let last = -Infinity;
+  return (now = Date.now()) => {
+    const counts = now - last >= gap;
+    last = now;
+    return counts;
+  };
+}
+
+/** ONB-011: the first-success milestones onboarding.rs keeps, each once, on this machine only. */
+export type Milestone = "aiConnected" | "kitLaunched" | "resultsOpened";
+
 /** ONB-007: closing is latched while it is being stored; a failed store frees the latch and keeps
  * the close, so the next click on any of the wizard's ways out tries the same close once more. */
 export function closer(store: (outcome: Outcome) => Promise<unknown>, done: () => void, fail: (err: unknown) => void) {

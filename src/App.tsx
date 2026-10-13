@@ -45,7 +45,7 @@ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
-import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, openAt, type Outcome } from "./onboarding/firstRun";
+import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, oneClick, openAt, REOPEN_WIZARD, type Outcome } from "./onboarding/firstRun";
 import { KITS, RECALL_KEY, assignRoles, readyVendors, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
 import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
@@ -1205,6 +1205,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     ),
   );
   const endWizard = (outcome: Outcome, after?: () => void) => wizardClose.end(outcome, after);
+  // ONB-009: Onboarding in the sidebar help menu starts the wizard over on screen one.
+  useEffect(() => {
+    const counts = oneClick();
+    const reopen = () => {
+      if (!counts()) return;
+      invoke("onboarding_reopen").then(
+        () => setWizard(0),
+        (err) => setToast(`Kolux could not reopen onboarding (${String(err)}).`),
+      );
+    };
+    window.addEventListener(REOPEN_WIZARD, reopen);
+    return () => window.removeEventListener(REOPEN_WIZARD, reopen);
+  }, []);
   // ONB-010: armed by Pick a folder, or by Skip while no project exists; the next project added
   // starts the saved default agent in it, once.
   const firstFolder = useRef(false);

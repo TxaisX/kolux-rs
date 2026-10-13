@@ -571,7 +571,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-295 · VIEW-114 Onboarding checklist and setup guide in the sidebar
 - [ ] T-296 · ACCT-035 The first connection is recorded; failures name the agent
 - [ ] T-297 · SKILL-016 Kits tick off first-run milestones and carry a tour anchor
-- [ ] T-298 · ONB-009 Reopen the wizard from the sidebar help menu · ONB-011 [compat] First-success milestones are recorded locally and appear in diagnostics
+- [x] T-298 · ONB-009 Reopen the wizard from the sidebar help menu · ONB-011 [compat] First-success milestones are recorded locally and appear in diagnostics (built: Help in the sidebar footer opens a menu with Onboarding, which starts the wizard over on screen one, wiping the close, the outcome, the progress and the checklist dismissed mark, clicks under half a second apart counting once; onboarding.rs keeps the three milestones, each written once; the diagnostics listing is T-298-b)
+- [ ] T-298-b · ONB 011 rest: the copied terminal diagnostics list when each first milestone happened (with T-166 TERM 116 and T-248 APP 010 Copy terminal diagnostics; the times are in the onboarding record under milestones)
 
 ### P2 · theme 10 · Identity and originality (4 cards)
 
