@@ -144,9 +144,6 @@ impl Terminals {
                 command.env(crate::cli::APP_DIR_ENV, dir);
             }
             unattended(command, is_program);
-            // CLI-010: a Kolux started from another copy's terminal inherits that copy's data-folder
-            // override, which would send this pane's commands to the other app.
-            command.env_remove("KOLUX_USER_DATA_PATH");
             // SET-027: the user's variables for this agent; Kolux's account variable below wins.
             for (k, v) in &own_env {
                 command.env(k, v);

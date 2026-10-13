@@ -1031,18 +1031,21 @@ fn pr_url_in(link: &str) -> Option<String> {
 }
 
 /// GIT-026: makes a printed link the workspace's linked pull request (the `scmLinkedPrs`
-/// setting a hand link uses); false when it already was.
-/// ponytail: a whole-settings write from the window in the same moment wins over this one.
+/// setting a hand link uses); false when it already was. Only that one setting is written.
+/// ponytail: per top-level key; a hand link or unlink sent in the same moment still writes the
+/// whole `scmLinkedPrs` map, so one of the two would be lost. Patch inside the map if that bites.
 pub fn link_printed(store: &crate::state::Store, dir: &str, url: &str) -> bool {
-    let mut settings = store.settings();
-    if settings["scmLinkedPrs"][dir] == url {
+    let mut links = store.settings()["scmLinkedPrs"].clone();
+    if links[dir] == url {
         return false;
     }
-    if !settings["scmLinkedPrs"].is_object() {
-        settings["scmLinkedPrs"] = serde_json::json!({});
+    if !links.is_object() {
+        links = serde_json::json!({});
     }
-    settings["scmLinkedPrs"][dir] = url.into();
-    store.save_settings(&settings).is_ok()
+    links[dir] = url.into();
+    let mut set = serde_json::Map::new();
+    set.insert("scmLinkedPrs".into(), links);
+    store.patch_settings(&set, &[]).is_ok()
 }
 
 /// GIT-028: one of GitHub's API budgets as `gh api rate_limit` gives it; `reset` is in Unix seconds.
@@ -2482,6 +2485,27 @@ mod tests {
         assert_eq!(s["scmLinkedPrs"]["C:/ws"], "https://github.com/o/r/pull/42");
         assert_eq!(s["scmLinkedPrs"]["C:/other"], "https://github.com/o/r/pull/1");
         assert_eq!(s["uiLook"], "classic");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git026_a_printed_link_survives_a_window_save_from_an_older_copy_of_the_settings() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-scm-git026-race-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        store.save_settings(&serde_json::json!({ "uiLook": "classic", "quietMinutes": 5 })).unwrap();
+        // The window read its copy before the link was printed, then changes one setting.
+        assert!(link_printed(&store, "C:/ws", "https://github.com/o/r/pull/42"));
+        let set = serde_json::json!({ "uiLook": "new" });
+        store.patch_settings(set.as_object().unwrap(), &["quietMinutes".to_string()]).unwrap();
+        let s = store.settings();
+        assert_eq!(s["scmLinkedPrs"]["C:/ws"], "https://github.com/o/r/pull/42");
+        assert_eq!(s["uiLook"], "new");
+        assert!(s.get("quietMinutes").is_none(), "{s}");
+        // A link printed after the window's change keeps that change.
+        assert!(link_printed(&store, "C:/ws2", "https://github.com/o/r/pull/43"));
+        assert_eq!(store.settings()["uiLook"], "new");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
     }

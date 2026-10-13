@@ -2,6 +2,7 @@
 // (SET-002) and the terminal colours picker with "Match app theme" (SET-003). Every change shows at
 // once on the whole window; the save follows a moment later so a slider drag is one write.
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
@@ -361,14 +362,14 @@ export default function AppearancePage() {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       invoke<Record<string, unknown>>("get_settings")
-        .then((s) => invoke("save_settings", { value: writeAppearance(s, next) }))
+        .then((s) => saveChanged(s, writeAppearance(s, next)))
         .catch((e) => setError(String(e)));
     }, 250);
   };
   const toggle = (on: boolean) => {
     setAutomations(on);
     invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [TITLE_BAR_FIELD.automations]: on } }))
+      .then((s) => saveChanged(s, { ...s, [TITLE_BAR_FIELD.automations]: on }))
       .catch((e) => setError(String(e)));
   };
   return (

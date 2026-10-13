@@ -18,6 +18,7 @@
 // Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { saveChanged } from "./settings/saveChanged";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -358,7 +359,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const saveSetting = (key: string, value: unknown) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
-    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+    saveChanged(settings, next).catch((err) => setNotice(String(err)));
   };
   // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
   const right = readRight(settings);
@@ -368,7 +369,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const next = { ...settings };
     for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
     setSettings(next);
-    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+    saveChanged(settings, next).catch((err) => setNotice(String(err)));
   };
   const showRight = (tab: RightTab) => {
     setScreen("terminals");
@@ -816,7 +817,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       .then((s) => {
         const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
         setSettings(next);
-        return invoke("save_settings", { value: next });
+        return saveChanged(s, next);
       })
       .catch((err) => setNotice(String(err)));
   };
@@ -1495,7 +1496,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onNest={(on) => {
               const next = { ...settings, [NESTING_KEY]: on };
               setSettings(next);
-              invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              saveChanged(settings, next).catch((err) => setNotice(String(err)));
             }}
             agents={agents}
             defaultId={defaultId}
@@ -1535,7 +1536,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                saveChanged(settings, next).catch((err) => setNotice(String(err)));
               }}
             />
           )}
@@ -1546,7 +1547,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                saveChanged(settings, next).catch((err) => setNotice(String(err)));
               }}
             />
           )}

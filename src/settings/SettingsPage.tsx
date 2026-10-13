@@ -3,6 +3,7 @@
 // Connect grid with install steps is ConnectGrid (ACCT-001, ACCT-003); the Claude account route and
 // the Codex sign-ins came with T-043-b / T-043-c.
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
@@ -105,7 +106,7 @@ function ClaudeCard() {
   const saveResume = (on: boolean) => {
     setResume(on);
     invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [RESUME_FIELD]: on } }))
+      .then((s) => saveChanged(s, { ...s, [RESUME_FIELD]: on }))
       .catch((e) => {
         setResume(!on);
         setError(String(e));

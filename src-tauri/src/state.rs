@@ -65,6 +65,28 @@ impl Store {
         fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
         fs::rename(&tmp, &self.settings_path)
     }
+
+    /// Writes only the keys in `set` and drops those in `remove`, over what is on disk now, so a
+    /// writer holding an older copy of the settings does not undo anyone else's keys.
+    pub fn patch_settings(&self, set: &serde_json::Map<String, serde_json::Value>, remove: &[String]) -> std::io::Result<()> {
+        self.save_settings(&patched(self.settings(), set, remove))
+    }
+}
+
+/// `value` with the keys in `set` laid over it and the keys in `remove` taken out.
+pub fn patched(mut value: serde_json::Value, set: &serde_json::Map<String, serde_json::Value>, remove: &[String]) -> serde_json::Value {
+    if !value.is_object() {
+        value = serde_json::json!({});
+    }
+    if let Some(obj) = value.as_object_mut() {
+        for k in remove {
+            obj.remove(k);
+        }
+        for (k, v) in set {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    value
 }
 
 #[cfg(test)]
