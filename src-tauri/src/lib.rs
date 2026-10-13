@@ -4,6 +4,9 @@ mod artifacts;
 mod automations;
 mod capture;
 mod browser;
+mod browser_annotate;
+mod browser_cli;
+mod browser_drive;
 mod cap;
 pub mod cli;
 mod cli_accounts;
@@ -128,6 +131,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            browser_drive::install(Box::new(browser_drive::Live(app.handle().clone())));
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
@@ -305,6 +309,7 @@ pub fn run() {
             browser::browser_navigate,
             browser::browser_go,
             browser::browser_close,
+            browser_annotate::browser_annotate,
             automations::automations_list,
             automations::automation_set_enabled,
             automations::automation_delete,

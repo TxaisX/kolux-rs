@@ -2039,6 +2039,8 @@ dependencies = [
  "toml_edit 0.25.16+spec-1.1.0",
  "trash",
  "unicode_names2",
+ "webview2-com",
+ "windows-core",
  "windows-sys 0.61.2",
 ]
 

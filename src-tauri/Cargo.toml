@@ -53,6 +53,9 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
+# T-195: the browser verbs drive a tab through WebView2's own DevTools protocol (already in the tree under wry).
+webview2-com = "0.39"
+windows-core = "0.62"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]

@@ -115,11 +115,11 @@ pub fn allowed(url: &Url, app: Option<&Url>) -> Result<(), String> {
 
 /// The app's own origin while it runs from the dev server; a release build serves itself from a
 /// `*.localhost` host, which `allowed` refuses on its own.
-fn app_origin(app: &AppHandle) -> Option<Url> {
+pub(crate) fn app_origin(app: &AppHandle) -> Option<Url> {
     tauri::is_dev().then(|| app.config().build.dev_url.clone()).flatten()
 }
 
-fn view(app: &AppHandle, id: u32) -> Result<Webview, String> {
+pub(crate) fn view(app: &AppHandle, id: u32) -> Result<Webview, String> {
     app.get_webview(&label(id)).ok_or_else(|| format!("browser tab {id} is not open"))
 }
 
@@ -142,6 +142,11 @@ pub async fn browser_open(app: AppHandle, window: tauri::Window, webview: Webvie
         .focused(false)
         .initialization_script(CHORD_SCRIPT)
         .on_navigation(move |url| {
+            // T-195 (BROW-037): a note saved in the page's annotation form travels the same way.
+            if let Some(note) = crate::browser_annotate::note_of(url.as_str()) {
+                let _ = chord_app.emit(crate::browser_annotate::NOTE_EVENT, crate::browser_annotate::NotePayload { id, note });
+                return false;
+            }
             let Some(what) = chord_of(url.as_str()) else {
                 // T-500: a redirect, link or script cannot take the tab where the bar may not.
                 return allowed(url, dev.as_ref()).is_ok();

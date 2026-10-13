@@ -1154,3 +1154,14 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .task-labels { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
 .task-x { margin-left: 2px; color: var(--fg-faint); font-size: 12px; line-height: 1; }
 .task-x:hover:not(:disabled) { color: var(--fg); }
+
+/* BROW-037: the tray of a page's notes under the browser header. */
+.notes-tray { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line-subtle); background: var(--pane-bg); font-size: 12px; }
+.notes-hint { color: var(--fg-muted); }
+.page-note { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.page-note .note-sel { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-family: var(--mono, monospace); font-size: 11.5px; }
+.page-note .note-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-note .note-edit { flex: 1; min-width: 0; resize: vertical; }
+.notes-send { position: relative; display: flex; justify-content: flex-end; }
+.notes-menu { position: absolute; right: 0; top: 100%; margin-top: 4px; }
+.pane.browser .ib.on { color: var(--accent, var(--fg)); background: var(--row-selected); }

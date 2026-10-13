@@ -1483,6 +1483,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       c.panes.forEach((p, i) => {
         const id = ptys.current[p.key];
         if (id !== undefined) rows.push({ handle: `term-${id}`, dir: p.cwd, cell: here.indexOf(c) + 1, tab: i + 1, title: tabName(p, titles), custom: p.title ?? null, shown: inView(p.key), ask: p.ask ?? null });
+        else if (p.kind === "browser") rows.push({ browser: p.key, dir: p.cwd, shown: inView(p.key), focused: p.key === focused }); // BROW-042: the command line's target tab
       });
     }
     for (const [ask, error] of Object.entries(cliFailed.current)) rows.push({ ask, error });
@@ -1490,6 +1491,16 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     if (sent === layoutSent.current) return;
     layoutSent.current = sent;
     void invoke("terminal_layout", { rows }).catch(() => undefined);
+  };
+  // BROW-037: the agent sessions a page's notes can go to, and how a message reaches one: typed
+  // as a paste (so its line breaks stay) and sent with Enter, as a kit's first prompt is.
+  const noteSessions = panes.filter((p) => aiOf(p) !== null && ptys.current[p.key] !== undefined).map((p) => ({ key: p.key, name: `${tabName(p, titles)}${p.cwd ? ` · ${folderName(p.cwd)}` : ""}` }));
+  const sendNotes = async (key: number, text: string) => {
+    const id = ptys.current[key];
+    if (id === undefined) return;
+    await invoke("terminal_write", { id, data: `\x1b[200~${text}\x1b[201~` });
+    await new Promise((r) => setTimeout(r, 300));
+    await invoke("terminal_write", { id, data: "\r" });
   };
   const report = useRef(reportLayout);
   report.current = reportLayout;
@@ -1834,7 +1845,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} url={p.url ?? p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} url={p.url ?? p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} sessions={noteSessions} onSend={(k, text) => void sendNotes(k, text).catch((err) => setToast(String(err)))} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.kind === "editor" && p.path ? (
                   <EditorPane
                     key={p.key}

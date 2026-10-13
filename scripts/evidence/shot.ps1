@@ -11,6 +11,10 @@ public static class Shot {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
   [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool repaint);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
 }
 "@
 # With two lanes running their own dev apps, pass -ProcessId so the right window is caught.
@@ -18,6 +22,13 @@ if ($ProcessId -ne 0) { $p = Get-Process -Id $ProcessId -ErrorAction SilentlyCon
 else { $p = Get-Process | Where-Object { $_.MainWindowTitle -like "Kolux RS*" } | Select-Object -First 1 }
 if (-not $p) { Write-Error "no Kolux RS window"; exit 1 }
 $h = $p.MainWindowHandle
+# MainWindowHandle can be Tao's empty "Thread Event Target" window (a black capture); the app's
+# own window is the process's top-level window of class "Tauri Window".
+$script:tw = [IntPtr]::Zero
+[Shot]::EnumWindows([Shot+EnumProc]{ param($w, $l) $q = 0; [Shot]::GetWindowThreadProcessId($w, [ref]$q) | Out-Null
+  if ($q -eq $p.Id) { $c = New-Object System.Text.StringBuilder 256; [Shot]::GetClassName($w, $c, 256) | Out-Null; if ($c.ToString() -eq 'Tauri Window') { $script:tw = $w } }
+  $true }, [IntPtr]::Zero) | Out-Null
+if ($script:tw -ne [IntPtr]::Zero) { $h = $script:tw }
 if ($Grow -ne 0) {
   $rg = New-Object Shot+RECT; [Shot]::GetWindowRect($h, [ref]$rg) | Out-Null
   [Shot]::MoveWindow($h, $rg.L, $rg.T, ($rg.R - $rg.L) + $Grow, ($rg.B - $rg.T) + $Grow, $true) | Out-Null
