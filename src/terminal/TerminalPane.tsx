@@ -3,7 +3,8 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { crewLabel, crewLine, headerOf, type Crew } from "./status";
+import { branchChip, crewLabel, crewLine, headerOf, type Crew } from "./status";
+import PaneMenu from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
@@ -26,7 +27,7 @@ import Ring from "../usage/Ring";
 import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
 import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
-import { matchEvent } from "../keys/keymap";
+import { labelOf, matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { stopLine, type StopInfo } from "./notify";
 
@@ -82,7 +83,9 @@ type Props = {
   onSetDefault?: (id: string) => void;
   onChoose?: () => void;
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
-  onSplit?: () => void;
+  onSplit?: (dir: "right" | "down") => void;
+  /** TERM-013: the grid's expand: `on` while this pane's cell fills the grid; `can` is false for a lone classic pane. */
+  expand?: { on: boolean; can: boolean; toggle: () => void };
   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
   card?: {
     expanded: boolean;
@@ -98,7 +101,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const box = useRef<HTMLElement>(null);
@@ -114,6 +117,21 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const [now, setNow] = useState(() => Date.now());
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
+  // TERM-025: the pane menu, opened by "..." or a right-click on the header.
+  const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
+  // TERM-022: the branch (or detached commit) of the pane's folder, read when it shows and on focus.
+  const [git, setGit] = useState<{ branch: string | null; head: string | null } | null | undefined>(undefined);
+  useEffect(() => {
+    if (!cwd || hidden) return;
+    let live = true;
+    invoke<{ branch: string | null; head: string | null } | null>("scm_head", { dir: cwd }).then(
+      (h) => live && setGit(h),
+      () => live && setGit(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [cwd, hidden, focused]);
   const idRef = useRef<number | null>(null);
   const keymap = useKeymap();
   const keys = useRef(keymap);
@@ -157,6 +175,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       fontSize: 13,
       theme: currentTerminal(),
       allowProposedApi: true,
+      // TERM-013: ConPTY repaints the screen itself after a resize, so a taller pane gets blank rows
+      // rather than history pulled down for ConPTY to paint over (expand then restore kept scrollback).
+      ...(navigator.userAgent.includes("Windows") ? { windowsPty: { backend: "conpty" as const } } : {}),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -304,10 +325,25 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const agentLabel = agent === "shell" ? "Plain shell" : programWord(agent);
   // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
   const model = agent === "shell" ? null : modelOf(args);
+  // TERM-022: before git answers, the branch the pane was opened on; a folder outside git has none.
+  const chip = git === undefined ? (branch ? { text: branch, tip: branch } : null) : branchChip(git);
+  // TERM-013 / TERM-025: on the Board, expand opens the card; in the grid it fills the grid.
+  const onExpand = card ? card.onToggle : expand?.toggle;
+  const expanded = card ? card.expanded : !!expand?.on;
+  const canExpand = card ? true : !!expand?.can;
+  const expandKey = labelOf(keymap, "terminal.expandPane").join("+") || "no shortcut";
+  const openMenu = (x: number, y: number) => setMenuAt({ top: Math.min(y, window.innerHeight - 160), left: Math.min(x, window.innerWidth - 240) });
 
   return (
     <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
-      <header className="pane-head">
+      <header
+        className="pane-head"
+        onContextMenu={(e) => {
+          if ((e.target as Element).closest?.(".address")) return;
+          e.preventDefault();
+          openMenu(e.clientX, e.clientY);
+        }}
+      >
         <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>
@@ -317,9 +353,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         <span className="title" title={cwd ?? undefined}>
           {title}
         </span>
-        {branch && (
-          <span className="chip" title={branch}>
-            {branch}
+        {chip && (
+          <span className="chip" title={chip.tip}>
+            {chip.text}
           </span>
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
@@ -345,19 +381,30 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             <Ring percent={context ?? 0} />
             {Math.round(context ?? 0)}%
           </span>
-          <button className="ib" title="Pane menu (not built yet)">
+          <button
+            className="ib"
+            title="Pane menu"
+            aria-haspopup="menu"
+            aria-expanded={menuAt !== null}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              openMenu(r.left, r.bottom + 4);
+            }}
+          >
             <Dots size={12} />
           </button>
           <button
             className="ib"
-            onClick={card?.onToggle}
+            onClick={onExpand}
+            disabled={!canExpand}
             aria-expanded={card ? card.expanded : undefined}
-            title={card ? (card.expanded ? "Collapse: the terminal goes back to its grid slot" : "Expand: show this session's live terminal in the card") : "Expand (not built yet)"}
+            aria-pressed={card ? undefined : expanded}
+            title={card ? (card.expanded ? "Collapse: the terminal goes back to its grid slot" : "Expand: show this session's live terminal in the card") : !canExpand ? "Expand: the only pane already fills the grid" : expanded ? `Restore: the other panes come back (${expandKey})` : `Expand: this pane fills the grid (${expandKey})`}
           >
             <Expand size={12} />
           </button>
           {onSplit && (
-            <button className="ib" onClick={onSplit} title="Split right: a shell in the same folder (Ctrl+Shift+D; Alt+Shift+D splits down)">
+            <button className="ib" onClick={() => onSplit("right")} title="Split right: a shell in the same folder (Ctrl+Shift+D; Alt+Shift+D splits down)">
               <SplitRight size={12} />
             </button>
           )}
@@ -378,6 +425,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           </button>
         </span>
       </header>
+      {menuAt && <PaneMenu style={menuAt} expanded={expanded} canExpand={canExpand} onExpand={onExpand} onSplit={onSplit} onClose={close} onDismiss={() => setMenuAt(null)} />}
       {plusAt && (
         <PlusMenu
           agents={agents}
@@ -397,7 +445,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             onSplit &&
             (() => {
               setPlusAt(null);
-              onSplit();
+              onSplit("right");
             })
           }
           onManage={() => {

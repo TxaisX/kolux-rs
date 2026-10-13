@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { VOCAB, ageLabel, headerOf, nextNeedsYou, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
+import { VOCAB, ageLabel, branchChip, headerOf, nextNeedsYou, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
 
 test("a plain shell reads as a terminal with a neutral status; an agent's word is tinted (TERM-020, TERM-021)", () => {
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ word: "Ready", tone: "", needsYou: false });
@@ -83,4 +83,11 @@ test("the pane header is the vocabulary applied to what the pane knows: hook sta
   expect(headerOf("claude", "failed", undefined, false, null, 0)).toMatchObject({ state: "failed", glyph: "failed" });
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ state: "idle", word: "Ready", glyph: "idle" });
   expect(headerOf("shell", "ended", 2, false, 0, 0)).toMatchObject({ state: "stopped", word: "Ended (2)", explain: "Stopped: exit code 2" });
+});
+
+test("TERM-022: the chip names the branch, a detached HEAD shows its short commit, a plain folder shows none", () => {
+  expect(branchChip({ branch: "feature/x", head: "0123456789abcdef0123456789abcdef01234567" })).toEqual({ text: "feature/x", tip: "feature/x" });
+  expect(branchChip({ branch: null, head: "0123456789abcdef0123456789abcdef01234567" })).toEqual({ text: "0123456", tip: "Detached at 0123456789abcdef0123456789abcdef01234567" });
+  expect(branchChip(null)).toBeNull();
+  expect(branchChip({ branch: null, head: null })).toBeNull();
 });

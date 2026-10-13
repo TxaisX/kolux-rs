@@ -55,7 +55,7 @@ import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
 import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
-import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount } from "./terminal/grid";
+import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
 import UpdateCenter from "./update/UpdateCenter";
@@ -156,6 +156,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsAt, setSettingsAt] = useState<{ target: SettingsTarget | null; n: number }>({ target: null, n: 0 }); // SET-006: a link's page and section
   const [expanded, setExpanded] = useState<number | null>(null); // VIEW-026: the Board card showing its terminal
+  const [zoom, setZoom] = useState<Zoom>({}); // TERM-013: each workspace's expanded cell
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // DT-17: Automations is a page of its own over the content column, opened from the sidebar;
   // the grid stays mounted (hidden) behind it.
@@ -633,6 +634,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           setFocused(order[t]);
           break;
         }
+        case "terminal.expandPane":
+          if (!inFront) return;
+          expandPane(focused);
+          break;
         case "terminal.splitRight":
         case "terminal.splitDown":
           if (!inFront) return;
@@ -809,6 +814,14 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // TERM-006: a split opens a shell in the pane's own folder, beside it (right) or under it.
   // CLI-026: a split from the command line works on the pane named, wherever it is, and leaves the
   // active tab and the focus alone.
+  // TERM-013: the pane's cell fills the grid (alone in the clean look, the whole workspace area);
+  // again restores every pane to its place. Nothing restarts: the other cells are only hidden.
+  const expandPane = (key: number) => {
+    const p = panes.find((x) => x.key === key);
+    if (!p) return;
+    const groups = cellsOf(panesIn(panes, p.cwd)).map((c) => c.group);
+    if (canExpand(groups.length, classic)) setZoom((z) => toggleZoom(z, p.cwd ?? "", groupOf(p), groups.length));
+  };
   const splitPane = (key: number, dir: "right" | "down", cli?: { ask: string; command: string | null }) => {
     const src = panes.find((p) => p.key === key);
     if (!src) {
@@ -1472,6 +1485,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   rowRef.current = rowStates;
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
+  const zoomed = terminals ? zoomedGroup(zoom, shown.map((c) => c.group)) : null;
+  const gridCount = zoomed === null ? shown.length : 1;
   const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
   // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
   const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
@@ -1855,9 +1870,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             </div>
           )}
           <div
-            className={board ? "board" : "grid"}
+            className={board ? "board" : `grid${zoomed === null ? "" : " zoomed"}`}
             hidden={(!terminals && !board) || (terminals && page !== null)}
-            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
+            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(gridCount, stacked[activeDir ?? ""])}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(gridCount, stacked[activeDir ?? ""])}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
           >
               {board &&
                 lanes.map((l, i) => (
@@ -1882,7 +1897,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               {cells.map((c) => {
                 const active = activeOf(c);
                 return (
-                  <div key={c.group} className="cell" hidden={!board && !sameDir(c.panes[0].cwd, activeDir)}>
+                  <div key={c.group} className="cell" hidden={!board && (!sameDir(c.panes[0].cwd, activeDir) || (zoomed !== null && c.group !== zoomed))}>
                     {c.panes.length > 1 && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
@@ -1971,7 +1986,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                     }}
                     onFailed={(error) => failedPane(p.key, error)}
-                    onSplit={() => splitPane(p.key, "right")}
+                    onSplit={(dir) => splitPane(p.key, dir)}
+                    expand={board ? undefined : { on: zoomed === groupOf(p), can: canExpand(shown.length, classic), toggle: () => expandPane(p.key) }}
                     title={p.title || nameOf(names, p.cwd)}
                     typed={p.typed}
                     shellName={p.word}

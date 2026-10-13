@@ -24,7 +24,10 @@ today. Agents report their own state through hooks Kolux installs for Claude Cod
 (permission, question, working, done, blocked, interrupted; subagents under their lead), with
 one status vocabulary for every dot, chip and label, desktop notifications on finish and
 permission, a quiet-terminal alert, tab and workspace unread marks, and a pane header with the
-agent mark, name, branch, program, status word and gauge.
+agent mark, name, branch (a detached checkout shows its short commit; a plain folder no chip),
+program, status word and gauge. Its "..." button or a right-click opens the pane menu (expand,
+split right or down, close); expand or Ctrl+Shift+Enter makes the pane fill the workspace and the
+same again restores every pane, terminals and their scrollback untouched.
 
 The sidebar lists projects (Git repositories, added by typing or browsing; nothing else is pulled
 in) with their main checkout and workspaces (worktrees), grouped by project, status or pull
