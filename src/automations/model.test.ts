@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { confirmDelete, keepSelection, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, triggerLabel, upcoming, type Automation, type Names, type Run } from "./model";
+import { confirmDelete, keepSelection, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, statusWord, triggerLabel, upcoming, GRACE, graceWord, PRECHECK, precheckWord, type Automation, type Names, type Run } from "./model";
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };
 const auto = (id: string, name: string, extra: Partial<Automation> = {}): Automation => ({ id, name, prompt: "", provider: "claude", projectId: "p1", enabled: true, ...extra });
@@ -115,4 +115,27 @@ test("when the selected row vanishes the selection moves to the row beside it (A
   expect(keepSelection(["a"], "c", 2)).toBe("a");
   expect(keepSelection([], "a", 0)).toBeNull();
   expect(keepSelection(["a", "b"], null, 0)).toBe("a");
+});
+
+test("AUTO-007 grace choices and why a run was skipped read in words", () => {
+  expect(GRACE.map((g) => g[0])).toEqual([0, 30, 60, 180, 720, 1440, 2880]);
+  expect(graceWord(0)).toBe("Skip it");
+  expect(graceWord(180)).toBe("Start it up to 3 hours late");
+  expect(graceWord(undefined)).toBe("Skip it");
+  const r: Run = { id: "run-1", automationId: "a", number: 1, trigger: "schedule", status: "skipped", at: 0 };
+  expect(statusWord({ ...r, cause: "missed" })).toBe("Skipped (Kolux was away)");
+  expect(statusWord({ ...r, cause: "signin" })).toBe("Skipped (sign-in needed)");
+  expect(statusWord({ ...r, cause: "unavailable" })).toBe("Skipped (unavailable)");
+  // AUTO-012: the same refusal again and again is one entry with a count.
+  expect(statusWord({ ...r, cause: "unavailable", repeats: 12 })).toBe("Skipped (unavailable) · 12 times");
+  expect(statusWord({ ...r, cause: "unavailable", repeats: 1 })).toBe("Skipped (unavailable)");
+});
+
+test("AUTO-008 the precheck's limits and its skip read in words", () => {
+  expect(PRECHECK.map((p) => p[0])).toEqual([60, 120, 300, 600]);
+  expect(PRECHECK.map((p) => p[1])).toEqual(["1 minute", "2 minutes", "5 minutes", "10 minutes"]);
+  const r: Run = { id: "run-1", automationId: "a", number: 1, trigger: "schedule", status: "skipped", at: 0, cause: "precheck" };
+  expect(statusWord({ ...r, exitCode: 1 })).toBe("Skipped (precheck failed)");
+  expect(statusWord({ ...r, timedOut: true })).toBe("Skipped (precheck timed out)");
+  expect([precheckWord(undefined), precheckWord(300)]).toEqual(["1 minute", "5 minutes"]);
 });

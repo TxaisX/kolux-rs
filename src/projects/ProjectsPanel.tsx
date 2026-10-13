@@ -21,14 +21,16 @@ import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } 
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
+import { pushBadge, type Pushed } from "../scm/model";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
-import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
+import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
+import AutomationsRow from "./AutomationsRow";
 import { chromeShown } from "../chrome/chromeItems";
 import { VOCAB } from "../terminal/status";
 import type { AgentPass } from "../launch/agents";
@@ -70,7 +72,7 @@ type Props = {
   allOff?: boolean;
   pass?: AgentPass;
   onRefresh?: () => void;
-  /** DT-17: the Automations page is opened from the sidebar (the optional row of AUTO-023 is T-291). */
+  /** DT-17 / AUTO-023: the Automations page is opened from the sidebar's Automations row. */
   /** Which page (Automations, Model routing) is open over the content column, if any. */
   page: Page | null;
   onPage: (page: Page) => void;
@@ -123,6 +125,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones the sidebar shows
   const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
   const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
+  const [pushedBy, setPushedBy] = useState<Record<string, Pushed>>({}); // GIT-065: by worktree path
+  const pushTag = (w: Worktree) => {
+    const b = pushBadge(pushedBy[w.path]);
+    return b && <span className={`hint push ${b.tone}`}>{b.text}</span>;
+  };
   const [review, setReview] = useState<string | null>(null); // project id whose new-worktree review is open
   const [hiddenPage, setHiddenPage] = useState(0);
   const [visGlobal, setVisGlobal] = useState<VisSource[]>([]); // SET-032: the global choice per source
@@ -204,6 +211,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setWorktrees(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => !w.hidden)])));
     setHiddenWts(Object.fromEntries(Object.entries(next).map(([id, ws]) => [id, ws.filter((w) => w.hidden)])));
     setFresh(unseen);
+    // GIT-065: the same poll keeps each row's unpushed badge current; a failed read keeps the last.
+    const shown = Object.values(next).flat().filter((w) => !w.hidden).map((w) => w.path);
+    invoke<Pushed[]>("scm_pushed", { worktrees: shown })
+      .then((list) => setPushedBy(Object.fromEntries(list.map((p) => [p.path, p]))))
+      .catch(() => {});
     const owner: Record<string, string> = {};
     const names: Record<string, string> = {};
     for (const p of list)
@@ -815,6 +827,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               external
             </span>
           )}
+          {pushTag(w)}
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
           {!asking && (
             <button
@@ -948,6 +961,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </span>
             Starter kits
           </button>
+          {chromeShown(settings, "automationsButton") && <AutomationsRow open={page === "automations"} onOpen={() => onPage("automations")} onHide={() => onSetting("automationsButton", false)} />}
         </nav>
 
         <div className="sb-section">
@@ -1070,6 +1084,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                     <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
                       <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
                       <span className="name">{worktreeLabel(main)}</span>
+                      {pushTag(main)}
                       {isActive(main) && <span className="count">{openCount(main)}</span>}
                       <span className="chev">
                         <ChevronDown size={12} />
@@ -1205,11 +1220,6 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           >
             <Gear />
           </button>
-          {chromeShown(settings, "automationsButton") && (
-            <button className="ib" title="Automations" aria-pressed={page === "automations"} onClick={() => onPage("automations")}>
-              <Clock />
-            </button>
-          )}
           {/* SET-028: until Settings > Agents exists (T-036, T-054), model routing opens from here. */}
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />

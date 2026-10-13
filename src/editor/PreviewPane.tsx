@@ -8,6 +8,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { Close, FileCode } from "../chrome/icons";
 import { baseName, subscribe, textOf } from "./buffers";
+import { domPick, selections } from "./notes";
 
 type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
 
@@ -37,6 +38,12 @@ export default function PreviewPane({ id, path, hidden = false, focused = false,
       off();
     };
   }, [path, tries]);
+
+  // GIT-042: the add-note shortcut reads the selection in the rendered page.
+  useEffect(() => {
+    selections.set(id, () => domPick(document.querySelector(`.pane.preview[data-key="${id}"] .md-preview`), path, text ?? ""));
+    return () => void selections.delete(id);
+  }, [id, path, text]);
 
   const name = baseName(path);
   return (

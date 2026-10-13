@@ -59,6 +59,8 @@ pub struct Place {
     pub prefix: String,
     /// Why the custom prefix is not used, when Git would refuse it.
     pub prefix_warning: Option<String>,
+    /// GIT-066: bring a local base branch up to its upstream before the workspace starts from it.
+    pub refresh: bool,
 }
 
 const PROJECTS_KEY: &str = "projects";
@@ -82,6 +84,10 @@ const USED_DIRS_SETTING: &str = "workspacesDirsUsed";
 /// PROJ-022: "user" (the Git user name, the default), "custom" or "none".
 pub const PREFIX_SETTING: &str = "branchPrefix";
 pub const PREFIX_CUSTOM_SETTING: &str = "branchPrefixCustom";
+/// GIT-066: refresh the local base before a new workspace (off by default).
+pub const REFRESH_BASE_SETTING: &str = "refreshBaseFirst";
+/// GIT-066: a user name longer than this (once cleaned) makes no branch prefix.
+pub const MAX_USER_PREFIX: usize = 40;
 
 /// Compares two folders the way Windows does: same canonical path, letter case ignored.
 fn same_folder(a: &Path, b: &Path) -> bool {
@@ -477,9 +483,15 @@ pub fn workspaces_dir(store: &Store) -> PathBuf {
 pub fn place_for(store: &Store, project: &Project) -> Place {
     let own = project.workspaces_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
     let settings = store.settings();
-    let user = || crate::git::run(&["config", "user.name"], Some(Path::new(&project.path))).ok();
+    let user = || prefix_user(|| crate::git::run(&["config", "user.name"], Some(Path::new(&project.path))).ok(), crate::scm::gh_login);
     let (prefix, prefix_warning) = branch_prefix(settings[PREFIX_SETTING].as_str(), settings[PREFIX_CUSTOM_SETTING].as_str(), user, &git_accepts);
-    Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning }
+    let refresh = settings[REFRESH_BASE_SETTING].as_bool() == Some(true);
+    Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning, refresh }
+}
+
+/// GIT-066: the name behind the default prefix: the configured git user name, else the gh login.
+pub fn prefix_user(git_name: impl Fn() -> Option<String>, gh_login: impl Fn() -> Option<String>) -> Option<String> {
+    git_name().filter(|n| !n.trim().is_empty()).or_else(|| gh_login().filter(|n| !n.trim().is_empty()))
 }
 
 /// PROJ-022 / SET-031: the branch prefix for `mode`. The Git user name (the default) is cleaned
@@ -489,7 +501,13 @@ pub fn branch_prefix(mode: Option<&str>, custom: Option<&str>, user: impl Fn() -
     let p = match mode {
         Some("none") => return (String::new(), None),
         Some("custom") => custom.unwrap_or("").trim().trim_end_matches('/').to_string(),
-        _ => user().and_then(|u| safe_name(&u)).unwrap_or_default(),
+        _ => {
+            let p = user().and_then(|u| safe_name(&u)).unwrap_or_default();
+            if p.chars().count() > MAX_USER_PREFIX {
+                return (String::new(), Some(format!("the user name \"{p}\" is too long for a branch prefix (over {MAX_USER_PREFIX} characters), so this branch has no prefix")));
+            }
+            p
+        }
     };
     if p.is_empty() {
         return (String::new(), None);
@@ -517,7 +535,7 @@ pub struct PrefixCheck {
 
 #[tauri::command]
 pub fn branch_prefix_check(mode: Option<String>, custom: Option<String>) -> PrefixCheck {
-    let user = || crate::git::run(&["config", "user.name"], None).ok();
+    let user = || prefix_user(|| crate::git::run(&["config", "user.name"], None).ok(), crate::scm::gh_login);
     let (prefix, warning) = branch_prefix(mode.as_deref(), custom.as_deref(), user, &git_accepts);
     PrefixCheck { prefix, refused: warning.is_some() }
 }
@@ -576,6 +594,41 @@ pub fn resolve_base(git: &Git, repo: &Path, project: &Project, chosen: Option<&s
     Ok((base, note))
 }
 
+/// GIT-066: brings the local branch `base` up to its upstream (already fetched by
+/// `resolve_base`) when `apply` is on. Fast-forward only: a base with commits of its own, or one
+/// whose worktree has uncommitted changes, is left alone with a note. With `apply` off it only
+/// says the base is behind, and says nothing when its worktree is dirty.
+fn refresh_base(git: &Git, repo: &Path, base: &str, apply: bool) -> Option<String> {
+    let run = |args: &[&str], dir: &Path| crate::git::run(args, Some(dir));
+    run(&["show-ref", "--verify", "--quiet", &format!("refs/heads/{base}")], repo).ok()?;
+    let up = run(&["rev-parse", "--abbrev-ref", &format!("{base}@{{upstream}}")], repo).ok()?;
+    let count = |range: String| run(&["rev-list", "--count", &range], repo).ok().and_then(|n| n.parse::<usize>().ok());
+    let behind = count(format!("{base}..{up}"))?;
+    if behind == 0 {
+        return None;
+    }
+    let commits = if behind == 1 { "1 commit".to_string() } else { format!("{behind} commits") };
+    let home = git.worktrees(repo).ok()?.into_iter().find(|w| w.branch.as_deref() == Some(base));
+    let dirty = home.as_ref().is_some_and(|w| run(&["status", "--porcelain"], Path::new(&w.path)).map_or(true, |s| !s.is_empty()));
+    if !apply {
+        return (!dirty).then(|| format!("{base} is {commits} behind {up}; update it, or turn on Refresh the base first in Settings > Git & worktrees"));
+    }
+    if dirty {
+        return Some(format!("{base} was not refreshed: its worktree has uncommitted changes, so this workspace starts from the local {base}"));
+    }
+    if count(format!("{up}..{base}"))? > 0 {
+        return Some(format!("{base} was not refreshed: it has commits of its own that {up} lacks, so this workspace starts from the local {base}"));
+    }
+    let moved = match &home {
+        Some(w) => run(&["merge", "--ff-only", "--quiet", &up], Path::new(&w.path)).map(drop),
+        None => {
+            let (new, old) = (run(&["rev-parse", &up], repo).ok()?, run(&["rev-parse", base], repo).ok()?);
+            run(&["update-ref", &format!("refs/heads/{base}"), &new, &old], repo).map(drop)
+        }
+    };
+    moved.err().map(|e| format!("{base} could not be refreshed ({e}), so this workspace starts from the local {base}"))
+}
+
 pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>) -> Result<Created, String> {
     // SESS-036: a name that cleans up to nothing becomes "workspace" (numbered when taken).
     let base = safe_name(typed_name).unwrap_or_else(|| "workspace".to_string());
@@ -583,6 +636,7 @@ pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name:
     let turn = repo_turn(repo);
     let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
     let (from, note) = resolve_base(git, repo, project, start)?;
+    let refreshed = refresh_base(git, repo, &from, place.refresh);
     // PROJ-021: a name taken by a branch (local or on a remote) or a folder gets a number.
     let (safe, dest) = (1..)
         .map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") })
@@ -596,7 +650,7 @@ pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name:
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     git.worktree_add(repo, &dest, &format!("{}{safe}", place.prefix), &from)?;
-    let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().collect();
+    let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().chain(refreshed).collect();
     warnings.extend(crate::include::bring_along(repo, &dest));
     let worktree = git
         .worktrees(repo)?
@@ -1127,7 +1181,72 @@ mod tests {
     }
 
     fn nested(root: &Path) -> Place {
-        Place { root: root.to_path_buf(), flat: false, prefix: String::new(), prefix_warning: None }
+        Place { root: root.to_path_buf(), flat: false, prefix: String::new(), prefix_warning: None, refresh: false }
+    }
+
+    #[test]
+    fn a_new_workspace_can_start_from_a_refreshed_base() {
+        let git = Git::detect().unwrap();
+        let profile = temp("refresh");
+        let store = Store::open(&profile).unwrap();
+        let remote = temp("refresh-remote");
+        git_in(&remote, &["init", "-q", "--bare", "-b", "main"]);
+        let repo = temp_repo("refresh-r");
+        let remote_url = remote.to_string_lossy().to_string();
+        git_in(&repo, &["remote", "add", "origin", &remote_url]);
+        git_in(&repo, &["push", "-q", "-u", "origin", "main"]);
+        // Someone else moves origin/main on.
+        let other = temp("refresh-other");
+        git_in(&other, &["clone", "-q", &remote_url, "."]);
+        let push_one = |file: &str| {
+            git_in(&other, &["-c", "user.name=o", "-c", "user.email=o@o", "commit", "-q", "--allow-empty", "-m", file]);
+            git_in(&other, &["push", "-q"]);
+            rev(&other, "HEAD")
+        };
+        let ahead = push_one("b");
+        let root = temp("refresh-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let head = |c: &Created| rev(Path::new(&c.worktree.path), "HEAD");
+        let on = Place { refresh: true, ..nested(&root) };
+
+        // Off: the workspace starts from the local base, and Kolux says it is behind.
+        let made = create_workspace(&git, &nested(&root), &project, "off", None).unwrap();
+        assert_ne!(head(&made), ahead);
+        assert!(made.warnings.iter().any(|w| w.contains("main is 1 commit behind origin/main")), "{:?}", made.warnings);
+
+        // On, but main's own worktree has uncommitted changes: left alone, with a note.
+        fs::write(repo.join("a.txt"), "dirty").unwrap();
+        let made = create_workspace(&git, &on, &project, "dirty", None).unwrap();
+        assert_ne!(head(&made), ahead);
+        assert!(made.warnings.iter().any(|w| w.contains("uncommitted changes")), "{:?}", made.warnings);
+        // Off with that worktree dirty: no suggestion to update it.
+        assert!(create_workspace(&git, &nested(&root), &project, "quiet", None).unwrap().warnings.is_empty());
+
+        // On and clean: main fast-forwards and the workspace starts from it.
+        git_in(&repo, &["checkout", "--", "a.txt"]);
+        let made = create_workspace(&git, &on, &project, "on", None).unwrap();
+        assert_eq!((head(&made), rev(&repo, "main")), (ahead.clone(), ahead.clone()));
+        assert!(made.warnings.is_empty(), "{:?}", made.warnings);
+
+        // Not checked out anywhere: the branch itself is moved on.
+        git_in(&repo, &["checkout", "-q", "-b", "side"]);
+        let ahead = push_one("c");
+        let made = create_workspace(&git, &on, &project, "moved", Some("main")).unwrap();
+        assert_eq!((head(&made), rev(&repo, "main")), (ahead.clone(), ahead.clone()));
+
+        // A base with commits of its own is never rewound or merged.
+        git_in(&repo, &["checkout", "-q", "main"]);
+        git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        let mine = rev(&repo, "main");
+        push_one("d");
+        let made = create_workspace(&git, &on, &project, "kept", None).unwrap();
+        assert_eq!((head(&made), rev(&repo, "main")), (mine.clone(), mine));
+        assert!(made.warnings.iter().any(|w| w.contains("commits of its own")), "{:?}", made.warnings);
+
+        drop(store);
+        for d in [profile, remote, repo, other, root] {
+            let _ = fs::remove_dir_all(d);
+        }
     }
 
     #[test]
@@ -1240,6 +1359,15 @@ mod tests {
         assert_eq!(branch_prefix(Some("custom"), Some("tx"), user, &ok).0, "tx/");
         assert_eq!(branch_prefix(Some("custom"), Some("///"), user, &ok), (String::new(), None), "only slashes: none");
         assert_eq!(branch_prefix(Some("none"), Some("tx"), user, &ok), (String::new(), None));
+        // GIT-066: an overly long user name gives no prefix, with a warning.
+        let long = || Some("a".repeat(MAX_USER_PREFIX + 1));
+        let (p, warn) = branch_prefix(None, None, long, &ok);
+        assert!(p.is_empty() && warn.unwrap().contains("too long"), "a long user name is refused");
+        assert_eq!(branch_prefix(None, None, || Some("a".repeat(MAX_USER_PREFIX)), &ok).0.len(), MAX_USER_PREFIX + 1);
+        // The git user name first, then the gh login.
+        assert_eq!(prefix_user(|| Some("Git Name".into()), || Some("ghlogin".into())).as_deref(), Some("Git Name"));
+        assert_eq!(prefix_user(|| None, || Some("ghlogin".into())).as_deref(), Some("ghlogin"));
+        assert_eq!(prefix_user(|| Some(" ".into()), || None), None);
         let (p, warn) = branch_prefix(Some("custom"), Some("a b"), user, &ok);
         assert!(p.is_empty() && warn.unwrap().contains("not a name Git accepts"), "Git refuses spaces");
         // The prefix goes on the branch only; the folder keeps the bare name.
@@ -1585,7 +1713,7 @@ mod tests {
         fs::write(repo.join(".env"), "SECRET=1\n").unwrap();
         fs::write(repo.join("tracked.txt"), "edited in main\n").unwrap();
         let project = add_project(&git, &store, &repo).unwrap();
-        let place = Place { root: temp("ws8"), flat: true, prefix: String::new(), prefix_warning: None };
+        let place = Place { root: temp("ws8"), flat: true, prefix: String::new(), prefix_warning: None, refresh: false };
 
         let made = create_workspace(&git, &place, &project, "feat", None).unwrap();
         let dest = PathBuf::from(&made.worktree.path);

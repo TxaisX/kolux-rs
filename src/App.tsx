@@ -38,6 +38,8 @@ import BrowserPane from "./browser/BrowserPane";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
+import ReviewNotes from "./editor/ReviewNotes";
+import { reviewOn, selections, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS } from "./kits/Kits";
@@ -62,7 +64,7 @@ import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
 import SourceControlPanel from "./scm/SourceControlPanel";
-import { SCM_AGENT_KEY, SUMMARY_UPSTREAM_KEY } from "./scm/model";
+import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
@@ -235,6 +237,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [notice, setNotice] = useState<string | null>(null);
   // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
   const [toast, setToastText] = useState<string | null>(null);
+  // GIT-042: review notes on Markdown, kept until copied or cleared.
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [picked, setPicked] = useState<Picked | null>(null);
   const toastTimer = useRef<number | null>(null);
   const setToast = (text: string) => {
     setToastText(text);
@@ -426,7 +431,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       // the ones Kolux has no action for yet are left to CodeMirror.
       const hit =
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
+        // GIT-042: a preview tab takes the one editor shortcut that applies to it.
+        (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       switch (hit.id) {
@@ -513,6 +520,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "tab.newBrowser":
           void newTab("browser");
           break;
+        case "editor.addReviewNote": {
+          // With nothing selected, or the review tools off, the shortcut does nothing.
+          const got = reviewOn(settings) ? selections.get(focused)?.() : null;
+          if (!got) return;
+          setPicked(got);
+          break;
+        }
         case "editor.nextChange":
         case "editor.previousChange": {
           const step = diffNav.get(focused);
@@ -1777,7 +1791,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           if (done) saveRight({ width: used });
         }}>
         {scmOpen && (
-          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} onAgentAction={async (a, prompt) => {
+          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
+            const p = projects.find((x) => x.id === projectOf(activeDir));
+            if (p) void invoke<Project>("project_set", { projectId: p.id, workspacesDir: p.workspacesDir ?? "", base }).then((u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x))));
+          }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
             if (activeDir === null) return "Open a workspace first.";
             try {
               await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
@@ -1822,6 +1839,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         );
       })()}
       <UpdateCenter />
+      {reviewOn(settings) && (
+        <ReviewNotes
+          picked={picked}
+          notes={notes}
+          onAdd={(n) => {
+            setNotes((ns) => [...ns, n]);
+            setPicked(null);
+          }}
+          onCancel={() => setPicked(null)}
+          onRemove={(i) => setNotes((ns) => ns.filter((_, k) => k !== i))}
+          onClear={() => setNotes([])}
+        />
+      )}
       {readStatusBar(settings).visible && (
       <StatusBar
         hidden={readStatusBar(settings).hidden}

@@ -79,7 +79,6 @@ export function cronWords(line: string, locale: string): string | null {
   return parts.join(" ");
 }
 
-// ponytail: graceMinutes waits for the grace window field of AUTO-007 (T-175); the dialog has none yet.
 export type Template = { id: string; name: string; prompt: string; form: ScheduleForm; graceMinutes: number; blurb: string };
 const at = (preset: Preset, time: string, day = 1): ScheduleForm => ({ preset, time, day, custom: "" });
 /** AUTO-006: choosing one only fills the dialog; nothing is stored until Save. */

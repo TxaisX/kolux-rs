@@ -1,15 +1,16 @@
 //! CLI-028 / CLI-029 (AUTO-020): the `automations` command group. `list`, `show` and `runs` read
 //! what the Automations page shows; `create`, `edit`, `remove` and `run` change it through the
 //! same checks the page's dialog goes through, and the page follows along. An id is given bare
-//! (`automations show auto-3`) or as `--id`. The precheck, session reuse, the missed-run grace
-//! window and source context wait on T-193-b with the rest of the flag set.
+//! (`automations show auto-3`) or as `--id`. `--missed-run-grace-minutes` sets AUTO-007's grace
+//! window (T-175), `--precheck` and `--precheck-timeout` (seconds) AUTO-008's precheck. Session
+//! reuse waits on T-192-c; AUTO-028 cuts source context.
 
 use super::{pick_project, pick_worktree, Ctx, Fail, Request};
 use crate::automations;
 use serde_json::{json, Map, Value};
 
-const FIELDS: &[&str] = &["name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "enabled", "disabled"];
-const EDIT: &[&str] = &["id", "name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "enabled", "disabled"];
+const FIELDS: &[&str] = &["name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "missed-run-grace-minutes", "precheck", "precheck-timeout", "enabled", "disabled"];
+const EDIT: &[&str] = &["id", "name", "trigger", "schedule", "time", "day", "timezone", "prompt", "provider", "repo", "workspace", "workspace-mode", "missed-run-grace-minutes", "precheck", "precheck-timeout", "enabled", "disabled"];
 pub(super) const COMMANDS: &[(&str, &str, &[&str])] = &[
     ("automations list", "automations.list", &[]),
     ("automations show", "automations.show", &["id"]),
@@ -51,6 +52,16 @@ pub(super) fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<Str
             return Err(Fail::args("--workspace-mode takes existing or new-per-run"));
         }
     }
+    if let Some(g) = text("missed-run-grace-minutes") {
+        if !g.parse::<u64>().is_ok_and(|g| automations::GRACE_MINUTES.contains(&g)) {
+            return Err(Fail::args("--missed-run-grace-minutes takes 0, 30, 60, 180, 720, 1440 or 2880"));
+        }
+    }
+    if let Some(t) = text("precheck-timeout") {
+        if !t.parse::<u64>().is_ok_and(|t| automations::PRECHECK_SECONDS.contains(&t)) {
+            return Err(Fail::args("--precheck-timeout takes 60, 120, 300 or 600 seconds: a precheck may take 1, 2, 5 or 10 minutes"));
+        }
+    }
     if flags.contains_key("repo") && flags.contains_key("workspace") {
         return Err(Fail::args("give --repo or --workspace, not both"));
     }
@@ -82,6 +93,8 @@ pub(super) fn check(command: &str, flags: &Map<String, Value>) -> Result<Map<Str
         let key = match k.as_str() {
             "schedule" => "trigger",
             "workspace-mode" => "workspaceMode",
+            "missed-run-grace-minutes" => "missedRunGraceMinutes",
+            "precheck-timeout" => "precheckTimeoutSeconds",
             other => other,
         };
         args.insert(key.to_string(), v.clone());
@@ -160,11 +173,11 @@ pub(super) fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let old = if req.command == "automations.edit" { Some(find(ctx, &id)?) } else { None };
             let mut input = json!({ "requestId": if old.is_some() { String::new() } else { req.id.clone() } });
             if let Some(o) = &old {
-                for k in ["id", "name", "prompt", "provider", "projectId", "workspaceMode", "workspace", "baseBranch", "enabled"] {
+                for k in ["id", "name", "prompt", "provider", "projectId", "workspaceMode", "workspace", "baseBranch", "missedRunGraceMinutes", "enabled"] {
                     input[k] = o[k].clone();
                 }
             }
-            for k in ["name", "prompt", "provider"] {
+            for k in ["name", "prompt", "provider", "missedRunGraceMinutes", "precheck", "precheckTimeoutSeconds"] {
                 if let Some(v) = text(k) {
                     input[k] = json!(v);
                 }
@@ -296,6 +309,13 @@ mod tests {
         assert!(refused("automations create --name r --trigger daily --prompt p --workspace-mode sometimes").contains("existing or new-per-run"));
         assert_eq!(ok("automations edit auto-1 --trigger weekly --day 0 --disabled").args["disabled"], true);
         assert!(refused("automations frobnicate").contains("unknown command"));
+        // AUTO-008's limit, in seconds: the dialog's 1, 2, 5 or 10 minutes and nothing else.
+        let pc = parse(&["automations", "create", "--name", "r", "--trigger", "daily", "--prompt", "p", "--precheck", "git diff --quiet", "--precheck-timeout", "300"].map(String::from)).1.unwrap().unwrap();
+        assert_eq!((&pc.args["precheck"], &pc.args["precheckTimeoutSeconds"]), (&json!("git diff --quiet"), &json!("300")));
+        assert!(refused("automations edit auto-1 --precheck-timeout 90").contains("60, 120, 300 or 600"));
+        assert!(refused("automations edit auto-1 --precheck-timeout 900").contains("10 minutes"));
+        // AUTO-028 cuts source context.
+        assert!(parse(&words("automations create --name r --trigger daily --prompt p --source-context {}")).1.is_err());
         for (name, _, _) in super::COMMANDS {
             assert!(super::super::HELP.contains(&format!("kolux-dev {name} ")), "{name} has no help line");
         }
@@ -336,6 +356,14 @@ mod tests {
         let ed = call(&format!("automations edit {id} --name renamed --workspace-mode existing"), &repo).unwrap();
         assert_eq!((&ed["name"], &ed["trigger"]["cron"], &ed["workspaceMode"]), (&json!("renamed"), &json!("30 10 * * 2"), &json!("existing")));
         assert!(Path::new(ed["workspace"].as_str().unwrap()).ends_with("repo"), "{ed}");
+        // AUTO-007's grace window; anything off the list is refused before the app is asked.
+        let g = call(&format!("automations edit {id} --missed-run-grace-minutes 30"), &repo).unwrap();
+        assert_eq!((&g["missedRunGraceMinutes"], &g["name"]), (&json!(30), &json!("renamed")));
+        assert!(parse(&words("automations edit auto-1 --missed-run-grace-minutes 45")).1.is_err());
+        // AUTO-008's precheck and its limit; an edit that leaves them out keeps them.
+        let pc = call_words(["automations", "edit", &id, "--precheck", "exit 1", "--precheck-timeout", "120"].map(String::from).to_vec(), &repo).unwrap();
+        assert_eq!((&pc["precheck"], &pc["precheckTimeoutSeconds"]), (&json!("exit 1"), &json!(120)));
+        assert_eq!(call(&format!("automations edit {id} --name renamed"), &repo).unwrap()["precheck"], json!("exit 1"));
         // A cron line is a timetable too.
         assert_eq!(call(&format!("automations edit {id} --trigger */15 --enabled"), &repo).unwrap_err().code, "failed");
         let cron = call_words(["automations", "edit", &id, "--trigger", "0 9 * * 1-5"].map(String::from).to_vec(), &repo).unwrap();
@@ -348,6 +376,14 @@ mod tests {
         let sh = call(&format!("automations show {id}"), &dir).unwrap();
         assert_eq!((&sh["automation"]["name"], &sh["runs"]), (&json!("renamed"), &json!(0)));
         assert_eq!(call(&format!("automations runs {id}"), &dir).unwrap()["runs"], json!([]));
+        // CLI-028: a timed run the precheck stopped is listed as skipped, with its exit code.
+        let yes = |_: &str| true;
+        let quiet = |_: &str, _: Value| {};
+        let launch = crate::automations::Launch { git: &git_, store: &store, claude_config: dir.join(".claude.json"), installed: &yes, notify: &quiet };
+        assert_eq!(crate::automations::run(&launch, &id, "schedule").unwrap()["cause"], json!("precheck"));
+        let runs = call(&format!("automations runs {id}"), &dir).unwrap();
+        assert_eq!((&runs["runs"][0]["status"], &runs["runs"][0]["exitCode"]), (&json!("skipped"), &json!(1)));
+        assert!(super::text("automations.runs", &runs).unwrap().contains("exit code 1"), "{runs}");
         assert!(super::text("automations.list", &l).unwrap().contains("host local"));
         assert_eq!(call("automations show auto-99", &dir).unwrap_err().code, "not_found");
 

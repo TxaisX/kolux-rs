@@ -42,6 +42,17 @@ fn cli_first(dir: &std::path::Path, path: Option<std::ffi::OsString>) -> std::ff
     std::env::join_paths(std::iter::once(dir.to_path_buf()).chain(rest)).unwrap_or_else(|_| dir.as_os_str().to_os_string())
 }
 
+/// GIT-063: an agent pane (automation runs start theirs the same way) gets git's prompts turned
+/// off, so a remote that wants a password fails the command instead of stalling the agent; a shell
+/// keeps prompting. Set before the user's own variables, which can turn them back on.
+fn unattended(command: &mut portable_pty::CommandBuilder, is_program: bool) {
+    if is_program {
+        for (k, v) in crate::git::NO_PROMPT {
+            command.env(k, v);
+        }
+    }
+}
+
 /// The handle a terminal is known by on the command line (`KOLUX_TERMINAL_HANDLE`).
 pub fn handle_of(id: u32) -> String {
     format!("term-{id}")
@@ -91,6 +102,9 @@ impl Terminals {
         let registry = self.inner.clone();
         let out_registry = self.inner.clone();
         let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty());
+        // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
+        let mut prs = crate::scm::PrScan::default();
+        let link_dir = cwd.clone();
         // ACCT-046: a program runs as asked; an automatic shell has a line of fallbacks.
         let mut commands = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => vec![program_command(p, &args, cwd.as_deref())],
@@ -129,6 +143,7 @@ impl Terminals {
             if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
                 command.env(crate::cli::APP_DIR_ENV, dir);
             }
+            unattended(command, is_program);
             // CLI-010: a Kolux started from another copy's terminal inherits that copy's data-folder
             // override, which would send this pane's commands to the other app.
             command.env_remove("KOLUX_USER_DATA_PATH");
@@ -152,6 +167,14 @@ impl Terminals {
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                 let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data });
+                if let Some(dir) = link_dir.as_deref() {
+                    for url in prs.feed(chunk) {
+                        let linked = out_app.state::<Mutex<crate::state::Store>>().lock().is_ok_and(|s| crate::scm::link_printed(&s, dir, &url));
+                        if linked {
+                            let _ = out_app.emit("settings-saved", ());
+                        }
+                    }
+                }
                 if is_program {
                     if let Ok(mut inner) = out_registry.lock() {
                         if let Some(m) = inner.marks.get_mut(&id) {
@@ -161,13 +184,21 @@ impl Terminals {
                 }
             },
             move |code| {
-                // Drop the session so the PTY closes and the reader thread can finish.
+                // Drop the session so the PTY closes and the reader thread can finish. A session
+                // still listed ended by itself: Kolux's own kills take it off the list first.
+                let mut by_itself = false;
                 if let Ok(mut inner) = registry.lock() {
-                    inner.sessions.remove(&id);
+                    by_itself = inner.sessions.remove(&id).is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
                     inner.keys.remove(&id);
                     inner.ended.insert(id);
+                }
+                // ORCH-027: a worker's agent that died mid-task tells its coordinator.
+                if by_itself && is_program {
+                    if let Ok(store) = exit_app.state::<Mutex<crate::state::Store>>().lock() {
+                        let _ = crate::cli::worker_exited(&store, id, code, crate::automations::now_ms());
+                    }
                 }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
@@ -434,6 +465,18 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_agent_panes_have_git_prompts_turned_off() {
+        let mut agent = crate::pty::program_command("claude", &[], None);
+        unattended(&mut agent, true);
+        assert_eq!(agent.get_env("GIT_TERMINAL_PROMPT").and_then(|v| v.to_str()), Some("0"));
+        assert_eq!(agent.get_env("GCM_INTERACTIVE").and_then(|v| v.to_str()), Some("never"));
+        let mut shell = crate::pty::shell_commands(None).remove(0);
+        let before = shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string());
+        unattended(&mut shell, false);
+        assert_eq!(shell.get_env("GIT_TERMINAL_PROMPT").map(|v| v.to_os_string()), before, "a shell still prompts");
+    }
 
     #[test]
     fn the_bundled_cli_folder_comes_first_on_the_search_path() {
