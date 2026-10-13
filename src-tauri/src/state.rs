@@ -107,6 +107,28 @@ impl Store {
         fs::rename(&tmp, &self.settings_path)
     }
 
+    /// APP-011: a durable save point before a restart, an update or a reload: the settings are
+    /// written out again and flushed to the drive, and the database's journal is folded into it.
+    /// Any failure comes back, so the action that asked for it is cancelled.
+    pub fn save_point(&self) -> std::io::Result<()> {
+        if self.closed.get() {
+            return Err(std::io::Error::other("Kolux RS is quitting"));
+        }
+        let tmp = self.settings_path.with_extension("json.tmp");
+        let written = (|| {
+            let mut f = fs::File::create(&tmp)?;
+            std::io::Write::write_all(&mut f, &serde_json::to_vec_pretty(&self.settings())?)?;
+            f.sync_all()?;
+            drop(f);
+            fs::rename(&tmp, &self.settings_path)
+        })();
+        if written.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        written?;
+        self.conn.execute_batch("PRAGMA wal_checkpoint(FULL);").map_err(std::io::Error::other)
+    }
+
     /// APP-050: the final save. Called with the store locked, so a save in flight has finished;
     /// afterwards every write is refused. A leftover temporary file goes, then the database's
     /// journal is folded into it. Failures (a drive refusing writes) are ignored: quitting goes on.
@@ -181,6 +203,29 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kolux-rs-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn app011_a_save_point_writes_the_settings_out_and_fails_when_they_cannot_be_written() {
+        let dir = temp_dir("savepoint");
+        let s = Store::open(&dir).unwrap();
+        s.save_settings(&serde_json::json!({ "quietMinutes": 7 })).unwrap();
+        s.set("starts", "1").unwrap();
+        s.save_point().unwrap();
+        assert_eq!(s.settings()["quietMinutes"], 7, "the settings are the same after the save point");
+        let file = dir.join("settings.json");
+        let mut perms = fs::metadata(&file).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&file, perms.clone()).unwrap();
+        assert!(s.save_point().is_err(), "a settings file that cannot be written fails the save point");
+        assert!(!dir.join("settings.json.tmp").exists(), "no temporary file is left behind");
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        fs::set_permissions(&file, perms).unwrap();
+        s.close();
+        assert!(s.save_point().is_err(), "after the final save no save point is taken");
+        drop(s);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

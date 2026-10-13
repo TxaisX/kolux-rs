@@ -78,6 +78,30 @@ fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, v
     store_settings(&app, store, value).map(|_| ())
 }
 
+/// APP-011: the durable save point a restart, an update or a reload waits for; an error cancels it.
+#[tauri::command(async)]
+fn save_point(store: tauri::State<'_, Mutex<Store>>) -> Result<(), String> {
+    store.lock().map_err(|e| e.to_string())?.save_point().map_err(|e| format!("Kolux could not save ({e}), so nothing was restarted."))
+}
+
+/// APP-006: how long a close request may go unanswered before the window's interface counts as
+/// gone (crashed, or frozen solid) and the app quits without asking.
+const CLOSE_ANSWER: std::time::Duration = std::time::Duration::from_secs(5);
+/// APP-006: quitting finishes within this long whatever hangs; the final save has its own, shorter
+/// deadline inside it (APP-050).
+const QUIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// APP-006: close requests made (the first number) and answered by the window (the second).
+#[derive(Default)]
+struct Closing(std::sync::atomic::AtomicU32, std::sync::atomic::AtomicU32);
+
+/// APP-006: the window's close handler heard the request (it then asks, or closes).
+#[tauri::command]
+fn close_heard(closing: tauri::State<'_, Closing>) {
+    use std::sync::atomic::Ordering::SeqCst;
+    closing.1.store(closing.0.load(SeqCst), SeqCst);
+}
+
 /// SET-035: one change, laid over what is stored while the store is held, so two saves in quick
 /// succession never undo each other. Returns what was really stored, without its secrets.
 #[tauri::command(async)]
@@ -161,6 +185,7 @@ pub fn run() {
                 });
             }
             app.manage(Terminals::default());
+            app.manage(Closing::default());
             app.manage(resources::Sampler::default());
             app.manage(resume::Registry::default());
             app.manage(claude_key::KeySetup::default());
@@ -217,6 +242,20 @@ pub fn run() {
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
         .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req))
         .on_window_event(|window, event| {
+            // APP-006: the window's own interface decides whether to ask before closing. If it does
+            // not answer at all, it is gone, crashed or frozen solid, and the app quits anyway.
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                use std::sync::atomic::Ordering::SeqCst;
+                let n = window.state::<Closing>().0.fetch_add(1, SeqCst) + 1;
+                let app = window.app_handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(CLOSE_ANSWER);
+                    if app.state::<Closing>().1.load(SeqCst) < n {
+                        eprintln!("close: the window did not answer within {CLOSE_ANSWER:?}; quitting");
+                        app.exit(0);
+                    }
+                });
+            }
             // The window is gone: no shell may outlive it.
             if let tauri::WindowEvent::Destroyed = event {
                 window.state::<Terminals>().kill_all();
@@ -229,6 +268,8 @@ pub fn run() {
             get_settings,
             save_settings,
             patch_settings,
+            save_point,
+            close_heard,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -368,6 +409,12 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // APP-006: whatever hangs below, the process is gone at the deadline.
+                std::thread::spawn(|| {
+                    std::thread::sleep(QUIT_LIMIT);
+                    eprintln!("quit: still running after {QUIT_LIMIT:?}; exiting");
+                    std::process::exit(0);
+                });
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
                 app.state::<Terminals>().kill_all();

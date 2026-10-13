@@ -1,0 +1,18 @@
+T-182-b live proof, 2026-10-13, lane release dev app, second screen
+
+APP-006 close asks first (a terminal running ping -n 900 started with kolux-dev terminal create):
+close button clicked -> "Quit Kolux? | A program is still running in 1 terminal. Quitting stops it. | Cancel/Quit"  (evidence/T-182-b-ask.png)
+after 6.5 s with the question open: app running
+after Cancel: "ask gone" app running
+Quit confirmed: app process gone after 1127 ms (checks include PowerShell start-up)
+
+APP-006 frozen interface (page script stuck in an endless loop, then WM_CLOSE posted to the window):
+cdp eval after freeze exit: 124 (124 = no answer, frozen)
+window close sent to a frozen interface: process gone after 5125 ms
+close: the window did not answer within 5s; quitting
+
+APP-011 reload only after a durable save point (Ctrl+Shift+R = Force Reload):
+settings.json read-only, Ctrl+Shift+R: page "NOT reloaded" toast="Kolux could not save (Access is denied. (os error 5)), so nothing was restarted."
+settings.json writable again, Ctrl+Shift+R: page "reloaded"
+(evidence/T-182-b-refused.png shows the refusal notice)
+not shown live: Restart to update (no update is offered to a dev build; the same savePoint runs first, unit-tested), the refusal while an editor tab holds unsaved text (unit-tested)

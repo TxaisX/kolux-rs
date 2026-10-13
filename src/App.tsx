@@ -20,6 +20,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { quitQuestion, savePoint, unsavedTabs, watchDrafts } from "./lifecycle";
+import { flushUnsaved } from "./settings/useSettings";
+import { settleWithin } from "./settings/pending";
 import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
@@ -209,7 +213,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
   const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
-  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
+  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; quit?: boolean } | null>(null);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
@@ -421,6 +425,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "browser.forward":
         case "browser.reload":
           browserAction(focused, hit.id.slice("browser.".length));
+          break;
+        case "app.forceReload":
+          // APP-011: a reload only after a durable save point; a refused one says why and changes nothing.
+          void savePoint().then(
+            () => location.reload(),
+            (err: Error) => setToast(err.message),
+          );
           break;
         case "app.settings":
           if (!settingsOpen) setSettingsAt((a) => ({ target: null, n: a.n }));
@@ -1213,6 +1224,28 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   };
   const closePane = (key: number) => void closeTab([key]);
 
+  // APP-006: closing the window saves typing not yet saved (SET-036, at most 2 s), then asks first
+  // when a program would stop (unless asking is switched off, TERM-045) or an editor tab would lose
+  // unsaved text. The request is acknowledged at once: one left unanswered means this interface is
+  // gone and the app quits on its own (lib.rs). Unmounted (crashed), nothing listens and the window
+  // closes without asking.
+  const held = useRef({ panes, dirty, titles, settings });
+  held.current = { panes, dirty, titles, settings };
+  useEffect(() => {
+    watchDrafts(() => held.current.panes.filter((p) => held.current.dirty[p.key]).map((p) => tabName(p, held.current.titles)));
+    const off = getCurrentWindow().onCloseRequested(async (e) => {
+      void invoke("close_heard").catch(() => {});
+      await settleWithin(flushUnsaved(), 2000);
+      const ids = Object.values(ptys.current);
+      const busy = asksBeforeClose(held.current.settings) ? await busyCount(ids, (ids) => invoke<boolean[]>("terminal_busy", { ids })) : 0;
+      const q = quitQuestion(busy, unsavedTabs());
+      if (!q) return;
+      e.preventDefault();
+      setAsking({ keys: [], quit: true, ...q });
+    });
+    return () => void off.then((stop) => stop()).catch(() => {});
+  }, []);
+
   // SKILL-009 / SKILL-010: the shown workspace's kit run and its seats.
   const [kitCheck] = useKitCheck(activeDir, kitFolded, kitTick);
   const kitSeats = kitCheck && activeDir !== null
@@ -1492,7 +1525,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             title={asking.title}
             body={asking.body}
             onCancel={() => setAsking(null)}
+            confirm={asking.quit ? "Quit" : undefined}
             onConfirm={() => {
+              if (asking.quit) return void getCurrentWindow().destroy().catch(() => {});
               asking.keys.forEach(dropPane);
               setAsking(null);
             }}

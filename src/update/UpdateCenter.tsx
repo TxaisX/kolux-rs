@@ -4,6 +4,7 @@
 import { useEffect, useReducer, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { savePoint } from "../lifecycle";
 import { Close, Refresh, Spinner, CheckCircle } from "../chrome/icons";
 import { Quietly, TICK_MS, UpdateSchedule, type Outcome, type Quiet } from "./schedule";
 import { cardReducer, initialCard, mainAction, tipVisible, RELEASES_PAGE, type LastLaunch, type UpdateInfo } from "./card";
@@ -157,8 +158,9 @@ export default function UpdateCenter() {
   // start, the card says why and the update stays ready for Try again.
   const restart = () => {
     const info = "info" in s.phase ? s.phase.info : null;
-    void invoke("update_restart").catch((e) => {
-      const message = String(e);
+    // APP-011: the installer starts only after a durable save point; a refused one says why here.
+    void savePoint().then(() => invoke("update_restart")).catch((e) => {
+      const message = e instanceof Error ? e.message : String(e);
       if (message === "No update is ready.") dispatch({ type: "notReady" });
       else dispatch({ type: "installFailed", info, message });
     });

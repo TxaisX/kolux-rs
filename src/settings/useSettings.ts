@@ -96,13 +96,14 @@ export class Draft {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => void this.flush(), DRAFT_PAUSE_MS);
   }
-  /** Saves now (leaving the field, changing page, closing the window). A failed save keeps the text. */
-  async flush(): Promise<void> {
+  /** Saves now (leaving the field, changing page, closing the window). A failed save keeps the text.
+   * True when nothing typed is left unsaved (APP-011). */
+  async flush(): Promise<boolean> {
     clearTimeout(this.timer);
-    if (this.composing || !this.dirty) return;
+    if (this.composing || !this.dirty) return !this.dirty;
     this.dirty = false;
     const t = this.text;
-    if (t === this.base) return;
+    if (t === this.base) return true;
     let ok: unknown;
     try {
       ok = await this.commit(t);
@@ -111,6 +112,7 @@ export class Draft {
     }
     if (ok === false) this.dirty = true;
     else if (!this.dirty) this.base = t;
+    return !this.dirty;
   }
 }
 
@@ -122,6 +124,8 @@ export function saveOnClose(save: () => unknown): () => void {
 }
 /** Saves every change not yet saved (SET-036: the window is closing). Never rejects. */
 export const flushUnsaved = () => Promise.allSettled([...unsaved].map((save) => save()));
+/** APP-011: saves every change not yet saved; true only when every one of them was saved. */
+export const saveAll = async () => (await Promise.all([...unsaved].map((save) => Promise.resolve(save()).then((ok) => ok !== false, () => false)))).every(Boolean);
 
 /** Props for a text or number `<input>` whose value saves itself (SET-036). */
 export function useDraft(value: string, commit: (text: string) => unknown) {
