@@ -11,20 +11,35 @@
 // effort levels or fast mode shows those options on its seat only (SESS-016); "Use last lineup"
 // (SESS-021) appears when this project has one whose agents are still here.
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Close, Dots } from "../chrome/icons";
+import { openSettings } from "../settings/pages";
 import { launchWarnings, useLaunchUsage } from "../usage/launchWarn";
 import VendorMark from "../chrome/VendorMark";
 import { markFor, type AgentInfo } from "./PlusMenu";
-import { canLaunch, type AgentPass } from "./agents";
+import { canLaunch, FEATURED, type AgentPass } from "./agents";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
+
+/** Agents whose own page `open_install_page` knows (agents.rs `install_page`). */
+const DOC_PAGES = ["claude", "codex"];
+
+/** SESS-017: the featured three first (a missing one only once detection is done), the other
+ * installed agents behind the fold, and whether no AI was found at all. */
+export function seatAgents(agents: AgentInfo[], detecting: boolean) {
+  const featured = FEATURED.flatMap((id) => agents.filter((a) => a.id === id)).map((agent) => ({ agent, missing: !agent.installed }));
+  const more = agents.filter((a) => a.installed && !FEATURED.includes(a.id));
+  return { featured: detecting ? [] : featured, more: detecting ? [] : more, none: !detecting && !agents.some((a) => a.installed) };
+}
 
 type Props = {
   /** The session's number, shown in the header. */
   number: number;
   hidden?: boolean;
   focused?: boolean;
-  /** Installed agents only. */
+  /** The offered agents, installed or not (SESS-017). */
   agents: AgentInfo[];
+  /** True until the first detection answers: then nothing is called missing. */
+  detecting?: boolean;
   seats: Seat[];
   onSeats: (seats: Seat[]) => void;
   /** SESS-012: the launch shape; a shape pick or a count change sets the shape and the seats together. */
@@ -55,7 +70,10 @@ type Props = {
   onUseLineup?: () => void;
 };
 
-export default function ChooserPane({ number, hidden = false, focused = false, agents, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup }: Props) {
+export default function ChooserPane({ number, hidden = false, focused = false, agents, detecting = false, seats, onSeats, shape, onLineup, task, onTask, onStart, copies, inGit, onCopies, busy = false, closable, onClose, onFocus, saved, onSaved, onPickSaved, pass, onRefresh, lastLineup, onUseLineup }: Props) {
+  const lineup = seatAgents(agents, detecting);
+  // SESS-017: which seats show the folded agents; a seat already using one shows them anyway.
+  const [unfolded, setUnfolded] = useState<number[]>([]);
   const nameOf = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
   // TERM-012: a chooser Kolux focuses takes the keyboard, so typing no longer lands in the last pane.
   const box = useRef<HTMLElement>(null);
@@ -265,13 +283,42 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                 />
               </div>
               <div className="choices" role="radiogroup" aria-label={`Seat ${i + 1}: which AI`}>
-                {agents.map((a) => (
-                  <label key={a.id} className="choice">
-                    <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
-                    <VendorMark agent={markFor(a.id)} size={12} />
-                    {a.name}
-                  </label>
+                {detecting && !pass && <span className="caption">Looking for AI programs…</span>}
+                {lineup.none && <span className="caption">No AI programs have been found yet.</span>}
+                {lineup.featured.map(({ agent: a, missing }) => (
+                  <span key={a.id} className="agent-card">
+                    <label className={`choice${missing ? " missing" : ""}`} title={missing ? `${a.name} is not installed on this computer` : a.path ?? a.name}>
+                      <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} disabled={missing} onChange={() => pickAgent(i, a.id)} />
+                      <VendorMark agent={markFor(a.id)} size={12} />
+                      {a.name}
+                      {missing && <span className="agent-missing">Not installed</span>}
+                    </label>
+                    {missing && (
+                      <button className="btn link agent-link" onClick={() => openSettings("accounts")} aria-label={`Set up ${a.name}`}>
+                        Set up
+                      </button>
+                    )}
+                    {DOC_PAGES.includes(a.id) && (
+                      <button className="btn link agent-link" onClick={() => void invoke("open_install_page", { agent: a.id }).catch(() => {})} aria-label={`${a.name} docs`} title={`Open ${a.name}'s own documentation`}>
+                        Docs
+                      </button>
+                    )}
+                  </span>
                 ))}
+                {lineup.more.length > 0 &&
+                  (unfolded.includes(i) || lineup.more.some((a) => a.id === seat.agent) ? (
+                    lineup.more.map((a) => (
+                      <label key={a.id} className="choice" title={a.path ?? a.name}>
+                        <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
+                        <VendorMark agent={markFor(a.id)} size={12} />
+                        {a.name}
+                      </label>
+                    ))
+                  ) : (
+                    <button className="btn link agent-link" onClick={() => setUnfolded((u) => [...u, i])}>
+                      {`More agents (${lineup.more.length})`}
+                    </button>
+                  ))}
                 <label className="choice">
                   <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === TERMINAL} onChange={() => pickAgent(i, TERMINAL)} />
                   <VendorMark agent="shell" size={12} />

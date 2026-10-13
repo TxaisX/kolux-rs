@@ -3,6 +3,7 @@
 // reason is shown for information only. The back end names the reason; this file owns the words
 // on the button.
 import { invoke } from "@tauri-apps/api/core";
+import { locale } from "../language";
 
 export type Reason =
   | "browser-blocked"
@@ -50,8 +51,8 @@ export function openInstallPage(agent: "claude" | "codex" | "grok"): Promise<voi
 /** "15:40", or "Fri 15:40" when it is not today. */
 export function resetTime(ms: number, now = Date.now()): string {
   const d = new Date(ms);
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  return d.toDateString() === new Date(now).toDateString() ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  const time = d.toLocaleTimeString(locale(), { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === new Date(now).toDateString() ? time : `${d.toLocaleDateString(locale(), { weekday: "short" })} ${time}`;
 }
 
 export function attentionText(a: Attention, now = Date.now()): string {

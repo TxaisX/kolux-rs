@@ -24,10 +24,11 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
-import CloseAsk from "./terminal/CloseAsk";
+import Ask from "./chrome/Ask";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
+import KeyLostNotice from "./settings/KeyLostNotice";
 import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, titleBarButton } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
@@ -46,6 +47,7 @@ import { datedName, matchSeats, roleDone, rolePrompt, seatTitle, type RunCheck }
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
+import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount } from "./terminal/grid";
@@ -84,6 +86,7 @@ import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { useUsageAlerts } from "./usage/alerts";
+import ToolNotices from "./launch/ToolNotices";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -150,18 +153,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // the grid stays mounted (hidden) behind it.
   // SET-028: Model routing opens the same way until Settings > Agents exists.
   const [page, setPage] = useState<Page | null>(() => openPageAt(initial)); // VIEW-011: the page open at quit
-  const [scmOpen, setScmOpen] = useState(false);
   // GIT-004: a half-written commit message per worktree, kept through closing the panel.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  // EDIT-033: the explorer on the right; closed at start (DT-R17). A bump of explorerFocus moves focus into its tree.
-  const [explorerOpen, setExplorerOpen] = useState(false);
+  // EDIT-033: a bump of explorerFocus moves focus into the explorer's tree.
   const [explorerFocus, setExplorerFocus] = useState(0);
-  const toggleExplorer = () => {
-    if (explorerOpen && document.activeElement?.closest(".explorer")) return setExplorerOpen(false);
-    setScreen("terminals");
-    setExplorerOpen(true);
-    setExplorerFocus((n) => n + 1);
-  };
+  // VIEW-056: the right sidebar's width while its edge is being dragged; saved when let go.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -343,6 +340,25 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setSettings(next);
     invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
   };
+  // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
+  const right = readRight(settings);
+  const explorerOpen = right.open && right.tab === "explorer";
+  const scmOpen = right.open && right.tab === "scm";
+  const saveRight = (patch: Partial<Record<keyof typeof RIGHT_KEYS, unknown>>) => {
+    const next = { ...settings };
+    for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
+    setSettings(next);
+    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+  };
+  const showRight = (tab: RightTab) => {
+    setScreen("terminals");
+    saveRight({ open: true, tab });
+  };
+  const toggleExplorer = () => {
+    if (explorerOpen && document.activeElement?.closest(".explorer")) return saveRight({ open: false });
+    showRight("explorer");
+    setExplorerFocus((n) => n + 1);
+  };
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
   useEffect(() => {
@@ -437,10 +453,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           setSidebarOpen((o) => !o);
           break;
         case "sidebar.sourceControl.toggle":
+          if (terminals && scmOpen) saveRight({ open: false });
+          else showRight("scm");
+          break;
         case "sidebar.right.toggle":
-          // ponytail: the right sidebar holds only Source Control until VIEW-056/057 (T-146).
-          setScreen("terminals");
-          setScmOpen((o) => !o);
+          if (terminals && right.open) saveRight({ open: false });
+          else showRight(right.tab);
           break;
         case "workspace.delete":
           setScreen("terminals");
@@ -794,7 +812,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
       const pid = projectOf(chooser.cwd) ?? projectFor(null);
       const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
-        if (!pid) throw new Error("Add a project first: an agent needs a repository to work in.");
+        if (!pid) throw new Error("Add a project first: an agent needs a project folder to work in.");
         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
         return { cwd: wt.path, branch: wt.branch };
       };
@@ -1053,7 +1071,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const launch = async (agent: AgentInfo, projectId: string | null) => {
     const pid = projectFor(projectId);
     if (!pid) {
-      setNotice("Add a project first: an agent needs a repository to work in.");
+      setNotice("Add a project first: an agent needs a project folder to work in.");
       return;
     }
     setLaunching(true);
@@ -1395,7 +1413,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         }
         screen={screen}
         classic={classic}
-        onScreen={setScreen} installed={installedIds} onSettings={() => setSettingsOpen(true)} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
+        onScreen={setScreen} installed={installedIds} onSettings={() => setSettingsOpen(true)} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body">
         {palette && (
           <WorktreePalette
@@ -1416,9 +1434,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           />
         )}
         {asking && (
-          <CloseAsk
+          <Ask
             title={asking.title}
             body={asking.body}
+            confirm="Close tab"
+            enter
             onCancel={() => setAsking(null)}
             onConfirm={() => {
               asking.keys.forEach(dropPane);
@@ -1472,6 +1492,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         )}
         <div className="content">
           <SignInNotice />
+          <KeyLostNotice />
+          {terminals && page === null && <ToolNotices projects={projects.map((p) => p.id).join(",")} />}
           {terminals && page === "automations" && (
             <AutomationsPage
               onClose={() => setPage(null)}
@@ -1666,7 +1688,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     hidden={!board && p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
-                    agents={agents.filter((a) => a.installed)}
+                    agents={agents}
+                    detecting={!agentPass.done}
                     seats={p.seats}
                     pass={agentPass}
                     onRefresh={refreshAgents}
@@ -1748,8 +1771,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             })}
           </div>
         </div>
-        {terminals && scmOpen && (
-          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} onAgentAction={async (a, prompt) => {
+        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? 297 : 0)} hidden={!terminals || !right.open} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
+          const used = clampWidth(w, window.innerWidth, sidebarOpen ? 297 : 0);
+          setDragWidth(done ? null : used);
+          if (done) saveRight({ width: used });
+        }}>
+        {scmOpen && (
+          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} onAgentAction={async (a, prompt) => {
             if (activeDir === null) return "Open a workspace first.";
             try {
               await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
@@ -1759,7 +1787,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             }
           }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
-        {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
+        {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
+        </RightSidebar>
       </div>
       {kits && kits.kit === null && <KitGallery connected={kitAIs} onPick={pickKit} onClose={() => setKits(null)} />}
       {kits && kits.kit !== null && (() => {

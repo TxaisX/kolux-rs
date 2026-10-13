@@ -5,7 +5,8 @@
 // the next step, a remote menu whose labels carry counts and whose disabled items say why, and a
 // notice when an action fails or a hook refuses a commit, with a Fix with AI action. The draft
 // message is the window's, keyed by worktree, so it survives closing the panel and switching
-// workspaces. Every call names the worktree. VIEW-068: a branch summary on top (ahead / behind
+// workspaces. Every call names the worktree. VIEW-067: every row and every section but Conflicts
+// can be discarded, always after a prompt that says what will happen. VIEW-068: a branch summary on top (ahead / behind
 // the base and the lines changed, split into source, tests and generated).
 // Rows select on click (Ctrl adds, Shift spans), and a bulk bar above the list says how many of
 // the selected rows Stage and Unstage will each cover (T-018-c); Escape clears the selection.
@@ -14,10 +15,11 @@
 // pull-request step (create, merged, loading) with GIT-021 (T-228).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
+import Ask from "../chrome/Ask";
+import { ChevronDown, Close, Minus, Plus, Refresh, Undo } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -84,6 +86,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const remoteButton = useRef<HTMLButtonElement>(null);
+  const [discarding, setDiscarding] = useState<(DiscardAsk & { section: Section }) | null>(null);
 
   const load = useCallback(async () => {
     if (dir === null) {
@@ -104,6 +107,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     setMenu(null);
     setSelected([]);
     setAnchor(null);
+    setDiscarding(null);
     void load();
     const timer = window.setInterval(() => void load(), 4000);
     return () => window.clearInterval(timer);
@@ -141,6 +145,12 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     }
   };
   const stage = (paths: string[], on: boolean) => paths.length > 0 && guarded(() => invoke("scm_stage", { worktree: dir, paths, on }));
+  const askDiscard = (section: Section, rows: Change[], all: boolean) => rows.length > 0 && setDiscarding({ ...discardAsk(section, rows, all), section });
+  const discard = (d: DiscardAsk & { section: Section }) => {
+    setDiscarding(null);
+    const section = d.section === "Changes" ? "changed" : d.section.toLowerCase();
+    void guarded(() => invoke("scm_discard", { worktree: dir, section, paths: d.paths }));
+  };
   const commit = () =>
     canCommit(status, draft) &&
     guarded(async () => {
@@ -191,12 +201,17 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
   };
   const chosen = status ? bulk(status, selected) : { present: [], stage: [], unstage: [] };
 
-  const section = (name: string, rows: Change[], on: boolean) =>
+  const section = (name: "Conflicts" | Section, rows: Change[], on: boolean) =>
     rows.length > 0 && (
       <div className="scm-sec-wrap" data-section={name}>
         <div className="scm-sec">
           <span>{name}</span>
           <span className="count">{rows.length}</span>
+          {name !== "Conflicts" && (
+            <button className="ib" title={`Discard all ${rows.length}`} aria-label={`Discard all in ${name}`} disabled={busy} onClick={() => askDiscard(name, rows, true)}>
+              <Undo />
+            </button>
+          )}
           <button className="ib" title={on ? `Stage all ${rows.length}` : `Unstage all ${rows.length}`} disabled={busy} onClick={() => void stage(rows.map((r) => r.path), on)}>
             {on ? <Plus /> : <Minus />}
           </button>
@@ -205,6 +220,11 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
           <div key={r.path} className="scm-row" aria-selected={selected.includes(r.path)} title={r.from ? `${r.from} → ${r.path}` : r.path} onClick={(e) => pick(r.path, e)}>
             <span className="letter">{r.status}</span>
             <span className="path">{r.from ? `${r.from} → ${r.path}` : r.path}</span>
+            {name !== "Conflicts" && (
+              <button className="ib" title="Discard" aria-label={`Discard ${r.path}`} disabled={busy} onClick={(e) => { e.stopPropagation(); askDiscard(name, [r], false); }}>
+                <Undo />
+              </button>
+            )}
             <button
               className="ib"
               title={on ? "Stage" : "Unstage"}
@@ -234,6 +254,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
         void commit();
       }}
     >
+      {discarding && <Ask title={discarding.title} body={discarding.body} confirm={discarding.confirm} onConfirm={() => discard(discarding)} onCancel={() => setDiscarding(null)} />}
       <div className="sidebar scm">
         <div className="sb-section scm-head">
           <span>Source Control</span>

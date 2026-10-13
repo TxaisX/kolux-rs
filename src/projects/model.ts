@@ -1,3 +1,4 @@
+import { locale } from "../language";
 // The shapes the Rust side hands over for projects and workspaces, plus the pure helpers the
 // sidebar draws from. No Tauri calls here, so it can be tested on its own.
 
@@ -48,7 +49,7 @@ export function worktreeLabel(w: Worktree): string {
 export function orderWorktrees(list: Worktree[]): Worktree[] {
   return [...list].sort((a, b) => {
     if (a.isMain !== b.isMain) return a.isMain ? -1 : 1;
-    return worktreeLabel(a).localeCompare(worktreeLabel(b));
+    return worktreeLabel(a).localeCompare(worktreeLabel(b), locale());
   });
 }
 

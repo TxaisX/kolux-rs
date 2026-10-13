@@ -37,6 +37,8 @@ mod state;
 mod status;
 mod sysmem;
 mod terminal;
+mod tools;
+mod token_usage;
 mod trust;
 mod update;
 mod visibility;
@@ -112,6 +114,8 @@ pub fn run() {
             let store = Store::open(&dir)?;
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
+            // ACCT-010: a key this computer can no longer open is cleared before the window asks.
+            secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
@@ -133,8 +137,11 @@ pub fn run() {
             // Pages Claude sessions publish are kept in the library as they happen (SKILL-035).
             capture::start(app.handle().clone());
             app.manage(update::Updates::default());
-            // Git is checked once here; every project and workspace action runs through it.
-            app.manage(git::Git::detect()?);
+            // Git is checked once here; every project and workspace action runs through it. Without
+            // Git the app still opens, and the landing screen says so (APP-023).
+            app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
+            app.manage(tools::Cache::default());
+            app.manage(token_usage::Flights::default());
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
@@ -226,10 +233,16 @@ pub fn run() {
             projects::project_set,
             agents::agent_list,
             pty::shell_list,
+            tools::tools_check,
+            tools::tools_dismiss,
+            token_usage::token_usage,
+            token_usage::token_usage_scan,
+            token_usage::token_tracking_set,
             agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status, scm::scm_summary,
             scm::scm_stage,
+            scm::scm_discard,
             scm::scm_commit, scm::scm_remote,
             terminal::terminal_busy,
             keybindings::keybindings_read,
@@ -249,6 +262,8 @@ pub fn run() {
             automations::automation_save,
             routing::routing_catalog,
             secrets::secret_status,
+            secrets::secrets_dropped,
+            secrets::secrets_dropped_dismiss,
             secrets::secret_set,
             secrets::secret_clear,
             codex_usage::codex_usage,
@@ -314,6 +329,7 @@ pub fn run() {
             update::update_restart,
             claude_accounts::claude_account_remove,
             codex_accounts::codex_account_remove,
+            codex_accounts::codex_account_label,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])

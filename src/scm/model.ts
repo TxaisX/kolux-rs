@@ -37,6 +37,41 @@ export const isCommitShortcut = (e: KeyLike): boolean => e.key === "Enter" && (e
 /** The sum of every section, for the panel's header. */
 export const changeCount = (s: Status | null): number => (s ? s.staged.length + s.changed.length + s.untracked.length + s.conflicts.length : 0);
 
+/** The sections whose rows can be discarded (VIEW-067); conflicts are resolved, not discarded. */
+export type Section = "Staged" | "Changes" | "Untracked";
+
+/** What a discard prompt says and which paths it hands to git. */
+export type DiscardAsk = { title: string; body: string; confirm: string; paths: string[] };
+
+/** VIEW-067: an untracked or newly added file is deleted, a deleted tracked file is restored,
+ * anything else loses its changes. */
+const discardKind = (section: Section, c: Change): "delete" | "restore" | "discard" => (section === "Untracked" || c.status === "A" ? "delete" : c.status === "D" ? "restore" : "discard");
+
+const lost = " This cannot be undone.";
+
+/** VIEW-067: the confirmation for discarding these rows of one section (all of it when `all`), in
+ * singular or plural; a staged rename sends its old name too, so it comes back. */
+export const discardAsk = (section: Section, rows: Change[], all: boolean): DiscardAsk => {
+  const paths = rows.flatMap((r) => (section === "Staged" && r.from ? [r.from, r.path] : [r.path]));
+  const kinds = rows.map((r) => discardKind(section, r));
+  if (!all && rows.length === 1) {
+    const name = rows[0].path;
+    if (kinds[0] === "delete")
+      return { title: `Delete ${name}?`, body: (section === "Untracked" ? "It is untracked, so it is deleted from disk." : "It is a staged new file, so discarding deletes it from disk, not just from the index.") + lost, confirm: "Delete", paths };
+    if (kinds[0] === "restore") return { title: `Restore ${name}?`, body: "The deleted file comes back as git last had it.", confirm: "Restore", paths };
+    return { title: `Discard changes to ${name}?`, body: (section === "Staged" ? "Its staged and unstaged changes are lost." : "Its unstaged changes are lost; anything staged stays.") + lost, confirm: "Discard", paths };
+  }
+  const n = (k: (typeof kinds)[number]) => kinds.filter((x) => x === k).length;
+  const [del, back, gone] = [n("delete"), n("restore"), n("discard")];
+  const parts = [
+    del > 0 && `${plural(del, "file")} ${del === 1 ? "is" : "are"} deleted`,
+    back > 0 && `${plural(back, "deleted file")} ${back === 1 ? "is" : "are"} restored`,
+    gone > 0 && `${plural(gone, "file")} ${gone === 1 ? "loses its" : "lose their"} changes`,
+  ].filter(Boolean);
+  const stagedNew = section === "Staged" && del > 0 ? " Staged new files are deleted, not just unstaged." : "";
+  return { title: `Discard all ${rows.length} in ${section}?`, body: `${parts.join("; ")}.${stagedNew}${del + gone > 0 ? lost : ""}`, confirm: "Discard all", paths };
+};
+
 export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" | "publish" | "rebase";
 
 /** What the main button offers; `reason` is why it waits, null when it can go. */

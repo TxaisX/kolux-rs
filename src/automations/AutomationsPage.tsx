@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import Ask from "../chrome/Ask";
 import { Dots, Plus, Refresh, Search } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import type { Project } from "../projects/model";
@@ -66,7 +67,6 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   const keyRef = useRef<(e: globalThis.KeyboardEvent) => void>(() => {});
   const [menu, setMenu] = useState<string | null>(null);
   const [asking, setAsking] = useState<string | null>(null); // the automation whose delete waits for a yes
-  const [dontAsk, setDontAsk] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   // The dialog: undefined shut, null a new automation, else the latest saved copy being edited.
@@ -174,7 +174,8 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
     if (confirmDelete(settings)) setAsking(a.id);
     else void act(invoke("automation_delete", { id: a.id }));
   };
-  const confirmRemove = (id: string) => {
+  // VIEW-116: the don't-ask-again tick counts only when the delete is confirmed.
+  const confirmRemove = (id: string, dontAsk: boolean) => {
     setAsking(null);
     if (dontAsk) onSettings({ ...settings, [CONFIRM_DELETE_KEY]: false });
     void act(invoke("automation_delete", { id }));
@@ -286,18 +287,15 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
         </div>
       )}
       {asking && (
-        <div className="autos-confirm" role="alertdialog" aria-label="Delete automation">
-          <span>Delete {all.find((a) => a.id === asking)?.name ?? "this automation"} and its run history?</span>
-          <label>
-            <input type="checkbox" checked={dontAsk} onChange={(e) => setDontAsk(e.target.checked)} /> Don't ask again
-          </label>
-          <button className="btn danger" onClick={() => confirmRemove(asking)}>
-            Delete
-          </button>
-          <button className="btn" onClick={() => setAsking(null)}>
-            Cancel
-          </button>
-        </div>
+        <Ask
+          key={asking}
+          title={`Delete ${all.find((a) => a.id === asking)?.name ?? "this automation"}?`}
+          body="Its run history goes with it."
+          confirm="Delete"
+          dontAsk
+          onConfirm={(dontAsk) => confirmRemove(asking, dontAsk)}
+          onCancel={() => setAsking(null)}
+        />
       )}
       {error !== null ? (
         <div className="empty" role="alert">

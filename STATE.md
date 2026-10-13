@@ -3,9 +3,9 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-013-c · The two rules of the create-workspace card that T-013 left out (a creation overtaken by a newer one is cancelled and its half-made checkout removed; a stand-in tab while Git works)
-Done: 153 / 425 tasks  ·  P0 parity: 0/228 cards
+Done: 166 / 436 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 425 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 436 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
@@ -1315,6 +1315,81 @@ whole project's terminals. A new terminal opens quietly in the background unless
 to come forward, and closing checks that each program really stopped. The old terminal stop
 still works and tells you to use close.
 
+[accounts] The branch prefix, the "Next branch" sample and the Default compare base moved from
+the sidebar's add-project form to Settings > Git & worktrees (T-116-a-fix). The form keeps one
+link that opens that page.
+
+[accounts] Codex accounts can now be named (T-138-b). Each Codex row in Settings > Accounts & keys
+has a Name button; type Personal or Work and press Enter, and the row reads "Work · you@...".
+When two Codex accounts share one email and have no names yet, both rows say so, so a personal
+and a business workspace can be told apart. Kolux does not guess which is which: OpenAI does not
+publish where a sign-in says personal or business.
+
+[accounts] The right side of the Terminals screen is now one sidebar with two tabs, Explorer and
+Source Control (T-146-a). Ctrl+L or the top-bar panel button shows and hides it, Ctrl+Shift+E and
+Ctrl+Shift+G jump to a tab, and dragging its left edge makes it wider or narrower. After a
+restart it comes back open or closed, on the same tab and at the same width. It is open on
+Explorer the first time. Agents, Checks and Search tabs come with T-146-b.
+
+[accounts] Source Control can now throw changes away (T-153-a): each row and each section but
+Conflicts has a discard button, and a prompt first says what will happen, file by file or as
+counts (deleted, restored, or losing its changes). Every confirmation prompt is now one dialog:
+Cancel has focus when it opens, Escape backs out, and the don't-ask-again box only counts when
+you confirm. VIEW-054 waits for Txais's click-through (T-153-c).
+
+[accounts] If Windows can no longer open a stored key (a new Windows profile, a restored
+backup), Kolux now clears just that key at start, the Claude card shows Not connected, and a
+note at the top of the window says which key it was and offers Open Accounts & keys or
+Dismiss (T-154-a). Every other setting stays as it was. The app's log now masks any Claude key.
+
+[accounts] Stored keys stay sealed even when Windows' secret store stops answering (T-157):
+a save then fails with a plain message and writes nothing, the key saved earlier stays as it
+was and is never treated as lost, and clearing a key still works and stays cleared once the
+store is back. The proxy address and browser search link are on the sealed list for when
+their settings arrive.
+
+[accounts] The folder button in the sidebar header, and Add project… in the new-workspace
+composer, now open an Add project dialog (T-200): Clone from a URL is the big first choice,
+with Open a folder… and New project beside it; arrow keys and Enter move between them and
+Escape closes. Open a folder works as before; cloning and new projects arrive with T-214, and
+until then their steps say so and offer Back or Open a folder.
+
+[accounts] In the Choose what to run pane each seat now lists Claude Code, Codex and Grok first
+(T-201-a); a featured agent that is not installed is greyed out with Not installed and a Set up
+link that opens Settings › Accounts & keys, Claude Code and Codex carry a Docs link, the other
+installed agents fold under More agents (n), and while the app is still looking for AI programs
+the seat says so instead of calling anything not installed.
+
+[accounts] Newcomer screens use everyday words (T-209-a): Add project offers Copy from a web
+address instead of Clone, the sidebar says workspaces rather than worktrees and a terminal
+rather than a shell, and toasts say project folder rather than repository; hovering the plain
+label shows the exact Git term. A test reads every in-scope screen and fails the build when one
+of repo, clone, checkout, worktree, shell, CLI or PTY shows on it.
+
+[accounts] Interface language (T-210-a): Settings › Appearance › Interface has a Language
+choice (System, English, 简体中文, 한국어, 日本語, Español, Français). System follows Windows and
+falls back to English for anything else, Traditional Chinese included. Dates, relative times,
+weekday names and sorted lists follow the pick at once and on the next start; Kolux's own words
+stay in English until the language packs arrive (T-210-b).
+
+[accounts] Missing-tool notices (T-211): the main screen now opens with a notice when Git is
+missing (the app used to refuse to start without it), when GitHub's gh program is missing or
+signed out once a GitHub project is registered, when GitLab's glab does not start once a GitLab
+project is registered, and when no AI program is installed. Each has Check again and Dismiss; a
+dismissed notice stays hidden across restarts until the set of GitHub projects changes.
+
+[accounts] Token analytics (T-136-b): Settings › Usage now has an Overview / Claude / Codex
+picker. Tracking starts off for each agent; turn it on and Kolux reads the logs Claude Code and
+Codex already keep on this PC (nothing is sent anywhere). The overview shows total tokens, days
+with use, the share read from cache, a 26-week green day grid with the best day ringed, and the
+token mix. The cost reads n/a, marked partial, until the price table lands (T-137-a).
+
+[accounts] Token panels and cost (T-137-a): the Claude and Codex panels on Settings › Usage now
+have a range (last 7, 30 or 90 days, or all time; 30 by default) and a scope (Kolux worktrees, the
+default, or every local use), a green bar per day, a list by model and the 10 most recent
+sessions. Costs are worked out from Anthropic's and OpenAI's public price pages (read 2026-10-12);
+a model with no known price shows n/a and the total is marked partial, a guessed one says inferred.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2432,6 +2507,32 @@ recorded default until told otherwise; nothing here blocks a pass.
   put all four back to untracked. One fix during the proof: three clicks fired in the same tick
   each read the stale selection, so the updater now takes the previous state. Proof files removed.
 
+- [accounts] T-138-b · ACCT-019's personal/business label is a name the user gives (Name / Rename on the row, up to 40 characters, kept across Sign in again), not read from the sign-in: the workspace kind sits in token claims OpenAI does not document. Two unnamed rows on one email ask to be named. Confirm, or point at a public source for the claim.
+
+- [accounts] T-146-a · VIEW-056 says the right sidebar is open by default; that replaces DT-R17's "explorer closed at start" for a first run. With no workspace open it shows "Open a workspace to browse its files."
+- [accounts] T-146-a · the tabs are short words (Explorer, Source Control), not icons, until more tabs arrive with T-146-b; the width is at least 240 px and always leaves the workspace 400 px.
+
+- [accounts] T-153-a · closing a tab with a running program (TERM-045) used to open with Close tab focused; it now opens with Cancel focused, as VIEW-116 asks, and Enter closes the tab only after Tab moves focus to Close tab.
+- [accounts] T-153-c · VIEW-054 needs a click-through of the installed app (DT-37) that the clean-room rule bars the builder from; Txais does it, then T-153-c is built or marked SKIPPED.
+
+- [accounts] T-154-a · ACCT-010 says to reconnect on "Settings, then AI connections"; the page is titled Accounts & keys in this build, so the note says Settings › Accounts & keys. Only the unreadable key is cleared: the key mode and its date stay, so the card shows Not connected until a new key is made.
+
+- [accounts] T-157 · SAFE-026 vs ACCT-009 off Windows: DT-A8. On Windows a save while the secret store is down fails and writes nothing; macOS and Linux keep the scramble with its log line until a keyring is chosen there.
+
+- [accounts] T-200 · The dialog's Browse choice is worded Open a folder… (clearer than Browse for a non-coder); the Clone and New project steps exist now with a plain not-built-yet line and a disabled Clone button until T-214 builds them.
+
+- [accounts] T-201-a · SESS-017's "AI connections" is the Settings › Accounts & keys page; the AI choice stays one native radio group (one tab stop), with Set up, Docs and More agents as their own links beside it; docs links for agents other than Claude Code and Codex wait for T-201-b.
+
+- [accounts] T-209-a · Plain words chosen: clone = Copy from a web address, repository = project, worktree = workspace, main checkout = main folder, shell = terminal, CLI = program, PTY = terminal; the sidebar's pointer to the Settings page Git & worktrees now reads the Git page in Settings (the Settings list is not a newcomer path, so its page name stays). The scan reads the source of each in-scope file (all states at once) instead of rendering one state.
+
+- [accounts] T-210-a · The saved value is a BCP-47 tag in settings field `language`: system, en, zh-CN, ko, ja, es or fr; anything else reads as system. English keeps Kolux's own short relative-time words (3h ago); other languages use the platform's relative-time wording. Mapping the old app's saved language names onto these tags (SET 017 Compat) is the settings importer's job.
+
+- [accounts] T-211 · The landing screen is the main Terminals screen with no Settings or Automations page open (the app opens a terminal straight away, so the empty state is rarely seen); the notices sit at its top beside the other main-window notices. "Agent CLIs are missing" is read as no AI program from the catalogue being installed at all. A probe that hangs past 6 s reads as unknown and shows no notice (gh's sign-in check can be slow offline), except glab, whose failed or hung version check counts as not installed; GitLab's notice follows the GitHub rule (only once a project with a GitLab remote exists). Every notice's dismissal is recorded under the GitHub project set, so Git's and the AI-program notice also come back when that set changes. Without Git the app now starts (Git::detect no longer stops the launch) and each Git action fails with its own error.
+
+- [accounts] T-136-b · Token tracking for a provider is off until turned on; a profile with saved results but no recorded choice counts as on and is rescanned on opening. "Served from cache" is cache reads over all input (fresh + cache reads + cache writes). Codex's cached input is taken as part of its input count, so fresh input is input minus cached; Codex cache writes stay inside fresh input (OpenAI bills them as input). A Claude reply counts once by message id, the last piece written winning; a Codex token event counts its own last-turn figures and only when the running total moved. The days are local days (system time zone). A missing log folder is a failed scan: saved figures stay with a plain warning, and with no saved figures the empty state shows. The provider picker leaves Grok out until its credits panel (T-137-b).
+
+- [accounts] T-137-a · Prices come from the public pages read 2026-10-12 (platform.claude.com pricing; developers.openai.com pricing, Standard tier) and live in `src/usage/pricing.ts` as dated entries; a later price change adds an entry with its first day. Kolux scope counts a log record when its working folder is a registered project's folder, that project's own workspaces folder or the global workspaces folder (no git call per open). A model is matched after dropping a provider prefix, a context tag such as [1m], a release date and an effort ending (low / medium / high / xhigh / max / minimal / none); "-codex" and "-max" variants then fall back to their base model (gpt-5.1-codex-max to gpt-5.1) and are labelled inferred, and an unknown release takes the nearest known release of its family at or below it, so a newer point release gets the family's current price and an older one never a newer price. A bare alias (opus, sonnet[1m]) takes its tier's newest price, inferred. The current Anthropic page lists no long-context surcharge for any model but Haiku 5.5 (prompts over 100k), so none is charged; OpenAI's long-context prices apply to prompts over 272k, a new fourth prompt-size band in the scan. A model whose page shows no cached price (the pro models) pays the full input price for cached input. Codex cache writes stay inside fresh input at the input price; OpenAI's newest models list a cache-write price 1.25x input, so their estimates can run slightly low. Charts of more than a year draw one bar per week.
+
 ## Last 10 passes  (date · task · result · evidence)
 - 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png
 - 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
@@ -2443,6 +2544,24 @@ recorded default until told otherwise; nothing here blocks a pass.
 - 2026-10-12 · [core] T-039-b · done: statusLine slot taken with a chaining bash command, /claude-status route → kv claudeRateLimits + claudeUsageLimitResetsAt, pill 'Claude N% left', header gauge, limit stop carries the reset; evidence/T-039-b-usage.png
 - 2026-10-12 · [core] T-039-a · done: StopFailure → stop cause limit/signin/error kept while blocked, chip + header tooltip say it, 'Agent Stopped' switch, sign-in stop re-checks the account; Kimi/Codex no cause DT-C13; evidence/T-039-a-stopped.png
 - 2026-10-12 · [core] T-014-b-fix · done: prompt without --agent falls back to the default or first installed agent, `warnings` list + stderr for inert flags, `issue:` selector; `identity:`/`active` refused by DT-C12; cargo test 116
+- 2026-10-12 · [accounts] T-140 · not built, left unticked · WAITS ON T-072: reading the agents' logs is now allowed (Needs Txais, token analytics, RESOLVED 2026-10-12) and the token and cost figures it needs exist since T-136-b / T-137-a, but AUTO-014 saves a run's output when the run ends, and runs still only reach "dispatched" until T-072 (AUTO-012, truthful end status) is built, which is open on main too. Build after T-072.
+- 2026-10-12 · [accounts] T-137-a · done (T-137 split: -b is USAGE-018's Grok credits panel, waiting on a Grok usage source): `src/usage/pricing.ts` (dated price table for Claude and OpenAI models, family / alias / variant matching, 5-minute and 1-hour cache writes, long-context bands), `tokens.ts` (range, Kolux scope, day bars, by model, recent sessions), the Claude / Codex panels in `TokenAnalytics.tsx`, a 272k prompt band in `token_usage.rs`; 8 pricing + 6 panel tests; live with invented stand-in logs: 30 then 7 days, Kolux scope then every local use, Codex outside-only shows no data, unknown model n/a and partial, inferred Codex price, overview cost; build / clippy / 199 Rust + 357 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-137-a.txt, T-137-a-1..7 png
+- 2026-10-12 · [accounts] T-136-b · done (T-136 split again: -c is USAGE-011's activity counts, waiting on T-025): new `src-tauri/src/token_usage.rs` (Claude / Codex log scan into local-day buckets, saved results, single-flight `Flights`, `token_usage` / `token_usage_scan` / `token_tracking_set`, 6 tests) and `src/usage/tokens.ts`, `pricing.ts` (empty until T-137-a), `TokenAnalytics.tsx`, `tokens.test.ts` (7 tests); Settings › Usage draws it; live with invented stand-in logs: off state, Enable Claude, Codex panel off then on, combined overview, broken folder keeps the figures, restart shows saved figures, both off shows the two enable buttons; build / clippy / 199 Rust + 343 front-end tests / cargo-deny / tsc / licence check / plan-check green; no orphan process · evidence/T-136-b.txt, T-136-b-1..7 png
+- 2026-10-12 · [accounts] T-211 · done: new `src-tauri/src/tools.rs` (time-limited probes of git, gh, gh auth status and glab, cached until Check again; GitHub/GitLab-hosted projects read fresh; dismissals in kv), `src/launch/toolChecks.ts` and `ToolNotices.tsx` on the main screen; the app starts without Git · evidence/T-211.txt, T-211-1..4 png
+- 2026-10-12 · [accounts] T-210-a · done: new `src/language.ts` (choices, System resolution, locale, apply on load) and `src/language.test.ts`; Language select in Appearance; every date, time and sort call reads `locale()` · evidence/T-210-a.txt, T-210-a-1..2 png
+- 2026-10-12 · [accounts] T-209-a · done: new `src/glossary.ts` (banned words, plain words with hover text, the Connect cards' lines) and `src/plainWords.test.ts` (TypeScript syntax scan of 13 in-scope files plus a hover check); Add Project, sidebar and toast wording changed · evidence/T-209-a.txt, T-209-a-1..2 png
+- 2026-10-12 · [accounts] T-208 · not built, left unticked · WAITS ON MERGE: ONB-006/007/008/010/012 are the leaving, progress, first-profile and grid-tour rules of the wizard T-207 builds, so it follows T-207 (which waits on the kit code from lane/release).
+- 2026-10-12 · [accounts] T-207 · not built, left unticked · WAITS ON MERGE: ONB-004 and ONB-005 are the sample-data and kit screens of the wizard, and ONB-001 hides the wizard behind the kit setup dialog; the kit code (T-204, T-205) is on main from lane/release but not in lane/accounts, and a wizard with two missing screens should not reach new profiles. Build with the kits (lane/release), or here once main reaches this lane.
+- 2026-10-12 · [accounts] T-206 · not built, left unticked · WAITS ON MERGE: SKILL-011..015 rescue, preview, collect and record runs of starter kits, and the kit code they act on (T-204 gallery and setup, T-205 kit runs and the results strip) is on main from lane/release (c03bab6, 55a1abf) but not in lane/accounts; building it here would mean a second copy of the kit system. Build in lane/release, or here once main reaches this lane.
+- 2026-10-12 · [accounts] T-201-a · done: `seatAgents` in `src/launch/ChooserPane.tsx` orders featured, missing and folded agents per seat; App passes every offered agent plus whether detection is still running · evidence/T-201-a.txt, T-201-a-1..3 png
+- 2026-10-12 · [accounts] T-200 · done: new `src/projects/AddProject.tsx` (`nextChoice`, `AddProjectView`, focus kept inside the dialog on every step), opened from the sidebar folder button and the composer's Add project item; `scripts/evidence/cdp.mjs` learns the arrow keys · evidence/T-200.txt, T-200-1..3 png
+- 2026-10-12 · [accounts] T-157 · done: `secrets.rs` seals four fields (`httpProxy` and `browserSearchSessionUrl` added for T-240/T-323), a save while the store is down fails with "the system secret store is not answering; nothing was saved", `drop_unreadable` probes the store first so an outage never clears a key, `clear_setting` needs no store, `KOLUX_RS_SECRET_STORE_DOWN` stands in for an outage in development builds only · evidence/T-157.txt, T-157-1..2 png
+- 2026-10-12 · [accounts] T-156 · not built, left unticked · HAND TO FABLE: SAFE-016/017/018/020 sit on the protected-action hook that T-058/T-059 build (the PreToolUse hook program, the listener, the rule engine and the Safety page section do not exist yet, and hooks are a Fable theme); SAFE-025 / STAT-056 need the shared setup, archive and issue scripts to run first (T-107-b, T-107-c). Build after T-058, T-059 and T-107-b.
+- 2026-10-12 · [accounts] T-154-a · done: `secrets.rs` `drop_unreadable` (run at start before the window), `dropped`/`dismiss_dropped` + `secrets_dropped`/`secrets_dropped_dismiss`, `mask` applied to every log line, a masked log line when the Claude key connects; new `src/settings/KeyLostNotice.tsx` in the main window; T-154 split into -a/-b · evidence/T-154-a.txt, T-154-a-1..3 png
+- 2026-10-12 · [accounts] T-153-a · done: new `src/chrome/Ask.tsx` (one confirmation dialog, `askKey`), replaces `src/terminal/CloseAsk.tsx` and the automation delete strip; `scm.rs` `discard` + `scm_discard` (staged back to HEAD, changes back to the index, untracked via git clean), Source Control discard buttons and `discardAsk` wording; T-153 split into -a/-b/-c · evidence/T-153-a.txt, T-153-a-1..6 png
+- 2026-10-12 · [accounts] T-146-a · done: new `src/chrome/RightSidebar.tsx` (frame, tab strip, drag edge, `readRight`, `clampWidth`), `App.tsx` keeps open/tab/width in settings (rightSidebarOpen/Tab/Width) and routes Ctrl+L, Ctrl+Shift+E/G and the top-bar button through it; fixed the Explorer and sidebar not hiding (their display:flex beat the hidden attribute); T-146 split into -a/-b/-c · evidence/T-146-a.txt, T-146-a-1-explorer-tab.png, T-146-a-2-scm-640.png, T-146-a-3-after-restart-explorer.png
+- 2026-10-12 · [accounts] T-138-b · done: `codex_accounts.rs` Account gains `label`, `set_label` (trim, 40 chars, blank clears, kept on re-sign-in) and the `codex_account_label` command; `CodexCard.tsx` Name/Rename with an inline field (Enter saves, Esc keeps), "Same email as another account" note, headline names the active account; `AccountRow.tsx` gains `onName`/`below`; 1 Rust test, 3 front-end tests; live with two seeded Codex accounts on one email · evidence/T-138-b.txt, evidence/T-138-b-1-same-email.png, evidence/T-138-b-2-named.png
+- 2026-10-12 · [accounts] T-116-a-fix · done: `src/settings/GitPage.tsx` gains the New branches card (prefix select, custom field saved on blur, sample and refused/only-slashes warning from `branch_prefix_check`, Default compare base); `ProjectsPanel.tsx` gear keeps a link to the page; DESIGN.md amended · evidence/T-116-a-fix.txt, evidence/t116a-fix-gear.png, evidence/t116a-fix-git-page.png
 - 2026-10-12 · [accounts] Git & worktrees gear move · not done: the sidebar gear's Git & worktrees part is T-116-a (b67005e), which is on main and lane/orchestration but not on lane/accounts, and this lane may not merge; move it into src/settings/GitPage.tsx (with the one-line DESIGN.md amendment) after main is merged into this lane, or in the merge itself
 - 2026-10-12 · [accounts] T-096-b · done: `recordKey`, `editChords`, `removeChord` and the `recording` flag in src/keys/record.ts; `keybindings_write` (one command into this platform's section, through a temp file, refuses a broken file and bad ids or values, emits `keybindings-changed`) in src-tauri/src/keybindings.rs; KeymapProvider `save` and reload on change; the window's shortcuts stand aside while recording; recorder on each Shortcuts row; tests in src/keys/record.test.ts, src/settings/shortcutRows.test.ts and two Rust tests · evidence/T-096-b.txt, evidence/T-096-b-1-recording.png .. -5-clash.png
 - 2026-10-12 · [accounts] T-096-a · done: `resolve` records clashes and takes an ignore list (src/keys/keymap.ts); `shortcutRows`, `filterRows`, `MAX_QUERY` in src/settings/shortcutRows.ts; `keywords` on actions; KeymapProvider ignores disabled agents' new-tab commands; Shortcuts page rebuilt; tests in src/settings/shortcutRows.test.ts and src/keys/keymap.test.ts · evidence/T-096-a.txt, evidence/T-096-a-1.png .. -3.png

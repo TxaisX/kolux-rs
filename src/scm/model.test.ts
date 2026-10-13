@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select } from "./model";
+import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select, discardAsk, type Section } from "./model";
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 
@@ -139,4 +139,36 @@ test("GIT-002: the bulk bar counts the selected rows each action covers, in disp
   expect(b.stage).toEqual(["x1", "c1", "u1"]);
   expect(b.unstage).toEqual(["s1"]);
   expect(bulk(s, []).present).toEqual([]);
+});
+
+// VIEW-067: the prompt says what discarding does to each kind of row, in the right number.
+test("discarding one row names what happens to it", () => {
+  const one = (section: Section, status: string, from: string | null = null) => discardAsk(section, [{ path: "a.txt", status, from }], false);
+  expect(one("Untracked", "?")).toMatchObject({ title: "Delete a.txt?", confirm: "Delete", paths: ["a.txt"] });
+  expect(one("Untracked", "?").body).toContain("untracked");
+  expect(one("Staged", "A").body).toContain("staged new file");
+  expect(one("Staged", "A").confirm).toBe("Delete");
+  expect(one("Changes", "D")).toMatchObject({ title: "Restore a.txt?", confirm: "Restore" });
+  expect(one("Changes", "M")).toMatchObject({ title: "Discard changes to a.txt?", confirm: "Discard" });
+  // A staged rename puts the old name back too.
+  expect(one("Staged", "R", "old.txt").paths).toEqual(["old.txt", "a.txt"]);
+});
+
+test("discard all counts each kind in singular or plural and warns about staged new files", () => {
+  const rows = [
+    { path: "n1", status: "A", from: null },
+    { path: "n2", status: "A", from: null },
+    { path: "d", status: "D", from: null },
+    { path: "m", status: "M", from: null },
+  ];
+  const ask = discardAsk("Staged", rows, true);
+  expect(ask.title).toBe("Discard all 4 in Staged?");
+  expect(ask.confirm).toBe("Discard all");
+  expect(ask.body).toContain("2 files are deleted");
+  expect(ask.body).toContain("1 deleted file is restored");
+  expect(ask.body).toContain("1 file loses its changes");
+  expect(ask.body).toContain("Staged new files are deleted");
+  const plain = discardAsk("Changes", [rows[3], { path: "m2", status: "M", from: null }], true);
+  expect(plain.body).toContain("2 files lose their changes");
+  expect(plain.body).not.toContain("Staged new");
 });

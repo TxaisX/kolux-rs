@@ -47,6 +47,31 @@ pub struct Account {
     /// ACCT-012: Codex answered with a sign-in error for this account; Sign in again clears it.
     #[serde(default)]
     pub sign_in_error: bool,
+    /// ACCT-019 (T-138-b): the user's own name for the account, so a personal and a business
+    /// workspace on one email can be told apart. Kolux does not guess the kind: OpenAI does not
+    /// document where a sign-in says it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+pub const LABEL_MAX: usize = 40;
+
+/// Names an account (trimmed, at most LABEL_MAX characters); a blank name clears it.
+pub fn set_label(store: &Store, id: &str, label: &str) -> Result<(), String> {
+    let mut list = load(store);
+    let Some(a) = list.iter_mut().find(|a| a.id == id) else {
+        return Err("That Codex account is no longer listed.".into());
+    };
+    let name: String = label.trim().chars().take(LABEL_MAX).collect();
+    a.label = Some(name.trim_end().to_string()).filter(|n| !n.is_empty());
+    store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn codex_account_label(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: String, label: String) -> Result<(), String> {
+    set_label(&*store.lock().map_err(|e| e.to_string())?, &id, &label)?;
+    let _ = app.emit(EVENT, ());
+    Ok(())
 }
 
 pub fn load(store: &Store) -> Vec<Account> {
@@ -210,11 +235,11 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
     if let Err(e) = secrets::write_file(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")), &text) {
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
-    let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now, sign_in_error: false };
+    let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now, sign_in_error: false, label: None };
     let store = store.lock().map_err(|e| e.to_string())?;
     let mut list = load(&store);
     match list.iter_mut().find(|a| a.id == id) {
-        Some(a) => *a = account.clone(),
+        Some(a) => *a = Account { label: a.label.take(), ..account.clone() },
         None => {
             list.push(account.clone());
             store.set(ACTIVE_KEY, id).map_err(|e| e.to_string())?;
@@ -568,6 +593,32 @@ mod tests {
     }
 
     #[test]
+    fn two_sign_ins_on_one_email_can_be_named_apart_and_keep_their_names() {
+        let profile = temp("label");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", 2, ok("kim@example.com")).unwrap();
+        {
+            let s = store.lock().unwrap();
+            set_label(&s, "c1", "  Personal  ").unwrap();
+            set_label(&s, "c2", &"W".repeat(80)).unwrap();
+            let list = load(&s);
+            assert_eq!(list[0].label.as_deref(), Some("Personal"), "trimmed");
+            assert_eq!(list[1].label.as_ref().map(|l| l.chars().count()), Some(LABEL_MAX), "capped");
+            assert!(set_label(&s, "gone", "x").is_err());
+        }
+        sign_in(&store, &profile, "c1", 3, ok("kim.new@example.com")).unwrap();
+        let s = store.lock().unwrap();
+        assert_eq!(load(&s)[0].label.as_deref(), Some("Personal"), "signing in again keeps the name");
+        set_label(&s, "c1", "   ").unwrap();
+        assert_eq!(load(&s)[0].label, None, "a blank name clears it");
+    }
+
+    #[test]
     fn a_missing_sign_in_file_warns_only_after_the_grace_period() {
         let mut seen = std::collections::HashMap::new();
         let t0 = std::time::Instant::now();
@@ -608,7 +659,7 @@ mod tests {
         let s = store.lock().unwrap();
         // An entry that points at the user's own folder is unlisted, never deleted.
         let mut list = load(&s);
-        list.push(Account { id: "mine".into(), email: None, home: own.parent().unwrap().to_string_lossy().into_owned(), last_sign_in: 1, sign_in_error: false });
+        list.push(Account { id: "mine".into(), email: None, home: own.parent().unwrap().to_string_lossy().into_owned(), last_sign_in: 1, sign_in_error: false, label: None });
         s.set(LIST_KEY, &serde_json::to_string(&list).unwrap()).unwrap();
         assert_eq!(active_account(&s).map(|a| a.id), Some("c2".into()));
         remove(&s, &profile, "c2").unwrap();

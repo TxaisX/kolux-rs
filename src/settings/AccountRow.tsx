@@ -2,8 +2,9 @@
 // panes use; managed rows offer re-authenticate and a Remove that asks first, inline, because the
 // webview has no confirm dialog. The System default row stands for the CLI's own login.
 import type { ReactNode } from "react";
+import { locale } from "../language";
 
-export const signedInAt = (ms: number) => new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+export const signedInAt = (ms: number) => new Date(ms).toLocaleString(locale(), { dateStyle: "medium", timeStyle: "short" });
 
 type Props = {
   title: string;
@@ -13,10 +14,12 @@ type Props = {
   onPick: () => void;
   trouble?: string | null;
   /** Managed rows only. */
-  manage?: { againLabel: string | null; onAgain: () => void; confirming: boolean; activeGoes: boolean; onAsk: () => void; onRemove: () => void; onKeep: () => void };
+  manage?: { againLabel: string | null; onAgain: () => void; confirming: boolean; activeGoes: boolean; onAsk: () => void; onRemove: () => void; onKeep: () => void; nameLabel?: string; onName?: () => void };
+  /** Shown under the row, e.g. a name field. */
+  below?: ReactNode;
 };
 
-export function AccountRow({ title, detail, active, busy, onPick, trouble, manage }: Props) {
+export function AccountRow({ title, detail, active, busy, onPick, trouble, manage, below }: Props) {
   const pick = () => {
     if (!active && !busy) onPick();
   };
@@ -54,6 +57,11 @@ export function AccountRow({ title, detail, active, busy, onPick, trouble, manag
                 {manage.againLabel}
               </button>
             )}
+            {manage.onName && (
+              <button className="btn" disabled={busy} onClick={stop(manage.onName)}>
+                {manage.nameLabel}
+              </button>
+            )}
             <button className="btn" disabled={busy} onClick={stop(manage.onAsk)}>
               Remove
             </button>
@@ -73,6 +81,7 @@ export function AccountRow({ title, detail, active, busy, onPick, trouble, manag
           </div>
         </div>
       )}
+      {below}
     </div>
   );
 }

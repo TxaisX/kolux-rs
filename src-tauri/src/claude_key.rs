@@ -473,6 +473,10 @@ pub fn claude_key_connect(app: AppHandle, setup: tauri::State<'_, KeySetup>) -> 
             if let Err(e) = kept {
                 attention = Some(format!("The key could not be stored: {e}").into());
             }
+            // ACCT-011: the log notes the connection; the key in it is masked.
+            if let Ok(dir) = app.path().app_data_dir() {
+                crate::secrets::log(&dir, &format!("claude-key: connected with {}", crate::secrets::mask(token)));
+            }
         }
         setup.set_attention(attention);
         setup.in_browser.store(false, Ordering::SeqCst);

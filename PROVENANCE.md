@@ -451,3 +451,34 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-11 · T-099 · the SESS-002/003/006/008/010 spec cards; the windows-sys crate source in the cargo registry (RegGetValueW, RRF_RT_ANY) and this PC's own per-user registry (the Lxss key's DefaultDistribution value, read for its presence only); Git for Windows' default install folder (Program Files/Git/bin/bash.exe) and the shells' own command-line flags (powershell -NoLogo, bash --login -i)
 > 2026-10-11 · T-092-b · Grok Build 1.0.50's own help text (`grok login --help`, `grok inspect --help`) and the authentication guide it ships (docs/user-guide/02-authentication.md, written into a throwaway GROK_HOME), plus what `grok login --device-auth` printed in that throwaway home before it was stopped; the binary was the portable download from WinGet's xAI.GrokBuild manifest, run from G:Temp and never installed
 > 2026-10-11 · T-092-a · WinGet's public return-code list (github.com/microsoft/winget-cli, doc/windows/package-manager/winget/returnCodes.md); `winget show` for OpenAI.Codex, Anthropic.ClaudeCode and xAI.GrokBuild (package ids, x.ai/cli homepage) and WinGet 1.29's own printed progress, seen in a download-only run; windows-sys 0.61 RegGetValueW in the cargo registry
+
+> 2026-10-12 · T-116-a-fix · moved this repo's own T-116-a code (SET-031 card) to the Settings page; no old Kolux source read
+
+> 2026-10-12 · T-138-b · rules from the ACCT-019 card; no OpenAI token-claim source used (none is public), so the label is the user's own; no old Kolux source read.
+>
+> 2026-10-12 · note: while finding the ACCT-019 card I ran a recursive filename grep from the lane root (`grep -rln ACCT-019 --include=*.md .`), which also scanned the lane's own copy of `provenance/dirty-room/firewall/` and printed one matching file name (07-accounts-keys.md). Only the path was shown, no content was opened or displayed; later searches exclude `provenance/`.
+
+> 2026-10-12 · T-146-a · rules from the VIEW-056 and VIEW-057 cards and DT-R17; Pointer Events setPointerCapture from MDN; no old Kolux source read
+
+> 2026-10-12 · T-153-a · rules from the VIEW-067 and VIEW-116 cards; git restore and git clean behaviour from the public git documentation; no old Kolux source read
+
+> 2026-10-12 · T-154-a · rules from the ACCT-010 and ACCT-011 cards; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-157 · rules from the SAFE-026 and ACCT-009 cards; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-200 · rules from the PROJ-002 card; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-201-a · rules from the SESS-017 card; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-209-a · rules from the ONB-036 card; TypeScript's compiler API (already a dev dependency) parses the scanned files; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-210-a · rules from the SET-017 card; the browser's Intl APIs (Collator, RelativeTimeFormat, DateTimeFormat) and navigator.languages from public MDN docs; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-211 · rules from the APP-023 card; Rust std::process and the gh manual's `gh auth status` (public cli.github.com docs); no outside source and no old Kolux source read
+
+> 2026-10-12 · T-136-b · rules from the USAGE-012 / USAGE-013 cards (and USAGE-016 / 017 for counting once). Log shapes under Txais's option (a) (STATE.md Needs Txais, RESOLVED 2026-10-12): a throwaway script outside the repo printed only field names and value types, never a value, from 4 of his Claude Code transcripts ($CLAUDE_CONFIG_DIR/projects/*/*.jsonl; 51,031 records, none unparsable) and 3 Codex session files (~/.codex/sessions/**/*.jsonl; 123 records); the script and its output were deleted. Observed 2026-10-12:
+>   Claude Code, one JSON record per line: type, timestamp (ISO text), sessionId, cwd, isSidechain (bool), uuid, parentUuid, requestId, apiBlockIndex (int), gitBranch, version, entrypoint, agentId; message.id, message.model, message.role, message.type; message.usage.input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens (int); message.usage.cache_creation.ephemeral_5m_input_tokens and ephemeral_1h_input_tokens (int); message.usage.output_tokens_details.thinking_tokens (int or null); message.usage.iterations[] (the same counters), service_tier, inference_geo, server_tool_use. apiBlockIndex means one reply can span several records, so replies are counted once by message.id.
+>   Codex, one JSON record per line: timestamp (ISO text), type, payload (object), ordinal (int), metadata; payload.cwd, payload.model, payload.model_provider, payload.session_id, payload.id; payload.info.total_token_usage and payload.info.last_token_usage, each with input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens, total_tokens (int); payload.info.model_context_window; the same counters also as payload.usage, payload.turn_token_usage and payload.thread_token_usage; payload.rate_limits.primary / secondary with used_percent, window_minutes, resets_at.
+>   The parser reads only the fields it needs, ignores the rest, and skips a line, record or file that does not fit; the test fixtures and the live-check logs are invented records with these field names. That cached input is part of Codex's input count and reasoning part of output follows OpenAI's public usage-object docs. No outside source and no old Kolux source read.
+
+> 2026-10-12 · T-137-a · rules from the USAGE-014 / USAGE-015 cards. Prices from two public pages read 2026-10-12: Anthropic's https://platform.claude.com/docs/en/about-claude/pricing (model table, cache multipliers, long-context section) and OpenAI's https://developers.openai.com/api/docs/pricing (Standard tier text-token table, short and long context, "Long context: >272K input tokens"). Model ids follow the public naming on those pages. No log value read (the stand-in logs are invented), no old Kolux source read.
