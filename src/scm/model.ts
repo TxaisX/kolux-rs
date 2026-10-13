@@ -208,6 +208,17 @@ export type Lines = { added: number; removed: number };
 /** VIEW-068: the branch against `against` (the pinned base, the upstream or the default branch). */
 export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines };
 
+/** GIT-066: the settings key of the order the Source Control groups are listed in. */
+export const SCM_GROUP_ORDER_KEY = "scmGroupOrder";
+export type ScmGroup = "conflicts" | "staged" | "changes" | "untracked";
+/** GIT-066: the orders on offer, `[id, label, groups]`; conflicts lead in each, since they block a commit. */
+export const SCM_GROUP_ORDERS: [string, string, ScmGroup[]][] = [
+  ["staged-first", "Staged first", ["conflicts", "staged", "changes", "untracked"]],
+  ["changes-first", "Changes first", ["conflicts", "changes", "untracked", "staged"]],
+];
+/** GIT-066: the groups in the saved order; anything else reads as the first one. */
+export const scmGroups = (order: unknown): ScmGroup[] => (SCM_GROUP_ORDERS.find((o) => o[0] === order) ?? SCM_GROUP_ORDERS[0])[2];
+
 /** The settings key of the off-by-default choice to measure against the branch's upstream. */
 export const SUMMARY_UPSTREAM_KEY = "scmSummaryUpstream";
 

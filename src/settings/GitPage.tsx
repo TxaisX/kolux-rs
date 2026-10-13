@@ -1,11 +1,11 @@
 // Settings > Git & worktrees. SET-031 / GIT-066: how new branches begin (the git user name,
 // then the gh login; custom text; or none), the default compare base, and whether a new
-// workspace refreshes its base first. PROJ-070: whether deleting one clean workspace asks first.
+// workspace refreshes its base first, and the order of the Source Control groups. PROJ-070: whether deleting one clean workspace asks first.
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CONFIRM_DELETE_FIELD, asksBeforeDelete } from "../projects/deleting";
 import { prefixSample, type PrefixCheck } from "../projects/model";
-import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
+import { SCM_GROUP_ORDERS, SCM_GROUP_ORDER_KEY, scmGroups, SUMMARY_UPSTREAM_KEY } from "../scm/model";
 import { useSettings } from "./useSettings";
 
 const REFRESH_FIELD = "refreshBaseFirst";
@@ -77,6 +77,22 @@ export default function GitPage() {
               Refresh the base first
             </label>
             <p className="conn-detail">A new workspace brings its local base branch up to the remote first. It only fast-forwards: a base with commits of its own, or with uncommitted changes in its worktree, is left as it is. With this off, Kolux says when the base is behind.</p>
+          </section>
+          <section className="conn-card" data-section="scm-groups">
+            <h2 className="conn-name">Source Control</h2>
+            <div className="look-select">
+              <span>Group order</span>
+              <select aria-label="source control group order" className="field" value={(SCM_GROUP_ORDERS.find((o) => o[0] === settings[SCM_GROUP_ORDER_KEY]) ?? SCM_GROUP_ORDERS[0])[0]} onChange={(e) => void save({ [SCM_GROUP_ORDER_KEY]: e.target.value })}>
+                {SCM_GROUP_ORDERS.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="conn-detail" data-group-order>
+              The list reads {scmGroups(settings[SCM_GROUP_ORDER_KEY]).map((g) => g[0].toUpperCase() + g.slice(1)).join(", then ")}. Conflicts always come first, since they hold up a commit.
+            </p>
           </section>
           <section className="conn-card" data-section="deleting">
             <h2 className="conn-name">Deleting workspaces</h2>

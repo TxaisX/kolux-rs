@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -30,6 +30,8 @@ type Props = {
   pinnedBase: string | null;
   /** VIEW-068: the off-by-default setting to measure the summary against the upstream instead. */
   againstUpstream: boolean;
+  /** GIT-066: the saved group order (`SCM_GROUP_ORDER_KEY`). */
+  groupOrder?: unknown;
   onAgainstUpstream: (on: boolean) => void;
   /** EDIT-040: the agents found on this machine, the default first, for Hand to agent. */
   agents: AgentInfo[];
@@ -68,7 +70,7 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
+export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
@@ -642,10 +644,10 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
             )}
             <div className="sb-list">
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}
-              {status && section("Conflicts", status.conflicts, true)}
-              {status && section("Staged", status.staged, false)}
-              {status && section("Changes", status.changed, true)}
-              {status && section("Untracked", status.untracked, true)}
+              {status &&
+                scmGroups(groupOrder).map((g) =>
+                  g === "conflicts" ? section("Conflicts", status.conflicts, true) : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true),
+                )}
             </div>
             <details className="scm-history" open={histOpen} onToggle={(e) => setHistOpen((e.target as HTMLDetailsElement).open)}>
               <summary>

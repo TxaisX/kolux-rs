@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { graph, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { graph, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -29,6 +29,13 @@ test("GIT-036: Explain changes asks about that commit", () => {
   expect(p).toContain("0123456789abcdef");
   expect(p).toContain("feat: three");
   expect(p).toContain("git show 0123456789abcdef");
+});
+
+test("GIT-066: the Source Control groups come in the chosen order, conflicts always first", () => {
+  expect(scmGroups(undefined)).toEqual(["conflicts", "staged", "changes", "untracked"]);
+  expect(scmGroups("changes-first")).toEqual(["conflicts", "changes", "untracked", "staged"]);
+  expect(scmGroups("nonsense")).toEqual(scmGroups(undefined));
+  for (const [id] of SCM_GROUP_ORDERS) expect([...scmGroups(id)].sort()).toEqual(["changes", "conflicts", "staged", "untracked"]);
 });
 
 test("GIT-027: the pull request refreshes itself, backs off after failures and keeps what it knew", () => {
