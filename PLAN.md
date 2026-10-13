@@ -157,7 +157,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-066 · SESS-030 Agent sessions resume after a quit or a crash
 - [ ] T-067 · TERM-017 Panes keep their identity across layout changes · TERM-065 [compat] Copy terminal selection, never silently · TERM-103 GPU rendering with safe fallback · TERM-105 Terminals survive quitting and reopening Kolux
 - [ ] T-068 · TERM-106 Restore after the background host or computer died
-- [ ] T-069 · VIEW-005 The app reopens on the screen and page you left · VIEW-107 Saving the workspace when Kolux quits
+- [x] T-069-a · VIEW-005 The app reopens on the screen and page you left · VIEW-107 Saving the workspace when Kolux quits (first part: the quit save and the unsaved-editor ask) · built 2026-10-13 [look] (the screen left at quit comes back with its page, switches written once and flushed on close, a corrupt settings file opens Terminals, unsaved editor text asks before quitting; evidence/T-069-*)
+- [ ] T-069-b · the rest of T-069-a's cards: every workspace and tab comes back on relaunch, rebuilt in session order in one pass (with T-065's saved layout); a failed workspace save is retried, then falls back to a durable-only save
 - [ ] T-070 · USAGE-023 Usage figures refresh on a timer and ride out errors
 - [x] T-071 · ORCH-012 [compat] Changing a task's state, with guards that keep tasks and workers in step · ORCH-022 [compat] Stop a worker and keep its worktree
 - [x] T-072-a · AUTO-012 [compat] Every run ends with a truthful status (first part: the same refusal again and again is one counted entry, and a run an earlier start left queued or starting is closed as failed on start)

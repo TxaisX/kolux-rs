@@ -527,6 +527,13 @@ nothing) or deletes it, and a delete leaves "Deleted Review crew. Undo" for eigh
 under `savedShapes`. Carrying a conversation to another agent and starting an agent from failing
 checks or an issue wait on T-187-b.
 
+[look] T-069-a: Kolux reopens on the screen left at quit (Agents, Board, Terminals, Artifacts or
+Inbox; Agents and Board only under New) with the page that was open, Tasks included; picking a
+first screen in General sets the next start's screen. A run of quick switches is written once, and
+a pending one before the window closes; an unreadable settings file opens on Terminals with no
+error. Closing the window with unsaved editor text asks first (Keep working / Quit without
+saving). Workspaces and tabs coming back after a restart is T-069-b.
+
 [orchestration] T-189-a adds the Automations title-bar button and asks an agent to resolve
 merge conflicts (VIEW-011, VIEW-069). Settings > Appearance has a Title bar card whose
 "Automations button" switch is off by default; turned on, a clock button sits left of the Source

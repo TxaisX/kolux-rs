@@ -1,7 +1,7 @@
 // Settings > General: the Classic or New look and the screen that opens first (SET-037).
 import { screens } from "../chrome/TopBar";
 import { useSettings } from "./useSettings";
-import { FIRST_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
+import { FIRST_FIELD, LAST_SCREEN_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
 import { REVIEW_FIELD, reviewOn } from "../editor/notes";
 
 /** A row of buttons that behaves as one radio group. */
@@ -30,7 +30,7 @@ export function GeneralView({ settings, onSave }: { settings: Record<string, unk
       <p className="conn-detail">New shows the redesigned screens with Agents, Board and Terminals in the top bar; Classic keeps the earlier layout.</p>
       <div className="look-select">
         <span>Opens first</span>
-        <Segmented label="Opens first" options={screens} value={classic ? "terminals" : savedFirst(settings)} off={classic ? ["agents", "board"] : []} onPick={(v) => onSave({ [FIRST_FIELD]: v })} />
+        <Segmented label="Opens first" options={screens} value={classic ? "terminals" : savedFirst(settings)} off={classic ? ["agents", "board"] : []} onPick={(v) => onSave({ [FIRST_FIELD]: v, [LAST_SCREEN_FIELD]: v })} />
       </div>
       {classic && <p className="conn-detail">Switch the look to New to open on Agents or Board.</p>}
       <label className="conn-switch">

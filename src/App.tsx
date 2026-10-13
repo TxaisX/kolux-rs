@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { saveChanged } from "./settings/saveChanged";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
@@ -30,7 +31,7 @@ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
-import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen } from "./settings/general";
+import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, readLook, startScreen } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
@@ -979,6 +980,35 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   useEffect(() => {
     if ((settings[OPEN_PAGE_FIELD] ?? null) !== page) saveSetting(OPEN_PAGE_FIELD, page);
   }, [page]);
+  // VIEW-005: the screen in front is written down too, a burst of switches as one write and a
+  // pending one before the window closes. The start screen itself is not written back.
+  const screenWriter = useRef(
+    lastWriter((s: Screen) => {
+      setSettings((x) => ({ ...x, [LAST_SCREEN_FIELD]: s }));
+      saveChanged({}, { [LAST_SCREEN_FIELD]: s }).catch((err) => setNotice(String(err)));
+    }),
+  ).current;
+  const shownScreen = useRef(screen);
+  useEffect(() => {
+    if (shownScreen.current === screen) return;
+    shownScreen.current = screen;
+    screenWriter.set(screen);
+  }, [screen]);
+  // VIEW-107: closing the window writes what is pending first; unsaved editor text stops the quit
+  // and asks, so nothing is lost without the user saying so.
+  const [quitAsk, setQuitAsk] = useState<string[] | null>(null);
+  const unsaved = useRef<string[]>([]);
+  unsaved.current = panes.filter((p) => dirty[p.key]).map((p) => baseName(p.path ?? p.title ?? "Untitled"));
+  const quitting = useRef(false);
+  useEffect(() => {
+    const off = getCurrentWindow().onCloseRequested((e) => {
+      screenWriter.flush();
+      if (quitting.current || unsaved.current.length === 0) return;
+      e.preventDefault();
+      setQuitAsk([...unsaved.current]);
+    });
+    return () => void off.then((f) => f()).catch(() => {});
+  }, []);
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
@@ -1693,6 +1723,20 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onConfirm={() => {
               asking.keys.forEach(dropPane);
               setAsking(null);
+            }}
+          />
+        )}
+        {quitAsk && (
+          <Ask
+            title="Quit with unsaved changes?"
+            body={`${quitAsk.length === 1 ? "1 file has" : `${quitAsk.length} files have`} unsaved changes: ${quitAsk.join(", ")}. Quitting now loses them.`}
+            confirm="Quit without saving"
+            cancel="Keep working"
+            onCancel={() => setQuitAsk(null)}
+            onConfirm={() => {
+              quitting.current = true;
+              setQuitAsk(null);
+              void getCurrentWindow().close();
             }}
           />
         )}

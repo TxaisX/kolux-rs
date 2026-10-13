@@ -23,8 +23,38 @@ export function savedFirst(s: Record<string, unknown>): Screen {
   return v === "agents" || v === "board" ? v : "terminals";
 }
 
-/** The screen the window opens on: under Classic always Terminals. */
-export const startScreen = (s: Record<string, unknown>): Screen => (readLook(s) === "classic" ? "terminals" : savedFirst(s));
+/** VIEW-005: the screen in front at quit. Picking a first screen in General writes it too, so the
+ *  next start honours that choice; after that the screen the user left wins. */
+export const LAST_SCREEN_FIELD = "lastScreen";
+
+/** The screen the window opens on: the one left at quit (Agents and Board only under New), else the
+ *  first-screen choice under New, else Terminals; an unknown saved value counts as none. */
+export function startScreen(s: Record<string, unknown>): Screen {
+  const classic = readLook(s) === "classic";
+  const last = s[LAST_SCREEN_FIELD];
+  if (last === "terminals" || last === "artifacts" || last === "inbox") return last;
+  if (last === "agents" || last === "board") return classic ? "terminals" : last;
+  return classic ? "terminals" : savedFirst(s);
+}
+
+/** VIEW-005: a burst of changes is written once, `ms` after the last; `flush` writes a pending one
+ *  at once (the window closing). */
+export function lastWriter<T>(write: (v: T) => void, ms = 400) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pending: T;
+  const flush = () => {
+    if (timer === null) return;
+    clearTimeout(timer);
+    timer = null;
+    write(pending);
+  };
+  const set = (v: T) => {
+    pending = v;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(flush, ms);
+  };
+  return { set, flush };
+}
 
 
 /** VIEW-011: the page that was open at quit, shown again at start (none when unset or unknown). */
