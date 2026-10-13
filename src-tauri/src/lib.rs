@@ -31,6 +31,7 @@ mod procs;
 mod resources;
 mod projects;
 mod scm;
+mod skills;
 mod pty;
 mod routing;
 mod schedule;
@@ -356,6 +357,7 @@ pub fn run() {
             files::file_pick,
             files::md_list,
             artifacts::artifacts_list,
+            skills::skills_scan,
             artifacts::artifact_add,
             artifacts::artifact_remove,
             artifacts::open_external,

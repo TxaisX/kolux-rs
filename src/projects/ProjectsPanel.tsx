@@ -33,6 +33,7 @@ import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
 import AutomationsRow from "./AutomationsRow";
+import SkillsRow from "./SkillsRow";
 import { chromeShown } from "../chrome/chromeItems";
 import { VOCAB } from "../terminal/status";
 import type { AgentPass } from "../launch/agents";
@@ -98,6 +99,9 @@ type Props = {
   /** SKILL-036: the Artifacts row opens the library and shows as current while it is up. */
   artifactsOn: boolean;
   onArtifacts: () => void;
+  /** SKILL-018: the Skills button opens the Skills page and shows as current while it is up. */
+  skillsOn?: boolean;
+  onSkills?: () => void;
 };
 
 // SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
@@ -119,7 +123,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, skillsOn = false, onSkills = () => {} }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -1034,6 +1038,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             Starter kits
           </button>
           {chromeShown(settings, "automationsButton") && <AutomationsRow open={page === "automations"} onOpen={() => onPage("automations")} onHide={() => onSetting("automationsButton", false)} />}
+          {chromeShown(settings, "skillsButton") && <SkillsRow open={skillsOn} onOpen={onSkills} onHide={() => onSetting("skillsButton", false)} />}
         </nav>
 
         <div className="sb-section">

@@ -44,6 +44,8 @@ import ReviewNotes from "./editor/ReviewNotes";
 import { reviewOn, selections, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
+import SkillsPage from "./skills/SkillsPage";
+import { closeSkills, toggleSkills } from "./skills/nav";
 import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, openAt, type Outcome } from "./onboarding/firstRun";
@@ -955,7 +957,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setPage(null);
     recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
     setActiveDir(dir);
-    if (screen === "artifacts") setScreen("terminals");
+    if (screen === "artifacts" || screen === "skills") setScreen("terminals");
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
     else {
       addShell(dir, branch);
@@ -1623,7 +1625,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           />
         )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
-        {(terminals || screen === "artifacts") && sidebarOpen && (
+        {(terminals || screen === "artifacts" || screen === "skills") && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
             states={rowStates}
@@ -1660,6 +1662,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onAdded={projectAdded}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
+            skillsOn={screen === "skills"}
+            onSkills={() => toggleSkills(screen, setScreen)}
             onIndex={(list, dirs, typed) => {
               setProjects(list);
               setOwner(dirs);
@@ -1774,8 +1778,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               )}
             </>
           )}
+          {screen === "skills" && <SkillsPage workspace={activeDir} onClose={() => closeSkills(setScreen)} />}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
-          {!terminals && !board && !inbox && screen !== "artifacts" && (
+          {!terminals && !board && !inbox && screen !== "artifacts" && screen !== "skills" && (
             <div className="empty">
               <h2>{screens.find((s) => s.id === screen)?.label}</h2>
               <p>Nothing here yet. This screen is built in a later task.</p>
