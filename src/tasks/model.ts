@@ -54,6 +54,20 @@ export function pageButtons(page: number, count: number): (number | null)[] {
   return out;
 }
 
+/** GIT-048: an item's labels after an edit: `remove` dropped, `add` appended once each, with the
+ * colours `known` has for them. Undoing an edit is the same call with the two lists swapped. */
+export function relabel(have: TaskLabel[], add: string[], remove: string[], known: TaskLabel[]): TaskLabel[] {
+  const kept = have.filter((l) => !remove.includes(l.name));
+  const extra = add.filter((n, i) => add.indexOf(n) === i && !kept.some((l) => l.name === n)).map((n) => known.find((k) => k.name === n) ?? { name: n, color: "" });
+  return [...kept, ...extra];
+}
+
+/** GIT-048: a search page with the label edits made since the last hard refresh laid over it, so
+ * GitHub search, whose index lags behind an edit, does not flip them back. */
+export function withEdits(page: TaskPage, edited: Map<string, TaskLabel[]>): TaskPage {
+  return { ...page, items: page.items.map((t) => (edited.has(t.url) ? { ...t, labels: edited.get(t.url) ?? t.labels } : t)) };
+}
+
 export type TaskEvent = { kind: string; actor: string; at: string; detail: string };
 export type TaskDetail = { title: string; body: string; state: string; labels: TaskLabel[]; assignees: string[]; updated: string; events: TaskEvent[] };
 

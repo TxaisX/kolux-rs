@@ -7,7 +7,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
-import { eventLine, type Task, type TaskDetail, type TaskLabel, taskKind } from "./model";
+import { eventLine, relabel, type Task, type TaskDetail, type TaskLabel, taskKind } from "./model";
 
 const FRESH_MS = 15_000;
 
@@ -22,33 +22,57 @@ export default function TaskDialog({ task, host, onClose, onLabels }: { task: Ta
   tell.current = onLabels;
   const args = { host, repo: task.repo, number: task.number };
 
+  // GIT-048: label edits show at once. `edits` counts edits started and `pending` those not yet
+  // answered: a read begun before the latest edit, or landing while one is out, keeps the labels
+  // on screen instead of GitHub's older ones; once every edit is answered GitHub is read again.
+  const shown = useRef<TaskLabel[]>(task.labels);
+  const edits = useRef(0);
+  const pending = useRef(0);
+  const undone = useRef<string | null>(null);
+  const put = (l: TaskLabel[]) => {
+    shown.current = l;
+    setDetail((d) => d && { ...d, labels: l });
+    tell.current(l);
+  };
+  const read = useRef(() => {});
+  read.current = () => {
+    const at = edits.current;
+    invoke<TaskDetail>("scm_task_detail", args)
+      .then((d) => {
+        const stale = pending.current > 0 || at !== edits.current;
+        setDetail({ ...d, labels: stale ? shown.current : d.labels });
+        setError(undone.current);
+        if (!stale) put(d.labels);
+      })
+      .catch((e) => setError(String(e)));
+  };
+  const readNow = () => read.current();
+
   useEffect(() => {
-    const read = () =>
-      invoke<TaskDetail>("scm_task_detail", args)
-        .then((d) => {
-          setDetail(d);
-          setError(null);
-          tell.current(d.labels);
-        })
-        .catch((e) => setError(String(e)));
-    void read();
+    readNow();
     invoke<TaskLabel[]>("scm_repo_labels", { host, repo: task.repo })
       .then(setOffer)
       .catch(() => setOffer([]));
-    const timer = setInterval(read, FRESH_MS);
+    const timer = setInterval(readNow, FRESH_MS);
     box.current?.focus();
     return () => clearInterval(timer);
   }, [task.url]);
 
   const labels = (add: string[], remove: string[]) => {
-    setBusy(true);
+    edits.current++;
+    pending.current++;
+    undone.current = null;
+    const known = [...offer, ...shown.current];
+    put(relabel(shown.current, add, remove, known));
     invoke<TaskLabel[]>("scm_task_labels", { ...args, add, remove })
-      .then((l) => {
-        setDetail((d) => d && { ...d, labels: l });
-        onLabels(l);
+      .catch((e) => {
+        put(relabel(shown.current, remove, add, known));
+        undone.current = `The label change was undone: ${String(e)}`;
+        setError(undone.current);
       })
-      .catch((e) => setError(String(e)))
-      .finally(() => setBusy(false));
+      .finally(() => {
+        if (--pending.current === 0) readNow();
+      });
   };
   const save = () => {
     if (draft === null) return;

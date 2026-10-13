@@ -49,6 +49,10 @@ pub const NO_PROMPT: [(&str, &str); 2] = [("GIT_TERMINAL_PROMPT", "0"), ("GCM_IN
 
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
+    // GIT-070: paths past Windows' old 260-character limit work (Git for Windows' own switch).
+    if cfg!(windows) {
+        cmd.args(["-c", "core.longpaths=true"]);
+    }
     cmd.args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
@@ -62,14 +66,103 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     cmd
 }
 
+/// GIT-070: how many git commands `output` lets run at once, and how long one may take.
+const AT_ONCE: usize = 8;
+const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// GIT-070: the cap on git processes running at once. Foreground work (the panel on screen) that
+/// is queued is let in before any queued background work (badges, sweeps across worktrees).
+pub(crate) struct Gate {
+    at_once: usize,
+    /// (running, foreground callers waiting)
+    state: std::sync::Mutex<(usize, usize)>,
+    freed: std::sync::Condvar,
+}
+
+pub(crate) struct Slot<'a>(&'a Gate);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.state.lock().unwrap_or_else(|e| e.into_inner()).0 -= 1;
+        self.0.freed.notify_all();
+    }
+}
+
+impl Gate {
+    pub(crate) const fn new(at_once: usize) -> Self {
+        Gate { at_once, state: std::sync::Mutex::new((0, 0)), freed: std::sync::Condvar::new() }
+    }
+
+    pub(crate) fn enter(&self, foreground: bool) -> Slot<'_> {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.1 += usize::from(foreground);
+        while s.0 >= self.at_once || (!foreground && s.1 > 0) {
+            s = self.freed.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+        if foreground {
+            s.1 -= 1;
+            self.freed.notify_all();
+        }
+        s.0 += 1;
+        Slot(self)
+    }
+}
+
+static GATE: Gate = Gate::new(AT_ONCE);
+
+thread_local! {
+    static FOREGROUND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// GIT-070: runs `read` with its git commands counted as foreground work.
+pub(crate) fn foreground<T>(read: impl FnOnce() -> T) -> T {
+    let was = FOREGROUND.replace(true);
+    let out = read();
+    FOREGROUND.set(was);
+    out
+}
+
 /// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
+/// GIT-070: waits its turn at the gate, and a git that has not finished within `LIMIT` is stopped.
 pub(crate) fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
-    let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
-    if out.status.success() {
-        Ok(out.stdout)
+    output_for(args, cwd, LIMIT)
+}
+
+// ponytail: stopping git leaves anything it started (a hook, an alias's shell) running until it
+// ends; its output is dropped. A Job Object would take the whole tree down.
+fn output_for(args: &[&str], cwd: Option<&Path>, limit: std::time::Duration) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let _slot = GATE.enter(FOREGROUND.get());
+    let mut child = command(args, cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
+    // Each pipe drains on its own thread so a chatty git never blocks on a full one.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut bytes);
+            }
+            let _ = tx.send(bytes);
+        });
+        rx
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let stopped = || format!("git {} did not finish within {} seconds and was stopped", args.iter().find(|a| !a.starts_with('-')).unwrap_or(&""), limit.as_secs());
+    let Ok(out) = stdout.recv_timeout(limit) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(stopped());
+    };
+    let err = stderr.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).unwrap_or_default();
+    let status = child.wait().map_err(|e| format!("git did not finish: {e}"))?;
+    if status.success() {
+        Ok(out)
     } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() { format!("git {} failed ({})", args.join(" "), out.status) } else { err })
+        let err = String::from_utf8_lossy(&err).trim().to_string();
+        Err(if err.is_empty() { format!("git {} failed ({status})", args.join(" ")) } else { err })
     }
 }
 
@@ -468,6 +561,37 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn git070_queued_foreground_work_goes_before_queued_background_work() {
+        static G: Gate = Gate::new(1);
+        let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let held = G.enter(false);
+        let wait = |fg: bool, name: &'static str| {
+            let order = order.clone();
+            std::thread::spawn(move || {
+                let _s = G.enter(fg);
+                order.lock().unwrap().push(name);
+            })
+        };
+        let bg = wait(false, "background");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let fg = wait(true, "foreground");
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        drop(held);
+        bg.join().unwrap();
+        fg.join().unwrap();
+        assert_eq!(*order.lock().unwrap(), ["foreground", "background"]);
+    }
+
+    #[test]
+    fn git070_a_hung_git_is_stopped_at_its_time_limit_and_the_next_one_runs() {
+        let started = std::time::Instant::now();
+        let err = output_for(&["-c", "alias.hang=!sleep 20", "hang"], None, std::time::Duration::from_secs(1)).unwrap_err();
+        assert!(err.contains("did not finish within 1 seconds"), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+        assert!(run(&["--version"], None).unwrap().starts_with("git version"));
     }
 
     #[test]
