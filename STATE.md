@@ -1614,6 +1614,12 @@ settings are copied into it (project trust Codex wrote there is kept); a missing
 or broken settings file shows a warning and never stops the launch. On quit, sign-ins the agents
 renewed are saved again, Codex first, then Claude, each step limited to two seconds.
 
+[accounts] T-170-b: an automation run (or anyone in a terminal) can now ask Kolux what the
+sessions in its own worktree used: `kolux worktree current --usage` rescans the tracked providers
+and adds input, output, cache and session counts for that worktree, its subfolders included and
+worktrees nested inside it left out. Token scans also remember what each log file held across
+restarts, so the first scan after starting Kolux again reads only the files that changed.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2833,7 +2839,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-171-b · ACCT-014: Kolux RS never remembers an agent's version and agents.rs reads the program path fresh on every search, so "Check again" has nothing to forget: it sends the window event kolux-check-again (the grid re-runs agent and install detection, every card re-reads) and then does the card's Cancel, which wipes the stale note (claude_account_cancel now does so too when idle, like Codex's). The account cards use liveCheck with no timer (focus and Check again only); the Claude key card's re-read can ask Claude Code for its own sign-in, as it already did on opening the page. ACCT-021: the copy is the user's config.toml (CODEX_HOME, else ~/.codex) with Kolux's cli_auth_credentials_store line and the home's own projects and hooks tables put back over it (the home's entry wins); it runs before every managed Codex launch, so later edits are picked up; the file is read again just before the atomic write and the copy redone up to three times if Codex changed it meanwhile. A missing settings file is warned about too, as the card rule asks. ACCT-025: settings need no quit step, since every change is written to disk when it is made; the quit step re-seals each live sign-in file whose sealed copy no longer matches.
 
+- [accounts] T-170-b · USAGE-016: the lookup is a `--usage` switch on `worktree show` and `worktree current` (COMPAT lists `worktree current [--json]`; the default output is unchanged), so a run asks with the command it already has; it rescans only providers whose tracking is on (USAGE-012 opt-in) and a provider not tracked shows {tracked:false}. A worktree nested inside the asked one keeps its own figures. The scan memory is a JSON file per provider in the profile (token-scan-claude.json / token-scan-codex.json, with the results' format mark, ignored when damaged or older), not a kv row, since it holds one entry per reply; it is written only when a log file was read or went. ponytail: the whole memory is rewritten on such a scan; write per-file entries if it grows slow.
+
 ## Last 10 passes  (date · task · result · evidence)
+automation runs look up their worktree's token use with worktree show|current --usage; the scan memory survives restarts
 Check again detects without connecting; account cards refresh on focus; Codex settings copied into each managed home with warnings and trust kept; renewed sign-ins saved on quit with a time limit
 - 2026-10-12 · [accounts] T-339 · done: CloseAsk folded into chrome/Ask (OK-only when confirm is null); duplicate notification switches removed; claudeFigures / publishClaude in launchWarn.ts fed by ClaudePill; TopBar onSettings dropped; titleBarButton and the Title bar card removed, automationsButton drives the title-bar button; reset summary explains each scope; test_dir.rs guard for the account and usage tests; T-138-c split for the Codex list move · evidence/T-339.txt, T-339-1-one-automations-switch.png, T-339-2-switch-off-no-button.png, T-339-3-notification-switches-once.png
 - 2026-10-12 · [accounts] T-137-b, T-139-c · not built: no public xAI source for Grok credit figures or the Grok session file (checked docs.x.ai); left unticked

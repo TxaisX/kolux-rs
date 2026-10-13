@@ -52,7 +52,7 @@ pub struct Saved {
 }
 
 /// One reply's counts before bucketing.
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Turn {
     at: u64,
     session: String,
@@ -220,13 +220,36 @@ pub fn codex_rows(files: &[(String, String)], tz: &jiff::tz::TimeZone) -> Vec<Ro
 }
 
 /// USAGE-016: what each log file held at its last read (size and change time), so a file unchanged
-/// since is not read again and the results of files that did not change are kept.
-/// ponytail: held in memory, so the first scan after a restart reads every file once; save it with
-/// the results if that first scan proves slow.
+/// since is not read again and the results of files that did not change are kept. It is kept in a
+/// file in Kolux's data folder too, so the first scan after a restart reads only what changed.
 #[derive(Default)]
 pub struct Cache(HashMap<PathBuf, Seen>);
 /// A file's size, change time and keyed turns at its last read.
 type Seen = (u64, Option<std::time::SystemTime>, Vec<(String, Turn)>);
+
+/// The scan memory as kept on disk, with the format mark so an older one is read afresh.
+#[derive(Serialize, Deserialize)]
+struct Kept {
+    format: u32,
+    files: Vec<(PathBuf, Seen)>,
+}
+
+fn kept_file(profile: &Path, provider: &str) -> PathBuf {
+    profile.join(format!("token-scan-{provider}.json"))
+}
+
+impl Cache {
+    /// What an earlier run kept; empty when it is missing, damaged or in another format.
+    pub fn load(path: &Path) -> Cache {
+        let kept = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<Kept>(&t).ok());
+        Cache(kept.filter(|k| k.format == FORMAT).map(|k| k.files.into_iter().collect()).unwrap_or_default())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let kept = Kept { format: FORMAT, files: self.0.iter().map(|(p, s)| (p.clone(), s.clone())).collect() };
+        crate::trust::write_whole(path, &serde_json::to_string(&kept).map_err(|e| e.to_string())?)
+    }
+}
 
 fn caches() -> &'static Mutex<HashMap<String, Cache>> {
     static CACHES: std::sync::OnceLock<Mutex<HashMap<String, Cache>>> = std::sync::OnceLock::new();
@@ -383,6 +406,64 @@ pub fn token_tracking_set(store: tauri::State<'_, Mutex<Store>>, provider: Strin
 }
 
 /// Rescans one provider and saves the result; a failed scan keeps the last good rows and says why.
+/// The scan memory starts from the copy kept on disk and is kept again when a file was read or went.
+pub fn rescan(store: &Mutex<Store>, provider: &str) {
+    let (dirs, profile) = match store.lock() {
+        Ok(s) => (roots(&s, provider, Some(&s.dir())), s.dir()),
+        Err(_) => return,
+    };
+    let result = {
+        let mut all = caches().lock().unwrap_or_else(|e| e.into_inner());
+        let cache = all.entry(provider.to_string()).or_insert_with(|| Cache::load(&kept_file(&profile, provider)));
+        let had = cache.0.len();
+        let result = scan(&dirs, provider, cache);
+        if result.as_ref().is_ok_and(|(_, read)| *read > 0) || cache.0.len() != had {
+            let _ = cache.save(&kept_file(&profile, provider));
+        }
+        result.map(|(rows, _)| rows)
+    };
+    let Ok(s) = store.lock() else { return };
+    let before = saved(&s, provider);
+    let next = match result {
+        Ok(rows) => Saved { format: FORMAT, scanned_at: crate::artifacts::now_ms(), rows, error: None },
+        Err(e) => Saved { format: FORMAT, error: Some(e), ..before.unwrap_or_default() },
+    };
+    let _ = s.set(&key_saved(provider), &serde_json::to_string(&next).unwrap_or_default());
+}
+
+/// Whether a provider's usage is tracked (USAGE-012's opt-in).
+fn tracked(store: &Store, provider: &str) -> bool {
+    tracking_of(choices(store).get(provider).and_then(Value::as_bool), saved(store, provider).is_some())
+}
+
+/// USAGE-016: rescans every tracked provider, so a lookup sees the latest turns.
+pub fn rescan_tracked(store: &Mutex<Store>) {
+    for p in PROVIDERS {
+        if store.lock().is_ok_and(|s| tracked(&s, p)) {
+            rescan(store, p);
+        }
+    }
+}
+
+/// USAGE-016: what the sessions that worked in a folder used, per tracked provider, from the saved
+/// results; `mine` says which working folders count. A provider not tracked shows only that.
+pub fn usage_in(store: &Mutex<Store>, mine: impl Fn(&str) -> bool) -> Value {
+    let Ok(s) = store.lock() else { return Value::Null };
+    let mut out = serde_json::Map::new();
+    for p in PROVIDERS {
+        if !tracked(&s, p) {
+            out.insert(p.into(), serde_json::json!({ "tracked": false }));
+            continue;
+        }
+        let got = saved(&s, p).unwrap_or_default();
+        let rows: Vec<&Row> = got.rows.iter().filter(|r| mine(&r.cwd)).collect();
+        let sum = |f: fn(&Row) -> u64| rows.iter().map(|r| f(r)).sum::<u64>();
+        let sessions: std::collections::BTreeSet<&str> = rows.iter().map(|r| r.session.as_str()).collect();
+        out.insert(p.into(), serde_json::json!({ "tracked": true, "sessions": sessions, "input": sum(|r| r.input), "output": sum(|r| r.output), "cacheRead": sum(|r| r.cache_read), "cacheWrite": sum(|r| r.cache_write), "reasoning": sum(|r| r.reasoning), "scannedAt": got.scanned_at, "error": got.error }));
+    }
+    Value::Object(out)
+}
+
 #[tauri::command]
 pub async fn token_usage_scan(app: tauri::AppHandle, provider: String) -> Result<Saved, String> {
     use tauri::Manager;
@@ -391,24 +472,7 @@ pub async fn token_usage_scan(app: tauri::AppHandle, provider: String) -> Result
     }
     tauri::async_runtime::spawn_blocking(move || {
         let store = app.state::<Mutex<Store>>();
-        let profile = app.path().app_data_dir().ok();
-        app.state::<Flights>().run(&provider, || {
-            let dirs = match store.lock() {
-                Ok(s) => roots(&s, &provider, profile.as_deref()),
-                Err(_) => return,
-            };
-            let result = {
-                let mut all = caches().lock().unwrap_or_else(|e| e.into_inner());
-                scan(&dirs, &provider, all.entry(provider.clone()).or_default()).map(|(rows, _)| rows)
-            };
-            let Ok(s) = store.lock() else { return };
-            let before = saved(&s, &provider);
-            let next = match result {
-                Ok(rows) => Saved { format: FORMAT, scanned_at: crate::artifacts::now_ms(), rows, error: None },
-                Err(e) => Saved { format: FORMAT, error: Some(e), ..before.unwrap_or_default() },
-            };
-            let _ = s.set(&key_saved(&provider), &serde_json::to_string(&next).unwrap_or_default());
-        });
+        app.state::<Flights>().run(&provider, || rescan(&store, &provider));
         let s = store.lock().map_err(|e| e.to_string())?;
         Ok(saved(&s, &provider).unwrap_or_default())
     })
@@ -575,6 +639,44 @@ mod tests {
         std::fs::remove_file(&original).unwrap();
         let (rows, read) = scan(std::slice::from_ref(&projects), "claude", &mut cache).unwrap();
         assert_eq!((total(&rows), by(&rows, "s-2"), read), (77, 77, 0), "the remaining copy now carries them, nothing re-read");
+    }
+
+    #[test]
+    fn usage_016_the_scan_memory_is_kept_across_a_restart() {
+        let t = temp("restart");
+        let root = t.0.join("projects");
+        write(&root.join("p").join("one.jsonl"), &[reply("m1", "2026-03-01T09:00:00Z", json!({ "input_tokens": 10, "output_tokens": 1 }))]);
+        write(&root.join("p").join("two.jsonl"), &[reply("m2", "2026-03-01T09:00:00Z", json!({ "input_tokens": 5, "output_tokens": 0 }))]);
+        let kept = t.0.join("profile").join("token-scan-claude.json");
+        let mut cache = Cache::default();
+        assert_eq!(scan(std::slice::from_ref(&root), "claude", &mut cache).unwrap().1, 2);
+        cache.save(&kept).unwrap();
+        // a new run starts from what the last one kept: nothing is read again, the figures are the same
+        let mut after = Cache::load(&kept);
+        let (rows, read) = scan(std::slice::from_ref(&root), "claude", &mut after).unwrap();
+        assert_eq!((read, total(&rows)), (0, 16));
+        // a damaged or older memory is ignored and every file is read once more
+        std::fs::write(&kept, "{ not json").unwrap();
+        assert_eq!(scan(std::slice::from_ref(&root), "claude", &mut Cache::load(&kept)).unwrap().1, 2);
+        std::fs::write(&kept, r#"{"format":1,"files":[]}"#).unwrap();
+        assert!(Cache::load(&kept).0.is_empty());
+        assert!(Cache::load(&t.0.join("missing.json")).0.is_empty());
+    }
+
+    #[test]
+    fn usage_016_a_worktree_looks_up_what_its_sessions_used() {
+        let t = temp("lookup");
+        let store = Mutex::new(Store::open(&t.0).unwrap());
+        let row = |session: &str, cwd: &str, input: u64| Row { session: session.into(), cwd: cwd.into(), input, output: 1, cache_read: 2, cache_write: 3, ..Default::default() };
+        let rows = vec![row("s-1", "C:/w/app", 10), row("s-2", "C:/w/app/sub", 20), row("s-1", "C:/w/app/sub", 40), row("s-3", "C:/w/other", 80)];
+        {
+            let s = store.lock().unwrap();
+            s.set(&key_saved("claude"), &serde_json::to_string(&Saved { format: FORMAT, scanned_at: 5, rows, error: None }).unwrap()).unwrap();
+            s.set(KEY_TRACKING, r#"{"claude":true,"codex":false}"#).unwrap();
+        }
+        let got = usage_in(&store, |cwd| cwd.starts_with("C:/w/app"));
+        assert_eq!(got["claude"], json!({ "tracked": true, "sessions": ["s-1", "s-2"], "input": 70, "output": 3, "cacheRead": 6, "cacheWrite": 9, "reasoning": 0, "scannedAt": 5, "error": null }));
+        assert_eq!(got["codex"], json!({ "tracked": false }), "a provider not tracked is never read");
     }
 
     #[test]
