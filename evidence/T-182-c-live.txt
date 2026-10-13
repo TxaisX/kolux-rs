@@ -1,0 +1,15 @@
+T-182-c live proof (APP-002), lane release, 2026-10-13
+
+1. Optional pages are not loaded at startup (CDP resource list after a fresh page load, then after opening Settings):
+after a fresh page load: 257 entries; SettingsPage: not loaded, AutomationsPage: not loaded, RoutingPage: not loaded, ArtifactsPage: not loaded, TopBar: loaded, TerminalPane: loaded
+after opening Settings: 277 entries; SettingsPage: loaded, AutomationsPage: not loaded, RoutingPage: not loaded, ArtifactsPage: not loaded, TopBar: loaded, TerminalPane: loaded
+
+2. Time from starting kolux-rs.exe to its 1416x889 main window being visible (EnumWindows poll, 25 ms):
+normal start 1: pid 49544: window (1416x889) visible after 2031 ms
+normal start 2: pid 54552: window (1416x889) visible after 1439 ms
+vite stopped (page never loads): pid 39172: window (1416x889) visible after 6083 ms
+
+Normal starts show the window from the page's first frame (about 1.4-2.0 s with a dev server transforming modules).
+With the dev server stopped the page never signals ready, and the 5 s fallback timer shows the window (6.1 s from process start; evidence/T-182-c-backstop.png).
+Hook installation now runs off the setup thread, so it never holds back the window.
+Screenshots: T-182-c-normal.png, T-182-c-backstop.png, T-182-c-settings.png. Profile restored (cmp same x4).

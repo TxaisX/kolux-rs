@@ -17,7 +17,7 @@
 // New tab menu opens one, and Mod+S saves the focused editor while the terminals screen is up.
 // Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -27,7 +27,6 @@ import { settleWithin } from "./settings/pending";
 import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
-import SettingsPage from "./settings/SettingsPage";
 import CloseAsk from "./terminal/CloseAsk";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
@@ -43,7 +42,6 @@ import { baseName, draftOf, keyOf, textOf } from "./editor/buffers";
 import { collect, hashText, restore, tidy, type Start } from "./editor/session";
 import PreviewPane from "./editor/PreviewPane";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
-import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS } from "./kits/Kits";
 import { KITS, VENDORS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
@@ -63,8 +61,6 @@ import { chromeShown } from "./chrome/chromeItems";
 import VendorMark, { type Agent } from "./chrome/VendorMark";
 import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
-import AutomationsPage from "./automations/AutomationsPage";
-import RoutingPage from "./settings/RoutingPage";
 import { changes, patchSettings } from "./settings/useSettings";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SUMMARY_UPSTREAM_KEY } from "./scm/model";
@@ -103,6 +99,12 @@ const aiOf = (p: { agent: string; program: string | null }): string | null => (p
 type Pane = { movedFrom?: string; key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string; start?: Start };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
+// APP-002: optional overlays are not loaded at startup; each loads the first time it opens.
+const SettingsPage = lazy(() => import("./settings/SettingsPage"));
+const AutomationsPage = lazy(() => import("./automations/AutomationsPage"));
+const RoutingPage = lazy(() => import("./settings/RoutingPage"));
+const ArtifactsPage = lazy(() => import("./artifacts/ArtifactsPage"));
+
 function tabName(p: Pane, titles: Record<number, string>): string {
   if (p.kind === "browser") return titles[p.key] || "New Tab";
   if (p.kind === "editor") return baseName(p.path ?? "");
@@ -1533,7 +1535,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             }}
           />
         )}
-        {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
+        {settingsOpen && (
+          <Suspense fallback={null}>
+            <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />
+          </Suspense>
+        )}
         {(terminals || screen === "artifacts") && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
@@ -1581,6 +1587,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         <div className="content">
           <SignInNotice />
           {terminals && page === "automations" && (
+            <Suspense fallback={null}>
             <AutomationsPage
               onClose={() => setPage(null)}
               projects={projects}
@@ -1591,8 +1598,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                 patchSettings(changes(settings, next)).catch((err) => setNotice(String(err)));
               }}
             />
+            </Suspense>
           )}
           {terminals && page === "routing" && (
+            <Suspense fallback={null}>
             <RoutingPage
               agents={agents}
               settings={settings}
@@ -1601,6 +1610,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                 patchSettings(changes(settings, next)).catch((err) => setNotice(String(err)));
               }}
             />
+            </Suspense>
           )}
           {terminals && (
             <>
@@ -1669,7 +1679,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           )}
           {screen === "artifacts" && (
             <>
-              <ArtifactsPage onToast={setToast} />
+              <Suspense fallback={null}>
+                <ArtifactsPage onToast={setToast} />
+              </Suspense>
               {toast && (
                 <div className="toast" role="status">
                   {toast}
