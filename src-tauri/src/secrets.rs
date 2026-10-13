@@ -358,21 +358,21 @@ mod dpapi {
 }
 
 /// Whether a secret settings field is set (never its value).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_status(store: tauri::State<'_, Mutex<Store>>, key: String) -> Result<bool, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     Ok(read_setting(&store, &key).ok().flatten().is_some())
 }
 
 /// Stores a secret settings field, sealed.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_set(store: tauri::State<'_, Mutex<Store>>, key: String, value: String) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     write_setting(&store, &key, value.trim())
 }
 
 /// Removes a secret settings field.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn secret_clear(store: tauri::State<'_, Mutex<Store>>, key: String) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     if !SECRET_SETTINGS.contains(&key.as_str()) {

@@ -254,7 +254,7 @@ pub struct CodexView {
     pub missing: Vec<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>) -> Result<CodexView, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let env = std::env::var(HOME_ENV).ok();
@@ -436,7 +436,7 @@ pub fn activate(store: &Store, id: Option<&str>) -> Result<(), String> {
     store.set(ACTIVE_KEY, id.unwrap_or("")).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn codex_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: Option<String>) -> Result<(), String> {
     activate(&*store.lock().map_err(|e| e.to_string())?, id.as_deref())?;
     let _ = app.emit(EVENT, ());
@@ -463,7 +463,7 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn codex_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
     if sign_ins.running.lock().map_err(|e| e.to_string())?.is_some() {
         return Err("Finish or cancel the sign-in first.".into());

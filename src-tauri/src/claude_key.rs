@@ -419,7 +419,7 @@ fn status(store: &Store, setup: &KeySetup) -> KeyStatus {
     s
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn claude_key_status(store: tauri::State<'_, Mutex<Store>>, setup: tauri::State<'_, KeySetup>) -> Result<KeyStatus, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     Ok(status(&store, &setup))
@@ -497,7 +497,7 @@ pub fn claude_key_cancel(app: AppHandle, setup: tauri::State<'_, KeySetup>) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn claude_key_disconnect(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, setup: tauri::State<'_, KeySetup>) -> Result<(), String> {
     forget(&*store.lock().map_err(|e| e.to_string())?)?;
     setup.set_attention(None);

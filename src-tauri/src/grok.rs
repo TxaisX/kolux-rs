@@ -111,7 +111,7 @@ fn cli_signed_in() -> bool {
     cli_home().is_some_and(|h| h.join("auth.json").is_file())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn grok_status(store: tauri::State<'_, Mutex<Store>>, s: tauri::State<'_, GrokSignIn>) -> Result<GrokView, String> {
     // A value the old app sealed cannot be opened here and counts as missing (COMPAT 5.4).
     let key_saved = secrets::read_setting(&*store.lock().map_err(|e| e.to_string())?, KEY_FIELD).ok().flatten().is_some();
@@ -215,7 +215,7 @@ pub fn grok_cancel(app: AppHandle, s: tauri::State<'_, GrokSignIn>) {
 }
 
 /// The key route: stores the xAI key sealed, once. The key is never sent back to the page.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn grok_key_set(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, key: String) -> Result<(), String> {
     let key = key.trim();
     if key.is_empty() {

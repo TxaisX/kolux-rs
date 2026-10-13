@@ -1,0 +1,29 @@
+T-075-a (APP-048 store rules, APP-050 final save) live proof, 2026-10-12, lane release, dev build on port 1422, CDP 9232.
+The lane profile was backed up first and restored afterwards (settings.json, state.db, state.db-wal,
+state.db-shm: cmp same; the one log line the damaged-file step added to logs/kolux.log was removed).
+
+A. Damaged settings file. Before launch settings.json was written as
+     { "uiLook": "new", "defaultAgent": oops, "quietMinutes": 7, "disabledAgents": [
+   (a bad value and a file cut short). After start:
+     settings.json      {"uiLook": "new", "quietMinutes": 7}     (the good entries, written back)
+     settings.json.bad  the damaged copy, byte for byte
+     logs/kolux.log     "settings: settings.json was damaged; the readable entries were kept, the damaged copy is settings.json.bad"
+     get_settings       {"uiLook":"new","quietMinutes":7}
+B. Change a setting, kill the process 2 s later (APP-048 acceptance 1): the window's save_settings call set
+   quietMinutes 12 at 17:11:44.688; taskkill /F of kolux-rs.exe at 17:11:47.436. On disk: quietMinutes 12.
+C. Relaunch: get_settings {"uiLook":"new","quietMinutes":12} (T-075-a-relaunched.png).
+D. Change then quit at once (APP-050 acceptance 1): save_settings quietMinutes 13 and the title bar's Close
+   in the same script. The process was gone 708 ms later; state.db-wal went from 16512 bytes to 0 (the
+   final save folded the journal in); settings.json held quietMinutes 13; no deadline message.
+E. Stalled profile drive (APP-050 acceptance 2), simulated by a second process holding an exclusive lock
+   on state.db for 20 s (the final save would otherwise wait on it): Close pressed, the process was gone
+   3757 ms later while the lock was still held, and the dev log has
+     "quit: the final save did not finish within 3s; quitting without it"
+
+Not proven here: APP-048 acceptance 2 (upgrade from the previous release: layout and sessions identical).
+The layout and running sessions are not saved yet; that is T-075-b with APP-052 (terminals coming back),
+and carrying a 0.15.0 profile over is the importer's job (DT-R46).
+Unit tests (state.rs): unchanged values not written again and real changes are; a busy database is waited
+on; a damaged settings file keeps good entries, an unreadable one counts as an existing install (Classic
+look), a missing one is a fresh profile; the final save waits for a save in flight, clears a leftover temp
+file and refuses later writes; a stuck final save does not hold quitting past the deadline.

@@ -56,7 +56,7 @@ struct AppInfo {
     start_count: u64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn app_info(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>) -> Result<AppInfo, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let start_count = store.get("start_count").map_err(|e| e.to_string())?.and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -64,13 +64,13 @@ fn app_info(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>) -> Res
     Ok(AppInfo { version: app.package_info().version.to_string(), profile_dir: profile_dir.display().to_string(), start_count })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Value, String> {
     // Secrets stay in the backend: the window never receives them (ACCT-009, ACCT-011).
     Ok(secrets::without_secrets(store.lock().map_err(|e| e.to_string())?.settings()))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
@@ -111,6 +111,10 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
+            // APP-048: a damaged settings file keeps its good entries (the damaged copy is kept as .bad).
+            if let Ok(true) = store.repair_settings() {
+                secrets::log(&dir, "settings: settings.json was damaged; the readable entries were kept, the damaged copy is settings.json.bad");
+            }
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
@@ -327,9 +331,20 @@ pub fn run() {
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
                 app.state::<Terminals>().kill_all();
-                if let Ok(dir) = app.path().app_data_dir() {
-                    let _ = std::fs::remove_file(dir.join(cli::FILE));
-                    let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));
+                // APP-050: the final save, after any save in flight and before nothing else, on its own
+                // thread so a stalled drive cannot hold the quit past the deadline.
+                let handle = app.clone();
+                let done = state::within(state::QUIT_DEADLINE, move || {
+                    if let Ok(store) = handle.state::<Mutex<Store>>().lock() {
+                        store.close();
+                    }
+                    if let Ok(dir) = handle.path().app_data_dir() {
+                        let _ = std::fs::remove_file(dir.join(cli::FILE));
+                        let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));
+                    }
+                });
+                if !done {
+                    eprintln!("quit: the final save did not finish within {:?}; quitting without it", state::QUIT_DEADLINE);
                 }
                 // APP-025: an update that finished downloading installs as the app quits.
                 update::install_on_quit(app);

@@ -333,7 +333,7 @@ pub struct Status {
     local: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: State<'_, Updates>) -> Result<Status, String> {
     let feed = this_feed();
     let store = store.lock().map_err(|e| e.to_string())?;
@@ -362,7 +362,7 @@ pub fn update_status(app: AppHandle, store: State<'_, Mutex<Store>>, updates: St
 }
 
 /// Remembers the dismissed version or that the reassurance tip is done.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_mark(store: State<'_, Mutex<Store>>, key: String, value: String) -> Result<(), String> {
     let key = match key.as_str() {
         "dismissedVersion" => KEY_DISMISSED,

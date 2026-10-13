@@ -270,7 +270,7 @@ pub struct AccountsView {
     pub upkeep_left_to_claude: bool,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn claude_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>) -> Result<AccountsView, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let settings = store.settings();
@@ -386,7 +386,7 @@ pub fn activate(store: &Store, id: Option<&str>) -> Result<(), String> {
     store.set(ACTIVE_KEY, id.unwrap_or("")).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn claude_account_activate(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: Option<String>) -> Result<(), String> {
     activate(&*store.lock().map_err(|e| e.to_string())?, id.as_deref())?;
     let _ = app.emit(EVENT, ());
@@ -414,7 +414,7 @@ pub fn remove(store: &Store, profile: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn claude_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::State<'_, SignIns>, id: String) -> Result<(), String> {
     if sign_ins.running.lock().map_err(|e| e.to_string())?.is_some() {
         return Err("Finish or cancel the sign-in first.".into());

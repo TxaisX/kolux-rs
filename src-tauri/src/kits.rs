@@ -63,7 +63,7 @@ pub fn copy_samples(root: &Path, kit: &str) -> Result<PathBuf, String> {
 }
 
 /// SKILL-005: Try with sample data. Returns the samples project, added like any repository.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn kit_samples(git: State<'_, Git>, store: State<'_, Mutex<Store>>, kit: String) -> Result<Project, String> {
     let dir = copy_samples(&samples_root(), &kit)?;
     let store = store.lock().map_err(|e| e.to_string())?;
