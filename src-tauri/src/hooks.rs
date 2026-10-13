@@ -799,9 +799,23 @@ fn write_json(file: &Path, value: &Value, before: Option<&str>) -> Result<(), St
     write_atomic(file, &render(value, before)?, before)
 }
 
+/// The end of the error `write_atomic` gives when the file changed since Kolux read it.
+pub(crate) const CHANGED: &str = "changed since it was read; nothing written";
+
+// Tests put a change to the file here; write_atomic makes it just before its re-read, as if
+// Claude Code had saved the file between Kolux's read and its rename.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BEFORE_REREAD: std::cell::RefCell<Vec<Box<dyn FnOnce()>>> = std::cell::RefCell::new(Vec::new());
+}
+
 /// T-152 (5): `bytes` replace `file` through a temp file in the same folder, written and synced to
 /// disk, then renamed over it, but only while `file` still holds `before` (`None`: it did not
 /// exist): a file changed since Kolux read it is left as it is and nothing is written.
+///
+/// T-152-b (5): one race is left. A save that lands between the re-read below and the rename is
+/// overwritten; the window is one syscall, and Claude Code's own saves are whole-file renames, so
+/// the loser is at most one of its saves (PROVENANCE.md, T-152-b).
 pub(crate) fn write_atomic(file: &Path, bytes: &[u8], before: Option<&str>) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -811,6 +825,10 @@ pub(crate) fn write_atomic(file: &Path, bytes: &[u8], before: Option<&str>) -> R
     // STAT-005: the rewritten file keeps the permissions the user's had.
     if let Ok(meta) = std::fs::metadata(file) {
         let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    #[cfg(test)]
+    if let Some(change) = BEFORE_REREAD.with(|c| c.borrow_mut().pop()) {
+        change();
     }
     let now = match std::fs::read(file) {
         Ok(b) => Some(b),
@@ -826,7 +844,7 @@ pub(crate) fn write_atomic(file: &Path, bytes: &[u8], before: Option<&str>) -> R
     }
     if now.as_deref() != before.map(str::as_bytes) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("{} changed since it was read; nothing written", file.display()));
+        return Err(format!("{} {CHANGED}", file.display()));
     }
     std::fs::rename(&tmp, file).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);

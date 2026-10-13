@@ -766,3 +766,42 @@ fn t_152_b_3_a_failed_record_write_leaves_no_copy_the_next_install_trusts() {
     assert!(back_up(&file, &record).unwrap().is_none(), "an existing copy matching its record is kept");
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn t_152_b_5_a_save_between_read_and_write_is_merged_once_and_a_second_one_fails() {
+    use super::super::BEFORE_REREAD;
+    let dir = temp("t152b-retry");
+    let home = dir.join("home");
+    // Claude Code saving the file (a whole-file write) between Kolux's read and its rename.
+    let save = |f: &Path, model: &'static str| -> Box<dyn FnOnce()> {
+        let f = f.to_path_buf();
+        Box::new(move || {
+            let mut v: Value = ev(&fs::read_to_string(&f).unwrap());
+            v["model"] = json!(model);
+            fs::write(&f, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        })
+    };
+    // One save: read again, merged once more, his save kept and Kolux's entries in.
+    let file = dir.join("one").join("settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, shaped()).unwrap();
+    BEFORE_REREAD.with(|c| c.borrow_mut().push(save(&file, "saved-once")));
+    install_claude_at(&home, &file).unwrap();
+    let after = ev(&fs::read_to_string(&file).unwrap());
+    assert_eq!(after["model"], "saved-once", "his save is kept");
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed", "and Kolux's entries are in");
+    assert!(BEFORE_REREAD.with(|c| c.borrow().is_empty()));
+    // Two saves: the second attempt fails as before, the file holds his second save, nothing of Kolux's.
+    let file = dir.join("two").join("settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, shaped()).unwrap();
+    BEFORE_REREAD.with(|c| c.borrow_mut().extend([save(&file, "saved-twice"), save(&file, "saved-first")]));
+    let err = install_claude_at(&home, &file).unwrap_err();
+    println!("kolux-rs: claude hooks: {err}");
+    assert!(err.ends_with("changed since it was read; nothing written"), "{err}");
+    let now = fs::read_to_string(&file).unwrap();
+    assert_eq!(ev(&now)["model"], "saved-twice");
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "not installed");
+    assert!(!file.with_extension("json.kolux-rs-tmp").exists());
+    let _ = fs::remove_dir_all(&dir);
+}

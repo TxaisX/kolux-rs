@@ -8,7 +8,7 @@
 //!
 //! A child of `hooks` so it shares that module's script and settings helpers.
 
-use super::{claude_settings_file, home_dir, install_claude_from, is_my_command, status_command, write_atomic, write_claude_script, write_codex_script, write_json, write_status_script, SCRIPT_DIR, STATUS_PREV};
+use super::{claude_settings_file, home_dir, CHANGED, install_claude_from, is_my_command, status_command, write_atomic, write_claude_script, write_codex_script, write_json, write_status_script, SCRIPT_DIR, STATUS_PREV};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::Write as _;
@@ -387,6 +387,20 @@ pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
     let dir = home.join(SCRIPT_DIR);
     let prev = dir.join(STATUS_PREV);
     let status = status_command(&status, &prev.to_string_lossy().replace('\\', "/"));
+    let command = format!("\"{path}\" || exit 0");
+    // T-152-b (5): a file Claude Code saved between Kolux's read and its write is read again and
+    // merged once more (the copy check and the status line save included); a second change fails.
+    match install_claude_once(file, &dir, &prev, &command, &status) {
+        Err(e) if e.ends_with(CHANGED) => {
+            eprintln!("kolux-rs: claude hooks: {e}; reading it again");
+            install_claude_once(file, &dir, &prev, &command, &status)
+        }
+        done => done,
+    }
+}
+
+/// One read, check and write of `install_claude_at`.
+fn install_claude_once(file: &Path, dir: &Path, prev: &Path, hook: &str, status: &str) -> Result<(), String> {
     // T-152 (3): a file that is not JSON is refused before anything is written, the copy included.
     let text = read_opt(file)?;
     let had: Option<Value> = text.as_deref().map(serde_json::from_str).transpose().map_err(|e| format!("{} is not JSON ({e}); hooks not installed", file.display()))?;
@@ -403,12 +417,12 @@ pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
         if !command.is_some_and(is_my_command) {
             fs::write(prev.with_extension("json"), slot.to_string()).map_err(|e| format!("claude status line: {e}"))?;
             if let Some(c) = command.filter(|c| !c.trim().is_empty()) {
-                fs::write(&prev, format!("{c}\n")).map_err(|e| format!("claude status line: {e}"))?;
+                fs::write(prev, format!("{c}\n")).map_err(|e| format!("claude status line: {e}"))?;
             }
         }
     }
     // T-152 (5): against the bytes read above, so a file changed since then is never overwritten.
-    install_claude_from(file, text, &format!("\"{path}\" || exit 0"), &status)?;
+    install_claude_from(file, text, hook, status)?;
     Ok(())
 }
 

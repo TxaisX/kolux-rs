@@ -164,3 +164,16 @@ proof.sh re-run on the rebuilt kolux-dev.exe (run4):
   cmp: post-off file byte-identical to the copy
   off-state sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e bytes 10077
   codex/hooks.json after: 373f2641a0d8fe47c1802afbf8e88e7f2da218e9befd552a7cf52822754b1d45 bytes 12 text {"hooks":{}}
+
+== Item 5 (AFTER 5): the re-read -> rename race documented; one retry on "changed since it was read" ==
+PROVENANCE.md: "T-152-b (5) known race" line appended under the T-152 entries; doc comment on write_atomic.
+Retry: install_claude_at runs install_claude_once (read, copy check, status line save, merge, write); on an
+error ending "changed since it was read; nothing written" it logs "reading it again" and runs it once more;
+a second change fails as before. Test hook: #[cfg(test)] BEFORE_REREAD makes a save just before the re-read.
+
+cargo test agent_hooks -- --nocapture --test-threads=1 (scratch env), t_152_b_5 lines:
+  test hooks::agent_hooks::tests::t_152_b_5_a_save_between_read_and_write_is_merged_once_and_a_second_one_fails ... kolux-rs: claude hooks: kept a copy before the first write: sha256 original a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7, backup a1de3f82b1bb948dab8079790d14612207889e4ebab2cbabfa2afd08070925b7
+  kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152b-retry-51564\one\settings.json changed since it was read; nothing written; reading it again
+  kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152b-retry-51564\two\settings.json changed since it was read; nothing written; reading it again
+  kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152b-retry-51564\two\settings.json changed since it was read; nothing written
+  test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 3.01s
