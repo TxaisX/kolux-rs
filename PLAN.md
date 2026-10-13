@@ -171,7 +171,8 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [x] T-077 · PROJ-047 Child workspaces nest under their parent
 - [x] T-078 · SESS-012 Launch shapes Solo, Pair, Workbench and Swarm assign roles · SESS-025 [compat] Agents launched side by side get a rules block and keep a handoff note
-- [ ] T-079 · TERM-125 [compat] Terminal commands in the CLI
+- [x] T-079 · TERM-125 [compat] Terminal commands in the CLI (first part: list with its worktree, limit, visual-layout and JSON options, show, create in the background with a title, command and focus, split, rename, switch and its focus alias, and close by terminal, tab or every terminal of a worktree, all already in cli.rs and proven live from a pane)
+- [ ] T-079-b · the rest of T-079's cards: show and read printing a terminal's content (cursor, screen only, line cap), send with Enter, interrupt, wait-for-submit and retry, and wait for exit or a quiet full-screen program with a time limit; these are the same commands as T-134's read, send and wait, so build them in one pass with T-134
 - [ ] T-080 · VIEW-020 Hand one agent's result to another agent
 - [x] T-081 · ACCT-034 [compat] Model routing tiers per provider for workers
 - [x] T-082 · ORCH-001 [compat] A coordinator opens a Run and its terminal becomes the Run's home · ORCH-002 [compat] Switch between, inspect and list Runs from the coordinator terminal · ORCH-003 [compat] Send typed mail to a Run, a worker, a terminal or a group · ORCH-005 [compat] check reads the mailbox oldest batch first and repeats it until acknowledged
