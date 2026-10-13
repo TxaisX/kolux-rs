@@ -25,13 +25,16 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     fs::rename(&temp, path).map_err(fail)
 }
 
+/// SAFE-021: a path on another machine is refused before the disk is touched.
 #[tauri::command]
-pub fn file_read(path: String) -> Result<String, String> {
+pub fn file_read(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String) -> Result<String, String> {
+    crate::links::refuse_host(&path, &crate::links::roots(&store))?;
     read_text(Path::new(&path))
 }
 
 #[tauri::command]
-pub fn file_write(path: String, text: String) -> Result<(), String> {
+pub fn file_write(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String, text: String) -> Result<(), String> {
+    crate::links::refuse_host(&path, &crate::links::roots(&store))?;
     write_text(Path::new(&path), &text)
 }
 
@@ -250,14 +253,23 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-pub fn dir_list(path: String) -> Result<Vec<DirEntry>, String> {
+pub fn dir_list(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String) -> Result<Vec<DirEntry>, String> {
+    crate::links::refuse_host(&path, &crate::links::roots(&store))?;
     list_dir(Path::new(&path))
 }
 
-/// What a path really is, following links: "dir", "file" or "missing".
+/// What a path really is: "remote" (another machine, never looked up; SAFE-021), else following
+/// links "dir", "file" or "missing".
 #[tauri::command]
-pub fn path_kind(path: String) -> &'static str {
-    match fs::metadata(&path) {
+pub fn path_kind(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, path: String) -> &'static str {
+    if crate::links::host_path(&path, &crate::links::roots(&store)) {
+        return "remote";
+    }
+    kind_of(Path::new(&path))
+}
+
+pub fn kind_of(path: &Path) -> &'static str {
+    match fs::metadata(path) {
         Ok(m) if m.is_dir() => "dir",
         Ok(_) => "file",
         Err(_) => "missing",
@@ -286,8 +298,8 @@ mod tests {
         }
         let got: Vec<_> = list_dir(&d).unwrap().into_iter().map(|e| (e.name, e.kind)).collect();
         assert_eq!(got, [("Alpha".to_string(), "dir"), ("zeta".to_string(), "dir"), ("A.txt".to_string(), "file"), ("b.txt".to_string(), "file")]);
-        assert_eq!(path_kind(d.join("zeta").to_string_lossy().into()), "dir");
-        assert_eq!(path_kind(d.join("nope").to_string_lossy().into()), "missing");
+        assert_eq!(kind_of(&d.join("zeta")), "dir");
+        assert_eq!(kind_of(&d.join("nope")), "missing");
         let _ = fs::remove_dir_all(&d);
     }
 

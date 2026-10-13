@@ -18,6 +18,7 @@ mod git;
 mod hooks;
 mod include;
 mod keybindings;
+mod links;
 mod names;
 mod notifications;
 mod orchestration;
@@ -278,6 +279,7 @@ pub fn run() {
             files::diff_image,
             files::dir_list,
             files::path_kind,
+            links::open_path,
             fsops::fs_create,
             fsops::fs_rename,
             fsops::fs_trash,

@@ -388,6 +388,10 @@ Rules: a host path is any share written with a leading double backslash or doubl
   treats a leading double slash as an ordinary local path while link clicks in the interface refuse
   it on every platform, a known difference that errs on the safe side and that the rebuild may make
   consistent.
+  (Kolux RS, T-060: `links::host_path` and `refuse_host`; a leading double slash is refused on
+  every platform, in the core as well as the interface, which the card allows; the registered
+  roots are the projects and the workspaces folder; terminal and note links are not built yet and
+  will call the same functions; no grant flow exists yet, so the exact-file grant rule is T-062's.)
 Acceptance:
   - [ ] Ctrl-click a terminal link to a double-slash share path, or to a file URL naming another
         host → nothing opens and no connection to that host is tried.
@@ -413,6 +417,9 @@ Rules: around a hundred program and script-like file types count, including unus
   finding I3); the Windows short-name test also catches ordinary names that happen to look like one,
   for example a text file whose name has a tilde and a digit, and such files are revealed rather
   than opened, which errs on the safe side.
+  (Kolux RS, T-060: `links::program_like`, `launchable` and the `open_path` command; the short-name
+  shape is a stem of up to eight characters holding a tilde followed by a digit with an extension
+  of up to three; on Linux the reveal opens the folder without selecting the file.)
 Acceptance:
   - [ ] Shift-click open on a link to a batch file, a JavaScript file, a Windows program or a
         shortcut → its folder is revealed and nothing runs.

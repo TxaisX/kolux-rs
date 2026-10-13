@@ -449,10 +449,16 @@ pub fn open_external(url: String) -> Result<(), String> {
     if !(low.starts_with("http://") || low.starts_with("https://") || low.starts_with("mailto:")) {
         return Err(format!("{url} is not a web or mail link"));
     }
+    system_open(&url)
+}
+
+/// Hands `url` (a link or a full file path) to the system's own handler. Callers check it first:
+/// `open_external` lets only web and mail links through, `links::open_path` reveals programs.
+pub(crate) fn system_open(url: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        let (verb, file) = (wide("open"), wide(&url));
+        let (verb, file) = (wide("open"), wide(url));
         // SAFETY: NUL-terminated wide strings that live across the call.
         let r = unsafe { windows_sys::Win32::UI::Shell::ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1) };
         if (r as isize) <= 32 {
