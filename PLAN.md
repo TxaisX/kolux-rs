@@ -592,7 +592,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-274 · TERM-095 Link detection never freezes on huge lines · TERM-137 Shell hooks from different Kolux builds coexist
 - [ ] T-275 · STAT-031 Agents that are gone stop reporting
 - [ ] T-276 · VIEW-090 Scan notices in the session list · VIEW-092 Session scans run in the background and survive restarts · VIEW-115 The shell avoids needless redraws
-- [ ] T-277 · USAGE-028 Resource Manager lists terminals picked up after a reload
+- [x] T-277 · USAGE-028 Resource Manager lists terminals picked up after a reload
 - [ ] T-278 · ACCT-054 Fast output never freezes a pane · ACCT-059 Memory caps scale with the machine
 - [ ] T-279 · ORCH-035 A task that keeps failing is no longer handed out · ORCH-057 Many viewers follow one terminal without drifting apart · ORCH-059 Closing a terminal retires it everywhere
 - [ ] T-280 · SAFE-028 Saved settings come back valid after a restart
