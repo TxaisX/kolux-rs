@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 335 / 578 tasks  ·  P0 cards passing: 6 / 228 cards  ·  cutline 2 / 18 left  ·  merge gate 40 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 336 / 578 tasks  ·  P0 cards passing: 6 / 228 cards  ·  cutline 2 / 18 left  ·  merge gate 40 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -2548,6 +2548,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [orchestration] T-119-b: the tab menu also has Close tab, so it is not a one-item menu; Rename is left off editor, browser and diff tabs, which take their names from their files and pages. The automatic tab titles switch was not added on its own: generated titles do not exist yet (T-124, T-258), and a switch with nothing behind it would mislead, so T-119-c builds it with them.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-13 · [main] T-543 · done: App.tsx agent status, settings, workspaces, palette/notice/toast, kits and wizard moved into six hooks as they were, hook order unchanged; lib.rs save_settings deleted, setup log lines go to diag, handler list grouped by module (per-module start() left: needs files outside the pass) · evidence/smoke-2e6821b.txt + evidence/smoke-97bb712.txt
 - 2026-10-13 · [accounts] T-265-b · not started, left open: the proof needs a real Claude agent going idle, and live checks may not launch agent CLIs; Needs Txais to run it once (the steps are on the PLAN line)
 - 2026-10-13 · [accounts] T-043-f · not started, left open: reading Claude Code's keychain entry names from a real install, the system security tool and the live proof all need a Mac, and this PC is Windows
 - 2026-10-13 · [accounts] T-206-c · not started, left open: there are no remote or SSH workspaces in the app, and no PLAN task builds them, so there is no workspace for the kit entry point to be hidden in; build it with remote workspaces
