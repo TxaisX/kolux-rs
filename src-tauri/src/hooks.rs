@@ -78,6 +78,9 @@ pub struct Change {
     /// Why a blocked state happened (STAT-022): `limit`, `signin` or `error`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<&'static str>,
+    /// SAFE-001: the whole plan Claude asks to leave plan mode with; only on its exit-plan step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 /// STAT-022's three causes for Claude Code's failure kinds (the StopFailure `error` values): a
@@ -111,6 +114,11 @@ fn tool_detail(input: Option<&Value>) -> Option<String> {
     Some(trim(&fold(pick), 160))
 }
 
+/// SAFE-001: the plan text of Claude's exit-plan tool call, when it carries one.
+fn plan_of(tool: Option<&str>, input: Option<&Value>) -> Option<String> {
+    (tool == Some("ExitPlanMode")).then(|| input?.get("plan")?.as_str().filter(|p| !p.trim().is_empty()).map(str::to_string)).flatten()
+}
+
 /// Claude Code's event mapping (COMPAT 3.5). `None` means the pane's state does not change.
 pub fn claude_change(event: &Value) -> Option<Change> {
     let name = event.get("hook_event_name")?.as_str()?;
@@ -138,6 +146,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
         "PreToolUse" => Some(Change {
             state: if matches!(tool.as_deref(), Some("AskUserQuestion" | "ExitPlanMode")) { "waiting" } else { "working" },
             detail: tool_detail(event.get("tool_input")),
+            plan: plan_of(tool.as_deref(), event.get("tool_input")),
             tool,
             ..Change::default()
         }),
@@ -149,7 +158,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             ..Change::default()
         }),
         "PostToolUseFailure" => plain("working"),
-        "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), tool, ..Change::default() }),
+        "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), plan: plan_of(tool.as_deref(), event.get("tool_input")), tool, ..Change::default() }),
         "PostCompact" => (str_of("trigger") == Some("manual")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
         // SubagentStart, SubagentStop and TeammateIdle feed the roster (status.rs); PreCompact is refused.
         _ => None,
@@ -849,6 +858,13 @@ mod tests {
         assert_eq!((t.state, t.tool.as_deref(), t.detail.as_deref()), ("working", Some("Bash"), Some("ls -la")));
         assert_eq!(c(r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{}}"#).unwrap().state, "waiting");
         assert_eq!(c(r#"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode"}"#).unwrap().state, "waiting");
+        // SAFE-001: the exit-plan step carries the whole plan on both events; nothing else does.
+        let plan = "# Plan\n\n1. Read it";
+        let pre = c(&format!(r#"{{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{{"plan":{}}}}}"#, json!(plan))).unwrap();
+        let ask = c(&format!(r#"{{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode","tool_input":{{"plan":{}}}}}"#, json!(plan))).unwrap();
+        assert_eq!((pre.plan.as_deref(), ask.plan.as_deref()), (Some(plan), Some(plan)));
+        assert_eq!(c(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls","plan":"x"}}"#).unwrap().plan, None);
+        assert_eq!(c(r#"{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode","tool_input":{"plan":"  "}}"#).unwrap().plan, None);
         let perm = c(r#"{"hook_event_name":"PermissionRequest","tool_name":"Write","tool_input":{"file_path":"C:/x/hello.txt","content":"hi"}}"#).unwrap();
         assert_eq!((perm.state, perm.tool.as_deref(), perm.detail.as_deref()), ("permission", Some("Write"), Some("C:/x/hello.txt")));
         assert_eq!(c(r#"{"hook_event_name":"PostToolUse","tool_name":"Write"}"#).unwrap().state, "working");

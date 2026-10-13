@@ -94,6 +94,8 @@ import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { useUsageAlerts } from "./usage/alerts";
 import ToolNotices from "./launch/ToolNotices";
+import PlanSheet from "./terminal/PlanSheet";
+import { feedbackMessage, showsReview, type PlanDraft } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -184,7 +186,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // STAT-050: when each pane's state last moved, and whether that turn was interrupted; the Inbox's clock.
   const [stamp, setStamp] = useState<Record<number, { at: number; interrupted: boolean }>>({});
   // VIEW-023: what each pane's last event said it was doing, and the newest file it wrote this session.
-  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo }>>({});
+  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string }>>({});
+  // SAFE-002..004: the pane whose plan is open for review, and each plan's unsent comments.
+  const [reviewing, setReviewing] = useState<number | null>(null);
+  const [planDrafts, setPlanDrafts] = useState<Record<string, PlanDraft>>({});
   // STAT-045: the terminal has printed nothing for the quiet window; cleared by the next event.
   const [stale, setStale] = useState<Record<number, boolean>>({});
   const [context, setContext] = useState<Record<number, ContextReading>>({}); // STAT-040: each Claude pane's last context reading
@@ -1477,6 +1482,31 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
       })
       .catch(() => {});
+  // SAFE-003, SAFE-004: Approve is the agent's own yes; Request changes is its no, then the
+  // feedback typed into its prompt as one paste once it has left the question.
+  const draftKey = (key: number) => `${key}\n${turn[key]?.plan ?? ""}`;
+  const dropDraft = (key: number) => setPlanDrafts((d) => Object.fromEntries(Object.entries(d).filter(([k]) => k !== draftKey(key))));
+  const approvePlan = (p: Pane) => {
+    setReviewing(null);
+    dropDraft(p.key);
+    void answer(p, true);
+  };
+  const requestChanges = async (p: Pane) => {
+    const d = planDrafts[draftKey(p.key)] ?? { comments: [], note: "" };
+    const text = feedbackMessage(d.comments, d.note);
+    setReviewing(null);
+    dropDraft(p.key);
+    await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).catch(() => {});
+    for (let i = 0; i < 30 && (hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission"); i++) await new Promise((r) => setTimeout(r, 100));
+    const id = ptys.current[p.key];
+    if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
+    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 300));
+    await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
+    setHook((h) => ({ ...h, [p.key]: "working" }));
+    setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+  };
+  const reviewPane = panes.find((p) => p.key === reviewing && showsReview(hook[p.key], turn[p.key]));
   // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
   // shows every pane); a finish or bell anywhere else marks tab, pane and workspace row unread
   // and says so in the window. A desktop notification and the settings that gate it are T-026.
@@ -1539,10 +1569,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   panesRef.current = panes;
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop } = e.payload;
+    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string; plan?: string } & Turn>("agent-status", (e) => {
+      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, plan } = e.payload;
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
-      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
+      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, plan, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
       setStale((m) => (m[paneKey] ? { ...m, [paneKey]: false } : m));
       const prev = hookRef.current[paneKey];
       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
@@ -1688,6 +1718,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           <SignInNotice />
           <KeyLostNotice />
           {terminals && page === null && <ToolNotices projects={projects.map((p) => p.id).join(",")} />}
+          {terminals && reviewPane && (
+            <PlanSheet
+              title={nameOf(names, reviewPane.cwd) ?? (reviewPane.cwd ? folderName(reviewPane.cwd) : tabName(reviewPane, titles))}
+              plan={turn[reviewPane.key]?.plan ?? ""}
+              draft={planDrafts[draftKey(reviewPane.key)] ?? { comments: [], note: "" }}
+              onDraft={(d) => setPlanDrafts((m) => ({ ...m, [draftKey(reviewPane.key)]: d }))}
+              onApprove={() => approvePlan(reviewPane)}
+              onRequest={() => void requestChanges(reviewPane)}
+              onClose={() => setReviewing(null)}
+            />
+          )}
           {terminals && page === "automations" && (
             <AutomationsPage
               onClose={() => setPage(null)}
@@ -1969,6 +2010,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     shellName={p.word}
                     number={p.key}
                     onClose={() => closePane(p.key)}
+                    onReviewPlan={showsReview(hook[p.key], turn[p.key]) ? () => setReviewing(p.key) : undefined}
                     agents={agents}
                     defaultId={defaultId}
                     onSetDefault={setDefault}

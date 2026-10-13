@@ -74,6 +74,8 @@ type Props = {
   onFocus?: () => void;
   /** Close was asked for; the window decides (TERM-045) and drops the pane, which ends its program. */
   onClose?: () => void;
+  /** SAFE-002: set while the agent waits on its plan; the header then offers Review plan. */
+  onReviewPlan?: () => void;
   /** The plus menu behind the header's "+" button. */
   agents?: AgentInfo[];
   launching?: boolean;
@@ -98,7 +100,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const box = useRef<HTMLElement>(null);
@@ -341,6 +343,11 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           </span>
         )}
         <span className="right">
+          {onReviewPlan && (
+            <button className="btn plan-review-btn" onClick={onReviewPlan} title="Read the plan, comment on it, then approve or ask for changes">
+              Review plan
+            </button>
+          )}
           <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
             <Ring percent={context ?? 0} />
             {Math.round(context ?? 0)}%

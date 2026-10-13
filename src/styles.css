@@ -1166,3 +1166,19 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .task-labels { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
 .task-x { margin-left: 2px; color: var(--fg-faint); font-size: 12px; line-height: 1; }
 .task-x:hover:not(:disabled) { color: var(--fg); }
+/* SAFE-002..004: the plan review sheet, from the right edge over the window. */
+.plan-sheet { position: fixed; z-index: 46; top: calc(env(safe-area-inset-top, 0px) + 40px); right: 0; bottom: 24px; width: min(520px, 100vw); display: flex; flex-direction: column; background: var(--pane-bg); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35); font-size: 13px; }
+.plan-sheet-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.plan-sheet-head h3 { margin: 0; font-size: 14px; color: var(--fg); }
+.plan-sheet-head .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-sheet-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 14px; }
+.plan-block { padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+.plan-block-head { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; }
+.plan-block .md-preview { padding: 0; user-select: text; }
+.plan-comment { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding: 4px 8px; border-left: 2px solid var(--line-focus); background: var(--chip-bg); border-radius: 4px; }
+.plan-comment span { flex: 1; min-width: 0; white-space: pre-wrap; }
+.plan-write { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.plan-write textarea, .plan-sheet-foot textarea { width: 100%; min-height: 54px; resize: vertical; font: inherit; color: var(--fg); background: var(--input-bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+.plan-sheet-foot { padding: 10px 14px; border-top: 1px solid var(--line); }
+.plan-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.plan-review-btn { height: 20px; padding: 0 8px; font-size: 11.5px; }
