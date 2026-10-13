@@ -601,7 +601,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-281-b · the rest of T-281's card: one failing repository no longer blanks the others in a multi-repository Tasks list, and a remembered issue source that is no longer set up is named (both need T-231-c's source picker) · state, assignee and reviewer edits show at once, items that leave the filter fade out, and two quick assignee edits both stick (need T-231-c / T-232-c) · fallbacks for git versions older than the ones already handled, and stopping a hung git together with every process it started (a Windows job object)
 - [ ] T-282 · EDIT-008 Huge pastes keep the window responsive or are turned away
 - [ ] T-283 · BROW-010 Pages are checked again after the computer wakes · BROW-043 Leftover browser helper processes are cleaned up
-- [ ] T-284 · SKILL-023 An interrupted skill delete is undone or completed on restart
+- [x] T-284 · SKILL-023 An interrupted skill delete is undone or completed on restart
 - [ ] T-285 · SET-042 End every terminal session in one go · SET-060 Restart the background terminal service · SET-062 macOS warns when terminal commands lose the app's permission grants · also: the rest of T-037's card: the Resource Manager offers to restart the terminal service, asking first; on macOS its free memory follows memory pressure (it shows unknown there now)
 - [ ] T-286 · APP-003 Startup failures and stray background errors never silently kill the app · APP-017 After sleep the window repaints, and hidden windows stop doing interface work · APP-040 Only real crashes are recorded, with useful context · APP-051 Stale worktree records are cleaned up safely
 - [ ] T-287 · CLI-041 [compat] kolux diagnostics memory

@@ -46,6 +46,7 @@ mod routing;
 mod schedule;
 mod resume;
 mod secrets;
+mod skill_delete;
 mod state;
 mod status;
 mod sysmem;
@@ -140,6 +141,7 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
+            skill_delete::recover(&dir); // SKILL-023: an interrupted skill delete is undone or completed.
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             onboarding::first_start(&store, starts)?;
