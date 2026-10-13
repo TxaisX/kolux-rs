@@ -76,7 +76,7 @@ import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgen
 import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
-import { FINISH_FIELD, STOPPED_FIELD } from "./settings/NotificationSwitches";
+import type { KindKey } from "./settings/notifications";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
 import { Bell, Globe, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
@@ -1564,7 +1564,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
     return repos.size > 1 && p.cwd !== null ? folderName(p.cwd) : null;
   };
-  const noticed = (p: Pane, what: string, body = "", gate: string = FINISH_FIELD) => {
+  const noticed = (p: Pane, what: string, body = "", gate: KindKey = "notifyOnFinish") => {
     const known = new Set(panes.map((x) => x.key));
     if (!known.has(p.key)) return;
     const title = noteTitle(tabName(p, titles), repoOf(p), what);
@@ -1602,7 +1602,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       const note = turnNote(prev, e.payload);
       if (note) {
         const p = panesRef.current.find((x) => x.key === paneKey);
-        if (p) noticedRef.current(p, note.what, note.body, note.stopped ? STOPPED_FIELD : FINISH_FIELD);
+        if (p) noticedRef.current(p, note.what, note.body, note.stopped ? "notifyOnStopped" : "notifyOnFinish");
       }
       // STAT-046: a stop on a sign-in failure has the account checked, so the main-window notice
       // (SignInNotice) names the lapsed account without waiting for the next start.
@@ -2132,8 +2132,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         <Wizard
           start={wizard}
           vendors={kitAIs}
-          ping={settings[FINISH_FIELD] !== false}
-          onPing={(on) => saveSetting(FINISH_FIELD, on)}
+          ping={settings["notifyOnFinish" satisfies KindKey] !== false}
+          onPing={(on) => saveSetting("notifyOnFinish" satisfies KindKey, on)}
           hidden={kits !== null}
           onSample={openSamples}
           onKit={(id) => void wizardKit(id)}
