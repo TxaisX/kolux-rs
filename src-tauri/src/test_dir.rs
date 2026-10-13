@@ -13,8 +13,15 @@ impl std::ops::Deref for TempDir {
 }
 
 impl Drop for TempDir {
+    /// Tried a few times: on Windows a file just closed (a store's database) can stay held for a
+    /// moment by the system, and a test run under load left whole folders behind.
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        for _ in 0..10 {
+            if std::fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }
 

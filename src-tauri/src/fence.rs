@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 /// At most this many picked files are granted; the oldest grant goes first.
 pub const GRANT_CAP: usize = 100;
+/// Where the picked-file grants are kept, so a restored tab for a picked file opens again.
+const KEY_GRANTS: &str = "file_grants";
 /// ponytail: worktree folders are read from Git at most this often on a miss; a worktree added
 /// outside Kolux opens after this delay at worst.
 const TREES_FRESH: Duration = Duration::from_secs(3);
@@ -19,6 +21,13 @@ const TREES_FRESH: Duration = Duration::from_secs(3);
 pub struct Fence {
     grants: Mutex<VecDeque<PathBuf>>,
     trees: Mutex<Option<(Instant, Vec<PathBuf>)>>,
+    /// The paths of the latest drop from outside Kolux: the Explorer may copy these in.
+    drop: Mutex<Vec<PathBuf>>,
+}
+
+/// A file that may be granted: on this computer, not a folder and not a drive root.
+fn grantable(real: &Path) -> bool {
+    !is_share(real) && !is_drive_root(real) && !real.is_dir()
 }
 
 /// A network share: `\\server\share`, `//server/share` or, once resolved, `\\?\UNC\...`.
@@ -67,10 +76,22 @@ pub fn check(path: &Path, roots: &[PathBuf], grants: &[PathBuf], exact: bool) ->
 }
 
 impl Fence {
-    /// Grants one picked file exactly; folders, drive roots and shares are never granted.
-    pub fn grant(&self, path: &Path) -> Result<(), String> {
+    /// The grants an earlier run saved, each checked again (a file since deleted drops out); a
+    /// damaged list grants nothing.
+    pub fn load(store: &Mutex<Store>) -> Fence {
+        let saved = store.lock().ok().and_then(|s| s.get(KEY_GRANTS).ok().flatten());
+        let list: Vec<PathBuf> = saved.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut grants: VecDeque<PathBuf> = list.into_iter().filter(|p| !is_share(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| grantable(p)).collect();
+        while grants.len() > GRANT_CAP {
+            grants.pop_front();
+        }
+        Fence { grants: Mutex::new(grants), ..Default::default() }
+    }
+
+    /// Grants one picked file exactly and saves the list; folders, drive roots and shares are never granted.
+    pub fn grant(&self, path: &Path, store: &Store) -> Result<(), String> {
         let real = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
-        if is_share(&real) || is_drive_root(&real) || real.is_dir() {
+        if !grantable(&real) {
             return Err(refused(path));
         }
         let mut g = self.grants.lock().map_err(|e| e.to_string())?;
@@ -79,7 +100,33 @@ impl Fence {
         while g.len() > GRANT_CAP {
             g.pop_front();
         }
-        Ok(())
+        store.set(KEY_GRANTS, &serde_json::to_string(&*g).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    }
+
+    /// Notes the paths of a drop from outside Kolux, in place of the last drop's.
+    pub fn dropped(&self, paths: &[PathBuf]) {
+        let real = paths.iter().filter(|p| !is_share(p)).filter_map(|p| p.canonicalize().ok()).filter(|p| !is_share(p) && !is_drive_root(p)).collect();
+        if let Ok(mut d) = self.drop.lock() {
+            *d = real;
+        }
+    }
+
+    /// Whether `path` is one of the latest drop's paths.
+    pub fn was_dropped(&self, path: &Path) -> bool {
+        !is_share(path) && path.canonicalize().is_ok_and(|r| self.drop.lock().is_ok_and(|d| d.contains(&r)))
+    }
+
+    /// EDIT-034 copy: a source inside the fence, or one the user just dropped in from outside.
+    pub fn allow_source(&self, path: &str, store: &Mutex<Store>, git: &Git) -> Result<PathBuf, String> {
+        if self.was_dropped(Path::new(path)) {
+            return Ok(PathBuf::from(path));
+        }
+        self.allow(path, store, git, false)
+    }
+
+    /// Every one of `paths` inside the fence (projects, worktrees), or the first refusal.
+    pub fn allow_all<'a>(&self, paths: impl IntoIterator<Item = &'a String>, store: &Mutex<Store>, git: &Git) -> Result<(), String> {
+        paths.into_iter().try_for_each(|p| self.allow(p, store, git, false).map(drop))
     }
 
     /// `check` against the projects in the store, then, on a miss, their worktrees too.
@@ -140,9 +187,10 @@ mod tests {
     #[test]
     fn acct_055_a_picked_file_grants_only_itself() {
         let t = temp("grant");
+        let store = Store::open(&t.0.join("data")).unwrap();
         let f = Fence::default();
-        f.grant(&t.0.join("outside/picked.txt")).unwrap();
-        assert!(f.grant(&t.0.join("outside")).is_err(), "a folder is never granted");
+        f.grant(&t.0.join("outside/picked.txt"), &store).unwrap();
+        assert!(f.grant(&t.0.join("outside"), &store).is_err(), "a folder is never granted");
         let grants: Vec<PathBuf> = f.grants.lock().unwrap().iter().cloned().collect();
         let roots = [t.0.join("project")];
         assert!(check(&t.0.join("outside/picked.txt"), &roots, &grants, true).is_ok());
@@ -151,10 +199,44 @@ mod tests {
         for i in 0..GRANT_CAP + 5 {
             let p = t.0.join(format!("outside/g{i}.txt"));
             fs::write(&p, "").unwrap();
-            f.grant(&p).unwrap();
+            f.grant(&p, &store).unwrap();
         }
         assert_eq!(f.grants.lock().unwrap().len(), GRANT_CAP);
         assert!(!f.grants.lock().unwrap().contains(&t.0.join("outside/picked.txt").canonicalize().unwrap()), "the oldest grant went first");
+    }
+
+    #[test]
+    fn acct_055_picked_file_grants_are_kept_across_a_restart() {
+        let t = temp("restart");
+        let store = Mutex::new(Store::open(&t.0.join("data")).unwrap());
+        let picked = t.0.join("outside/picked.txt");
+        Fence::default().grant(&picked, &store.lock().unwrap()).unwrap();
+        // the next run starts from what was saved: the picked file opens, its folder stays closed
+        let after = Fence::load(&store);
+        let grants: Vec<PathBuf> = after.grants.lock().unwrap().iter().cloned().collect();
+        assert_eq!(grants, vec![picked.canonicalize().unwrap()]);
+        // a saved list someone edited by hand: a folder, a share and a drive root are never let in
+        let drive = t.0.ancestors().last().unwrap().to_string_lossy().into_owned();
+        let edited = serde_json::json!([t.0.join("outside"), r"\\server\share\x.txt", drive, picked]).to_string();
+        store.lock().unwrap().set(KEY_GRANTS, &edited).unwrap();
+        let kept: Vec<PathBuf> = Fence::load(&store).grants.lock().unwrap().iter().cloned().collect();
+        assert_eq!(kept, vec![picked.canonicalize().unwrap()], "the picked file, in the form a request is checked in");
+        store.lock().unwrap().set(KEY_GRANTS, "not json").unwrap();
+        assert!(Fence::load(&store).grants.lock().unwrap().is_empty(), "a damaged list grants nothing");
+    }
+
+    #[test]
+    fn acct_055_only_the_files_of_the_latest_drop_may_be_copied_in_from_outside() {
+        let t = temp("drop");
+        let f = Fence::default();
+        let (picked, other) = (t.0.join("outside/picked.txt"), t.0.join("outside/other.txt"));
+        assert!(!f.was_dropped(&picked));
+        f.dropped(std::slice::from_ref(&picked));
+        assert!(f.was_dropped(&picked) && !f.was_dropped(&other), "a file next to a dropped one is not");
+        f.dropped(std::slice::from_ref(&other));
+        assert!(!f.was_dropped(&picked) && f.was_dropped(&other), "a new drop replaces the last one");
+        f.dropped(&[PathBuf::from(r"\\server\share\x.txt")]);
+        assert!(!f.was_dropped(Path::new(r"\\server\share\x.txt")), "never from a share");
     }
 
     #[cfg(windows)]

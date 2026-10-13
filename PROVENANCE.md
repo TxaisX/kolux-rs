@@ -198,7 +198,13 @@ The column headings mean:
 | 21 | 45 | 0 (register area; covered by the Wave 2 audits) | n/a | 57 | 5 | +1 card (HID-045); 0 leaks, 1 similarity fix |
 | **Total** | **1,263** | | 2 areas | **650** | 234 (mixed units) | **+8 cards, 4 amended** |
 
-Every area ended its firewall pass at 0 token-check hits.
+Every area ended its firewall pass at 0 token-check hits. That held for the spec as committed
+(7dad8dd: spec/, SPEC.md and COMPAT.md re-checked 2026-10-13 with the unchanged allowlist, 0 hits),
+but it no longer describes the spec of today: 41 later builder commits added "(Kolux RS ...)" notes
+and amendments that carry 53 hits (Kolux RS's own file names, settings keys and public Claude Code
+status-line field names; no old-app identifier is known among them, but the check cannot tell them
+apart). Since T-541 those 53 are the recorded baseline in `scripts/firewall-baseline.txt`, and
+`scripts/firewall-check.ps1 -Baseline` (CI and the merge gate) fails on any hit beyond it.
 
 The cards by tier:
 
@@ -504,6 +510,31 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-137-b / T-139-c · source check only: docs.x.ai/build/cli/reference and docs.x.ai/build/features/status-line read; neither documents Grok credit figures or a session-file format; nothing built or copied
 
 > 2026-10-12 · T-339 · rules from SET-020, VIEW-011, VIEW-116, USAGE-010, ORCH-031 and ACCT-001 cards and DT-A6; no outside source used; no old Kolux source read
+> 2026-10-12 · T-134-a · The cards CLI-024/CLI-025, COMPAT 2.1 rows for terminal read/send/wait, the xterm.js public typings in node_modules (`buffer.active`, `viewportY`, `translateToString`). Nothing from the old app.
+> 2026-10-12 · T-139-b · The cards ACCT-023/ACCT-064 and the repo's own codex_accounts and terminal modules. Nothing from the old app.
+> 2026-10-12 · T-145-b · The card TERM-098, the public win32-input-mode spec in microsoft/terminal's doc/specs (via context7) for the key-event sequence, the vendored portable-pty 0.9.0 source for the pseudoconsole flags. Nothing from the old app.
+> 2026-10-12 · T-050 · The cards VIEW-015, VIEW-019, VIEW-021 and VIEW-024, and this repo's own sidebar rows, chooser pane and Board cells. Nothing from the old app.
+> 2026-10-12 · T-028-b · The card VIEW-017 and this repo's own status vocabulary and Board chip. Nothing from the old app.
+> 2026-10-12 · T-040-b · The cards USAGE-004, VIEW-018 and USAGE-025, and this repo's own meter, ring and pill code. Nothing from the old app.
+> 2026-10-12 · T-144-a · The cards TERM-010 and TERM-024, DT-A7, and this repo's own grid and pane code; CSS container queries and pointer capture are platform features. Nothing from the old app.
+> 2026-10-12 · T-102-a · The cards TERM-044, TERM-049 and TERM-045, COMPAT's tab.close / tab.closeAll rows, and this repo's own close question, grid and menu code. Nothing from the old app.
+> 2026-10-12 · T-174-a · The cards ORCH-054 and ORCH-058, COMPAT 7, CLI-007 and this repo's own CLI, terminal and process code; taskkill, the Toolhelp snapshot and kill(1) are platform tools. Nothing from the old app.
+> 2026-10-12 · T-058 · The cards SAFE-009..012, COMPAT 3.2 and the PreToolUse reply shape from Claude Code's published hook docs (context7), and this repo's own hook server and script. Nothing from the old app.
+> 2026-10-12 · T-059-a · The cards SAFE-013 and SAFE-014, the hook input fields (`cwd`) from Claude Code's published hook docs (context7), PowerShell's and cmd's public switch names, and this repo's own protected module. Nothing from the old app.
+> 2026-10-12 · T-060 · The cards SAFE-021 and SAFE-022, Windows' public path forms (UNC, long-path and device prefixes, 8.3 short names, alternate data streams), Explorer's /select switch and macOS open -R, and this repo's own files and artifacts modules. Nothing from the old app.
+> 2026-10-12 · T-061 · The card GIT-003 and the app's own CloseAsk dialog; git's reset, checkout and pathspec-from-file behaviour as the unit test exercises it on this machine; no outside source.
+> 2026-10-12 · T-062-a · The cards EDIT-044, EDIT-045 and EDIT-053 and the T-060 host refusal; Rust std `canonicalize` and Windows sharing-violation error codes as the unit tests exercise them on this machine; no outside source.
+> 2026-10-12 · T-063 · The card BROW-051 and the app's own hooks and CLI servers; the Fetch standard's CORS and Sec-Fetch behaviour as the app's own web view showed it; no outside source.
+> 2026-10-12 · T-064-a · The card APP-041 and the app's own secrets, terminal and settings modules; the token prefixes are the public formats of Anthropic, GitHub, Slack, AWS, Google, GitLab and npm keys as their documentation shows them; no outside source.
+> 2026-10-12 · T-064-b · The card APP-070, the Send Feedback card's Compat line and the app's own update, artifacts and CLI modules; GitHub's new-issue address parameters (title, body) as its public documentation shows them; the WebView2 flag from Tauri's config reference (additionalBrowserArgs); no outside source.
+> 2026-10-12 · T-065 · The card PROJ-067, DESIGN.md and the lane's own App.tsx/workspaces.ts; no outside source.
+> 2026-10-12 · T-066 · The card SESS-030, Claude Code's public CLI/hook docs (`claude --resume <id>`, hook `session_id`) and the Codex CLI's public `resume` subcommand, read through context7; the lane's own hooks.rs, layout.ts and agents.rs.
+> 2026-10-13 · T-541 · cargo-deny configuration docs (github.com/EmbarkStudios/cargo-deny, docs/src/checks: advisories ignore entries with a reason, bans, sources) and the public GitHub Action taiki-e/install-action, used by name with its tool input (installs cargo-deny on a Windows runner; nothing read from it); RustSec advisory RUSTSEC-2024-0370 as printed by cargo-deny; no code copied; no old Kolux source read
+> 2026-10-13 · T-108-b · public docs read 2026-10-13: GSD's npm package get-shit-done-cc 1.42.3, file get-shit-done/references/worktree-path-safety.md (https://cdn.jsdelivr.net/npm/get-shit-done-cc@1.42.3/get-shit-done/references/worktree-path-safety.md): its executors run in Claude Code isolation worktrees on `worktree-agent-*` branches and write `gsd-spawn-toplevel` into the worktree's Git folder; and Claude Code's worktree page https://code.claude.com/docs/en/worktrees (`.claude/worktrees/` default folder, subagent isolation). Only the file name and folder facts were used; no GSD code was copied · area 01
+> 2026-10-13 · T-109-b · public docs relied on from general knowledge (not opened this pass): the GitHub CLI manual for `gh issue list` and `gh pr list` (`--search`, `--json number,title,url`) at https://cli.github.com/manual/, and GitHub's search docs ("About searching on GitHub": queries longer than 256 characters are not supported) at https://docs.github.com/en/search-github/getting-started-with-searching-on-github/about-searching-on-github. Behaviour only, no text or code copied · area 02
+
+> 2026-10-13 · T-112-a · public sources read 2026-10-13 for the two setup-file formats: Conductor's conductor.json docs (https://www.conductor.build/docs/core/conductor-json: scripts.setup, scripts.run, scripts.archive); the Codex app's local environments page (https://learn.chatgpt.com/docs/environments/local-environment: config lives in the project's .codex folder) and, for the file's key names, public example files at .codex/environments/environment.toml in public GitHub repositories (unpkg/unpkg, petyosi/react-virtuoso, sketch-hq/fig2sketch, ccusage/ccusage, akarras/ultros, read with `gh api` contents; keys version, name, [setup] script, [setup.windows] script, [cleanup] script) and public conductor.json files (vercel/next.js, RSSNext/Folo, tambo-ai/tambo). Only key names and meanings taken; no code.
+> 2026-10-13 · T-542 · rules from the council consensus section 4 row E and the pass brief; selectors, IPC command names and the hook request shape from this tree's own src/, src-tauri/hooks.rs and scripts/evidence/cdp.mjs (read, not edited); no outside source used; no old Kolux source read
 
 > 2026-10-13 · T-152 · rules from the STAT-004 and STAT-005 cards, COMPAT.md 3.4 (the Claude settings path) and DT-C1; public doc: https://docs.claude.com/en/docs/claude-code/settings (user settings live in ~/.claude/settings.json, or the CLAUDE_CONFIG_DIR folder) and https://docs.claude.com/en/docs/claude-code/hooks (hook entry shape, already used by STAT-001); Codex hook shape as already in this tree's hooks.rs; no old Kolux source or hook script read
 > 2026-10-13 · T-120-a · rules from the STAT-002 and STAT-003 cards and T-036's card; public docs: https://docs.claude.com/en/docs/claude-code/hooks and https://docs.claude.com/en/docs/claude-code/settings (hooks and statusLine in settings.json) for what counts as Kolux's Claude Code entries; Codex hooks.json shape as already in this tree's hooks.rs; no old Kolux source or hook script read

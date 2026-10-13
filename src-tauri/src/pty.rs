@@ -10,6 +10,23 @@ use std::path::{Component, Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
+/// TERM-098 (Windows): a terminal's reply to a program's colour question (OSC 4/10/11/12 with
+/// `rgb:`) or light/dark question (CSI ? 997 ; 1|2 n) reaches the console layer as plain bytes,
+/// and it drops them, since it parses input only for the sequences it knows. Written as
+/// win32-input-mode key events (one per character, the console's own keyboard encoding, which it
+/// asks for with CSI ? 9001 h) they reach the program untouched.
+pub fn is_reply(data: &[u8]) -> bool {
+    data.starts_with(b"\x1b]") || data.starts_with(b"\x1b[?997;")
+}
+
+/// `data` as win32-input-mode key events: `CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _` per character, a
+/// key-down then a key-up with the character and no virtual key. The key-up matters: a run of
+/// identical key-downs is coalesced by the console into one repeated key, and a reader then sees
+/// one character too many (measured: `dddd` read back as `ddddd`).
+pub fn as_key_events(data: &[u8]) -> Vec<u8> {
+    String::from_utf8_lossy(data).chars().map(|c| format!("\x1b[0;0;{0};1;0;1_\x1b[0;0;{0};0;0;1_", c as u32)).collect::<String>().into_bytes()
+}
+
 /// ACCT-046: the shells an automatic pick tries, best first. On Windows: PowerShell 7 (passed over
 /// when the copy found is a Microsoft Store alias), then Windows PowerShell, then the command
 /// prompt, which is always last, found through the system's ComSpec setting when that is set, and
@@ -300,6 +317,13 @@ impl PtySession {
     /// Sends keystrokes (already encoded as the terminal would) to the program.
     pub fn write(&mut self, data: &[u8]) -> Result<(), String> {
         let w = self.writer.as_mut().ok_or("session already closed")?;
+        let keyed;
+        let data = if cfg!(windows) && is_reply(data) {
+            keyed = as_key_events(data);
+            &keyed[..]
+        } else {
+            data
+        };
         w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
     }
 
@@ -482,6 +506,94 @@ mod tests {
         let folder = cwd_text.trim_end_matches(['\\', '/']).to_lowercase();
         assert!(seen.to_lowercase().contains(&folder), "it started in the chosen folder {folder}:\n{seen}");
         session.kill();
+    }
+
+    /// TERM-098: a program's colour and light/dark questions reach the pane through the console
+    /// layer and the pane's answers reach the program. PowerShell asks, the test answers as the
+    /// pane would, and the program prints what it received.
+    #[test]
+    #[cfg(windows)]
+    fn term098_colour_and_mode_queries_pass_through_the_console_layer() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
+        let script = concat!(
+            "$e=[char]27; $q = \"$e]11;?$e\\\" + \"$e]10;?$e\\\" + \"$e]4;1;?$e\\\" + \"$e[?996n\" + \"$e[?2031h\"; ",
+            "[Console]::Out.Write($q); [Console]::Out.Flush(); $t=(Get-Date).AddMilliseconds(2500); $s=''; ",
+            "while((Get-Date) -lt $t){ if([Console]::KeyAvailable){ $s += [Console]::ReadKey($true).KeyChar } else { Start-Sleep -Milliseconds 20 } }; ",
+            "'GOT:' + (($s.ToCharArray() | % { [int]$_ }) -join ',') + ':END'"
+        );
+        let args = vec!["-NoLogo".to_string(), "-NoProfile".to_string(), "-Command".to_string(), script.to_string()];
+        let mut session = PtySession::spawn(
+            program_command("powershell", &args, None),
+            100,
+            30,
+            move |chunk| {
+                let _ = tx.send(chunk.to_vec());
+            },
+            move |code| {
+                let _ = exit_tx.send(code);
+            },
+        )
+        .expect("spawn powershell in a pty");
+        // What the pane would answer to each question, once per question seen.
+        let answers: [(&str, &[u8]); 5] = [
+            ("\x1b[6n", b"\x1b[1;1R"),
+            ("\x1b]11;?", b"\x1b]11;rgb:1111/2222/3333\x1b\\"),
+            ("\x1b]10;?", b"\x1b]10;rgb:aaaa/bbbb/cccc\x1b\\"),
+            ("\x1b]4;1;?", b"\x1b]4;1;rgb:dddd/eeee/ffff\x1b\\"),
+            ("\x1b[?996n", b"\x1b[?997;1n"),
+        ];
+        let mut answered = [0usize; 5];
+        let mut seen = String::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let code = loop {
+            if let Ok(code) = exit_rx.try_recv() {
+                break code;
+            }
+            assert!(Instant::now() < deadline, "the program did not end within 30s; saw:\n{seen:?}");
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+                seen.push_str(&String::from_utf8_lossy(&chunk));
+            }
+            for (i, (ask, reply)) in answers.iter().enumerate() {
+                let asks = seen.matches(ask).count();
+                while answered[i] < asks {
+                    session.write(reply).expect("answer a query");
+                    answered[i] += 1;
+                }
+            }
+        };
+        while let Ok(chunk) = rx.recv_timeout(Duration::from_millis(500)) {
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        session.kill();
+        assert_eq!(code, Some(0), "clean exit; output:\n{seen:?}");
+        let got: String = seen
+            .split_once("GOT:")
+            .and_then(|(_, r)| r.split_once(":END"))
+            .map(|(codes, _)| codes.split(',').filter_map(|c| c.trim().parse::<u32>().ok()).filter_map(char::from_u32).collect())
+            .unwrap_or_default();
+        eprintln!("PANE SAW: {seen:?}\nPROGRAM GOT: {got:?}\nANSWERED: {answered:?}");
+        // The console layer keeps OSC 10 and 11 questions to itself (measured on Windows 11 26200,
+        // DT-C20); the palette question and the light/dark question and subscription get through.
+        for ask in ["\x1b]4;1;?", "\x1b[?996n", "\x1b[?2031h"] {
+            assert!(seen.contains(ask), "the pane saw the question {ask:?}; pane saw:\n{seen:?}");
+        }
+        assert!(got.contains("\x1b]4;1;rgb:dddd/eeee/ffff"), "the program got the palette colour; it got {got:?}");
+        assert!(got.contains("\x1b[?997;1n"), "the program got the light/dark answer; it got {got:?}");
+        assert!(!got.contains("\x1b[1;1R"), "the cursor report stays the console's own; it got {got:?}");
+    }
+
+    #[test]
+    fn term098_a_reply_is_sent_as_key_events_and_keys_are_not() {
+        assert!(is_reply(b"\x1b]11;rgb:1111/2222/3333\x1b\\"));
+        assert!(is_reply(b"\x1b[?997;2n"));
+        assert!(!is_reply(b"\x1b[1;1R"));
+        assert!(!is_reply(b"\x1b[?1;2c"));
+        assert!(!is_reply(b"\x1b[200~\x1b]0;x\x07\x1b[201~"));
+        assert!(!is_reply(b"ls\r"));
+        let keyed = as_key_events(b"\x1b[?997;1n");
+        assert!(keyed.starts_with(b"\x1b[0;0;27;1;0;1_\x1b[0;0;27;0;0;1_\x1b[0;0;91;1;0;1_\x1b[0;0;91;0;0;1_"), "{}", String::from_utf8_lossy(&keyed));
+        assert_eq!(keyed.iter().filter(|b| **b == b'_').count(), 18, "a down and an up per character");
     }
 
     /// A program that is not installed fails at spawn with a message, not a silent empty pane.

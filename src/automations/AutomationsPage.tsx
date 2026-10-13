@@ -6,7 +6,7 @@
 // AUTO-017: Up and Down move the selection, Enter opens the automation as its own page, Left and
 // Right switch Overview and Runs, Escape steps back to the list and then closes the page.
 // AUTO-018: the Overview tab, with a long prompt folded behind an expand control.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import Ask from "../chrome/Ask";
@@ -17,7 +17,7 @@ import AutomationDialog, { TemplateCards } from "./AutomationDialog";
 import type { Template } from "./timetable";
 import RunsDashboard, { Breadcrumb, RunPage } from "./RunsDashboard";
 import { folderName } from "../projects/model";
-import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, graceWord, precheckWord, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
+import { ago, CONFIRM_DELETE_KEY, confirmDelete, keepSelection, lastRun, runActions, runStep, startedBy, type RunAction, pageKey, matches, noFilters, normalizeQuery, passes, sortRows, statusWord, triggerLabel, upcoming, graceWord, precheckWord, type Automation, type Filters, type Names, type Run, type SortKey } from "./model";
 
 /** `runsError` says the history could not be read (AUTO-018: the run count then reads unknown). */
 export type Data = { automations: Automation[]; runs: Run[]; runsError?: string };
@@ -31,6 +31,10 @@ type Props = {
   onClose?: () => void;
   /** Seeds the page without asking the back end (tests render it to HTML); `open` opens one automation. */
   initial?: { data?: Data; error?: string; runs?: boolean; open?: string };
+  /** AUTO-013: whether a run's own terminal is still open, and how View run and Resume workspace get there. */
+  liveRun?: (r: Run) => boolean;
+  onViewRun?: (r: Run) => void;
+  onResume?: (r: Run) => void;
 };
 
 const columns: Array<{ key: SortKey; label: string }> = [
@@ -49,10 +53,10 @@ const results: Array<{ value: Filters["result"]; label: string }> = [
   { value: "dispatched", label: "Running" },
   { value: "pending", label: "Queued" },
   { value: "skipped", label: "Skipped" },
-  { value: "failed", label: "Failed to start" },
+  { value: "failed", label: "Failed" },
 ];
 
-export default function AutomationsPage({ projects, agents, settings, onSettings, onClose, initial }: Props) {
+export default function AutomationsPage({ projects, agents, settings, onSettings, onClose, initial, liveRun, onViewRun, onResume }: Props) {
   const [data, setData] = useState<Data | null>(initial?.data ?? null);
   const [error, setError] = useState<string | null>(initial?.error ?? null);
   const [query, setQuery] = useState("");
@@ -126,7 +130,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   keyRef.current = (e) => {
     const t = e.target as HTMLElement;
     if (runsView || (t !== document.body && !root.current?.contains(t))) return;
-    const overlay = dialog !== undefined || asking !== null || menu !== null || t.closest('[role="dialog"],[role="menu"],[role="listbox"],[role="alertdialog"]') !== null || document.querySelector('[aria-modal="true"]') !== null;
+    const overlay = dialog !== undefined || asking !== null || menu !== null || t.closest('[role="dialog"],[role="menu"],[role="listbox"]:not(.autos-runs),[role="alertdialog"]') !== null || document.querySelector('[aria-modal="true"]') !== null;
     const control = t.closest("input,textarea,select,button,a,[contenteditable]") !== null;
     const what = pageKey({ key: e.key, mods: e.altKey || e.ctrlKey || e.metaKey || e.shiftKey, control, search: t === search.current, row: t.tagName === "TR", overlay, opened: openedA !== undefined });
     if (!what) return;
@@ -233,7 +237,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
         <div className="autos-bar">
           <Breadcrumb onAutomations={() => setOpened(null)} last={openedA.name} />
         </div>
-        <Detail key={openedA.id} a={openedA} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(openedA.provider)} tab={tab} onTab={setTab} onRun={() => runNow(openedA)} onToggle={() => toggle(openedA)} />
+        <Detail key={openedA.id} a={openedA} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(openedA.provider)} tab={tab} onTab={setTab} onRun={() => runNow(openedA)} onToggle={() => toggle(openedA)} live={liveRun} onView={onViewRun} onResume={onResume} onRetry={() => void load()} />
         {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} template={template} onClose={() => setDialog(undefined)} onSaved={saved} />}
       </div>
     );
@@ -397,7 +401,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
               </tbody>
             </table>
           </div>
-          {current && <Detail key={current.id} a={current} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(current.provider)} tab={tab} onTab={setTab} onRun={() => runNow(current)} onToggle={() => toggle(current)} />}
+          {current && <Detail key={current.id} a={current} runs={runs} runsError={data?.runsError} now={now} agent={names.agent(current.provider)} tab={tab} onTab={setTab} onRun={() => runNow(current)} onToggle={() => toggle(current)} live={liveRun} onView={onViewRun} onResume={onResume} onRetry={() => void load()} />}
         </>
       )}
       {dialog !== undefined && <AutomationDialog projects={projects} agents={agents} editing={dialog} template={template} onClose={() => setDialog(undefined)} onSaved={saved} />}
@@ -405,12 +409,45 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
   );
 }
 
-type DetailProps = { a: Automation; runs: Run[]; runsError?: string; now: number; agent: string; tab: "overview" | "runs"; onTab: (t: "overview" | "runs") => void; onRun: () => void; onToggle: () => void };
-function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }: DetailProps) {
+type DetailProps = { a: Automation; runs: Run[]; runsError?: string; now: number; agent: string; tab: "overview" | "runs"; onTab: (t: "overview" | "runs") => void; onRun: () => void; onToggle: () => void; live?: (r: Run) => boolean; onView?: (r: Run) => void; onResume?: (r: Run) => void; onRetry: () => void };
+function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle, live, onView, onResume, onRetry }: DetailProps) {
   const mine = runs.filter((r) => r.automationId === a.id).sort((x, y) => y.number - x.number);
   // AUTO-018: a prompt that does not fit is folded; the guess holds until the box is measured, and
   // a narrower window brings the control up. The control stays put when used, so focus stays on it.
   const [unfolded, setUnfolded] = useState(false);
+  // AUTO-013: the selected run, the run whose saved output is open, and a rerun held as pending a moment.
+  // The selection follows the run, not its place, so a new run arriving on top does not move it.
+  const [sel, setSel] = useState<string | null>(null);
+  const [shown, setShown] = useState<string | null>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const runList = useRef<HTMLOListElement>(null);
+  const found = mine.findIndex((r) => r.id === sel);
+  const at = found < 0 ? null : found;
+  const actionsOf = (r: Run) => runActions(r, { live: live?.(r) ?? false, exists: true });
+  const doAction = (r: Run, what: RunAction) => {
+    if (what === "view") onView?.(r);
+    else if (what === "resume") onResume?.(r);
+    else if (what === "snapshot") setShown((x) => (x === r.id ? null : r.id));
+    else {
+      setPending(r.id);
+      window.setTimeout(() => setPending((x) => (x === r.id ? null : x)), 1500);
+      onRun();
+    }
+  };
+  const runKey = (e: KeyboardEvent<HTMLOListElement>) => {
+    if (e.target !== e.currentTarget && (e.key === "Enter" || e.key === " ")) return; // a focused button does its own thing
+    const step = runStep({ key: e.key, mods: e.altKey || e.ctrlKey || e.metaKey || e.shiftKey, composing: e.nativeEvent.isComposing }, at, mine.length);
+    if (step === null) return;
+    e.preventDefault();
+    if (step === "open") {
+      const r = mine[at ?? 0];
+      const first = actionsOf(r).find((x) => x !== "rerun");
+      if (first) doAction(r, first);
+    } else {
+      setSel(mine[step].id);
+      runList.current?.children[step]?.scrollIntoView({ block: "nearest" });
+    }
+  };
   const [overflows, setOverflows] = useState(() => a.prompt.split("\n").length > 6 || a.prompt.length > 600);
   const box = useRef<HTMLPreElement>(null);
   useEffect(() => {
@@ -481,20 +518,36 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }:
       </div>
       <div role="tabpanel" aria-label="Runs" hidden={tab !== "runs"}>
       {runsError ? (
-        <p className="autos-none">The run history could not be read.</p>
+        <div className="note warn" role="alert">
+          The run history could not be read: {runsError}{" "}
+          <button className="btn" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
       ) : mine.length === 0 ? (
         <p className="autos-none">No runs yet.</p>
       ) : (
-        <ol className="autos-runs">
-          {mine.map((r) => (
-            <li key={r.id}>
+        <ol ref={runList} className="autos-runs" role="listbox" aria-label={`${a.name} runs`} tabIndex={0} aria-activedescendant={at !== null ? `run-${mine[at]?.id}` : undefined} onKeyDown={runKey}>
+          {mine.map((r, i) => (
+            <li key={r.id} id={`run-${r.id}`} role="option" aria-selected={at === i} onClick={() => setSel(r.id)}>
               <span className="num">#{r.number}</span>
               <span>{statusWord(r)}</span>
-              <span className="muted">{r.trigger === "manual" ? "by hand" : r.trigger === "event" ? "by an event" : "by the timetable"}</span>
+              <span className="muted">{startedBy(r)}</span>
               <span className="muted">{r.lastAt ? `first ${ago(r.at, now)}, last ${ago(r.lastAt, now)}` : ago(r.at, now)}</span>
               {r.worktreeName && <span className="chip">{r.worktreeName}</span>}
               {r.detail && <span className="muted">{r.detail}</span>}
-              {r.output && <pre className="auto-output">{r.output}</pre>}
+              {actionsOf(r).map((what) => (
+                <button key={what} className="btn" disabled={what === "rerun" && pending === r.id} aria-expanded={what === "snapshot" ? shown === r.id : undefined} onClick={() => doAction(r, what)}>
+                  {what === "view" ? "View run" : what === "resume" ? "Resume workspace" : what === "snapshot" ? "Saved output" : pending === r.id ? "Rerun pending" : "Rerun"}
+                </button>
+              ))}
+              {r.worktreeGone && shown === r.id && (
+                <div className="autos-snapshot">
+                  <p className="note">A snapshot: the worktree {r.worktreeName ?? ""} is gone, so this is what was saved when the run ended, not a live terminal.</p>
+                  {r.output ? <pre className="auto-output">{r.output}</pre> : <p className="muted">No terminal output was saved for this run.</p>}
+                </div>
+              )}
+              {r.output && !r.worktreeGone && <pre className="auto-output">{r.output}</pre>}
             </li>
           ))}
         </ol>

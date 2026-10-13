@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { DONE_LIMIT, inboxItems, moveSelection, settle, type Source } from "./inbox";
+import { DONE_LIMIT, inboxItems, moveSelection, openLabel, settle, type Source } from "./inbox";
 
 const MIN = 60_000;
 const now = 10_000 * MIN;
@@ -41,4 +41,14 @@ test("Down with nothing selected picks the first row, Up the last; movement stop
   expect(settle(keys, 5)).toBe(7);
   expect(settle([], 5)).toBeNull();
   expect(settle(keys, null)).toBeNull();
+});
+
+test("an item that needs an answer offers Answer in Code, since nothing is answered in the Inbox yet; the rest offer Open in Code (EDIT-041)", () => {
+  const items = inboxItems([src(1, "permission", { running: false }), src(2, "waiting"), src(3, "working"), src(4, "done", { finishedAt: now - MIN })], now);
+  expect(items.map((i) => [i.key, openLabel(i)])).toEqual([
+    [1, "Answer in Code"],
+    [2, "Answer in Code"],
+    [3, "Open in Code"],
+    [4, "Open in Code"],
+  ]);
 });

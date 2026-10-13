@@ -37,6 +37,10 @@ pub struct Worktree {
     /// AUTO-024: who made it, from Kolux's record of how it came to be ("app", "cli" or
     /// "automation"); none when Kolux has no record.
     pub made_by: Option<String>,
+    /// VIEW-038: the issue or pull request number it is linked to, so the palette finds it by number.
+    pub number: Option<u64>,
+    /// EDIT-047: the comment it was made with (`worktree create --comment`); the palette shows it.
+    pub comment: Option<String>,
 }
 
 /// GIT-063: what an unattended git is given, so it fails at once instead of waiting on a password
@@ -418,7 +422,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None, made_by: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None });
         }
     }
     out

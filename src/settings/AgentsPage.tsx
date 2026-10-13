@@ -7,6 +7,7 @@ import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "
 import { Segmented } from "./GeneralPage";
 import { useSettings } from "./useSettings";
 import { CAP_FIELD, capOn } from "../usage/meter";
+import { CACHE_LENGTH, CACHE_ON, cacheMinutes } from "../projects/cache";
 
 const OPTIONS_FIELD = "agentOptions";
 const PERMISSIONS_FIELD = "agentPermissions";
@@ -170,6 +171,30 @@ export default function AgentsPage() {
       </section>
       <HooksSwitch on={hooksOn(settings)} onSwitch={(on) => void save({ [HOOKS_FIELD]: on }).then(() => invoke("agent_hooks_sync")).catch(() => {})} />
       <AgentsPageView cap={capOn(settings ?? {})} onCap={(on) => void save({ [CAP_FIELD]: on })} />
+      <CachePick minutes={cacheMinutes(settings)} onPick={(m) => void save(m === null ? { [CACHE_ON]: false } : { [CACHE_ON]: true, [CACHE_LENGTH]: m })} />
     </>
+  );
+}
+
+// SET-059: the prompt-cache countdown switch (off by default) and its length, matched to how long
+// the provider keeps the cache; minutes, or null for off.
+export function CachePick({ minutes, onPick }: { minutes: number | null; onPick: (m: number | null) => void }) {
+  return (
+    <section className="conn-card" aria-label="Prompt-cache timer">
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={minutes !== null} onChange={(e) => onPick(e.target.checked ? 5 : null)} />
+        <span>
+          Prompt-cache timer
+          <small>When a Claude agent goes idle, its worktree card counts down how long the conversation stays cached; after that the next message sends it all again without the cache.</small>
+        </span>
+      </label>
+      <div className="look-select">
+        <span>Cache length</span>
+        <select aria-label="Cache length" className="field" disabled={minutes === null} value={String(minutes ?? 5)} onChange={(e) => onPick(Number(e.target.value))}>
+          <option value="5">5 minutes</option>
+          <option value="60">1 hour</option>
+        </select>
+      </div>
+    </section>
   );
 }

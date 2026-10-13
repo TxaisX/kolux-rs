@@ -306,7 +306,8 @@ mod script_runs {
         // An agent that strips the token variables: only the pane key, identity and endpoint file.
         let env = [("KOLUX_PANE_KEY", "7".to_string()), ("KOLUX_HOOK_IDENTITY", who(7)), ("KOLUX_HOOK_ENDPOINT", endpoint.display().to_string()), ("CLAUDE_CONFIG_DIR", "C:\\cfg!\\".to_string())];
         let out = run(&dir, &env, STOP);
-        assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
+        // SAFE-009: the Claude script hands Kolux's answer back to Claude on stdout.
+        assert!(out.status.success() && out.stdout == b"{}", "{out:?}");
         let req = got.join().unwrap();
         assert_eq!(req.path, "/claude");
         assert_eq!(req.headers.get("x-kolux-token").map(String::as_str), Some("sekrit"));

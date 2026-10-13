@@ -1,0 +1,8 @@
+hooks-sync T-152-gate proof after merging main bc2531c into lane/hooks (dev app pid 26156, identifier com.txaisxiong.kolux-rs.hooks, vite 1419, CDP 9245)
+launch env: CLAUDE_CONFIG_DIR=G:\Temp\hooks-sync\claude-config, CODEX_HOME=G:\Temp\hooks-sync\codex-home (scratch, empty before launch); the log line below confirms agentHooksInstall is off
+dev log lines matching 'agent hooks':
+kolux-rs: agent hooks: not installed (agentHooksInstall is off)
+scratch CLAUDE_CONFIG_DIR after launch, a shell pane open, a settings change and screenshots (find output, empty = nothing written):
+settings.json present: no
+scratch CODEX_HOME contents:
+hooks.json present: no

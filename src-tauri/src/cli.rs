@@ -46,6 +46,10 @@ pub struct Request {
     /// an orchestration change away before running it. Empty from a CLI that predates the field.
     #[serde(default)]
     pub cli: String,
+    /// When the app took the connection, which can be well before it gets to answer: requests
+    /// are answered one at a time (ORCH-017's repeat that joins the start ahead of it).
+    #[serde(skip)]
+    pub arrived: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -95,11 +99,11 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>, the name defaulting to its title] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--usage] [--json]\n      --usage adds the tokens the worktree's sessions used (tracked providers only)\n  kolux-dev worktree set [--worktree <selector>] [--display-name <d>] [--issue <number>|null] [--comment <text>]\n      [--parent-worktree <selector>|current] [--no-parent] [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration worker-list [--run <run>] [--terminal-state active|reclaimable|retained|release_pending|release_unknown|released]\n      [--cursor <c>] [--limit 1-100] [--json]\n      (this terminal's Run unless --run names another; every Run when none is tied)\n  kolux-dev orchestration worker-retain --dispatch <id> [--json]\n      (keeps a settled worker's terminal open; the mark lasts across restarts)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev terminal read [--terminal <handle>] [--cursor <n>] [--limit <n>] [--screen] [--json]\n      (the output after a cursor, or with --screen the frame visible now; inside a Kolux terminal --terminal defaults to it)\n  kolux-dev terminal send [--terminal <handle>] [--text <text>] [--enter] [--interrupt] [--wait-submit <seconds>] [--retry-request <id>] [--json]\n  kolux-dev terminal wait [--terminal <handle>] --for exit|tui-idle [--timeout-ms <ms>] [--json]\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
       [--missed-run-grace-minutes 0|30|60|180|720|1440|2880]\n      [--precheck <command>] [--precheck-timeout 60|120|300|600] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev skills coverage [--json]\n      (which installed agents have the orchestration skill for the whole computer)\n  kolux-dev agent hooks status | agent hooks on | agent hooks off [--json]\n      (each agent's status hooks: installed, partial, not installed or error; on and off switch them\n      and bring every agent in line; these work with the app closed)\n  kolux-dev agent hooks prepare-codex\n      (install and trust Kolux's Codex hooks before Codex is first started)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing
 acts on yet go to stderr and into the result's `warnings` list. Exit 0 worked, 1 any error.\n";
 
-const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "enabled", "disabled", "references", "focus", "include-visual-layouts", "tab"];
+const SWITCHES: &[&str] = &["force", "activate", "run-hooks", "no-parent", "takeover-legacy", "unread", "peek", "all", "format", "wait", "full", "ready", "brief", "inject", "dry-run", "return-preamble", "preamble", "tasks", "messages", "enabled", "disabled", "references", "focus", "include-visual-layouts", "tab", "screen", "enter", "interrupt", "usage"];
 /// switch; stop is the old word for close, kept out of the help.
 const TERMINAL: &[(&str, &str, &[&str])] = &[
     ("terminal list", "terminal.list", &["worktree", "limit", "include-visual-layouts"]),
@@ -136,17 +140,25 @@ const MAIL: &[(&str, &str, &[&str])] = &[
     ("orchestration task-create", "orchestration.task-create", &["spec", "task-title", "display-name", "deps", "parent", "run", "from", "retry-request"]),
     ("orchestration task-list", "orchestration.task-list", &["status", "ready", "brief", "run", "from"]),
     ("orchestration task-update", UPDATE, &["id", "status", "result", "run", "from", "retry-request"]),
-    // ponytail: ask's older hand-back with exit status 75 (CLI-033) and the
-    // worker-list/show/read/release/retain commands (CLI-036) are T-089-b.
+    // ponytail: ask's older hand-back with exit status 75 (CLI-033) and worker-show, worker-read
+    // and worker-release (CLI-036) are T-089-c; they need the terminal's saved output.
     ("orchestration dispatch", "orchestration.dispatch", &["task", "to", "from", "run", "inject", "dry-run", "return-preamble", "max-depth", "retry-request"]),
     ("orchestration dispatch-show", "orchestration.dispatch-show", &["task", "preamble", "from"]),
     ("orchestration worker-abandon", ABANDON, &["dispatch", "run", "from", "retry-request"]),
     ("orchestration worker-stop", STOP, &["dispatch", "run", "from", "retry-request"]),
+    ("orchestration worker-list", WORKER_LIST, &["run", "terminal-state", "cursor", "limit", "from"]),
+    ("orchestration worker-retain", RETAIN, &["dispatch", "run", "from", "retry-request"]),
 ];
 /// CLI-038: the orchestration changes. Each carries a request id that lasts, so a change whose
 /// answer was lost can be sent again and still take effect no more than once.
 const CHANGES: &[&str] = &["orchestration.run-create", "orchestration.run-use", SEND, "orchestration.reply", "orchestration.task-create", "orchestration.dispatch", WORKER_START];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// CLI-024 / CLI-025: reading, typing into and waiting on a terminal by its handle.
+const TERM: &[(&str, &str, &[&str])] = &[
+    ("terminal read", "terminal.read", &["terminal", "cursor", "limit", "screen"]),
+    ("terminal send", "terminal.send", &["terminal", "text", "enter", "interrupt", "wait-submit", "retry-request"]),
+    ("terminal wait", "terminal.wait", &["terminal", "for", "timeout-ms"]),
+];
 /// CLI-015..017: the repo, project and worktree lookups and their flags.
 const QUERY: &[(&str, &str, &[&str])] = &[
     ("repo list", "repo.list", &[]),
@@ -157,8 +169,8 @@ const QUERY: &[(&str, &str, &[&str])] = &[
     ("project list", "project.list", &[]),
     ("worktree list", "worktree.list", &["repo", "limit"]),
     ("worktree ps", "worktree.ps", &["repo", "limit"]),
-    ("worktree show", "worktree.show", &["worktree"]),
-    ("worktree current", "worktree.current", &[]),
+    ("worktree show", "worktree.show", &["worktree", "usage"]),
+    ("worktree current", "worktree.current", &["usage"]),
     ("worktree changes", "worktree.changes", &["worktree"]),
     ("worktree overlap", "worktree.overlap", &["worktree"]),
 ];
@@ -166,6 +178,8 @@ const SEND: &str = "orchestration.send";
 const ABANDON: &str = "orchestration.worker-abandon";
 const UPDATE: &str = "orchestration.task-update";
 const STOP: &str = "orchestration.worker-stop";
+const WORKER_LIST: &str = "orchestration.worker-list";
+const RETAIN: &str = "orchestration.worker-retain";
 const CHECK: &str = "orchestration.check";
 const ASK: &str = "orchestration.ask";
 const RESET: &str = "orchestration.reset";
@@ -190,6 +204,10 @@ fn camel(k: &str) -> String {
     }
     out
 }
+/// CLI-019: what `worktree set` changes, and its flags.
+const SET: &str = "worktree.set";
+const SET_FIELDS: &[&str] = &["display-name", "issue", "comment", "parent-worktree", "no-parent"];
+const SET_FLAGS: &[&str] = &["worktree", "display-name", "issue", "comment", "workspace-status", "parent-worktree", "no-parent"];
 const CREATE_FLAGS: &[&str] = &["name", "repo", "agent", "prompt", "setup", "base-branch", "issue", "comment", "parent-worktree", "no-parent", "run-hooks", "activate"];
 const RM_FLAGS: &[&str] = &["worktree", "force", "run-hooks"];
 const WORKER_START: &str = "orchestration.worker-start";
@@ -207,6 +225,7 @@ type Command = (&'static str, &'static str, &'static [&'static str]);
 fn commands() -> Vec<Command> {
     let mut all: Vec<Command> = vec![
         ("worktree create", "worktree.create", CREATE_FLAGS),
+        ("worktree set", SET, SET_FLAGS),
         ("worktree rm", "worktree.rm", RM_FLAGS),
         ("worktree remove", "worktree.rm", RM_FLAGS),
         ("worktree delete", "worktree.rm", RM_FLAGS),
@@ -216,6 +235,7 @@ fn commands() -> Vec<Command> {
         ("open", "app.open", OPEN_FLAGS),
     ];
     all.extend(QUERY.iter().copied());
+    all.extend(TERM.iter().copied());
     all.extend(MAIL.iter().copied());
     all.extend(TERMINAL.iter().copied());
     all.extend(automations_cli::COMMANDS.iter().copied());
@@ -428,8 +448,8 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
         let empty = |k: &str| text(k).is_some_and(|v| v.trim().is_empty());
         let mut args = Map::new();
         if command == "worktree.create" {
-            if text("name").map(str::trim).unwrap_or_default().is_empty() {
-                return Err(Fail::args("--name is required"));
+            if text("name").map(str::trim).unwrap_or_default().is_empty() && text("issue").map(str::trim).unwrap_or_default().is_empty() {
+                return Err(Fail::args("--name is required (or --issue, to name it after the issue)"));
             }
             for k in ["agent", "prompt", "setup", "parent-worktree"] {
                 if empty(k) {
@@ -462,6 +482,28 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             args.insert("setup".into(), Value::String(setup.into()));
             if flags.contains_key("run-hooks") {
                 args.insert("activate".into(), Value::Bool(true));
+            }
+        } else if command == SET {
+            // CLI-019: refused before any lookup.
+            if flags.contains_key("workspace-status") {
+                return Err(Fail::args("--workspace-status moves the worktree's card on the Board, which is not built yet; nothing was changed"));
+            }
+            if flags.contains_key("no-parent") && flags.contains_key("parent-worktree") {
+                return Err(Fail::args("--no-parent and --parent-worktree disagree; pass one of them"));
+            }
+            for k in ["worktree", "display-name", "parent-worktree"] {
+                if empty(k) {
+                    return Err(Fail::args(format!("--{k} cannot be empty")));
+                }
+            }
+            if text("issue").map(str::trim).is_some_and(|v| v != "null" && v.parse::<u64>().map_or(true, |n| n == 0)) {
+                return Err(Fail::args("--issue takes a GitHub issue number, or null to remove the link"));
+            }
+            if !SET_FIELDS.iter().any(|k| flags.contains_key(*k)) {
+                return Err(Fail::args("nothing to set; pass --display-name, --issue, --comment, --parent-worktree or --no-parent"));
+            }
+            for (k, v) in &flags {
+                args.insert(camel(k), v.clone());
             }
         } else if command == WORKER_START {
             check_worker_start(&flags)?;
@@ -549,7 +591,16 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
                     }
                 }
                 "orchestration.dispatch-show" => need("task", "")?,
-                ABANDON | STOP => need("dispatch", ": name the dispatch, like dispatch-2")?,
+                ABANDON | STOP | RETAIN => need("dispatch", ": name the dispatch, like dispatch-2")?,
+                WORKER_LIST => {
+                    // ORCH-026: a page holds 1 to 100 workers; the terminal states are a closed set.
+                    if text("limit").and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| n > 100) {
+                        return Err(Fail::args("--limit takes 1 to 100"));
+                    }
+                    if let Some(st) = text("terminal-state").filter(|v| !crate::orchestration::TERMINAL_STATES.contains(&v.trim())) {
+                        return Err(Fail::args(format!("--terminal-state is one of {}, not {st}", crate::orchestration::TERMINAL_STATES.join(", "))));
+                    }
+                }
                 "orchestration.request-show" => need("request", ": the --retry-request id of the change")?,
                 UPDATE => {
                     need("id", ": name the task, like task-2")?;
@@ -575,6 +626,14 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             args = automations_cli::check(command, &flags)?;
         } else if local_cli::COMMANDS.iter().any(|c| c.1 == command) {
             args = flags.clone();
+        } else if TERM.iter().any(|(_, c, _)| *c == command) {
+            // CLI-024 / CLI-025: --text may be anything, even blank; the rest are keys and numbers.
+            for (k, v) in &flags {
+                if k != "text" && v.as_str().is_some_and(|s| s.trim().is_empty()) {
+                    return Err(Fail::args(format!("--{k} cannot be empty")));
+                }
+                args.insert(camel(k), v.clone());
+            }
         } else if QUERY.iter().any(|(_, c, _)| *c == command) {
             for (k, v) in &flags {
                 if v.as_str().is_some_and(|s| s.trim().is_empty()) {
@@ -893,6 +952,28 @@ fn text_of(command: &str, r: &Value) -> String {
     let s = |k: &str| r[k].as_str().unwrap_or_default().to_string();
     match command {
         c if c.starts_with("account.") => cli_accounts::text(c, r),
+        "terminal.read" => {
+            let strs = |v: &Value| v.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
+            if r["screen"] == Value::Bool(true) {
+                return strs(&r["rows"]).join("\n").trim_end().to_string();
+            }
+            let mut out: Vec<String> = r["lines"].as_array().into_iter().flatten().filter_map(|l| l["text"].as_str().map(str::to_string)).collect();
+            if let Some(p) = r["pending"].as_str().filter(|p| !p.is_empty()) {
+                out.push(p.to_string());
+            }
+            out.push(format!("-- cursor {}", r["cursor"]));
+            out.join("\n")
+        }
+        "terminal.send" => {
+            let what = r["delivered"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join("+");
+            let tail = match r["receipt"].as_str() {
+                Some("turn_began") => ": the agent began a turn".to_string(),
+                Some(rc) => format!(": {rc}; {}", r["next"].as_str().map(|n| format!("look with {n}")).unwrap_or_default()),
+                None => String::new(),
+            };
+            format!("sent {what} to {}{}", s("terminal"), tail.trim_end_matches("; "))
+        }
+        "terminal.wait" => format!("{} is {}", s("terminal"), s("state")),
         "worktree.create" => {
             let mut line = format!("created {} at {} (from {})", if s("name").is_empty() { s("branch") } else { s("name") }, s("path"), s("base"));
             if let Some(n) = r["note"].as_str() {
@@ -905,6 +986,7 @@ fn text_of(command: &str, r: &Value) -> String {
             let model = r["model"].as_str().map(|m| format!(", {m}")).unwrap_or_default();
             let term = r["terminals"][0]["id"].as_u64().map(|t| format!(" in terminal {t}")).unwrap_or_default();
             let how = if s("launch") == "reused_terminal" { ", reused" } else { "" };
+            let how = if r["joined"] == true { format!("{how}; joined the same start already under way") } else { how.to_string() };
             let mut line = format!("worker {}: {} for {} in {} ({}{}){}{how}", s("status"), s("dispatchId"), s("taskId"), r["worktree"]["path"].as_str().unwrap_or_default(), s("agent"), model, term);
             if let Some(h) = r["reveal"].as_str() {
                 line.push_str(&format!("\n{h}"));
@@ -1024,11 +1106,41 @@ fn text_of(command: &str, r: &Value) -> String {
             };
             format!("{} stopped: {how}; the worktree {} stays; {} is {}", s("dispatchId"), s("worktree"), s("taskId"), s("taskStatus"))
         }
+        WORKER_LIST => {
+            let scope = match (r["scope"]["from"].as_str(), r["scope"]["run"].as_str()) {
+                (Some("named"), Some(run)) => format!("workers in {run} (named with --run)"),
+                (_, Some(run)) => format!("workers in {run} (this terminal's Run)"),
+                _ => "workers in every Run (this terminal is tied to none)".to_string(),
+            };
+            let rows = r["workers"].as_array().cloned().unwrap_or_default();
+            let mut out = vec![format!("{scope}: {}", rows.len())];
+            for w in &rows {
+                let g = |k: &str| w[k].as_str().unwrap_or("-").to_string();
+                let next = w["next"].as_str().map(|n| format!("; next: {n}")).unwrap_or_default();
+                out.push(format!("{} {} (task {}) terminal {} {}{next}", g("dispatchId"), g("terminalState"), g("taskStatus"), g("terminal"), g("worktree")));
+            }
+            if let Some(c) = r["nextCursor"].as_str() {
+                out.push(format!("more: --cursor {c}"));
+            }
+            out.join("\n")
+        }
+        RETAIN => match r["alreadyRetained"] == true {
+            true => format!("{} was already kept", s("dispatchId")),
+            false => format!("{} kept: its terminal {} stays open until it is released", s("dispatchId"), s("terminal")),
+        },
         ABANDON => {
             let term = if s("terminal").is_empty() { "its terminal".to_string() } else { s("terminal") };
             format!("{} abandoned: its worker can no longer report on it; {term} stays open; {} is {}", s("dispatchId"), s("taskId"), s("taskStatus"))
         }
-        SEND => format!("sent {} to {}", r["messageIds"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "), s("to")),
+        SEND => {
+            let sent = format!("sent {} to {}", r["messageIds"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "), s("to"));
+            let k = &r["settled"];
+            match (k["status"].as_str(), k["why"].as_str()) {
+                (Some(st), _) => format!("{sent}\n{} is {st}", k["taskId"].as_str().unwrap_or_default()),
+                (_, Some(why)) => format!("{sent}\n{why}"),
+                _ => sent,
+            }
+        }
         CHECK => {
             let msgs = r["messages"].as_array().cloned().unwrap_or_default();
             let mut out = Vec::new();
@@ -1077,6 +1189,13 @@ fn mail_lines(msgs: &[Value], out: &mut Vec<String>) {
         if !m["payload"].is_null() {
             out.push(format!("  payload: {}", m["payload"]));
         }
+        // ORCH-015: a done report shows how it ended, the files it touched and its report.
+        let files = m["filesModified"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", ");
+        for (k, v) in [("outcome", g("outcome").to_string()), ("files", files), ("report", g("reportPath").to_string())] {
+            if !v.is_empty() {
+                out.push(format!("  {k}: {v}"));
+            }
+        }
         if !g("reply").is_empty() {
             out.push(format!("  reply: {}", g("reply")));
         }
@@ -1123,6 +1242,41 @@ fn wait_for_mail(port: u16, mut req: Request) -> Result<Value, Fail> {
         }
         std::thread::sleep(Duration::from_millis(500.min(timeout - elapsed)));
     }
+}
+
+/// CLI-025: `terminal wait` asks again every half second until the condition holds or the time
+/// is up (`--timeout-ms`, default `WAIT_DEFAULT_MS`). A terminal that ends blocked on the user,
+/// or the time running out, is a failure, so the exit status is 1.
+fn wait_for_terminal(port: u16, req: Request) -> Result<Value, Fail> {
+    let timeout = req.args["timeoutMs"].as_str().and_then(|s| s.trim().parse::<u64>().ok()).filter(|n| *n > 0).unwrap_or(WAIT_DEFAULT_MS);
+    let start = Instant::now();
+    loop {
+        let env = call(port, &req)?;
+        if env["success"] != Value::Bool(true) || wait_step(&env["result"])? {
+            return Ok(env);
+        }
+        let elapsed = start.elapsed().as_millis() as u64;
+        if elapsed >= timeout {
+            let r = &env["result"];
+            let mut f = Fail::new("timeout", format!("{} did not reach {} within {timeout} ms (it is {})", r["terminal"].as_str().unwrap_or_default(), req.args["for"].as_str().unwrap_or_default(), r["state"].as_str().unwrap_or_default()));
+            f.data = r.clone();
+            return Err(f);
+        }
+        std::thread::sleep(Duration::from_millis(500.min(timeout - elapsed)));
+    }
+}
+
+/// One answer of `terminal.wait`: done, keep asking, or blocked on the user (an error).
+fn wait_step(r: &Value) -> Result<bool, Fail> {
+    if r["done"] != Value::Bool(true) {
+        return Ok(false);
+    }
+    if r["blocked"] == Value::Bool(true) {
+        let mut f = Fail::new("blocked", format!("{} is {}, not idle: the agent needs an answer", r["terminal"].as_str().unwrap_or_default(), r["state"].as_str().unwrap_or_default()));
+        f.data = r.clone();
+        return Err(f);
+    }
+    Ok(true)
 }
 
 /// ORCH-041: Claude Code with Agent Teams turned on, in the Kolux terminal it is run from; every
@@ -1336,7 +1490,7 @@ pub fn main(words: Vec<String>) -> i32 {
         if parsed.command == cli_accounts::ADD {
             let (port, token) = read_endpoint(&data_dir())?;
             let ask = |command: &str, args: Value| -> Result<Value, Fail> {
-                let r = Request { id: request_id(), token: token.clone(), command: command.into(), cwd: cwd.clone(), args, pane: None, cli: VERSION.into() };
+                let r = Request { id: request_id(), token: token.clone(), command: command.into(), cwd: cwd.clone(), args, pane: None, cli: VERSION.into(), arrived: None };
                 let env = call(port, &r)?;
                 if env["success"] == Value::Bool(true) {
                     return Ok(env["result"].clone());
@@ -1355,12 +1509,17 @@ pub fn main(words: Vec<String>) -> i32 {
         }
         if (parsed.command == CHECK && parsed.args.contains_key("wait")) || parsed.command == ASK {
             let (port, token) = read_endpoint(&data_dir())?;
-            let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane, cli: VERSION.into() };
+            let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane, cli: VERSION.into(), arrived: None };
             return Ok((parsed.command.clone(), wait_for_mail(port, req)?));
+        }
+        if parsed.command == "terminal.wait" {
+            let (port, token) = read_endpoint(&data_dir())?;
+            let req = Request { id: id.clone(), token, command: parsed.command.clone(), cwd, args: Value::Object(args), pane, cli: VERSION.into(), arrived: None };
+            return Ok((parsed.command.clone(), wait_for_terminal(port, req)?));
         }
         let send = || {
             let (port, token) = read_endpoint(&data_dir())?;
-            call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(args.clone()), pane: pane.clone(), cli: VERSION.into() })
+            call(port, &Request { id: id.clone(), token, command: parsed.command.clone(), cwd: cwd.clone(), args: Value::Object(args.clone()), pane: pane.clone(), cli: VERSION.into(), arrived: None })
         };
         let env = if parsed.command == "app.open" { open(&send, &launch_app, OPEN_LIMIT)? } else { send()? };
         Ok((parsed.command.clone(), env))
@@ -1502,13 +1661,55 @@ fn pick_in(ctx: &Ctx, sel: &str, cwd: &str, parent: bool) -> Result<(Project, Wo
     }
 }
 
+/// CLI-019: a worktree's display name, linked issue, comment and parent, changed in one call. The
+/// parent is checked first, so a refused move writes nothing; an empty comment clears it.
+fn set_worktree(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    let a = &req.args;
+    let raw = |k: &str| a[k].as_str().map(str::trim);
+    let (p, w) = pick_worktree(ctx, raw("worktree").filter(|s| !s.is_empty()).unwrap_or("current"), &req.cwd)?;
+    let parent = if a["noParent"].as_bool().unwrap_or(false) {
+        Some(None)
+    } else if let Some(sel) = raw("parentWorktree") {
+        let (owner, to) = pick_in(ctx, sel, &req.cwd, true)?;
+        if owner.id != p.id {
+            return Err(Fail::args(format!("--parent-worktree {sel} is in project {}, not {}", owner.name, p.name)));
+        }
+        Some(Some(to.path))
+    } else {
+        None
+    };
+    let store = ctx.store.lock().map_err(|e| e.to_string())?;
+    if let Some(to) = &parent {
+        projects::reparent(ctx.git, &store, &p, &w.path, to.as_deref())?;
+    }
+    if let Some(n) = raw("displayName") {
+        projects::set_name(&store, &w.path, Some(n))?;
+    }
+    if raw("issue").is_some() || raw("comment").is_some() {
+        let mut o = projects::origin(&store, &w.path).filter(Value::is_object).unwrap_or_else(|| json!({}));
+        if let Some(i) = raw("issue") {
+            o["issue"] = i.parse::<u64>().map_or(Value::Null, |n| json!(n));
+            o["issueUrl"] = Value::Null;
+        }
+        if let Some(c) = raw("comment") {
+            o["comment"] = if c.is_empty() { Value::Null } else { json!(c) };
+        }
+        projects::set_origin(&store, &w.path, Some(&o))?;
+    }
+    let all = projects::list_workspaces(ctx.git, &store, &p)?;
+    drop(store);
+    let now = all.iter().find(|x| same_dir(&x.path, &w.path)).cloned().unwrap_or(w);
+    (ctx.notify)(json!({ "kind": "changed", "projectId": p.id, "path": now.path }));
+    Ok(worktree_row(&p, &now, &all))
+}
+
 /// Runs one request against the app and says what it did.
 pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     match req.command.as_str() {
+        SET => set_worktree(ctx, req),
         "worktree.create" => {
-            let name = text("name").ok_or_else(|| Fail::args("--name is required"))?;
             // PROJ-038: a prompt with no agent named goes to the default agent, else the first
             // installed one in catalogue order; a worktree made with neither gets no agent tab.
             let agent = match text("agent") {
@@ -1517,6 +1718,13 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
                 None => None,
             };
             let project = pick_project(ctx, text("repo").as_deref(), &req.cwd)?;
+            // PROJ-037: --issue with no --name names the worktree after the issue's title.
+            let issue = text("issue").and_then(|v| v.parse::<u64>().ok());
+            let name = match (text("name"), issue) {
+                (Some(n), _) => n,
+                (None, Some(n)) => crate::pr_checkout::issue(&crate::scm::gh_program().map_err(|e| Fail::new("failed", e))?, Path::new(&project.path), n).map_err(|e| Fail::new("failed", e))?.title,
+                (None, None) => return Err(Fail::args("--name is required")),
+            };
             // Lineage: the worktree the call was made from, unless a flag says otherwise.
             let parent = if a["noParent"].as_bool().unwrap_or(false) {
                 None
@@ -1529,7 +1737,6 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             } else {
                 calling_worktree(ctx, &project, &req.cwd)?
             };
-            let issue = text("issue").and_then(|v| v.parse::<u64>().ok());
             let made = projects::create_named(ctx.git, ctx.store, &project.id, &name, text("baseBranch").as_deref(), None)?;
             // The calling terminal, when the runtime vouches for it; a shell outside Kolux records none.
             let terminal = caller(ctx, req).ok().flatten();
@@ -1550,23 +1757,15 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             obj.insert("agent".into(), json!(agent));
             obj.insert("activated".into(), json!(activate));
             obj.extend(origin.as_object().expect("an origin is an object").clone());
-            // ponytail: setup scripts (PROJ-033) and issue lookups (PROJ-037) are T-107; the
-            // values are recorded and echoed, nothing runs on them yet, and the caller is told so
-            // (T-014-b-fix) rather than left to think the scripts ran.
-            let setup = text("setup").unwrap_or_else(|| "inherit".into());
-            let mut warnings = Vec::new();
-            if setup == "run" {
-                warnings.push("--setup run: setup scripts do not run yet; the worktree was made without them");
-            }
+            // PROJ-033: the window runs the setup script in a Setup tab unless it is skipped;
+            // --run-hooks runs it as --setup run does. Issue lookups (PROJ-037) are T-107-c.
+            let mut setup = text("setup").unwrap_or_else(|| "inherit".into());
             if a["runHooks"].as_bool().unwrap_or(false) {
-                warnings.push("--run-hooks: setup scripts do not run yet; the worktree was only activated");
-            }
-            if text("comment").is_some() {
-                warnings.push("--comment: recorded with the worktree's origin, shown nowhere yet");
+                setup = "run".into();
             }
             obj.insert("setup".into(), json!(setup));
-            obj.insert("warnings".into(), json!(warnings));
-            (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": made, "agent": agent, "prompt": text("prompt").unwrap_or_default(), "activate": activate }));
+            obj.insert("warnings".into(), json!([]));
+            (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": made, "agent": agent, "prompt": text("prompt").unwrap_or_default(), "activate": activate, "setup": setup }));
             Ok(result)
         }
         "worktree.rm" => {
@@ -1579,7 +1778,13 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             if !a["force"].as_bool().unwrap_or(false) && ctx.git.dirty(Path::new(&w.path))? {
                 return Err(Fail { code: "dirty", message: format!("{shown} has uncommitted changes"), data: json!({ "hint": "add --force to remove it anyway, changes and all" }) });
             }
-            ctx.terminals.kill_under(Path::new(&w.path));
+            // ORCH-058: its terminals and their processes end first and must be shown gone; a stop
+            // that cannot be proven blocks the removal unless --force waives it.
+            let stopped = ctx.terminals.kill_under(Path::new(&w.path));
+            if !stopped.stuck.is_empty() && !a["force"].as_bool().unwrap_or(false) {
+                let pids: Vec<String> = stopped.stuck.iter().map(u32::to_string).collect();
+                return Err(Fail { code: "stuck", message: format!("{} process{} in {shown} did not stop (pid {})", pids.len(), if pids.len() == 1 { "" } else { "es" }, pids.join(", ")), data: json!({ "hint": "add --force to remove it anyway, leaving them running", "pids": stopped.stuck }) });
+            }
             // CLI-020: --force forces only the checkout's removal; the branch is kept.
             let keep = a["force"].as_bool().unwrap_or(false) || projects::keeps_branch(&*ctx.store.lock().map_err(|e| e.to_string())?, &w.path);
             projects::remove_worktree(ctx.git, &project, &w.path, true, keep)?;
@@ -1589,7 +1794,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             (ctx.notify)(json!({ "kind": "removed", "path": w.path }));
             let warnings: Vec<&str> = if a["runHooks"].as_bool().unwrap_or(false) { vec!["--run-hooks: teardown scripts do not run yet; the worktree was removed without them"] } else { vec![] };
-            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": keep && w.branch.is_some(), "warnings": warnings }))
+            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": keep && w.branch.is_some(), "stopped": stopped.ended, "stuck": stopped.stuck, "warnings": warnings }))
         }
         "app.open" => {
             (ctx.front)()?;
@@ -1597,6 +1802,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         }
         WORKER_START => worker_start_once(ctx, req),
         c if QUERY.iter().any(|(_, w, _)| *w == c) => query(ctx, req),
+        c if TERM.iter().any(|(_, w, _)| *w == c) => terminal_io(ctx, req),
         c if c.starts_with("orchestration.") => mail(ctx, req),
         c if c.starts_with("account.") => cli_accounts::dispatch(ctx, req),
         c if c.starts_with("automations.") => automations_cli::dispatch(ctx, req),
@@ -1840,7 +2046,7 @@ fn repo_row(p: &Project) -> Value {
 fn worktree_row(p: &Project, w: &Worktree, all: &[Worktree]) -> Value {
     let id = format!("{}::{}", p.id, w.path);
     let children: Vec<&str> = all.iter().filter(|c| c.parent.as_deref().is_some_and(|x| same_dir(x, &w.path))).map(|c| c.path.as_str()).collect();
-    json!({ "id": id, "selector": format!("id:{id}"), "repoId": p.id, "repo": p.name, "path": w.path, "name": w.name, "branch": w.branch, "head": w.head, "isMain": w.is_main, "kind": w.kind, "parent": w.parent, "children": children })
+    json!({ "id": id, "selector": format!("id:{id}"), "repoId": p.id, "repo": p.name, "path": w.path, "name": w.name, "branch": w.branch, "head": w.head, "isMain": w.is_main, "kind": w.kind, "parent": w.parent, "children": children, "number": w.number, "comment": w.comment })
 }
 
 /// Which hosts a listing looked at, so an empty one is never read as the whole picture.
@@ -2091,7 +2297,15 @@ fn query(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let sel = if req.command == "worktree.current" { "current".to_string() } else { text("worktree").unwrap_or_else(|| "current".into()) };
             let (p, w) = pick_worktree(ctx, &sel, &req.cwd)?;
             let all = projects::list_workspaces(ctx.git, &*lock()?, &p)?;
-            Ok(worktree_row(&p, &w, &all))
+            let mut row = worktree_row(&p, &w, &all);
+            // USAGE-016: an automation run (or anyone) asks what this worktree's sessions used. A
+            // worktree nested inside this one keeps its own.
+            if a["usage"].as_bool().unwrap_or(false) {
+                crate::token_usage::rescan_tracked(ctx.store);
+                let nested: Vec<&str> = all.iter().filter(|o| !same_dir(&o.path, &w.path) && under(&w.path, &o.path)).map(|o| o.path.as_str()).collect();
+                row["usage"] = crate::token_usage::usage_in(ctx.store, |cwd| !cwd.is_empty() && under(&w.path, cwd) && !nested.iter().any(|n| under(n, cwd)));
+            }
+            Ok(row)
         }
         other => Err(Fail::args(format!("unknown command {other}"))),
     }
@@ -2191,6 +2405,15 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
             }
             out.join("\n")
         }
+        SET => {
+            let mut out = vec![format!("updated {}  [{}]  {}", label(r), r["branch"].as_str().unwrap_or("detached"), s(r, "path"))];
+            out.push(r["number"].as_u64().map_or("no linked issue".into(), |n| format!("linked #{n}")));
+            if let Some(c) = r["comment"].as_str() {
+                out.push(format!("comment {c}"));
+            }
+            out.push(r["parent"].as_str().map_or("no parent".into(), |p| format!("parent {p}")));
+            out.join("\n")
+        }
         "worktree.show" | "worktree.current" => {
             let mut out = vec![format!("{}  [{}]  {}", label(r), r["branch"].as_str().unwrap_or("detached"), s(r, "path")), format!("selector {}", s(r, "selector"))];
             if let Some(p) = r["parent"].as_str() {
@@ -2198,6 +2421,14 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
             }
             for c in rows("children") {
                 out.push(format!("child {}", c.as_str().unwrap_or_default()));
+            }
+            for (p, u) in r["usage"].as_object().into_iter().flatten() {
+                let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                out.push(if u["tracked"] == true {
+                    format!("tokens {p}: in {} out {} cache read {} cache write {} in {} sessions", n("input"), n("output"), n("cacheRead"), n("cacheWrite"), u["sessions"].as_array().map_or(0, Vec::len))
+                } else {
+                    format!("tokens {p}: not tracked (turn it on in Token analytics)")
+                });
             }
             out.join("\n")
         }
@@ -2249,9 +2480,22 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "orchestration.request-show" => m.request_show(&pane.clone().unwrap_or_default(), &text("request").ok_or_else(|| Fail::args("--request is required"))?, u64::from(std::process::id())),
         SEND => {
             let p = need()?;
-            let dispatches = load_list(&store, DISPATCHES_KEY);
+            let (mut tasks, mut dispatches) = (load_list(&store, TASKS_KEY), load_list(&store, DISPATCHES_KEY));
             let peers = peers(ctx);
-            m.once(retry, |m| m.post(&p, a, &dispatches, &peers, now_ms()))?
+            let v = m.once(retry, |m| {
+                let mut v = m.post(&p, a, &dispatches, &peers, now_ms())?;
+                // ORCH-015: the worker's own done report settles its task with the mail.
+                let settled = crate::orchestration::report(&mut tasks, &mut dispatches, &p, a, now_ms())?;
+                if !settled.is_null() {
+                    v["settled"] = settled;
+                }
+                Ok(v)
+            })?;
+            if !v["settled"].is_null() {
+                let (t, d) = (Value::Array(tasks).to_string(), Value::Array(dispatches).to_string());
+                store.set_all(&[(TASKS_KEY, &t), (DISPATCHES_KEY, &d)]).map_err(|e| Fail::new("failed", e.to_string()))?;
+            }
+            v
         }
         CHECK => {
             let p = need()?;
@@ -2307,7 +2551,7 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             let peers = peers(ctx);
             m.once(retry, |m| m.ask(&p, a, &dispatches, &peers, now_ms()))?
         }
-        "orchestration.task-create" | "orchestration.task-list" | "orchestration.dispatch" | "orchestration.dispatch-show" | ABANDON | UPDATE | STOP | "orchestration.gate-create" | "orchestration.gate-resolve" | "orchestration.gate-list" => tasks(ctx, &store, &mut m, req, pane.as_deref(), retry)?,
+        "orchestration.task-create" | "orchestration.task-list" | "orchestration.dispatch" | "orchestration.dispatch-show" | ABANDON | UPDATE | STOP | WORKER_LIST | RETAIN | "orchestration.gate-create" | "orchestration.gate-resolve" | "orchestration.gate-list" => tasks(ctx, &store, &mut m, req, pane.as_deref(), retry)?,
         other => return Err(Fail::args(format!("unknown command {other}"))),
     };
     m.save(&store)?;
@@ -2388,7 +2632,7 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
     let own = pane.and_then(|p| m.run_of(p, &dispatches));
     let run = named.clone().or_else(|| own.clone());
     let caps = caps(store, a);
-    let changes = !["orchestration.task-list", "orchestration.dispatch-show", "orchestration.gate-list"].contains(&req.command.as_str()) && a["dryRun"] != true;
+    let changes = !["orchestration.task-list", "orchestration.dispatch-show", "orchestration.gate-list", WORKER_LIST].contains(&req.command.as_str()) && a["dryRun"] != true;
     if let (true, Some(n), Some(p)) = (changes, &named, pane) {
         in_run(m, p, n, &dispatches)?;
     }
@@ -2496,6 +2740,18 @@ fn tasks(ctx: &Ctx, store: &Store, m: &mut crate::orchestration::Mail, req: &Req
                 Ok(receipt)
             })?
         }
+        WORKER_LIST => {
+            // ORCH-026: the named Run, else the tied Run, else every Run; the answer says which.
+            let from = if named.is_some() { "named" } else if own.is_some() { "tied" } else { "all" };
+            let limit = text("limit").and_then(|v| v.parse::<usize>().ok()).unwrap_or(50);
+            let live = |h: &str| ctx.terminals.live(h);
+            o::worker_list(&tasks, &dispatches, run.as_deref(), from, text("terminalState").as_deref(), text("cursor").as_deref(), limit, &live)?
+        }
+        RETAIN => {
+            let id = text("dispatch").ok_or_else(|| Fail::args("--dispatch is required"))?;
+            let live = |h: &str| ctx.terminals.live(h);
+            m.once(retry, |_| o::retain(&mut dispatches, &live, &id, run.as_deref()))?
+        }
         "orchestration.gate-create" => m.once(retry, |m| m.gate_create(run.as_deref(), &mut tasks, &dispatches, a, now_ms()))?,
         "orchestration.gate-resolve" => m.once(retry, |m| m.gate_resolve(run.as_deref(), &mut tasks, a, now_ms()))?,
         "orchestration.gate-list" => m.gate_list(run.as_deref(), a)?,
@@ -2537,6 +2793,171 @@ fn pane_agent(ctx: &Ctx, h: &str) -> Option<String> {
     let p = ctx.terminals.program_of(h, SETTLE)?;
     let stem = Path::new(&p).file_stem()?.to_string_lossy().to_lowercase();
     crate::agents::agent_list().into_iter().find(|x| x.id == stem || x.program.eq_ignore_ascii_case(&stem)).map(|x| x.id)
+}
+
+// ---------------------------------------------------------------- terminal read, send, wait (CLI-024, CLI-025)
+
+/// How long `send` watches for the agent to take a prompt unless `--wait-submit` says otherwise.
+const SUBMIT_WATCH: Duration = Duration::from_secs(3);
+/// Receipts by terminal and `--retry-request` id: an exact retry answers without sending again.
+/// ponytail: in memory, bounded; a retry after a Kolux restart sends anew.
+static SENT: Mutex<Vec<(String, Value)>> = Mutex::new(Vec::new());
+const BLOCKED: [&str; 3] = ["permission", "waiting", "blocked"];
+
+fn terminal_io(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    let a = &req.args;
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let num = |k: &str, flag: &str| -> Result<Option<u64>, Fail> {
+        match a[k].as_str() {
+            None => Ok(None),
+            Some(v) => v.trim().parse::<u64>().map(Some).map_err(|_| Fail::args(format!("{flag} takes a whole number, not `{}`", v.trim()))),
+        }
+    };
+    // COMPAT 2.1: inside a Kolux terminal the command works on that terminal unless told otherwise.
+    let handle = text("terminal").or_else(|| req.pane.as_ref().map(|p| p.handle.clone())).ok_or_else(|| Fail::args("--terminal <handle> is required outside a Kolux terminal (kolux worktree ps --json lists them)"))?;
+    let id = handle.strip_prefix("term-").and_then(|n| n.parse::<u32>().ok()).ok_or_else(|| Fail::args(format!("{handle} is not a terminal handle (term-<n>)")))?;
+    let live = ctx.terminals.live(&handle);
+    let gone = || Fail::new("not_found", format!("no open Kolux terminal is called {handle}"));
+    match req.command.as_str() {
+        "terminal.read" => {
+            let cursor = num("cursor", "--cursor")?;
+            let limit = num("limit", "--limit")?.map(|n| n as usize);
+            if a["screen"].as_bool().unwrap_or(false) {
+                if cursor.is_some() {
+                    return Err(Fail::args("--screen and --cursor cannot be combined: a screen has no history"));
+                }
+                if !live {
+                    return Err(gone());
+                }
+                let request = request_id();
+                crate::terminal::screen_open(&request);
+                (ctx.notify)(json!({ "emit": crate::terminal::SCREEN_EVENT, "payload": { "id": id, "request": request } }));
+                if let Some(rows) = crate::terminal::screen_wait(&request) {
+                    return Ok(json!({ "terminal": handle, "screen": true, "rows": rows }));
+                }
+                let r = ctx.terminals.read(id, None, limit).ok_or_else(gone)?;
+                let mut out = serde_json::to_value(r).unwrap_or_default();
+                out["terminal"] = json!(handle);
+                out["screen"] = json!(false);
+                out["warnings"] = json!([format!("the window did not supply {handle}'s screen; this is its output stream, not a screen")]);
+                return Ok(out);
+            }
+            let r = ctx.terminals.read(id, cursor, limit).ok_or_else(gone)?;
+            let mut warnings = Vec::new();
+            if r.dropped {
+                warnings.push(format!("only part of the output is kept: lines before cursor {} are gone; the oldest cursor to read on from is {}", r.oldest, r.oldest.saturating_sub(1)));
+            }
+            if r.more {
+                warnings.push(match cursor {
+                    Some(_) => format!("more lines follow; read on with --cursor {}", r.cursor),
+                    None => "older lines were left out by --limit; page through them with --cursor".to_string(),
+                });
+            }
+            let mut out = serde_json::to_value(r).unwrap_or_default();
+            out["terminal"] = json!(handle);
+            out["screen"] = json!(false);
+            out["warnings"] = json!(warnings);
+            Ok(out)
+        }
+        "terminal.send" => {
+            let body = text("text");
+            let enter = a["enter"].as_bool().unwrap_or(false);
+            let interrupt = a["interrupt"].as_bool().unwrap_or(false);
+            if body.is_none() && !enter && !interrupt {
+                return Err(Fail::args("nothing to send: give --text, --enter or --interrupt"));
+            }
+            let watch = num("waitSubmit", "--wait-submit")?.map(Duration::from_secs).unwrap_or(SUBMIT_WATCH);
+            let retry = text("retryRequest").map(|r| format!("{handle}|{r}"));
+            if let Some(key) = &retry {
+                if let Some(receipt) = SENT.lock().ok().and_then(|s| s.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())) {
+                    let mut again = receipt;
+                    again["retried"] = json!(true);
+                    return Ok(again);
+                }
+            }
+            if !live {
+                return Err(gone());
+            }
+            let agent = ctx.terminals.program(id).flatten();
+            let prompt = agent.is_some() && body.is_some() && enter;
+            let before = if prompt { Some(crate::status::activity(id)) } else { None };
+            let write = |s: &str| ctx.terminals.write(id, s).map_err(|e| Fail::new("failed", e));
+            let mut delivered = Vec::new();
+            if interrupt {
+                write("\u{3}")?;
+                crate::status::cancel(id);
+                delivered.push("interrupt");
+            }
+            if let Some(t) = &body {
+                // An agent's input box takes the text as one paste, so its line breaks do not send it early.
+                if agent.is_some() { write(&format!("\u{1b}[200~{t}\u{1b}[201~"))? } else { write(t)? }
+                delivered.push("text");
+            }
+            if enter {
+                if prompt {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                write("\r")?;
+                delivered.push("enter");
+            }
+            let mut out = json!({ "terminal": handle, "delivered": delivered, "agent": agent, "prompt": prompt });
+            if let Some(before) = before {
+                let next = format!("kolux terminal read --terminal {handle} --screen");
+                let (receipt, warning) = match before {
+                    None => ("unknown", Some(format!("no status hooks report for {handle}; whether the agent took the prompt cannot be told"))),
+                    Some((_, true)) => ("queued", Some("the agent was already working; the prompt waits behind its turn".to_string())),
+                    Some((mark, false)) => {
+                        let until = Instant::now() + watch;
+                        let mut took = false;
+                        while !took && Instant::now() < until {
+                            took = crate::status::activity(id).is_some_and(|(m, working)| m != mark || working);
+                            if !took {
+                                std::thread::sleep(Duration::from_millis(100));
+                            }
+                        }
+                        if took { ("turn_began", None) } else { ("queued", Some(format!("the agent did not begin a turn within {} s; Enter may have been lost", watch.as_secs()))) }
+                    }
+                };
+                out["receipt"] = json!(receipt);
+                if receipt != "turn_began" {
+                    out["next"] = json!(next);
+                }
+                out["warnings"] = json!(warning.into_iter().collect::<Vec<_>>());
+            }
+            if let Some(key) = retry {
+                if let Ok(mut s) = SENT.lock() {
+                    s.retain(|(k, _)| k != &key);
+                    s.push((key, out.clone()));
+                    if s.len() > 100 {
+                        s.remove(0);
+                    }
+                }
+            }
+            Ok(out)
+        }
+        "terminal.wait" => {
+            let what = text("for").ok_or_else(|| Fail::args("--for exit|tui-idle is required"))?;
+            if !matches!(what.as_str(), "exit" | "tui-idle") {
+                return Err(Fail::args(format!("--for takes exit or tui-idle, not `{what}`")));
+            }
+            if !live {
+                // Either condition holds for a terminal that has ended.
+                return Ok(json!({ "terminal": handle, "done": true, "state": "exited", "blocked": false }));
+            }
+            if what == "exit" {
+                return Ok(json!({ "terminal": handle, "done": false, "state": "running", "blocked": false }));
+            }
+            match crate::status::state_of(id) {
+                Some(state) => Ok(json!({ "terminal": handle, "done": state != "working", "state": state, "blocked": BLOCKED.contains(&state) })),
+                None => {
+                    // ponytail: no hooks report (a shell, or an agent without them): silence stands in for idle.
+                    let quiet = ctx.terminals.quiet_for(id).is_none_or(|d| d >= IDLE);
+                    Ok(json!({ "terminal": handle, "done": quiet, "state": if quiet { "quiet" } else { "writing" }, "blocked": false, "warnings": [format!("no status hooks report for {handle}; idle means {} s without output", IDLE.as_secs())] }))
+                }
+            }
+        }
+        other => Err(Fail::args(format!("unknown command {other}"))),
+    }
 }
 
 fn same_dir(a: &str, b: &str) -> bool {
@@ -2726,7 +3147,15 @@ fn reuse(ctx: &Ctx, req: &Request, to: &str) -> Result<Value, Fail> {
 /// second worker. A start turned away leaves no receipt; one that timed out keeps its outcome. A
 /// start left pending by an earlier run of Kolux is over (its terminals went with it): it runs fresh.
 fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
-    let Some(id) = req.args["retryRequest"].as_str().map(str::trim).filter(|s| !s.is_empty()) else { return worker_start(ctx, req) };
+    // ORCH-017: the same start is the same caller, folder and flags; the CLI gives every send a
+    // request id of its own, so that one is left out.
+    let start = || {
+        let mut flags = req.args.clone();
+        flags.as_object_mut().map(|f| f.remove("retryRequest"));
+        let same = format!("{}|{}|{}|{flags}", req.command, caller(ctx, req).ok().flatten().unwrap_or_default(), req.cwd);
+        join_running(&same, req.arrived, || worker_start(ctx, req))
+    };
+    let Some(id) = req.args["retryRequest"].as_str().map(str::trim).filter(|s| !s.is_empty()) else { return start() };
     let key = format!("{}|{}|{id}", req.command, caller(ctx, req)?.unwrap_or_default());
     let me = u64::from(std::process::id());
     let until = Instant::now() + Duration::from_secs(300);
@@ -2751,7 +3180,7 @@ fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         m.save(&store)?;
         break;
     }
-    let out = worker_start(ctx, req);
+    let out = start();
     let store = ctx.store.lock().map_err(|e| e.to_string())?;
     let mut m = crate::orchestration::Mail::load(&store);
     let kept = match &out {
@@ -2761,6 +3190,33 @@ fn worker_start_once(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     };
     m.finish(&key, kept);
     m.save(&store)?;
+    out
+}
+
+/// Starts lately finished: the request (command, caller, folder and flags), when it began and
+/// ended, and how it went. Kept ten minutes.
+type Finished = (String, Instant, Instant, Result<Value, Fail>);
+static FINISHED: Mutex<Vec<Finished>> = Mutex::new(Vec::new());
+
+/// ORCH-017: the same start sent again while the first is under way joins it. The app answers
+/// one request at a time, so the repeat waits behind the first; when its turn comes it hands back
+/// the first one's outcome (marked `joined`) rather than starting a second worker. A repeat sent
+/// after the first finished, or with any other flag, is a start of its own.
+fn join_running(same: &str, arrived: Option<Instant>, start: impl FnOnce() -> Result<Value, Fail>) -> Result<Value, Fail> {
+    let lock = || FINISHED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(at) = arrived {
+        if let Some((.., out)) = lock().iter().rev().find(|(k, from, to, _)| k == same && *from <= at && at <= *to) {
+            return out.clone().map(|mut v| {
+                v["joined"] = json!(true);
+                v
+            });
+        }
+    }
+    let from = Instant::now();
+    let out = start();
+    let mut done = lock();
+    done.retain(|(.., to, _)| to.elapsed() < Duration::from_secs(600));
+    done.push((same.to_string(), from, Instant::now(), out.clone()));
     out
 }
 
@@ -2873,9 +3329,11 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let behind = drift(ctx.git, &project, &worktree.path);
     let brief = crate::orchestration::brief(&task, &crate::orchestration::Brief { dispatch: &dispatch_id, run: run_id.as_deref(), coordinator: coordinator.as_deref(), behind, levels_left: cap - depth });
 
-    // SAFE-023: the worktree (and its main repository) are trusted before the agent starts; best
-    // effort, a failure never stops the worker.
-    let trusted = match crate::trust::trust_folders(&ctx.claude_config, &agent_id, &[PathBuf::from(&worktree.path), PathBuf::from(&project.path)]) {
+    // SAFE-023: a worktree Kolux made is trusted before the agent starts (never the main checkout or
+    // a folder made elsewhere, T-443); best effort, a failure never stops the worker.
+    let mine = crate::trust::made_by_kolux(ctx.store, &[PathBuf::from(&worktree.path)]);
+    let trusted = match crate::trust::trust_folders(&ctx.claude_config, &agent_id, &mine) {
+        Ok(_) if mine.is_empty() => json!("not trusted: not a worktree Kolux made, so the agent asks itself"),
         Ok(_) => json!(true),
         Err(e) => json!(format!("not trusted: {e}")),
     };
@@ -2921,14 +3379,26 @@ pub(crate) fn secret() -> String {
     format!("{:016x}{:016x}", h.finish(), std::collections::hash_map::RandomState::new().build_hasher().finish())
 }
 
-/// Answers requests on `listener` one at a time until the listener is dropped.
+/// Answers requests on `listener` one at a time, for as long as the app runs.
 pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: impl Fn(&Request) -> Result<Value, Fail>) {
-    // ponytail: one request at a time; a parallel accept loop if agents ever queue up on it.
-    for stream in listener.incoming().flatten() {
-        let mut stream = stream;
+    // ponytail: one request at a time; a parallel accept loop if agents ever queue up on it. A
+    // second thread takes each connection as it comes, so a request knows when it was sent.
+    let (queue, taken) = mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            if queue.send((stream, Instant::now())).is_err() {
+                break;
+            }
+        }
+    });
+    for (mut stream, arrived) in taken {
         stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
         let mut line = String::new();
         if BufReader::new(&stream).read_line(&mut line).is_err() {
+            continue;
+        }
+        // BROW-051: a web page can only ever send HTTP here; its request line is dropped unanswered.
+        if line.split_whitespace().nth(2).is_some_and(|w| w.starts_with("HTTP/")) {
             continue;
         }
         let (id, out) = match serde_json::from_str::<Request>(&line) {
@@ -2937,7 +3407,7 @@ pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: imp
             Ok(req) if CHANGES.contains(&req.command.as_str()) && newer(&req.cli, VERSION) => {
                 (req.id, Err(Fail { code: "version_gap", message: format!("this Kolux ({VERSION}) is older than the command line ({}); update Kolux before sending orchestration changes", req.cli), data: json!({ "appVersion": VERSION, "cliVersion": req.cli }) }))
             }
-            Ok(req) => (req.id.clone(), handle(&req)),
+            Ok(req) => (req.id.clone(), handle(&Request { arrived: Some(arrived), ..req })),
             Err(e) => (String::new(), Err(Fail::args(format!("malformed request: {e}")))),
         };
         let mut reply = envelope(&id, runtime, out);
@@ -3053,7 +3523,7 @@ mod tests {
         // A wrong flag: the nearest flag of that command, and the list of its flags.
         let flag = fail("worktree show --worktre name:x");
         assert!(flag.message.contains("unknown flag --worktre for worktree show") && flag.message.contains("did you mean --worktree?"), "{}", flag.message);
-        assert_eq!(flag.data["flags"], json!(["--worktree", "--json"]));
+        assert_eq!(flag.data["flags"], json!(["--worktree", "--usage", "--json"]));
         assert!(flag.data["hint"].as_str().unwrap().contains("--worktree"));
         assert_eq!(flag.data["nextSteps"], json!(["kolux-dev worktree show --worktree name:x"]));
         let long = fail(&format!("worktree list --{}", "x".repeat(40)));
@@ -3091,6 +3561,9 @@ mod tests {
         assert!(refused("worktree create --name x --name y").contains("twice"));
         assert!(refused("worktree create --name x --bogus 1").contains("--bogus"));
         assert!(refused("worktree create --name x --setup later").contains("run, skip or inherit"));
+        // PROJ-037: --issue alone is enough; the app names the worktree after the issue's title.
+        assert!(refused("worktree create --agent claude").contains("--name is required (or --issue"));
+        assert_eq!(parse(&words("worktree create --issue 7")).1.unwrap().unwrap().args["issue"], "7");
         assert!(refused("worktree create --name x --no-parent --parent-worktree name:a").contains("disagree"));
         assert!(refused("worktree create --name x --parent-workspace name:a").contains("retired"));
         assert!(refused("worktree create --name x --parent-worktree").contains("needs a value"));
@@ -3197,6 +3670,64 @@ mod tests {
     }
 
     #[test]
+    fn terminal_read_send_and_wait_parse_and_refuse_what_the_cards_say() {
+        let ok = |s: &str| parse(&words(s)).1.unwrap().unwrap();
+        let p = ok("terminal read --terminal term-3 --cursor 5 --limit 10");
+        assert_eq!((p.command.as_str(), p.args["terminal"].as_str(), p.args["cursor"].as_str(), p.args["limit"].as_str()), ("terminal.read", Some("term-3"), Some("5"), Some("10")));
+        assert_eq!(ok("terminal read --screen").args["screen"], true);
+        let p = ok("terminal send --text hi --enter --interrupt --wait-submit 5 --retry-request r1");
+        assert_eq!((p.args["text"].as_str(), p.args["enter"].as_bool(), p.args["interrupt"].as_bool(), p.args["waitSubmit"].as_str(), p.args["retryRequest"].as_str()), (Some("hi"), Some(true), Some(true), Some("5"), Some("r1")));
+        let p = ok("terminal wait --for tui-idle --timeout-ms 100");
+        assert_eq!((p.command.as_str(), p.args["for"].as_str(), p.args["timeoutMs"].as_str()), ("terminal.wait", Some("tui-idle"), Some("100")));
+        for c in ["terminal read", "terminal send", "terminal wait"] {
+            assert!(HELP.contains(&format!("kolux-dev {c} ")), "{c} in help");
+        }
+
+        let dir = std::env::temp_dir().join(format!("kolux-rs-term-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        let notify = |_: Value| {};
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let pane = Some(Pane { handle: "term-7".into(), key: "k".into() });
+        let req = |command: &str, args: Value, pane: Option<Pane>| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane, cli: VERSION.into(), arrived: None };
+        // Outside a Kolux terminal --terminal is required; inside one it defaults to that terminal.
+        assert!(dispatch(&ctx, &req("terminal.read", json!({}), None)).unwrap_err().message.contains("--terminal"));
+        assert_eq!(dispatch(&ctx, &req("terminal.read", json!({}), pane.clone())).unwrap_err().message, "no open Kolux terminal is called term-7");
+        assert_eq!(dispatch(&ctx, &req("terminal.read", json!({ "terminal": "term-9" }), None)).unwrap_err().code, "not_found");
+        assert!(dispatch(&ctx, &req("terminal.read", json!({ "terminal": "nine" }), None)).unwrap_err().message.contains("term-<n>"));
+        // CLI-024: a screen has no history, so --screen --cursor is refused before anything is looked up.
+        let both = dispatch(&ctx, &req("terminal.read", json!({ "terminal": "term-9", "screen": true, "cursor": "5" }), None)).unwrap_err();
+        assert!(both.message.contains("--screen and --cursor"), "{}", both.message);
+        assert!(dispatch(&ctx, &req("terminal.read", json!({ "terminal": "term-9", "cursor": "x" }), None)).unwrap_err().message.contains("--cursor takes a whole number"));
+        // CLI-025: send needs something to send; a retry of a known request answers without a terminal.
+        assert!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9" }), None)).unwrap_err().message.contains("--text, --enter or --interrupt"));
+        assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "enter": true }), None)).unwrap_err().code, "not_found");
+        SENT.lock().unwrap().push(("term-9|r1".into(), json!({ "terminal": "term-9", "receipt": "turn_began" })));
+        let again = dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r1" }), None)).unwrap();
+        assert_eq!((again["receipt"].as_str(), again["retried"].as_bool()), (Some("turn_began"), Some(true)));
+        assert_eq!(dispatch(&ctx, &req("terminal.send", json!({ "terminal": "term-9", "text": "hi", "enter": true, "retryRequest": "r2" }), None)).unwrap_err().code, "not_found");
+        // CLI-025: wait needs a condition it knows; an ended terminal has met either.
+        assert!(dispatch(&ctx, &req("terminal.wait", json!({ "terminal": "term-9" }), None)).unwrap_err().message.contains("--for"));
+        assert!(dispatch(&ctx, &req("terminal.wait", json!({ "terminal": "term-9", "for": "idle" }), None)).unwrap_err().message.contains("exit or tui-idle"));
+        let ended = dispatch(&ctx, &req("terminal.wait", json!({ "terminal": "term-9", "for": "tui-idle" }), None)).unwrap();
+        assert_eq!((ended["done"].as_bool(), ended["state"].as_str()), (Some(true), Some("exited")));
+        assert!(wait_step(&ended).unwrap());
+        assert!(!wait_step(&json!({ "done": false })).unwrap());
+        let blocked = wait_step(&json!({ "terminal": "term-2", "done": true, "state": "permission", "blocked": true })).unwrap_err();
+        assert_eq!((blocked.code, blocked.message.as_str()), ("blocked", "term-2 is permission, not idle: the agent needs an answer"));
+        // Text output: a screen is its rows; a read is its lines, the unfinished one, and the cursor.
+        assert_eq!(text_of("terminal.read", &json!({ "screen": true, "rows": ["a", "b", ""] })), "a\nb");
+        assert_eq!(text_of("terminal.read", &json!({ "screen": false, "lines": [{ "cursor": 4, "text": "x" }], "pending": "> ", "cursor": 4 })), "x\n> \n-- cursor 4");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "turn_began" })), "sent text+enter to term-1: the agent began a turn");
+        assert_eq!(text_of("terminal.send", &json!({ "terminal": "term-1", "delivered": ["text", "enter"], "receipt": "queued", "next": "kolux terminal read --terminal term-1 --screen" })), "sent text+enter to term-1: queued; look with kolux terminal read --terminal term-1 --screen");
+        assert_eq!(text_of("terminal.wait", &json!({ "terminal": "term-1", "state": "done" })), "term-1 is done");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn tasks_need_a_known_creator_and_a_dry_run_needs_no_recipient() {
         let dir = std::env::temp_dir().join(format!("kolux-rs-dry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3205,7 +3736,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         // CLI-034: outside any Kolux terminal there is no creator, so nothing is made.
         let orphan = dispatch(&ctx, &req("orchestration.task-create", json!({ "spec": "add a test" }))).unwrap_err();
         assert_eq!(orphan.code, "unbound_caller");
@@ -3275,6 +3806,12 @@ mod tests {
         assert!(refused("orchestration worker-start --spec x --agent claude --max-depth two").contains("--max-depth"));
         assert!(refused("orchestration worker-abandon").contains("--dispatch"));
         assert!(refused("orchestration worker-stop").contains("--dispatch"));
+        // ORCH-026, ORCH-025: pages hold 1 to 100 workers; the terminal states are a closed set.
+        assert!(refused("orchestration worker-list --limit 101").contains("--limit"));
+        assert!(refused("orchestration worker-list --terminal-state kept").contains("--terminal-state"));
+        assert!(refused("orchestration worker-retain").contains("--dispatch"));
+        let (_, p) = parse(&words("orchestration worker-list --terminal-state reclaimable --limit 100"));
+        assert_eq!(p.unwrap().unwrap().args["terminalState"], "reclaimable");
         assert!(refused("orchestration task-update --status completed").contains("--id"));
         assert!(refused("orchestration task-update --id task-1").contains("--status"));
         let (_, p) = parse(&words("orchestration task-update --id task-1 --status completed --result green"));
@@ -3385,15 +3922,71 @@ mod tests {
     }
 
     #[test]
+    fn brow051_an_http_shaped_request_gets_no_reply_and_runs_nothing() {
+        use std::io::Read;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        assert!(listener.local_addr().unwrap().ip().is_loopback());
+        let port = listener.local_addr().unwrap().port();
+        let ran = Arc::new(AtomicBool::new(false));
+        let seen = ran.clone();
+        std::thread::spawn(move || serve_loop(listener, "secret", "rt-1", move |_| { seen.store(true, Ordering::SeqCst); Ok(json!({})) }));
+        // What a web page's fetch or form post looks like on the wire: dropped without a byte back.
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.write_all(b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nContent-Length: 2\r\n\r\n{}").unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let mut reply = String::new();
+        let _ = s.read_to_string(&mut reply);
+        assert_eq!(reply, "", "no reply, not even an error envelope");
+        assert!(!ran.load(Ordering::SeqCst), "nothing ran");
+        // The real client on the same listener still works afterwards.
+        let req = Request { id: "r2".into(), token: "secret".into(), command: "x".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None };
+        assert_eq!(call(port, &req).unwrap()["success"], true);
+        assert!(ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_start_repeated_while_the_first_runs_joins_it() {
+        let key = "orchestration.worker-start|7|C:/repo|{\"spec\":\"join test\"}";
+        let mid = std::cell::Cell::new(None);
+        let first = join_running(key, None, || {
+            mid.set(Some(Instant::now()));
+            Ok(json!({ "dispatchId": "dispatch-1" }))
+        })
+        .unwrap();
+        assert_eq!(first["dispatchId"], "dispatch-1");
+        assert!(first.get("joined").is_none());
+        // Sent while the first was under way: it gets the first one's receipt, no second worker.
+        let again = join_running(key, mid.get(), || panic!("a repeat of a start under way must not start a second worker")).unwrap();
+        assert_eq!(again["dispatchId"], "dispatch-1");
+        assert_eq!(again["joined"], true);
+        // A failure is joined too, with the same error.
+        let bad = "orchestration.worker-start|7|C:/repo|{\"task\":\"task-9\"}";
+        let mid = std::cell::Cell::new(None);
+        let _ = join_running(bad, None, || {
+            mid.set(Some(Instant::now()));
+            Err(Fail::new("failed", "task-9 already has a worker (dispatch-3)"))
+        });
+        assert_eq!(join_running(bad, mid.get(), || panic!("joined")).unwrap_err().message, "task-9 already has a worker (dispatch-3)");
+        // Sent after the first finished, or with other flags, or not over the port: a start of its own.
+        let later = join_running(key, Some(Instant::now()), || Ok(json!({ "dispatchId": "dispatch-2" }))).unwrap();
+        assert_eq!(later["dispatchId"], "dispatch-2");
+        let other = join_running("orchestration.worker-start|7|C:/repo|{\"spec\":\"other\"}", mid.get(), || Ok(json!({ "dispatchId": "dispatch-4" }))).unwrap();
+        assert_eq!(other["dispatchId"], "dispatch-4");
+    }
+
+    #[test]
     fn requests_cross_the_loopback_port_with_the_token() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || serve_loop(listener, "secret", "rt-1", |req| Ok(json!({ "echo": req.args }))));
-        let req = Request { id: "r1".into(), token: "secret".into(), command: "x".into(), cwd: String::new(), args: json!({ "a": 1 }), pane: None, cli: String::new() };
+        std::thread::spawn(move || serve_loop(listener, "secret", "rt-1", |req| Ok(json!({ "echo": req.args, "arrived": req.arrived.is_some() }))));
+        let req = Request { id: "r1".into(), token: "secret".into(), command: "x".into(), cwd: String::new(), args: json!({ "a": 1 }), pane: None, cli: String::new(), arrived: None };
         let v = call(port, &req).unwrap();
         assert_eq!(v["success"], true);
         assert_eq!(v["requestId"], "r1");
         assert_eq!(v["result"]["echo"]["a"], 1);
+        assert_eq!(v["result"]["arrived"], true, "the app stamps when it took the connection");
         assert_eq!(v["meta"]["runtimeId"], "rt-1");
         let bad = Request { token: "wrong".into(), ..req.clone() };
         let v = call(port, &bad).unwrap();
@@ -3427,7 +4020,7 @@ mod tests {
                 // The second request: the app reads it and closes without answering.
             }
         });
-        let req = Request { id: "r1".into(), token: "t".into(), command: "orchestration.reset".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into() };
+        let req = Request { id: "r1".into(), token: "t".into(), command: "orchestration.reset".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into(), arrived: None };
         let v = call(port, &req).unwrap();
         assert_eq!(v["error"]["code"], "version_gap", "{v}");
         assert!(v["error"]["message"].as_str().unwrap().contains("Update Kolux"), "{v}");
@@ -3476,7 +4069,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         let done = "1b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633a";
         let sent = "2b4e28ba-2fa1-4d3b-a3f5-ef19b5a7633a";
         {
@@ -3525,6 +4118,8 @@ mod tests {
         assert!(refused("repo add").contains("--path"));
         assert!(refused("worktree list --limit 0").contains("above zero"));
         assert!(refused("worktree current --worktree name:a").contains("unknown flag"));
+        assert_eq!(parse(&words("worktree current --usage")).1.unwrap().unwrap().args["usage"], true);
+        assert_eq!(parse(&words("worktree show --worktree name:a --usage")).1.unwrap().unwrap().args["usage"], true);
 
         let dir = std::env::temp_dir().join(format!("kolux-rs-cli117-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3552,7 +4147,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
 
         // CLI-015: a relative path counts from the folder the command ran in.
         let added = dispatch(&ctx, &req("repo.add", &dir, json!({ "path": "other" }))).unwrap();
@@ -3598,6 +4193,12 @@ mod tests {
         for form in [format!("id:{wid}"), format!("identity:{wid}")] {
             assert_eq!(dispatch(&ctx, &req("worktree.show", &dir, json!({ "worktree": form }))).unwrap()["path"], made["path"]);
         }
+        // USAGE-016: --usage adds what the worktree's sessions used; with tracking off nothing is read.
+        let plain = dispatch(&ctx, &req("worktree.current", &inner, json!({}))).unwrap();
+        assert!(plain.get("usage").is_none(), "only asked for");
+        let used = dispatch(&ctx, &req("worktree.current", &inner, json!({ "usage": true }))).unwrap();
+        assert_eq!((&used["usage"]["claude"], &used["usage"]["codex"]), (&json!({ "tracked": false }), &json!({ "tracked": false })));
+        assert!(query_text("worktree.current", &used).unwrap().contains("tokens claude: not tracked"));
         let outside = dispatch(&ctx, &req("worktree.current", &dir, json!({}))).unwrap_err();
         assert!(outside.data["hint"].as_str().unwrap().contains("--worktree"), "{:?}", outside.data);
         let bare = dispatch(&ctx, &req("worktree.show", &dir, json!({ "worktree": "42" }))).unwrap_err();
@@ -3608,6 +4209,80 @@ mod tests {
         assert_eq!(twice.code, "ambiguous");
         // ps: no Kolux terminal is open in a test.
         assert_eq!(dispatch(&ctx, &req("worktree.ps", &dir, json!({}))).unwrap()["worktrees"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cli019_worktree_set_renames_links_comments_and_moves_a_worktree() {
+        let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
+        assert!(refused("worktree set --worktree name:a --no-parent --parent-worktree name:b").contains("disagree"));
+        assert!(refused("worktree set --worktree name:a --parent-worktree").contains("needs a value"));
+        assert!(refused("worktree set --worktree name:a --issue seven").contains("null"));
+        assert!(refused("worktree set --worktree name:a --issue 0").contains("null"));
+        let blank = ["worktree", "set", "--worktree", "name:a", "--display-name", ""].map(String::from);
+        assert!(parse(&blank).1.unwrap_err().message.contains("cannot be empty"));
+        assert!(refused("worktree set --worktree name:a").contains("nothing to set"));
+        assert!(refused("worktree set --worktree name:a --workspace-status in-review").contains("Board"));
+        let (_, p) = parse(&words("worktree set --worktree active --issue null --display-name Login --no-parent"));
+        let p = p.unwrap().unwrap();
+        assert_eq!(p.command, "worktree.set");
+        assert_eq!((&p.args["issue"], &p.args["displayName"], &p.args["noParent"]), (&json!("null"), &json!("Login"), &json!(true)));
+
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli019-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q", "-b", "main"], &repo);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"], &repo);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let mut settings = s.settings();
+            settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
+            s.save_settings(&settings).unwrap();
+        }
+        let seen = Mutex::new(Vec::<Value>::new());
+        let notify = |v: Value| seen.lock().unwrap().push(v);
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
+        let a = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "a", "issue": "7", "comment": "first" }))).unwrap();
+        let b = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "b" }))).unwrap();
+        let a_path = PathBuf::from(a["path"].as_str().unwrap());
+        seen.lock().unwrap().clear();
+
+        // active: the worktree around the folder; --issue null drops the link and keeps the rest
+        let set = dispatch(&ctx, &req("worktree.set", &a_path.join("."), json!({ "worktree": "active", "issue": "null" }))).unwrap();
+        assert_eq!((&set["path"], &set["number"], &set["comment"]), (&a["path"], &Value::Null, &json!("first")));
+        assert!(dispatch(&ctx, &req("worktree.show", &repo, json!({ "worktree": "issue:7" }))).is_err(), "the link is gone");
+        assert_eq!(seen.lock().unwrap().last().unwrap()["kind"], "changed", "the window is told to redraw");
+
+        // a new name, issue, comment and parent in one call
+        let set = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": "name:a", "displayName": "Login page", "issue": "12", "comment": "second", "parentWorktree": "name:b" }))).unwrap();
+        assert_eq!((&set["name"], &set["number"], &set["comment"], &set["parent"]), (&json!("Login page"), &json!(12), &json!("second"), &b["path"]));
+        let shown = dispatch(&ctx, &req("worktree.show", &repo, json!({ "worktree": "issue:12" }))).unwrap();
+        assert_eq!(shown["path"], a["path"]);
+        let text = text_of("worktree.set", &set);
+        assert!(text.contains("Login page") && text.contains("linked #12") && text.contains("second"), "{text}");
+
+        // a loop is refused and nothing else in the call is written
+        let e = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": "name:b", "parentWorktree": "name:Login page", "comment": "x" }))).unwrap_err();
+        assert!(e.message.contains("loop"), "{}", e.message);
+        assert_eq!(dispatch(&ctx, &req("worktree.show", &repo, json!({ "worktree": "name:b" }))).unwrap()["comment"], Value::Null);
+
+        // the parent taken from the current folder, then removed; an empty comment clears it
+        let set = dispatch(&ctx, &req("worktree.set", &a_path, json!({ "worktree": "name:b", "parentWorktree": "current" })));
+        assert!(set.unwrap_err().message.contains("loop"), "b cannot sit under a, which sits under b");
+        let set = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": "name:Login page", "noParent": true, "comment": "" }))).unwrap();
+        assert_eq!((&set["parent"], &set["comment"], &set["number"]), (&Value::Null, &Value::Null, &json!(12)));
+        let set = dispatch(&ctx, &req("worktree.set", &a_path, json!({ "worktree": "name:b", "parentWorktree": "current" }))).unwrap();
+        assert_eq!(set["parent"], a["path"]);
+        let main = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": format!("path:{}", repo.display()), "parentWorktree": "name:b" }))).unwrap_err();
+        assert!(main.message.contains("main checkout"), "{}", main.message);
+        drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3641,7 +4316,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         let make = |name: &str| PathBuf::from(dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": name }))).unwrap()["path"].as_str().unwrap());
         let (one, two, quiet) = (make("one"), make("two"), make("quiet"));
         commit(&one, "a.txt", "one\n");
@@ -3710,7 +4385,7 @@ mod tests {
         let notify = |v: Value| events.lock().unwrap().push(v);
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
 
         let made = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "cli one", "setup": "skip" }))).unwrap();
         let path = PathBuf::from(made["path"].as_str().unwrap());
@@ -3727,11 +4402,16 @@ mod tests {
         assert_eq!(child["parent"], json!(path.display().to_string()));
         assert_eq!(child["issue"], 12);
         assert_eq!(child["comment"], "from a test");
-        // T-014-b-fix: flags nobody acts on yet are named, not swallowed.
-        let warned = child["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(warned.len(), 1, "{warned:?}");
-        assert!(warned[0].starts_with("--comment"), "{warned:?}");
+        // EDIT-047: the comment is no longer inert: the worktree palette shows it and finds the worktree by it.
+        assert_eq!(child["warnings"], json!([]));
         let child_path = child["path"].as_str().unwrap().to_string();
+        {
+            let st = store.lock().unwrap();
+            let project = projects::load_projects(&st).into_iter().next().unwrap();
+            let listed = projects::list_workspaces(&git_, &st, &project).unwrap();
+            let row = listed.iter().find(|w| projects::same_folder(Path::new(&w.path), Path::new(&child_path))).unwrap();
+            assert_eq!((row.comment.as_deref(), row.number), (Some("from a test"), Some(12)));
+        }
         let stored = projects::origin(&store.lock().unwrap(), &child_path).unwrap();
         assert_eq!(stored["parent"], json!(path.display().to_string()));
         assert_eq!(stored["cwd"], json!(dir.display().to_string()));
@@ -3743,10 +4423,7 @@ mod tests {
         assert_eq!(alone["parent"], Value::Null);
         let from_elsewhere = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "top", "repo": "name:repo", "setup": "run", "runHooks": true, "activate": true }))).unwrap();
         assert_eq!(from_elsewhere["parent"], Value::Null, "called from outside every worktree");
-        let warned = from_elsewhere["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(warned.len(), 2, "{warned:?}");
-        assert!(warned[0].starts_with("--setup run"), "{warned:?}");
-        assert!(warned[1].starts_with("--run-hooks"), "{warned:?}");
+        assert_eq!(from_elsewhere["warnings"], json!([]), "T-107-b: --setup and --run-hooks act now (PROJ-033)");
         let missing = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "x", "parentWorktree": "name:nope" }))).unwrap_err();
         assert_eq!(missing.code, "not_found");
         // T-014-b-fix: the issue: selector finds the worktree made for that issue; the forms with
@@ -3832,11 +4509,11 @@ mod tests {
             assert_eq!(out.data["setup"], "not_configured");
             let wt = PathBuf::from(out.data["worktree"]["path"].as_str().unwrap());
             assert!(wt.join(".git").exists());
-            // SAFE-023: the new worktree and the main repository are trusted before the start.
+            // SAFE-023: the new worktree is trusted before the start; the main checkout is not (T-443).
             assert_eq!(out.data["trust"], true, "{}", out.data["trust"]);
             let conf: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".claude.json")).unwrap()).unwrap();
             assert_eq!(conf["projects"][crate::trust::claude_key(&wt).unwrap()]["hasTrustDialogAccepted"], true);
-            assert_eq!(conf["projects"][crate::trust::claude_key(&repo).unwrap()]["hasTrustDialogAccepted"], true);
+            assert!(conf["projects"].get(crate::trust::claude_key(&repo).unwrap()).is_none(), "the main checkout keeps Claude's own prompt");
             let ev = events.lock().unwrap();
             let n = ev.len();
             assert_eq!(ev[n - 2]["kind"], "created");
@@ -3892,7 +4569,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: repo.display().to_string(), args, pane: None, cli: VERSION.into() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: repo.display().to_string(), args, pane: None, cli: VERSION.into(), arrived: None };
         let mut open = Vec::new();
         for n in ["a", "b", "c", "d"] {
             let made = dispatch(&ctx, &req("worktree.create", json!({ "name": n, "setup": "skip" }))).unwrap();
@@ -3946,13 +4623,15 @@ mod tests {
         let msgs = vec![
             json!({ "id": "msg-3", "from": "term-2", "fromAgent": "Claude Code", "type": "status", "priority": "urgent", "subject": "stop", "body": "halt now", "payload": { "n": 1 }, "reply": "kolux orchestration reply --id msg-3 --body x" }),
             json!({ "id": "msg-4", "from": "term-5", "type": "question", "priority": "normal", "subject": "which?", "body": "", "reply": "kolux orchestration reply --id msg-4 --body y" }),
+            json!({ "id": "msg-5", "from": "term-3", "type": "worker_done", "priority": "normal", "subject": "done", "body": "", "outcome": "succeeded", "filesModified": ["a.rs", "b.rs"], "reportPath": "notes/r.md" }),
         ];
         let mut out = Vec::new();
         mail_lines(&msgs, &mut out);
         let text = out.join("\n");
         assert!(text.contains("[URGENT]") && text.contains("Claude Code (term-2)") && text.contains("payload: {\"n\":1}"), "{text}");
         assert!(text.contains("--id msg-3") && text.contains("from term-5") && !text.contains("[NORMAL]"), "{text}");
-        assert_eq!(out.iter().filter(|l| l.starts_with("----")).count(), 2, "each message ends with its own divider");
+        assert!(text.contains("  outcome: succeeded") && text.contains("  files: a.rs, b.rs") && text.contains("  report: notes/r.md"), "{text}");
+        assert_eq!(out.iter().filter(|l| l.starts_with("----")).count(), 3, "each message ends with its own divider");
     }
 
     #[test]
@@ -4010,7 +4689,7 @@ mod tests {
         let notify = |_: Value| {};
         let terminals = Terminals::default();
         let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
-        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new() };
+        let req = |command: &str, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: dir.display().to_string(), args, pane: None, cli: String::new(), arrived: None };
         let show = |id: &str| dispatch(&ctx, &req("orchestration.request-show", json!({ "request": id }))).unwrap();
         assert_eq!(show("never-sent")["state"], "absent");
         {

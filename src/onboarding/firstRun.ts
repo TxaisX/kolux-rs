@@ -1,4 +1,5 @@
 // ONB-001..005: the first-run wizard's pure rules; Wizard.tsx draws it, onboarding.rs keeps its record.
+import { invoke } from "@tauri-apps/api/core";
 import { sameDir } from "../workspaces";
 
 export const SCREENS = [
@@ -36,6 +37,29 @@ export const ADD_PROJECT = "kolux-add-project";
 export const leaveKey = (e: { key: string; isComposing: boolean; defaultPrevented: boolean }) => e.key === "Escape" && !e.isComposing && !e.defaultPrevented;
 
 export type Outcome = "completed" | "dismissed";
+
+/** ONB-009: the help menu's Onboarding item asks the window to start the wizard over through this event. */
+export const REOPEN_WIZARD = "kolux-reopen-wizard";
+
+/** ONB-009: true for a click that counts; one less than half a second after the click before it does not. */
+export function oneClick(gap = 500) {
+  let last = -Infinity;
+  return (now = Date.now()) => {
+    const counts = now - last >= gap;
+    last = now;
+    return counts;
+  };
+}
+
+/** ONB-011: the first-success milestones onboarding.rs keeps, each once, on this machine only. */
+export type Milestone = "aiConnected" | "kitLaunched" | "resultsOpened";
+
+/** ONB-011: records a milestone (kept only the first time); the user sees nothing, even when the write fails. */
+export const milestone = (name: Milestone, send: (cmd: string, args: { name: Milestone }) => Promise<unknown> = invoke): Promise<void> =>
+  send("onboarding_milestone", { name }).then(
+    () => {},
+    () => {},
+  );
 
 /** ONB-007: closing is latched while it is being stored; a failed store frees the latch and keeps
  * the close, so the next click on any of the wizard's ways out tries the same close once more. */

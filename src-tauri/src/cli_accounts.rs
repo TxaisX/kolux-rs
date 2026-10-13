@@ -248,9 +248,9 @@ mod tests {
     const CREDS: &str = r#"{"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh"}}"#;
     const SIGNED_IN: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Example Org"}"#;
 
-    fn profile(tag: &str) -> (PathBuf, Mutex<Store>) {
-        let dir = std::env::temp_dir().join(format!("kolux-rs-cli-acct-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+    /// The folder goes when the test ends, after the store in it has closed.
+    fn profile(tag: &str) -> (crate::test_dir::TempDir, Mutex<Store>) {
+        let dir = crate::test_dir::temp(&format!("rs-cli-acct-{tag}"));
         let store = Store::open(&dir).unwrap();
         (dir, Mutex::new(store))
     }

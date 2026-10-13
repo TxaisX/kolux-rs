@@ -1,6 +1,8 @@
 // The explorer's file operations (EDIT-034, part 1): create, rename, delete to the system trash and
 // bring back from it, and copy a path to the clipboard. The explorer keeps the undo history; each undo or redo is one of these calls.
 // Part 2: copy (also used for files dropped in from the desktop) and move (drag in the tree).
+// EDIT-045: every command fences its paths first (`links::fence`): the entry acted on must sit
+// inside a project, and a folder written into must really be inside one.
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
@@ -78,8 +80,7 @@ pub fn trash_each(paths: &[String]) -> Vec<Gone> {
             let permanent = is_wsl(path);
             let done = if permanent {
                 match fs::symlink_metadata(path) {
-                    Ok(m) if m.is_dir() => fs::remove_dir_all(path),
-                    Ok(_) => fs::remove_file(path),
+                    Ok(m) => remove_retrying(path, m.is_dir()),
                     Err(e) => Err(e),
                 }
                 .map_err(|e| e.to_string())
@@ -89,6 +90,22 @@ pub fn trash_each(paths: &[String]) -> Vec<Gone> {
             Gone { path: p.clone(), permanent, error: done.err().map(|e| format!("{p}: {e}")) }
         })
         .collect()
+}
+
+/// EDIT-044: on Windows a removal that fails for a passing reason (the file locked for a moment:
+/// sharing or lock violation, access denied) is tried a few more times before it counts as failed.
+pub fn remove_retrying(path: &Path, dir: bool) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        let r = if dir { fs::remove_dir_all(path) } else { fs::remove_file(path) };
+        match r {
+            Err(e) if cfg!(windows) && tries < 5 && e.raw_os_error().is_some_and(|c| [5, 32, 33].contains(&c)) => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
+            r => return r,
+        }
+    }
 }
 
 /// Whether a trash entry is the one deleted from `want`. Windows lists an entry by its shown name,
@@ -125,23 +142,61 @@ pub fn restore(_paths: &[String]) -> Result<(), String> {
     Err("putting files back from the trash needs the Finder on macOS".into()) // ponytail: no restore API in the trash crate on macOS
 }
 
+type Store<'a> = tauri::State<'a, Mutex<crate::state::Store>>;
+type Grants<'a> = tauri::State<'a, crate::links::Grants>;
+type Fence = (Vec<String>, std::collections::HashSet<String>);
+/// ACCT-055's fence (fence.rs): the user's projects and their worktrees.
+type Guard<'a> = tauri::State<'a, crate::fence::Fence>;
+type GitState<'a> = tauri::State<'a, crate::git::Git>;
+
+fn fence_of(store: &Store<'_>, grants: &Grants<'_>) -> Fence {
+    (crate::links::roots(store), grants.snapshot())
+}
+
+fn fenced(f: &Fence, path: &str, follow: bool) -> Result<PathBuf, String> {
+    crate::links::fence(path, &f.0, &f.1, follow)
+}
+
+// ACCT-055: each command below works only on paths inside the user's projects and worktrees
+// (fence.rs) and, on top of that, never out through a link (EDIT-045's `links::fence`); a copy
+// may also take files the user just dropped in from outside.
 #[tauri::command]
-pub fn fs_create(dir: String, name: String, folder: bool) -> Result<String, String> {
-    create(Path::new(&dir), &name, folder).map(|p| shown(&p))
+pub fn fs_create(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, dir: String, name: String, folder: bool) -> Result<String, String> {
+    guard.allow(&dir, &store, &git, false)?;
+    create(&fenced(&fence_of(&store, &grants), &dir, true)?, &name, folder).map(|p| shown(&p))
 }
 
 #[tauri::command]
-pub fn fs_rename(path: String, name: String) -> Result<String, String> {
-    rename(Path::new(&path), &name).map(|p| shown(&p))
+pub fn fs_rename(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, path: String, name: String) -> Result<String, String> {
+    guard.allow(&path, &store, &git, false)?;
+    rename(&fenced(&fence_of(&store, &grants), &path, false)?, &name).map(|p| shown(&p))
 }
 
 #[tauri::command]
-pub async fn fs_trash(paths: Vec<String>) -> Vec<Gone> {
-    tauri::async_runtime::spawn_blocking(move || trash_each(&paths)).await.unwrap_or_default()
+pub async fn fs_trash(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, paths: Vec<String>) -> Result<Vec<Gone>, String> {
+    let f = fence_of(&store, &grants);
+    let refused = paths.iter().map(|p| guard.allow(p, &store, &git, false).err()).collect::<Vec<_>>();
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .zip(refused)
+            .map(|(p, refused)| match refused.map_or_else(|| fenced(&f, &p, false), Err) {
+                Ok(_) => trash_each(std::slice::from_ref(&p)).remove(0),
+                Err(e) => Gone { path: p, permanent: false, error: Some(e) },
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn fs_restore(paths: Vec<String>) -> Result<(), String> {
+pub async fn fs_restore(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, paths: Vec<String>) -> Result<(), String> {
+    guard.allow_all(&paths, &store, &git)?;
+    let f = fence_of(&store, &grants);
+    for p in &paths {
+        fenced(&f, p, false)?;
+    }
     tauri::async_runtime::spawn_blocking(move || restore(&paths)).await.map_err(|e| e.to_string())?
 }
 
@@ -240,11 +295,16 @@ pub fn move_into(from: &Path, dir: &Path) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn fs_copy(paths: Vec<String>, dir: String) -> Vec<Placed> {
+pub async fn fs_copy(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, paths: Vec<String>, dir: String) -> Result<Vec<Placed>, String> {
+    guard.allow(&dir, &store, &git, false)?;
+    let f = fence_of(&store, &grants);
+    // Ok(true): a file the user just dropped in from outside, copied as it is.
+    let sources = paths.iter().map(|p| guard.allow_source(p, &store, &git).map(|_| guard.was_dropped(Path::new(p)))).collect::<Vec<_>>();
     tauri::async_runtime::spawn_blocking(move || {
         paths
             .into_iter()
-            .map(|p| match copy_into(Path::new(&p), Path::new(&dir)) {
+            .zip(sources)
+            .map(|(p, source)| match source.and_then(|dropped| if dropped { Ok(PathBuf::from(&p)) } else { fenced(&f, &p, false) }).and_then(|from| fenced(&f, &dir, true).and_then(|d| copy_into(&from, &d))) {
                 Ok((to, 0)) => Placed { from: p, to: Some(shown(&to)), error: None },
                 Ok((to, n)) => Placed { from: p, error: Some(format!("{}: {n} link(s) inside were left out", shown(&to))), to: Some(shown(&to)) },
                 Err(e) => Placed { from: p, to: None, error: Some(e) },
@@ -252,23 +312,25 @@ pub async fn fs_copy(paths: Vec<String>, dir: String) -> Vec<Placed> {
             .collect()
     })
     .await
-    .unwrap_or_default()
+    .map_err(|e| e.to_string())
 }
 
 /// Each move is (entry, folder to move it into).
 #[tauri::command]
-pub async fn fs_move(moves: Vec<(String, String)>) -> Vec<Placed> {
+pub async fn fs_move(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, moves: Vec<(String, String)>) -> Result<Vec<Placed>, String> {
+    guard.allow_all(moves.iter().flat_map(|(p, d)| [p, d]), &store, &git)?;
+    let f = fence_of(&store, &grants);
     tauri::async_runtime::spawn_blocking(move || {
         moves
             .into_iter()
-            .map(|(p, dir)| match move_into(Path::new(&p), Path::new(&dir)) {
+            .map(|(p, dir)| match fenced(&f, &p, false).and_then(|from| fenced(&f, &dir, true).and_then(|d| move_into(&from, &d))) {
                 Ok(to) => Placed { from: p, to: Some(shown(&to)), error: None },
                 Err(e) => Placed { from: p, to: None, error: Some(e) },
             })
             .collect()
     })
     .await
-    .unwrap_or_default()
+    .map_err(|e| e.to_string())
 }
 
 /// Puts text on the system clipboard from the app side, so a copy works whether or not the web view
@@ -329,6 +391,29 @@ mod tests {
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn edit044_a_removal_blocked_for_a_moment_is_retried() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let d = temp_dir("retry");
+        let file = d.join("busy.txt");
+        fs::write(&file, "x").unwrap();
+        // Held open with no sharing for 150 ms: the first removals fail with a sharing violation.
+        let held = fs::OpenOptions::new().read(true).share_mode(0).open(&file).unwrap();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(held);
+        });
+        let started = std::time::Instant::now();
+        remove_retrying(&file, false).unwrap();
+        assert!(started.elapsed() >= std::time::Duration::from_millis(100), "it had to wait for the lock");
+        assert!(!file.exists());
+        t.join().unwrap();
+        // A real failure still comes back once the retries are spent.
+        assert!(remove_retrying(&d.join("absent.txt"), false).is_err());
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

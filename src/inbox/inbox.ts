@@ -45,3 +45,9 @@ export function settle(keys: number[], selected: number | null): number | null {
   if (selected === null) return null;
   return keys.includes(selected) ? selected : (keys[0] ?? null);
 }
+
+/** EDIT-041: the detail's button. Nothing is answered in the Inbox itself yet, so a question or a
+ *  permission always sends the user to the agent's pane to answer it there. */
+export function openLabel(item: Pick<Item, "group">): "Answer in Code" | "Open in Code" {
+  return item.group === "needs" ? "Answer in Code" : "Open in Code";
+}

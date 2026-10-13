@@ -12,27 +12,37 @@ mod claude_key;
 mod codex_accounts;
 mod codex_usage;
 mod creatures;
+mod diag;
 mod fence;
 mod files;
 mod fsops;
 mod fonts;
 mod git;
+mod groups;
 mod hooks;
 mod include;
+// T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
+#[cfg_attr(not(test), allow(dead_code))]
+mod keychain;
 mod grok;
 mod install;
 mod keybindings;
 mod kits;
+mod links;
 mod names;
+mod newproject;
 mod notifications;
 mod onboarding;
 mod orchestration;
 mod foreground;
 mod procs;
+mod protected;
 mod resources;
 mod projects;
 mod scm;
+mod pr_checkout;
 mod pty;
+mod setup;
 mod routing;
 mod schedule;
 mod resume;
@@ -139,6 +149,9 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            app.manage(links::Grants::default());
+            // APP-041: the app's own start-and-stop record, next to what the terminals report.
+            diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
             if let Some(w) = app.get_webview_window("main") {
@@ -163,7 +176,9 @@ pub fn run() {
             // Git the app still opens, and the landing screen says so (APP-023).
             app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
             app.manage(tools::Cache::default());
-            app.manage(fence::Fence::default());
+            // ACCT-055: picked-file grants saved by the last run come back.
+            let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
+            app.manage(fence);
             app.manage(token_usage::Flights::default());
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
@@ -233,6 +248,10 @@ pub fn run() {
             if let tauri::WindowEvent::Destroyed = event {
                 window.state::<Terminals>().kill_all();
             }
+            // ACCT-055: files dropped in from outside may be copied into the Explorer, nothing else.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<fence::Fence>().dropped(paths);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
@@ -250,6 +269,7 @@ pub fn run() {
             resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,
+            terminal::terminal_screen_reply,
             status::agent_history,
             activity::activity_counts,
             status::agent_answer,
@@ -262,12 +282,23 @@ pub fn run() {
             projects::workspace_list,
             projects::workspace_preview,
             projects::workspace_create,
+            projects::workspace_create_cancel,
+            projects::workspace_prs,
+            projects::workspace_open_pr,
+            projects::workspace_from_item,
+            projects::workspace_items,
+            projects::workspace_item,
+            setup::workspace_setup,
+            setup::setup_imports_list,
+            setup::setup_import,
             projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,
             projects::workspace_unseen,
             projects::workspace_seen,
             projects::workspace_hide,
+            projects::workspace_rename,
+            projects::workspace_sleep,
             projects::visibility_get,
             projects::visibility_set,
             projects::visibility_root_add,
@@ -306,7 +337,7 @@ pub fn run() {
             scm::scm_stage,
             scm::scm_discard,
             scm::scm_commit, scm::scm_remote,
-            scm::scm_pr, scm::scm_pr_create, scm::scm_open_pr,
+            scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             terminal::terminal_busy,
             keybindings::keybindings_read,
@@ -359,6 +390,19 @@ pub fn run() {
             codex_accounts::codex_account_remove,
             projects::git_first_commit_preview,
             projects::git_start,
+            activity::activity_get,
+            activity::activity_touch,
+            groups::groups_get,
+            groups::group_create,
+            groups::group_rename,
+            groups::group_nest,
+            groups::group_put,
+            groups::group_delete,
+            newproject::clone_suggest,
+            newproject::project_clone,
+            newproject::clone_cancel,
+            newproject::project_new_defaults,
+            newproject::project_create,
             kits::kit_samples,
             kits::kit_samples_dir,
             kits::kit_check,
@@ -370,6 +414,8 @@ pub fn run() {
             onboarding::onboarding_get,
             onboarding::onboarding_step,
             onboarding::onboarding_close,
+            onboarding::onboarding_reopen,
+            onboarding::onboarding_milestone,
             files::file_read,
             files::file_write,
             files::file_pick,
@@ -386,6 +432,7 @@ pub fn run() {
             files::diff_image,
             files::dir_list,
             files::path_kind,
+            links::open_path, links::file_grant,
             fsops::fs_create,
             fsops::fs_rename,
             fsops::fs_trash,
@@ -393,13 +440,15 @@ pub fn run() {
             fsops::fs_copy,
             fsops::fs_move,
             fsops::clip_write,
+            diag::diag_bundle,
+            diag::diag_review,
+            diag::diag_review_discard,
             update::update_status,
             update::update_mark,
             update::update_check,
             update::update_download,
             update::update_restart,
             claude_accounts::claude_account_remove,
-            codex_accounts::codex_account_remove,
             codex_accounts::codex_account_label,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
@@ -416,8 +465,19 @@ pub fn run() {
                 }
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
+                // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's,
+                // each step given two seconds. Settings need no step: every change is already on disk.
+                if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
+                    let steps = [codex_accounts::sign_in_files(&store, &profile), claude_accounts::sign_in_files(&store, &profile)];
+                    drop(store);
+                    for pairs in steps {
+                        let p = profile.clone();
+                        let _ = secrets::within(std::time::Duration::from_secs(2), move || secrets::save_changed(&pairs, &p));
+                    }
+                }
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
+                    diag::write(&dir, "app exit");
                     let _ = std::fs::remove_file(dir.join(cli::FILE));
                     let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));
                 }

@@ -1,7 +1,7 @@
 // The usage meters (USAGE-005): how a session's context reading and its agent's plan figures
 // become the Board card's meter, the tab ring and the pane header's percentage.
 import type { ClaudeLimit } from "./claude";
-import type { CodexUsage } from "./codex";
+import { resetWords, type CodexUsage } from "./codex";
 
 export type ContextReading = { tokens: number; window: number };
 export type PlanFigures = { fiveHour: number | null; weekly: number | null };
@@ -31,6 +31,18 @@ export function shortTokens(n: number): string {
 /** USAGE-002: yellow at 70%, red past 90%, the same scale on the card bar and the pane header. */
 export const tone = (percent: number): "" | "warn" | "danger" => (percent > 90 ? "danger" : percent >= 70 ? "warn" : "");
 
+/** USAGE-025: the Appearance choice of how plan percentages read; missing or unknown means used. */
+export const PERCENT_FIELD = "usagePercentages";
+export type PercentMode = "used" | "remaining";
+export const percentMode = (v: unknown): PercentMode => (v === "remaining" ? "remaining" : "used");
+/** A used percentage as the choice reads it: rounded, held to 0..100, a broken value 0. Only the
+ *  Agents screen's usage footer (T-040-b) follows it; the top pill always reads left. */
+export function shownPercent(used: number, mode: PercentMode): number {
+  if (!Number.isFinite(used)) return 0;
+  const u = Math.min(100, Math.max(0, Math.round(used)));
+  return mode === "remaining" ? 100 - u : u;
+}
+
 const pct = (n: number | undefined) => (n === undefined || !Number.isFinite(n) ? null : Math.min(100, Math.max(0, Math.round(n))));
 
 /** The plan figures for a session's agent: Claude to the Claude account, Codex to Codex, none for the rest or when the read failed. */
@@ -56,4 +68,23 @@ export function meterText(m: Meter): string {
   if (m.context) lines.push(`Context ${shortTokens(m.context.tokens)} / ${shortTokens(m.context.window)} (${m.context.percent}%)`);
   if (m.plan) lines.push([m.plan.fiveHour !== null && `5-hour ${m.plan.fiveHour}%`, m.plan.weekly !== null && `Weekly ${m.plan.weekly}%`].filter(Boolean).join(" · "));
   return lines.join("\n");
+}
+
+/** USAGE-025: the settings key for how usage reads; `left` or anything else (= used). The Appearance control is T-263. */
+export const READS_FIELD = "usageReads";
+export const readsLeft = (settings: Record<string, unknown>): boolean => settings[READS_FIELD] === "left" || percentMode(settings[PERCENT_FIELD]) === "remaining"; // MERGE 13: the T-263 Appearance pick (PERCENT_FIELD) counts too
+
+/** USAGE-004 / VIEW-018: the Agents footer, "Claude 38% used · resets today 15:00"; the provider's
+ *  5-hour window as used or left (a broken value reads 0, never NaN); empty for a provider with no
+ *  5-hour window, a failed read, or a plain shell. */
+export function usageLine(agent: string, claude: ClaudeLimit[], codex: CodexUsage | null, left: boolean, now: Date = new Date()): string {
+  let five: { name: string; used: number; at: number | null } | null = null;
+  if (agent === "claude") {
+    const w = claude.find((l) => l.kind === "five_hour");
+    if (w) five = { name: "Claude", used: w.usedPercent, at: w.resetsAt === null ? null : w.resetsAt / 1000 };
+  }
+  if (agent === "codex" && codex?.state === "ok" && codex.fiveHour) five = { name: "Codex", used: codex.fiveHour.usedPercent, at: codex.fiveHour.resetsAt };
+  if (!five) return "";
+  const used = pct(five.used) ?? 0;
+  return `${five.name} ${left ? 100 - used : used}% ${left ? "left" : "used"} · ${resetWords(five.at, now)}`;
 }
