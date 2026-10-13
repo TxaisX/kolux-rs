@@ -1,3 +1,131 @@
+T-152 acceptance (STAT 005 rewrite, lines 1-6) - proof, 2026-10-13, lane hooks
+Dev app: pnpm tauri dev, vite 1419, CDP 9245, identifier com.txaisxiong.kolux-rs.hooks.t152, every inherited
+KOLUX_* variable unset. Scratch env for the launch AND for every cargo test run in this batch:
+  USERPROFILE=G:\Temp\hooks-T-152\home  CLAUDE_CONFIG_DIR=G:\Temp\hooks-T-152\claude  CODEX_HOME=G:\Temp\hooks-T-152\codex
+The proof file is SYNTHETIC, written from scratch by G:\Temp\hooks-T-152\gen.js (no real settings file was opened,
+copied or diffed): 12 hook events, each with one group whose command is
+  cmd /c "G:\some\other\tool-<event>.cmd" || exit 0   (matcher "*" on the 4 tool events)
+a statusLine object {type command, padding 0} whose command is the chain
+  sh -c "cat > \"$TMP/sl-$$.json\"; cat \"$TMP/sl-$$.json\" | sh G:/some/other/prev-line.sh; rm -f \"$TMP/sl-$$.json\""
+"$schema", "model": "opus", env, permissions with a 6-entry allow list, 12 skillOverrides, enabledPlugins,
+includeCoAuthoredBy; JSON.stringify(v, null, 2) + "\n" (2-space indent, final newline).
+Codex home: codex\config.toml (69 bytes) and codex\hooks.json (209 bytes, another tool's Stop hook).
+
+== before launch (sha256sum)
+12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474 *claude/settings.json
+deb82796875e4f535956e65b64001b6474b0984a5d1cea7d762037b9f737e80c *codex/hooks.json
+6309c8458e4d6d112b375f8582ebececb263ea6c4aa40bbf254ffe7da972fac5 *codex/config.toml
+codex folder (ls -la, parent entry left out):
+  drwxr-xr-x 1 XiongT 197121   0 12:45:09 .
+  -rw-r--r-- 1 XiongT 197121  69 12:45:09 config.toml
+  -rw-r--r-- 1 XiongT 197121 209 12:45:09 hooks.json
+After launch with the switch off (default): sha256sum -c pre.sha -> all three OK.
+
+== unit tests: cargo test t_152 -- --nocapture --test-threads=1 (scratch env above)
+test result: ok. 7 passed; 0 failed   (t_152_1 .. t_152_6 plus t_152_gate)
+
+---------------------------------------------------------------------------------------------------
+(1) writes only to the resolved CLAUDE_CONFIG_DIR\settings.json while the switch is on; test, dev and
+    evidence builds can never resolve to his path
+  Code: agent_hooks::claude_target() = hooks::claude_settings_file(); in a debug build (cargo test, pnpm
+  tauri dev, every evidence build) scratch_only() refuses any file whose folder is not inside the temp
+  folder (G:\Temp\), so G:\Dev\claude-config\settings.json is unreachable from those builds. Install and
+  removal both go through claude_target(); sync is gated by the switch (T-152-gate).
+  Runtime: Settings > Agents showed "Claude Code settings: G:\Temp\hooks-T-152\claude\settings.json";
+  after the switch went on only that file (plus its .bak-kolux) changed under CLAUDE_CONFIG_DIR:
+    ls claude -> settings.json  settings.json.bak-kolux
+  Unit (t_152_1): a path in the repo is refused ("left alone"), a "..\" path that climbs out of the temp
+  folder is refused, and the resolved file is written only when it is scratch:
+    resolved G:\Temp\hooks-T-152\claude\settings.json -> Ok("G:\\Temp\\hooks-T-152\\claude\\settings.json")
+  An earlier run of the same test before the scratch env was set (the test process inherited the user
+  env; scratch_only only resolves the FOLDER name, the file is never opened) printed the refusal for his
+  real path:
+    resolved G:\Dev\claude-config\settings.json -> Err("a debug build writes agent settings only under G:\\Temp\\; G:\\Dev\\claude-config\\settings.json left alone")
+
+(2) before the first write: copy to settings.json.bak-kolux if absent, refuse the install if the copy
+    fails, record sha256 of original and backup
+  Runtime log on switch-on (app.log):
+    kolux-rs: claude hooks: kept a copy before the first write: sha256 original 12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474, backup 12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474
+    kolux-rs: claude hooks: installed
+  Record file home\.kolux-rs\agent-hooks\claude-settings.sha256:
+    12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474  G:\Temp\hooks-T-152\claude\settings.json
+    12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474  G:\Temp\hooks-T-152\claude\settings.json.bak-kolux
+  sha256sum after install:
+    9e94d87c9c6942cae0d5e3752a71b3389100ce1bda407fa26c32bfcbf8f310e1 *claude/settings.json
+    12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474 *claude/settings.json.bak-kolux
+  Unit (t_152_2): the copy equals the pre-install file and both record hashes match it; a second install
+  keeps the first copy; a copy that cannot be made refuses with "hooks not installed" and writes nothing.
+
+(3) merge, not overwrite: only entries whose command contains .kolux-rs/agent-hooks are added or
+    removed; the file parsed-equals the input once RS entries are stripped from both; invalid JSON
+    means refuse
+  Code: hooks::install_claude compares the result and the input with Kolux's groups and the statusLine
+  slot taken out and refuses ("would change more than Kolux's entries") if they differ.
+  Runtime: node check.js pre-settings.json claude/settings.json (strips every hook whose command contains
+  .kolux-rs/agent-hooks and the statusLine slot, then compares):
+    kolux entries in second file: 12 ; statusLine is kolux: true
+    parsed-equal after stripping: true
+  Installed file: model opus, 12 skillOverrides, 6 allow entries, 12 events (each: the user's group + Kolux's).
+  Runtime invalid JSON: claude\settings.json replaced with `{ "model": "opus", ` and the switch turned on:
+    kolux-rs: claude hooks: G:\Temp\hooks-T-152\claude\settings.json is not JSON (EOF while parsing a value at line 1 column 19); hooks not installed
+    sha256sum -c bad.sha -> claude/settings.json: OK (not written; the switch was turned off and the
+    synthetic file put back afterwards: 12c0c758...c474)
+  Unit (t_152_3): the user's groups in all 12 events are untouched (an old-app .kolux/agent-hooks entry
+  included), Kolux adds exactly one group per event, stripped-equal holds both ways, invalid JSON:
+    G:\Temp\kolux-rs-agent-hooks-t152-merge-48652\bad\settings.json is not JSON (EOF while parsing a value at line 1 column 19); hooks not installed
+  and the bad file is unchanged with no .bak-kolux made.
+
+(4) his statusLine is kept and still runs; removing hooks restores the exact original value
+  Kept: home\.kolux-rs\agent-hooks\claude-status-prev.json = the exact original slot
+    {"type":"command","command":"sh -c \"cat > \\\"$TMP/sl-$$.json\\\"; cat \\\"$TMP/sl-$$.json\\\" | sh G:/some/other/prev-line.sh; rm -f \\\"$TMP/sl-$$.json\\\"\"","padding":0}
+  and claude-status-prev.sh = the user's command. The installed statusLine runs Kolux's script, then
+  `sh ".../claude-status-prev.sh"`, padding 0 kept.
+  Still runs: the installed statusLine command fed a sample status JSON through sh:
+    sh: G:/some/other/prev-line.sh: No such file or directory
+    exit=0
+  (the user's chain ran and reached his own prev-line.sh, which does not exist on this synthetic path)
+  Restored: after switch-off the file is byte-identical to the original (line 6), so statusLine is the
+  exact original value; prev.json and prev.sh are removed (ls agent-hooks -> claude.cmd
+  claude-settings.sha256 claude-status.cmd codex.cmd).
+  Unit (t_152_4): the shaped file's statusLine comes back equal; a slot with no "type" and an odd extra
+  ("padding": 3, command with spaces) comes back byte for byte without the "type" Kolux set.
+
+(5) atomic: temp file in the same folder, write, sync_all, re-read and abort if the file changed since
+    the first read, then rename
+  Code: hooks::write_atomic writes <file>.json.kolux-rs-tmp in the same folder (create, write_all,
+  sync_all, original permissions), re-reads the target and compares with the text read first (a file
+  that did not exist must still not exist), removes the temp file and aborts on a difference, else renames.
+  Every Claude and Codex settings write goes through it (write_json -> write_atomic).
+  Unit (t_152_5), exact log line:
+    kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152-atomic-48652\settings.json changed since it was read; nothing written
+  the newer file stays, no temp file is left, a file that appeared after the read counts as changed,
+  an unchanged file is replaced.
+
+(6) switching off yields a file byte-identical to the pre-install file, proven on a copy shaped like his
+    real file before he says yes; no write to CODEX_HOME while T-025-e is off the cutline
+  Runtime switch-off (checked=false), sha256sum:
+    12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474 *pre-settings.json
+    12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474 *claude/settings.json
+    12c0c758233e62faddf380abad90028948099f061e0a5daf46d44e90f706c474 *claude/settings.json.bak-kolux
+    cmp pre-settings.json claude/settings.json -> post-off file byte-identical to the pre-install file
+  CODEX_HOME: on switch-on the log says
+    kolux-rs: codex hooks: not written (Codex hooks wait for T-025-e)
+  codex folder after on and after off (ls -la, parent entry left out): the same three lines as before
+  launch (same sizes, same 12:45:09 times); sha256sum codex/* after off:
+    6309c8458e4d6d112b375f8582ebececb263ea6c4aa40bbf254ffe7da972fac5 *codex/config.toml
+    deb82796875e4f535956e65b64001b6474b0984a5d1cea7d762037b9f737e80c *codex/hooks.json
+  (only the `total` blocks line of ls differs, 6 -> 10: it counts the parent entry, which grew from the
+  new files in G:\Temp\hooks-T-152; no entry inside codex changed)
+  Unit (t_152_6): shaped, compact one-line and CRLF variants all come back byte for byte; without the
+  copy the layout still comes back (indent, line ends, final newline); apply(codex, Install) returns
+  "not written (Codex hooks wait for T-025-e)".
+  The proof on a copy of HIS real file is T-025-d's job, after Txais says yes in session.
+
+Cleanup: app closed (process count 0), ports 1419 and 9245 free, G:\Temp\hooks-T-152 deleted.
+
+===================================================================================================
+Earlier proof (the first T-152 pass, 3a40770; kept for history, superseded by the acceptance above)
+===================================================================================================
 T-152 (STAT-004 which agents get hooks, STAT-005 removal, lock, backup) - text proof, 2026-10-13
 Lane hooks dev app (com.txaisxiong.kolux-rs.hooks), window on the second screen (X=-1920),
 started with every inherited KOLUX_* variable unset and USERPROFILE, CLAUDE_CONFIG_DIR and

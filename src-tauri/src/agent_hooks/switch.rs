@@ -4,8 +4,8 @@
 //! unreadable value installs nothing, and turning it on is the user's recorded approval. The
 //! commands answer from the files themselves, so they work whether or not Kolux is open.
 
-use super::{clear, codex_command, codex_home, names_mine, read_opt, sync};
-use crate::hooks::{claude_settings_file, home_dir, install_codex, write_codex_script, CLAUDE_EVENTS, CODEX_EVENTS};
+use super::{clear, codex_home, names_mine, read_opt, sync};
+use crate::hooks::{claude_settings_file, CLAUDE_EVENTS, CODEX_EVENTS};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
@@ -91,8 +91,7 @@ pub fn prepare_codex(settings: &Value) -> Result<Value, String> {
     if !on(settings) {
         return Err("agent status hooks are off; run kolux agent hooks on first".into());
     }
+    // T-152 (6): the user's own Codex home is not written while T-025-e is off the cutline.
     let home = codex_home().ok_or("no Codex home could be found")?;
-    let command = codex_command(&write_codex_script(&home_dir())?);
-    let changed = install_codex(&home, &command)?;
-    Ok(json!({ "home": home.display().to_string(), "changed": changed }))
+    Err(format!("Kolux does not write Codex hooks into {} yet (T-025-e); nothing changed", home.display()))
 }
