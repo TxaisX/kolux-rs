@@ -91,6 +91,38 @@ pub fn remote_for(repo: &Path, wanted: &str, url: &str) -> Result<String, String
     unreachable!("1.. never ends")
 }
 
+/// PROJ-037: an issue, as `gh issue view --json number,title,url` gives it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+}
+
+pub fn parse_issue(text: &str) -> Result<Issue, String> {
+    serde_json::from_str(text.trim()).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
+}
+
+/// One issue of the project's repository by its number.
+pub fn issue(gh: &Path, repo: &Path, number: u64) -> Result<Issue, String> {
+    let n = number.to_string();
+    let text = crate::scm::gh_run(gh, repo, &["issue", "view", &n, "--json", "number,title,url"], None).map_err(|e| crate::scm::gh_words(&e))?;
+    parse_issue(&text)
+}
+
+/// PROJ-037: whether any remote in `remotes` (`git config --get-regexp` lines: key, then the
+/// address as the user wrote it) is the GitHub repository `host/owner/name`.
+pub fn has_repo(remotes: &str, host: &str, owner: &str, name: &str) -> bool {
+    let want = format!("{host}/{owner}/{name}").to_lowercase();
+    remotes.lines().filter_map(|l| l.split_once(' ')).any(|(_, url)| crate::scm::github_repo(url, "").is_some_and(|g| g.key == want))
+}
+
+/// The remote addresses of the repository at `repo` as written (an insteadOf rewrite is not
+/// applied, so a mirror still counts as the repository it stands in for).
+pub fn remotes(repo: &Path) -> String {
+    run(&["config", "--get-regexp", r"^remote\..*\.url$"], Some(repo)).unwrap_or_default()
+}
+
 fn sha(repo: &Path, r: &str) -> Option<String> {
     run(&["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")], Some(repo)).ok().map(|s| s.trim().to_string())
 }
@@ -204,6 +236,19 @@ mod tests {
         assert_eq!(fork_url("git@github.com:txais/app.git", "someone", "app").as_deref(), Some("git@github.com:someone/app.git"));
         assert_eq!(fork_url("https://github.com/txais/app", "o", "n").as_deref(), Some("https://github.com/o/n"));
         assert_eq!(fork_url("C:/repos/app", "o", "n"), None);
+    }
+
+    #[test]
+    fn proj037_the_project_is_the_one_with_a_remote_at_the_item_repository() {
+        let remotes = "remote.origin.url https://github.com/Acme/App.git\nremote.fork.url git@github.com:me/app.git\n";
+        assert!(has_repo(remotes, "github.com", "acme", "app"), "case does not matter");
+        assert!(has_repo(remotes, "github.com", "me", "app"), "any remote counts");
+        assert!(!has_repo(remotes, "github.com", "acme", "other"));
+        assert!(!has_repo(remotes, "ghe.corp.example", "acme", "app"), "the host counts");
+        assert!(!has_repo("", "github.com", "acme", "app"));
+        let issue = parse_issue(r#"{"number":34,"title":"Crash on save","url":"https://github.com/acme/app/issues/34"}"#).unwrap();
+        assert_eq!((issue.number, issue.title.as_str()), (34, "Crash on save"));
+        assert!(parse_issue("not json").unwrap_err().contains("cannot read"));
     }
 
     #[test]

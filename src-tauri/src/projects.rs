@@ -908,6 +908,34 @@ pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: Stor
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
     Ok(made)
 }
+/// PROJ-037: an issue or pull request named by its address, as the palette read it.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct WorkItem {
+    pub host: String,
+    pub owner: String,
+    pub repo: String,
+    pub kind: String,
+    pub number: u64,
+}
+
+/// PROJ-037: a workspace straight from an issue or pull request address, in the project that has
+/// a remote at its repository: a pull request is checked out as `workspace_open_pr` does; an
+/// issue gets a new branch named after its title, linked to it (the `issue:` selector finds it).
+#[tauri::command(async)]
+pub fn workspace_from_item(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, item: WorkItem) -> Result<Created, String> {
+    let projects = load_projects(&*store.lock().map_err(|e| e.to_string())?);
+    let project = projects
+        .into_iter()
+        .find(|p| crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo))
+        .ok_or_else(|| format!("No project here has {}/{}/{} as a remote; add that repository as a project first.", item.host, item.owner, item.repo))?;
+    if item.kind == "pull" {
+        return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None);
+    }
+    let issue = crate::pr_checkout::issue(&crate::scm::gh_program()?, Path::new(&project.path), item.number)?;
+    let made = create_named(&git, &store, &project.id, &issue.title, None, None)?;
+    set_origin(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "issue": issue.number, "issueUrl": issue.url })))?;
+    Ok(made)
+}
 
 /// PROJ-070: what deleting a workspace would lose or run into, read when the question opens.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]

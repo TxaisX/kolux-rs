@@ -82,7 +82,7 @@ import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./u
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, type CliWorkspace, type PendingCreate, type Project, type SetupLine, type SetupWhere, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type PendingCreate, type Project, type SetupLine, type SetupWhere, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
@@ -927,6 +927,22 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       setFocused(key);
     }
   };
+  // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
+  const runSetup = (dir: string, branch: string | null) =>
+    invoke<SetupLine | null>("workspace_setup", { path: dir })
+      .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
+      .catch((err) => setNotice(String(err)));
+  // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
+  const fromItem = (item: WorkItem) => {
+    setToast(`Making a workspace from ${item.kind === "pull" ? "pull request" : "issue"} #${item.number}…`);
+    invoke<Created>("workspace_from_item", { item })
+      .then((made) => {
+        setRefresh((n) => n + 1);
+        cli.current.select(made.path, made.branch, true);
+        void runSetup(made.path, made.branch);
+      })
+      .catch((err) => setNotice(String(err)));
+  };
   // VIEW-011: the open page is written down, so it is shown again after a restart.
   useEffect(() => {
     if ((settings[OPEN_PAGE_FIELD] ?? null) !== page) saveSetting(OPEN_PAGE_FIELD, page);
@@ -1046,8 +1062,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const key = keyOfHandle(handle);
     setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title: title ?? undefined } : p)));
   };
-  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, dropPane: (_k: number) => {} });
-  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, dropPane: (k: number) => dropPane(k) };
+  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
+  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
   useEffect(() => {
     const off = listen<CliWorkspace>("cli-workspace", (e) => {
       const p = e.payload;
@@ -1073,10 +1089,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
       // PROJ-033: a workspace made from the command line runs its setup script in a background tab
       // unless it was told to skip it.
-      if (p.setup !== "skip")
-        invoke<SetupLine | null>("workspace_setup", { path: p.worktree.path })
-          .then((line) => line && cli.current.startSetup(p.worktree.path, p.worktree.branch, line, "tab", false))
-          .catch((err) => setNotice(String(err)));
+      if (p.setup !== "skip") void cli.current.runSetup(p.worktree.path, p.worktree.branch);
     });
     return () => {
       off.then((f) => f()).catch(() => undefined);
@@ -1469,6 +1482,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             }}
             onCreate={(name) => {
               setScreen("terminals");
+              const item = workItem(name);
+              if (item) return fromItem(item);
               setSidebarOpen(true);
               setCreateName(name);
               setCreateRequest((n) => n + 1);

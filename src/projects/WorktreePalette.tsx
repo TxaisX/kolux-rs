@@ -4,7 +4,7 @@
 // typed name.
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { worktreeLabel, type Project, type Worktree } from "./model";
+import { workItem, worktreeLabel, type Project, type Worktree } from "./model";
 import { MAX_QUERY, matchWords, wordsOf } from "./nav";
 
 /** A row the window supplies: its section, what it shows, and what Enter does. */
@@ -19,7 +19,8 @@ type Props = {
   /** Each workspace folder's pull request state, from the sidebar's row states. */
   prOf: (dir: string) => string | null;
   onWorktree: (w: Worktree) => void;
-  /** Enter on the last row: make a workspace named after the query. */
+  /** Enter on the last row: make a workspace named after the query (PROJ-037: or from the issue
+   * or pull request the query's address names). */
   onCreate: (name: string) => void;
   onClose: () => void;
 };
@@ -93,7 +94,11 @@ export default function WorktreePalette({ projects, items, prOf, onWorktree, onC
   const typed = query.trim() !== "";
   const rows = useMemo(() => paletteRows([...items, ...worktreeItems(projects, lists, typed, prOf, onWorktree)], query), [items, projects, lists, query]);
   const create = typed ? query.trim() : null;
+  const item = create ? workItem(create) : null;
   const count = rows.length + (create ? 1 : 0);
+  // PROJ-037: an issue or pull request address has the create row picked; other text leaves the
+  // first match picked.
+  const cur = Math.min(at, count - 1);
   const go = (i: number) => {
     onClose();
     if (i < rows.length) rows[i].run();
@@ -103,7 +108,7 @@ export default function WorktreePalette({ projects, items, prOf, onWorktree, onC
     if (v.length > MAX_QUERY) return setRefused(true);
     setRefused(false);
     setQuery(v);
-    setAt(0);
+    setAt(workItem(v) ? Infinity : 0);
   };
 
   return (
@@ -118,9 +123,9 @@ export default function WorktreePalette({ projects, items, prOf, onWorktree, onC
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Escape") onClose();
-            else if (e.key === "Enter") count > 0 && go(Math.min(at, count - 1));
-            else if (e.key === "ArrowDown") setAt((i) => Math.min(i + 1, count - 1));
-            else if (e.key === "ArrowUp") setAt((i) => Math.max(i - 1, 0));
+            else if (e.key === "Enter") count > 0 && go(cur);
+            else if (e.key === "ArrowDown") setAt(Math.min(cur + 1, count - 1));
+            else if (e.key === "ArrowUp") setAt(Math.max(cur - 1, 0));
             else return;
             e.preventDefault();
             e.stopPropagation();
@@ -131,7 +136,7 @@ export default function WorktreePalette({ projects, items, prOf, onWorktree, onC
           {rows.map((r, i) => (
             <Fragment key={`${r.section}|${r.label}|${r.hint ?? ""}|${i}`}>
               {(i === 0 || rows[i - 1].section !== r.section) && <div className="palette-section">{r.section}</div>}
-              <button role="option" aria-selected={i === at} className={`menu-item${i === at ? " at" : ""}`} onMouseEnter={() => setAt(i)} onClick={() => go(i)}>
+              <button role="option" aria-selected={i === cur} className={`menu-item${i === cur ? " at" : ""}`} onMouseEnter={() => setAt(i)} onClick={() => go(i)}>
                 <span className="name">
                   <Marked text={r.label} spans={r.spans} from={0} />
                 </span>
@@ -146,8 +151,9 @@ export default function WorktreePalette({ projects, items, prOf, onWorktree, onC
           {create && (
             <>
               {rows.length === 0 && <div className="menu-hint">Nothing matches.</div>}
-              <button role="option" aria-selected={at === rows.length} className={`menu-item${at === rows.length ? " at" : ""}`} onMouseEnter={() => setAt(rows.length)} onClick={() => go(rows.length)}>
-                <span className="name">Create workspace “{create}”</span>
+              <button role="option" aria-selected={cur === rows.length} className={`menu-item${cur === rows.length ? " at" : ""}`} onMouseEnter={() => setAt(rows.length)} onClick={() => go(rows.length)}>
+                <span className="name">{item ? `Create workspace from ${item.kind === "pull" ? "pull request" : "issue"} #${item.number}` : `Create workspace “${create}”`}</span>
+                {item && <span className="picker-folder">{`${item.owner}/${item.repo}, named after its title and linked to it`}</span>}
               </button>
             </>
           )}

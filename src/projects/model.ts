@@ -254,3 +254,14 @@ export function prefixSample(mode: string, custom: string, check: PrefixCheck | 
   if (/^\/+$/.test(typed)) return { sample, note: "A prefix of only slashes is no prefix, so new branches get the bare name." };
   return { sample, note: null };
 }
+
+/** PROJ-037: a GitHub issue or pull request named by its address. */
+export type WorkItem = { host: string; owner: string; repo: string; kind: "pull" | "issue"; number: number };
+
+/** The issue or pull request an address names; null for anything else, a plain name or a
+ * repository's home page included. Any host, so an Enterprise address counts too. */
+export function workItem(text: string): WorkItem | null {
+  const m = /^https?:\/\/([^/\s]+)\/([\w.-]+)\/([\w.-]+)\/(pull|issues)\/(\d+)(?:[/?#]\S*)?$/i.exec(text.trim());
+  if (!m || Number(m[5]) === 0) return null;
+  return { host: m[1].toLowerCase().replace(/^www\./, ""), owner: m[2], repo: m[3], kind: m[4].toLowerCase() === "pull" ? "pull" : "issue", number: Number(m[5]) };
+}

@@ -218,6 +218,7 @@ pub fn run() {
             projects::workspace_create_cancel,
             projects::workspace_prs,
             projects::workspace_open_pr,
+            projects::workspace_from_item,
             setup::workspace_setup,
             projects::workspace_set_parent,
             projects::workspace_branches,

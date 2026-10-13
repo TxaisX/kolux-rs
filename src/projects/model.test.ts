@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, type PendingCreate, type PrHead } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, type PendingCreate, type PrHead } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -181,4 +181,16 @@ test("PROJ-048: a new parent is never the workspace itself, its parent, its desc
   expect(names(all[6])).toEqual(["p", "a", "kid", "grand", "b"]);
   // a parent that is no longer listed is not "the current parent"
   expect(names(w("lost", "gone"))).toEqual(["p", "a", "kid", "grand", "b", "loop1", "loop2"]);
+});
+
+test("PROJ-037: an issue or pull request address is a work item; a plain name or a repository home page is not", () => {
+  expect(workItem(" https://github.com/Acme/app/pull/12 ")).toEqual({ host: "github.com", owner: "Acme", repo: "app", kind: "pull", number: 12 });
+  expect(workItem("https://github.com/acme/app/pull/12/files#diff")?.number).toBe(12);
+  expect(workItem("https://www.github.com/acme/app/issues/34?x=1")).toEqual({ host: "github.com", owner: "acme", repo: "app", kind: "issue", number: 34 });
+  expect(workItem("https://ghe.corp.example/team/app/issues/3")?.host).toBe("ghe.corp.example");
+  expect(workItem("https://github.com/acme/app")).toBeNull();
+  expect(workItem("https://github.com/acme/app/pulls")).toBeNull();
+  expect(workItem("https://github.com/acme/app/issues/0")).toBeNull();
+  expect(workItem("fix the login page")).toBeNull();
+  expect(workItem("#12")).toBeNull();
 });
