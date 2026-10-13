@@ -3329,9 +3329,11 @@ fn worker_start(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let behind = drift(ctx.git, &project, &worktree.path);
     let brief = crate::orchestration::brief(&task, &crate::orchestration::Brief { dispatch: &dispatch_id, run: run_id.as_deref(), coordinator: coordinator.as_deref(), behind, levels_left: cap - depth });
 
-    // SAFE-023: the worktree (and its main repository) are trusted before the agent starts; best
-    // effort, a failure never stops the worker.
-    let trusted = match crate::trust::trust_folders(&ctx.claude_config, &agent_id, &[PathBuf::from(&worktree.path), PathBuf::from(&project.path)]) {
+    // SAFE-023: a worktree Kolux made is trusted before the agent starts (never the main checkout or
+    // a folder made elsewhere, T-443); best effort, a failure never stops the worker.
+    let mine = crate::trust::made_by_kolux(ctx.store, &[PathBuf::from(&worktree.path)]);
+    let trusted = match crate::trust::trust_folders(&ctx.claude_config, &agent_id, &mine) {
+        Ok(_) if mine.is_empty() => json!("not trusted: not a worktree Kolux made, so the agent asks itself"),
         Ok(_) => json!(true),
         Err(e) => json!(format!("not trusted: {e}")),
     };
@@ -4507,11 +4509,11 @@ mod tests {
             assert_eq!(out.data["setup"], "not_configured");
             let wt = PathBuf::from(out.data["worktree"]["path"].as_str().unwrap());
             assert!(wt.join(".git").exists());
-            // SAFE-023: the new worktree and the main repository are trusted before the start.
+            // SAFE-023: the new worktree is trusted before the start; the main checkout is not (T-443).
             assert_eq!(out.data["trust"], true, "{}", out.data["trust"]);
             let conf: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".claude.json")).unwrap()).unwrap();
             assert_eq!(conf["projects"][crate::trust::claude_key(&wt).unwrap()]["hasTrustDialogAccepted"], true);
-            assert_eq!(conf["projects"][crate::trust::claude_key(&repo).unwrap()]["hasTrustDialogAccepted"], true);
+            assert!(conf["projects"].get(crate::trust::claude_key(&repo).unwrap()).is_none(), "the main checkout keeps Claude's own prompt");
             let ev = events.lock().unwrap();
             let n = ev.len();
             assert_eq!(ev[n - 2]["kind"], "created");

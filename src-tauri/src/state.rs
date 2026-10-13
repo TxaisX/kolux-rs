@@ -51,18 +51,51 @@ impl Store {
         tx.commit()
     }
 
-    /// User settings as JSON; an absent or unreadable file reads as an empty object.
-    pub fn settings(&self) -> serde_json::Value {
-        fs::read(&self.settings_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_else(|| serde_json::json!({}))
+    /// User settings as JSON. No file yet reads as an empty object; a file that cannot be read or
+    /// is not a JSON object is an error, never an empty set (T-441).
+    pub fn try_settings(&self) -> std::io::Result<serde_json::Value> {
+        let bytes = match fs::read(&self.settings_path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::json!({})),
+            Err(e) => return Err(e),
+        };
+        match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(v) if v.is_object() => Ok(v),
+            Ok(_) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "it is not a JSON object")),
+            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+        }
     }
 
-    /// Writes settings whole or not at all: to a temp file first, then renamed into place.
+    /// User settings for reading. An unreadable file reads as empty here so the app still starts on
+    /// defaults; every save refuses until the file reads again, so the empty copy never lands on disk.
+    pub fn settings(&self) -> serde_json::Value {
+        self.try_settings().unwrap_or_else(|e| {
+            eprintln!("kolux: settings.json could not be read, using defaults and saving nothing: {e}");
+            serde_json::json!({})
+        })
+    }
+
+    /// Writes settings whole or not at all. Refuses while the file on disk cannot be read, so a
+    /// writer that saw defaults never wipes the real file; keeps the last good file as
+    /// settings.json.bak; syncs the new file to disk before renaming it into place.
     pub fn save_settings(&self, value: &serde_json::Value) -> std::io::Result<()> {
+        if let Err(e) = self.try_settings() {
+            let bak = self.settings_path.with_extension("json.bak");
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("Kolux could not read {} ({e}), so it left the file untouched and saved nothing. The last good copy is {}.", self.settings_path.display(), bak.display()),
+            ));
+        }
         let tmp = self.settings_path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
+        {
+            use std::io::Write;
+            let mut f = fs::File::create(&tmp)?;
+            f.write_all(&serde_json::to_vec_pretty(value)?)?;
+            f.sync_all()?;
+        }
+        if self.settings_path.exists() {
+            fs::copy(&self.settings_path, self.settings_path.with_extension("json.bak"))?;
+        }
         fs::rename(&tmp, &self.settings_path)
     }
 
@@ -122,6 +155,31 @@ mod tests {
         s.save_settings(&serde_json::json!({ "theme": "classic" })).unwrap();
         assert_eq!(s.settings()["theme"], "classic");
         assert!(!dir.join("settings.json.tmp").exists());
+        drop(s);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn t441_a_corrupt_settings_file_is_never_overwritten() {
+        let dir = temp_dir("corrupt");
+        let s = Store::open(&dir).unwrap();
+        s.save_settings(&serde_json::json!({ "theme": "classic", "defaultAgent": "codex" })).unwrap();
+        s.patch_settings(&serde_json::Map::from_iter([("theme".into(), serde_json::json!("new"))]), &[]).unwrap();
+        // The backup holds the file as it was before the last save.
+        let bak: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("settings.json.bak")).unwrap()).unwrap();
+        assert_eq!(bak["theme"], "classic");
+
+        for planted in [&b"{\"theme\": \"new\", \"defaultAg"[..], b"", b"[1,2]"] {
+            fs::write(dir.join("settings.json"), planted).unwrap();
+            assert!(s.try_settings().is_err());
+            assert_eq!(s.settings(), serde_json::json!({}), "reads fall back to defaults");
+            let err = s.patch_settings(&serde_json::Map::from_iter([("uiLook".into(), serde_json::json!("new"))]), &[]).unwrap_err();
+            assert!(err.to_string().contains("settings.json.bak"), "{err}");
+            assert!(s.save_settings(&serde_json::json!({})).is_err());
+            assert_eq!(fs::read(dir.join("settings.json")).unwrap(), planted, "the planted file is untouched");
+            let bak: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("settings.json.bak")).unwrap()).unwrap();
+            assert_eq!(bak["theme"], "classic", "the last good copy is untouched");
+        }
         drop(s);
         fs::remove_dir_all(&dir).unwrap();
     }

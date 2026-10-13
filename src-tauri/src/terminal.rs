@@ -405,6 +405,8 @@ impl Terminals {
                     inner.logs.remove(&id);
                 }
                 crate::activity::terminal_ended(id);
+                // AUTO-012: an automation run followed in this pane is over with it.
+                crate::automations::follow(&exit_app, |s| crate::automations::pane_ended(s, id, code, crate::automations::now_ms()));
                 // ORCH-027: a worker's agent that died mid-task tells its coordinator.
                 if by_itself && is_program {
                     if let Ok(store) = exit_app.state::<Mutex<crate::state::Store>>().lock() {
@@ -620,6 +622,7 @@ impl Terminals {
 
     /// Ends every session: the window is closing, nothing may be left running.
     pub fn kill_all(&self) {
+        crate::automations::QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Ok(mut inner) = self.inner.lock() {
             inner.dirs.clear();
             inner.keys.clear();
@@ -708,7 +711,13 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
         }
         crate::hooks::install_codex_home(std::path::Path::new(home));
     }
-    let id = terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)?;
+    let agent = program.as_deref().and_then(crate::agents::credited_agent);
+    let dir = cwd.clone();
+    let id = terminals.spawn(app.clone(), cols, rows, cwd, program, args, env_own, env, pane_key)?;
+    // AUTO-012: an automation run dispatched to this worktree for this agent is followed here.
+    if let Some(dir) = dir {
+        crate::automations::follow(&app, |s| crate::automations::claim(s, id, pane_key, &dir, agent));
+    }
     Ok(Spawned { id, program: terminals.started(id), account })
 }
 

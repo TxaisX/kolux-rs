@@ -526,7 +526,7 @@ fn gh_repo_arg(worktree: &Path, ssh_config: &str) -> Option<String> {
 
 /// GIT-060: the worktree's GitHub repository, for grouping checkouts (the Tasks picker, T-231-b).
 #[tauri::command]
-pub fn scm_github_repo(worktree: String) -> Option<GhRepo> {
+pub async fn scm_github_repo(worktree: String) -> Option<GhRepo> {
     let url = run(&["remote", "get-url", "origin"], Some(Path::new(&worktree))).ok()?;
     github_repo(&url, &ssh_config())
 }
@@ -969,7 +969,7 @@ pub async fn scm_commit_message(worktree: String, command: Option<String>, instr
 
 /// GIT-017: stops the commit-message run for `worktree`.
 #[tauri::command]
-pub fn scm_commit_message_stop(worktree: String) {
+pub async fn scm_commit_message_stop(worktree: String) {
     stop_message(&worktree);
 }
 
@@ -1346,7 +1346,7 @@ pub async fn scm_tasks_search(host: String, queries: Vec<String>, page: u32) -> 
 
 /// GIT-043: the account gh is signed in with on `host`, from gh's own config (no network).
 #[tauri::command]
-pub fn scm_gh_account(host: String) -> Option<String> {
+pub async fn scm_gh_account(host: String) -> Option<String> {
     let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", &host, "user"]).output().ok()?;
     let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !login.is_empty()).then_some(login)
@@ -1639,7 +1639,7 @@ pub async fn scm_pr_create(worktree: String, title: String, body: String, base: 
 
 /// Opens a pull request in the browser.
 #[tauri::command]
-pub fn scm_open_pr(url: String) -> Result<(), String> {
+pub async fn scm_open_pr(url: String) -> Result<(), String> {
     if !safe_pr_url(&url) {
         return Err("That is not a pull request link".into());
     }
@@ -1780,7 +1780,7 @@ pub async fn scm_history(worktree: String) -> Result<Vec<Commit>, String> {
 }
 
 #[tauri::command]
-pub fn scm_commit_files(worktree: String, hash: String) -> Result<Vec<Change>, String> {
+pub async fn scm_commit_files(worktree: String, hash: String) -> Result<Vec<Change>, String> {
     commit_files(Path::new(&worktree), &hash)
 }
 
@@ -1987,30 +1987,30 @@ fn has_commit_hook(worktree: &Path) -> bool {
 }
 
 #[tauri::command]
-pub fn scm_status(worktree: String) -> Result<Status, String> {
+pub async fn scm_status(worktree: String) -> Result<Status, String> {
     status(Path::new(&worktree))
 }
 
 #[tauri::command]
-pub fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
+pub async fn scm_summary(worktree: String, pinned: Option<String>, upstream: bool) -> Result<Summary, String> {
     summary(Path::new(&worktree), pinned.as_deref(), upstream)
 }
 
 #[tauri::command]
-pub fn scm_abort(worktree: String) -> Result<(), String> {
+pub async fn scm_abort(worktree: String) -> Result<(), String> {
     abort(Path::new(&worktree))
 }
 
 #[tauri::command]
 /// ACCT-055: stage and discard only in a project or worktree (fence.rs).
-pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+pub async fn scm_stage(worktree: String, paths: Vec<String>, on: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
     stage(&fence.allow(&worktree, &store, &git, false)?, &paths, on)
 }
 
 #[tauri::command]
 /// VIEW-067 discards one section; GIT-003 rows picked across sections come without one.
 /// ACCT-055: only inside a project or worktree (fence.rs).
-pub fn scm_discard(worktree: String, section: Option<String>, paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+pub async fn scm_discard(worktree: String, section: Option<String>, paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
     let root = fence.allow(&worktree, &store, &git, false)?;
     match section {
         Some(section) => discard(&root, &section, &paths),
@@ -2019,12 +2019,12 @@ pub fn scm_discard(worktree: String, section: Option<String>, paths: Vec<String>
 }
 
 #[tauri::command]
-pub fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
+pub async fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
     commit(Path::new(&worktree), &message)
 }
 
 #[tauri::command]
-pub fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, String> {
+pub async fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, String> {
     remote(Path::new(&worktree), &action)
 }
 
