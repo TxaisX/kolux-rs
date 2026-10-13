@@ -123,6 +123,42 @@ pub fn remotes(repo: &Path) -> String {
     run(&["config", "--get-regexp", r"^remote\..*\.url$"], Some(repo)).unwrap_or_default()
 }
 
+/// SESS-036: an issue or pull request the composer can link a new workspace to.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Linkable {
+    #[serde(default)]
+    pub kind: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+}
+
+/// GitHub's search takes at most 256 characters, so a longer lookup is refused before gh is asked.
+pub const LOOKUP_MAX: usize = 256;
+
+pub fn lookup_refused(query: &str) -> Option<String> {
+    let n = query.chars().count();
+    (n > LOOKUP_MAX).then(|| format!("That lookup is {n} characters long; GitHub searches take at most {LOOKUP_MAX}."))
+}
+
+/// gh's `issue list` and `pr list --json number,title,url` answers, issues first.
+pub fn parse_found(issues: &str, prs: &str) -> Result<Vec<Linkable>, String> {
+    let read = |text: &str, kind: &str| {
+        serde_json::from_str::<Vec<Linkable>>(text.trim()).map(|v| v.into_iter().map(|l| Linkable { kind: kind.to_string(), ..l }).collect::<Vec<_>>()).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
+    };
+    Ok([read(issues, "issue")?, read(prs, "pull")?].concat())
+}
+
+/// The open issues and pull requests of the repository at `repo` matching `query` in GitHub's search.
+// ponytail: text search only; a bare number is matched the way GitHub's search matches it.
+pub fn find(gh: &Path, repo: &Path, query: &str) -> Result<Vec<Linkable>, String> {
+    if let Some(why) = lookup_refused(query) {
+        return Err(why);
+    }
+    let list = |what: &str| crate::scm::gh_run(gh, repo, &[what, "list", "--state", "open", "--limit", "8", "--search", query.trim(), "--json", "number,title,url"], None).map_err(|e| crate::scm::gh_words(&e));
+    parse_found(&list("issue")?, &list("pr")?)
+}
+
 fn sha(repo: &Path, r: &str) -> Option<String> {
     run(&["rev-parse", "--verify", "--quiet", &format!("{r}^{{commit}}")], Some(repo)).ok().map(|s| s.trim().to_string())
 }
@@ -249,6 +285,19 @@ mod tests {
         let issue = parse_issue(r#"{"number":34,"title":"Crash on save","url":"https://github.com/acme/app/issues/34"}"#).unwrap();
         assert_eq!((issue.number, issue.title.as_str()), (34, "Crash on save"));
         assert!(parse_issue("not json").unwrap_err().contains("cannot read"));
+    }
+
+    #[test]
+    fn sess036_issues_and_pull_requests_are_offered_and_overlong_lookups_refused() {
+        // recorded `gh issue list` / `gh pr list --json number,title,url` answers
+        let issues = r#"[{"number":34,"title":"Crash on save","url":"https://github.com/acme/app/issues/34"}]"#;
+        let prs = r#"[{"number":12,"title":"Fix the login page","url":"https://github.com/acme/app/pull/12"}]"#;
+        let found = parse_found(issues, prs).unwrap();
+        assert_eq!(found.iter().map(|f| (f.kind.as_str(), f.number, f.title.as_str())).collect::<Vec<_>>(), [("issue", 34, "Crash on save"), ("pull", 12, "Fix the login page")]);
+        assert!(parse_found("[]", "nope").unwrap_err().contains("cannot read"));
+        assert_eq!(lookup_refused(&"a".repeat(LOOKUP_MAX)), None);
+        assert!(lookup_refused(&"a".repeat(LOOKUP_MAX + 1)).unwrap().contains("at most 256"));
+        assert_eq!(lookup_refused(&"é".repeat(LOOKUP_MAX)), None, "characters, not bytes");
     }
 
     #[test]

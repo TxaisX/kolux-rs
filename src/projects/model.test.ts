@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, type PendingCreate, type PrHead } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, type Linked, type PendingCreate, type PrHead } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -193,4 +193,17 @@ test("PROJ-037: an issue or pull request address is a work item; a plain name or
   expect(workItem("https://github.com/acme/app/issues/0")).toBeNull();
   expect(workItem("fix the login page")).toBeNull();
   expect(workItem("#12")).toBeNull();
+});
+
+test("SESS-036/038: a linked GitHub item reads as its number and title, and a project switch drops it but keeps a tracker link", () => {
+  const issue: Linked = { kind: "issue", number: 34, title: "Crash on save", url: "https://github.com/acme/app/issues/34", repo: "github.com/acme/app" };
+  const pr: Linked = { ...issue, kind: "pull", number: 12, title: "Fix the login page" };
+  expect(itemLabel(issue)).toBe("issue #34 Crash on save");
+  expect(itemLabel(pr)).toBe("pull request #12 Fix the login page");
+  expect(keepOnSwitch(issue)).toBeNull();
+  expect(keepOnSwitch(pr)).toBeNull();
+  const tracker: Linked = { kind: "tracker", number: 7, title: "Plan the launch", url: "https://tracker.example/7", repo: null };
+  expect(keepOnSwitch(tracker)).toBe(tracker);
+  expect(keepOnSwitch(null)).toBeNull();
+  expect(bound({ kind: "issue", number: 34, title: "t", url: "https://github.com/Acme/App/issues/34" }).repo).toBe("github.com/Acme/App");
 });

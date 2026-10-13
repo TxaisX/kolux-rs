@@ -918,6 +918,34 @@ pub struct WorkItem {
     pub number: u64,
 }
 
+/// SESS-036: the open issues and pull requests of the project's own repository that match the
+/// text typed in the composer's name field.
+#[tauri::command(async)]
+pub fn workspace_items(store: StoreState<'_>, project_id: String, query: String) -> Result<Vec<crate::pr_checkout::Linkable>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    crate::pr_checkout::find(&crate::scm::gh_program()?, Path::new(&project.path), &query)
+}
+
+/// SESS-036: the issue or pull request a link pasted in the composer names, when it belongs to
+/// the chosen project's own repository (never another one, so no repository is asked for).
+#[tauri::command(async)]
+pub fn workspace_item(store: StoreState<'_>, project_id: String, item: WorkItem) -> Result<crate::pr_checkout::Linkable, String> {
+    use crate::pr_checkout::Linkable;
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    let repo = Path::new(&project.path);
+    if !crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(repo), &item.host, &item.owner, &item.repo) {
+        return Err(format!("That link is to {}/{}/{}, which is not a remote of {}; links here come from the chosen project's own repository.", item.host, item.owner, item.repo, project.name));
+    }
+    let gh = crate::scm::gh_program()?;
+    Ok(if item.kind == "pull" {
+        let pr = crate::pr_checkout::view(&gh, repo, item.number)?;
+        Linkable { kind: "pull".into(), number: pr.number, title: pr.title, url: pr.url }
+    } else {
+        let i = crate::pr_checkout::issue(&gh, repo, item.number)?;
+        Linkable { kind: "issue".into(), number: i.number, title: i.title, url: i.url }
+    })
+}
+
 /// PROJ-037: a workspace straight from an issue or pull request address, in the project that has
 /// a remote at its repository: a pull request is checked out as `workspace_open_pr` does; an
 /// issue gets a new branch named after its title, linked to it (the `issue:` selector finds it).
@@ -1115,7 +1143,7 @@ pub fn create_named_until(git: &Git, store: &Mutex<Store>, project_id: &str, nam
 // PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>) -> Result<Created, String> {
     let made = create_named_until(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref(), &|| dropped(ticket));
     if let Some(t) = ticket {
         settle_create(t);
@@ -1123,6 +1151,10 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
     let mut made = made?;
     // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
     let store = store.lock().map_err(|e| e.to_string())?;
+    if let Some(i) = issue {
+        // SESS-036: linked to the issue the composer named it from (the `issue:` selector finds it)
+        set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "issue": i.number, "issueUrl": i.url })))?;
+    }
     let project = find_project(&store, &project_id)?;
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
     Ok(made)

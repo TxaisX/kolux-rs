@@ -822,6 +822,9 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .pick-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pick-item .hint { margin-left: auto; flex: none; font-size: 11px; color: var(--fg-muted); }
 .pick-item mark { background: none; color: var(--fg); font-weight: 700; text-decoration: underline; }
+/* SESS-036: the issues and pull requests the composer name field suggests. */
+button.pick-item { width: 100%; text-align: left; font: inherit; }
+button.pick-item:hover, button.pick-item:focus-visible { background: var(--input-bg); outline: 1px solid var(--line-focus); }
 .composer-advanced { display: flex; flex-direction: column; gap: 6px; }
 .field.multi.grow { field-sizing: content; max-height: 160px; resize: none; }
 .composer .btn-row { flex-wrap: wrap; align-items: center; }

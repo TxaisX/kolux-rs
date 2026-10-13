@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
@@ -174,6 +174,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [parentDraft, setParentDraft] = useState<string | null>(null); // SESS-037: the parent worktree, none by default
   const [advanced, setAdvanced] = useState(false);
   const [more, setMore] = useState(false); // SESS-038: Create more
+  const [linked, setLinked] = useState<Linked | null>(null); // SESS-036: the GitHub item the workspace is named from
+  const [found, setFound] = useState<Linked[]>([]); // SESS-036: issues and pull requests matching the name
+  const [findNote, setFindNote] = useState("");
   const [setupSkip, setSetupSkip] = useState(false); // PROJ-033: the setup policy; the project's script runs unless skipped
   const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
   const [setupWait, setSetupWait] = useState(false);
@@ -285,7 +288,28 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   useEffect(() => {
     setPrList(null); // PROJ-030: another project's pull requests are not this one's
     setPrDraft(null);
+    setLinked((l) => (creating === null ? null : keepOnSwitch(l))); // SESS-038
   }, [creating]);
+  useEffect(() => {
+    // SESS-036: the chosen project's own issues and pull requests matching the name, and a pasted
+    // link resolved to its item (its title seeds the name). Lookups that fail for want of gh stay quiet.
+    setFound([]);
+    setFindNote("");
+    const item = workItem(name);
+    const q = name.trim();
+    if (!creating || linked || existing || prList !== null || (!item && q.length < 2)) return;
+    let live = true;
+    const t = setTimeout(() => {
+      const ask = item
+        ? invoke<Linked>("workspace_item", { projectId: creating, item }).then((l) => live && (setLinked(bound(l)), setName(l.title)))
+        : invoke<Linked[]>("workspace_items", { projectId: creating, query: q }).then((l) => live && setFound(l.map(bound)));
+      ask.catch((err) => live && (item || String(err).startsWith("That lookup")) && setFindNote(String(err)));
+    }, item ? 0 : 350);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [name, creating, linked, existing, prList]);
 
   useEffect(() => {
     // SESS-036: the name field suggests the project's branches too.
@@ -407,8 +431,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const base = baseDraft.trim();
     const branch = branchDraft.trim();
     // SESS-036: a name that is an existing branch opens that branch rather than making a new one.
-    const reuse = existing ? branch : branchList.includes(name.trim()) ? name.trim() : "";
-    const pr = prList !== null ? prDraft : null; // PROJ-030: open a pull request's branch
+    const reuse = existing ? branch : !linked && branchList.includes(name.trim()) ? name.trim() : "";
+    // PROJ-030: open a pull request's branch; SESS-036: a linked pull request opens the same way
+    const pr = prList !== null ? prDraft : linked?.kind === "pull" ? { number: linked.number } : null;
+    const issue = linked?.kind === "issue" ? linked : null;
     if (prList !== null ? !pr : existing ? !reuse : !name.trim() || preview === null) return;
     const keepOpen = more; // SESS-038: Create more keeps the composer open for the next one
     const typed = name.trim();
@@ -426,6 +452,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setBranchDraft("");
     setPromptDraft("");
     setPrDraft(null);
+    setLinked(null); // SESS-038: Create more drops the linked item, ready for the next one
     if (!keepOpen) {
       setCreating(null);
       setBaseDraft("");
@@ -436,7 +463,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket })
         : reuse
         ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket })
-        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket });
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue });
       const lost = overtaken.current.has(mine.ticket);
       noteRecent(project.id);
       const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
@@ -522,7 +549,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     if (e.key === "Enter" && p) create(p);
     else if (e.key === "Escape") setCreating(null);
   };
-  const reusing = !existing && prList === null && branchList.includes(name.trim());
+  const reusing = !existing && prList === null && !linked && branchList.includes(name.trim());
   const openPrs = (p: Project) => {
     setExisting(false);
     setPrList([]);
@@ -546,8 +573,26 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         onKeyDown={submitKeys(p)}
       />
       <div className="preview">
-        {prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
+        {linked ? `linked to ${itemLabel(linked)}${linked.kind === "pull" ? ", its branch checked out" : ", on a new branch"}` : prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
       </div>
+      {linked && (
+        <div className="btn-row">
+          <button className="link" onClick={() => setLinked(null)}>
+            Unlink {linked.kind === "pull" ? "the pull request" : "the issue"}
+          </button>
+        </div>
+      )}
+      {findNote && <div className="preview warn">{findNote}</div>}
+      {found.length > 0 && (
+        <div className="pick-list" aria-label="issues and pull requests">
+          {found.map((f) => (
+            <button key={f.url} type="button" className="pick-item" title={f.url} onClick={() => (setLinked(f), setName(f.title), nameRef.current?.focus())}>
+              <span className="name">#{f.number} {f.title}</span>
+              <span className="hint">{f.kind === "pull" ? "pull request" : "issue"}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {p && <Picker key={`parent-${p.id}`} name="Parent" value={parentLabel(p)} items={parentItems(p)} onPick={(k) => setParentDraft(k || null)} onEmptyEnter={() => setParentDraft(null)} />}
       <select aria-label="agent" className="field" value={agentDraft} onChange={(e) => setAgentDraft(e.target.value)}>
         <option value="">{promptDraft.trim() && fallbackAgent ? `${fallbackAgent.name} (default)` : "No agent: a terminal"}</option>

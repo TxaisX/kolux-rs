@@ -265,3 +265,18 @@ export function workItem(text: string): WorkItem | null {
   if (!m || Number(m[5]) === 0) return null;
   return { host: m[1].toLowerCase().replace(/^www\./, ""), owner: m[2], repo: m[3], kind: m[4].toLowerCase() === "pull" ? "pull" : "issue", number: Number(m[5]) };
 }
+
+/** SESS-036: the issue or pull request (or, later, a tracker item) a new workspace is linked to;
+ * `repo` is the GitHub repository it belongs to, null for a tracker link bound to none. */
+export type Linked = { kind: string; number: number; title: string; url: string; repo: string | null };
+
+/** A GitHub item as the back end found it, bound to the repository its address names. */
+export const bound = (l: Omit<Linked, "repo">): Linked => {
+  const w = workItem(l.url);
+  return { ...l, repo: w ? `${w.host}/${w.owner}/${w.repo}` : l.url };
+};
+
+export const itemLabel = (l: Linked) => `${l.kind === "pull" ? "pull request" : l.kind} #${l.number} ${l.title}`;
+
+/** SESS-038: switching project drops a GitHub item of the old repository, keeps a link bound to none. */
+export const keepOnSwitch = (l: Linked | null): Linked | null => (l && l.repo === null ? l : null);
