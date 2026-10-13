@@ -36,3 +36,16 @@ $ cargo clippy --all-targets -- -D warnings
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.56s
 $ pnpm exec tsc
 tsc: no errors
+
+Live proof, both halves together (2026-10-13, reliability handover round 1, lane/reliability after merging main 29c9b37)
+Shape check: EditorPane sends { path, text, loadedHash } -> Tauri maps to loaded_hash: Option<String> (match); hash = lowercase hex SHA-256 of the raw file_read text on both sides (match); refusal kind: backend sent "changedOnDisk", main's isStale (src/editor/buffers.ts:91) wants "stale" -> MISMATCH, fixed in files.rs (d64c959: kind "stale").
+Run: scratch copy of scripts/evidence/smoke.mjs flow 2 plus the steps below, dev app from G:/Dev/kolux-rs-lanes/reliability (pid 31732), vite 1425, CDP 9247, identifier com.txaisxiong.kolux-rs.reliability.smoke, CLAUDE_CONFIG_DIR/CODEX_HOME under G:/Temp/reliability-handover, stand-in gh (KOLUX_DEV_GH).
+After flow 2 saved notes.txt, an unsaved edit "kolux edit after the agent " was typed, then:
+1. outside write to notes.txt after the editor loaded it: disk sha256 45a7753686df16ef779ce798a553e2050d719cd279213b7dc1d2b17eefddccaf
+2. Mod+S: the choice appeared: {"notice":["note .txt changed on di k  ince you opened it,  o it wa  not  aved.ReloadKeep mine"],"buttons":["Reload","Keep mine"]}
+3. disk after Mod+S: sha256 45a7753686df16ef779ce798a553e2050d719cd279213b7dc1d2b17eefddccaf (UNCHANGED); text "agent wrote this from outside\n"
+   screenshot: saved G:\Dev\kolux-rs-lanes\reliability\evidence\T-073-a-stale-choice.png (1416 x 889) pid 31732
+4. Reload: editor now shows "agent wrote this from outside"; stale notices left 0; disk sha256 45a7753686df16ef779ce798a553e2050d719cd279213b7dc1d2b17eefddccaf (unchanged)
+   (the notice text in line 2 lost its letter s to a regex-escaping slip in the proof script; the real text, visible in the screenshot: "notes.txt changed on disk since you opened it, so it was not saved." with Reload / Keep mine)
+   screenshot evidence/T-073-a-stale-choice.png: the first-start tour card had opened over the page; the stale bar with Reload and Keep mine shows behind it.
+flow 2: PASS; close: window close over CDP, exited in 2.5 s, survivors 0.
