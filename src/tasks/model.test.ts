@@ -1,5 +1,5 @@
-import { describe, expect, it, test } from "vitest";
-import { beyondWindow, eventLine, pageButtons, pageCount, PRESETS, taskKind, taskQueries, relabel, tasksRepo, withEdits } from "./model";
+import { expect, test } from "vitest";
+import { beyondWindow, eventLine, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
 
 const projects = [
   { id: "a", name: "Alpha", path: "G:/r/alpha" },
@@ -55,24 +55,4 @@ test("GIT-050: the preview's timeline says each event in words", () => {
   expect(e("commented", "mo", "Same here.")).toBe("@mo commented: Same here.");
   expect(e("renamed", "mo", "Crsh → Crash")).toBe("@mo renamed this: Crsh → Crash");
   expect(e("head_ref_deleted", "")).toBe("head ref deleted");
-});
-
-describe("GIT-048: label edits show at once and do not flip back", () => {
-  const bug = { name: "bug", color: "d73a4a" };
-  const docs = { name: "docs", color: "0075ca" };
-  const ui = { name: "ui", color: "" };
-  it("two quick additions both stay, and undoing one failed edit leaves the other", () => {
-    const one = relabel([ui], ["bug"], [], [bug, docs]);
-    const two = relabel(one, ["docs"], [], [bug, docs]);
-    expect(two).toEqual([ui, bug, docs]);
-    expect(relabel(two, [], ["bug"], [bug, docs])).toEqual([ui, docs]);
-    expect(relabel(two, ["bug"], ["ui"], [])).toEqual([bug, docs]);
-  });
-  it("a late search page still carrying the old labels does not undo an edit", () => {
-    const item = { kind: "issue", number: 1, title: "t", url: "u1", repo: "a/b", state: "open", draft: false, labels: [ui], assignees: [], updated: "", checks: null };
-    const page = { total: 2, deepest: 2, items: [item, { ...item, url: "u2" }] };
-    const out = withEdits(page, new Map([["u1", [ui, bug]]]));
-    expect(out.items.map((t) => t.labels)).toEqual([[ui, bug], [ui]]);
-    expect(withEdits(page, new Map()).items[0].labels).toEqual([ui]);
-  });
 });

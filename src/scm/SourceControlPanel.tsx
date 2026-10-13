@@ -445,8 +445,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     if (!status) return;
     switch (step.action) {
       case "stage":
-        // GIT-012: with the lists cut short, "Stage all" means the whole worktree, not the rows shown.
-        return stage((status.cut ?? 0) > 0 ? ["."] : [...status.changed, ...status.untracked].map((c) => c.path), true);
+        return stage([...status.changed, ...status.untracked].map((c) => c.path), true);
       case "commit":
         return commit();
       case "pr":
@@ -984,19 +983,6 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 <button className="ib" title="Clear selection (Esc)" onClick={() => setSelected([])}>
                   <Close />
                 </button>
-              </div>
-            )}
-            {status && (status.cut ?? 0) > 0 && (
-              <div className="note warn" role="status" data-scm-cut>
-                This list is cut short: {(status.cut ?? 0).toLocaleString()} more changes are left out so the panel stays quick.
-                {(status.heavy ?? []).length > 0 && (
-                  <>
-                    {" "}
-                    <button className="link" disabled={busy} onClick={() => void guarded(() => invoke("scm_ignore_heavy", { worktree: dir, folders: status.heavy }))}>
-                      Add {(status.heavy ?? []).join(", ")} to .gitignore
-                    </button>
-                  </>
-                )}
               </div>
             )}
             <div className="sb-list">

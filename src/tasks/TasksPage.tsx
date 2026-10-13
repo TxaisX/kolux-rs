@@ -6,7 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
-import { beyondWindow, pageButtons, pageCount, PER_PAGE, PRESETS, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries, withEdits } from "./model";
+import { beyondWindow, pageButtons, pageCount, PER_PAGE, PRESETS, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
 import TaskDialog from "./TaskDialog";
 
 type GhRepo = { host: string; owner: string; name: string };
@@ -38,13 +38,11 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
       .catch(() => setGh(null));
   }, [repo?.dir]);
 
-  // GIT-048: label edits made here, laid over every search until a hard refresh (the Refresh button).
-  const edited = useRef(new Map<string, TaskLabel[]>());
   const load = () => {
     if (!gh) return;
     setError(null);
     invoke<TaskPage>("scm_tasks_search", { host: gh.host, queries: taskQueries(preset, query, [`${gh.owner}/${gh.name}`]), page })
-      .then((r) => setResult(withEdits(r, edited.current)))
+      .then(setResult)
       .catch((e) => setError(String(e)));
   };
   useEffect(load, [gh, preset, query, page]);
@@ -96,15 +94,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
             {gh.host} · {login ? `@${login}` : "not signed in"} · {gh.owner}/{gh.name}
           </span>
         )}
-        <button
-          className="ib"
-          title="Refresh"
-          disabled={!gh}
-          onClick={() => {
-            edited.current.clear();
-            load();
-          }}
-        >
+        <button className="ib" title="Refresh" disabled={!gh} onClick={load}>
           <Refresh />
         </button>
       </div>
@@ -163,10 +153,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           task={open}
           host={gh.host}
           onClose={() => setOpen(null)}
-          onLabels={(labels: TaskLabel[]) => {
-            edited.current.set(open.url, labels);
-            setResult((r) => r && withEdits(r, edited.current));
-          }}
+          onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
         />
       )}
     </div>

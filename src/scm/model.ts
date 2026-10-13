@@ -24,10 +24,6 @@ export type Status = {
   resolved: string[];
   /** GIT-001: `[added, removed]` by path per section; a binary file has no entry. */
   lines?: { staged: Record<string, [number, number]>; changed: Record<string, [number, number]>; untracked: Record<string, [number, number]> };
-  /** GIT-012: changes left out of the lists (each shows its first 1,000); 0 when none are. */
-  cut?: number;
-  /** GIT-012: heavy folders not ignored yet, offered for the ignore file when lists are cut. */
-  heavy?: string[];
 };
 
 /** GIT-065: whether a workspace's commits are on its remote (`scm_pushed`). */
@@ -57,7 +53,7 @@ export type KeyLike = { key: string; ctrlKey: boolean; metaKey: boolean; altKey:
 export const isCommitShortcut = (e: KeyLike): boolean => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !e.isComposing;
 
 /** The sum of every section, for the panel's header. */
-export const changeCount = (s: Status | null): number => (s ? s.staged.length + s.changed.length + s.untracked.length + s.conflicts.length + (s.cut ?? 0) : 0);
+export const changeCount = (s: Status | null): number => (s ? s.staged.length + s.changed.length + s.untracked.length + s.conflicts.length : 0);
 
 /** The sections whose rows can be discarded (VIEW-067); conflicts are resolved, not discarded. */
 export type Section = "Staged" | "Changes" | "Untracked";
