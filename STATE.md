@@ -113,7 +113,10 @@ know, keeps the default for any entry with a bad chord, drops a custom chord tha
 another in the same place, and shows a red notice when the file will not parse while leaving the
 file alone. The search box chips and "Next that needs you" read their keys from that map (an
 override shows at once at the next start; unbound shows "Unassigned"). Ctrl+B hides and shows the
-sidebar and Ctrl+Alt+V cycles Agents / Board / Terminals through the keymap. The app icon and the
+sidebar (closed, it takes no width and the first tab stays in view), its right edge drags between
+220 and 480 px and the width is kept (a bad saved width falls back), Ctrl+Shift+0 opens it and puts
+focus on its list, and each workspace lists its running sessions as rows with their own agent mark
+and name plus a count that skips ended ones; a click on a row shows that pane (T-051), and Ctrl+Alt+V cycles Agents / Board / Terminals through the keymap. The app icon and the
 top-left mark are now Txais's own (design/icon/).
 
 T-006 makes the sidebar rows a switch: a click on a workspace row (main checkout or worktree)

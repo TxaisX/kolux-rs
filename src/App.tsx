@@ -17,7 +17,7 @@
 // New tab menu opens one, and Mod+S saves the focused editor while the terminals screen is up.
 // Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { saveChanged } from "./settings/saveChanged";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
@@ -54,7 +54,7 @@ import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, ty
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
-import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
+import RightSidebar, { clampLeft, clampWidth, Grip, LEFT_KEY, readLeft, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount, canExpand, toggleZoom, zoomedGroup, type Zoom } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
@@ -169,6 +169,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [explorerFocus, setExplorerFocus] = useState(0);
   // VIEW-056: the right sidebar's width while its edge is being dragged; saved when let go.
   const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const [dragLeft, setDragLeft] = useState<number | null>(null); // VIEW-050: the left sidebar mid-drag
   const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
@@ -385,6 +386,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   };
   // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
   const right = readRight(settings);
+  const leftWidth = dragLeft ?? readLeft(settings);
   const explorerOpen = right.open && right.tab === "explorer";
   const scmOpen = right.open && right.tab === "scm";
   const saveRight = (patch: Partial<Record<keyof typeof RIGHT_KEYS, unknown>>) => {
@@ -533,7 +535,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           const rows = [...document.querySelectorAll<HTMLElement>(".sidebar :is(button.branch, .sess[role=button])")];
           const at = rows.findIndex((r) => r.classList.contains("sel"));
           if (hit.id === "sidebar.focusWorktreeList") {
-            rows[Math.max(at, 0)]?.focus();
+            // VIEW-050: a sidebar just opened lists its rows a moment later, so look again for up to a second.
+            const focusList = (tries: number) => {
+              const list = [...document.querySelectorAll<HTMLElement>(".sidebar :is(button.branch, .sess[role=button])")];
+              if (list.length) (list.find((r) => r.classList.contains("sel")) ?? list[0]).focus();
+              else if (tries > 0) setTimeout(() => focusList(tries - 1), 50);
+            };
+            focusList(20);
             break;
           }
           const i = navTarget(rows.length, at, hit.id === "workspace.selectByIndex" ? { index: hit.index ?? 0 } : { step: hit.id === "worktree.navigateDown" ? 1 : -1 });
@@ -1694,7 +1702,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         screen={screen}
         classic={classic}
         onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
-      <div className="body">
+      <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
         {palette && (
           <WorktreePalette
             projects={projects}
@@ -1744,6 +1752,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         {(terminals || screen === "artifacts") && sidebarOpen && (
           <ProjectsPanel
             openDirs={openDirs}
+            sessions={sources}
+            onOpenSession={openPane}
             states={rowStates}
             unread={unreadDirs}
             onUnread={markDir}
@@ -1784,6 +1794,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               setNames(typed);
             }}
           />
+        )}
+        {(terminals || screen === "artifacts") && sidebarOpen && (
+          <Grip side="left" width={leftWidth} label="Resize the sidebar" className="lside-grip" onWidth={(w, done) => {
+            setDragLeft(done ? null : clampLeft(w));
+            if (done) saveSetting(LEFT_KEY, clampLeft(w));
+          }} />
         )}
         <div className="content">
           {sheet?.seats && (
@@ -2051,8 +2067,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             })}
           </div>
         </div>
-        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? 297 : 0)} hidden={!terminals || !right.open} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
-          const used = clampWidth(w, window.innerWidth, sidebarOpen ? 297 : 0);
+        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0)} hidden={!terminals || !right.open} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
+          const used = clampWidth(w, window.innerWidth, sidebarOpen ? leftWidth + 8 : 0);
           setDragWidth(done ? null : used);
           if (done) saveRight({ width: used });
         }}>

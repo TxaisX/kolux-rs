@@ -75,7 +75,7 @@ input { font: inherit; }
 
 /* ---- 5. sidebar card: x 8, y 44, 289 wide ---- */
 .sidebar-wrap { flex: none; display: flex; padding: 8px 0 8px 8px; }
-.sidebar { width: 289px; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
+.sidebar { width: var(--sidebar-w, 289px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
 /* EDIT-033: the explorer, a card on the right matching the sidebar; rows are fixed 22px and virtualized. */
 .explorer { flex: none; width: 280px; margin: 8px 8px 8px 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
 .explorer-head { flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
@@ -138,7 +138,9 @@ input { font: inherit; }
 .proj:hover .ib, .proj .ib.on { opacity: 1; }
 .branch { display: flex; align-items: center; height: 32px; padding: 0 12px 0 8px; gap: 8px; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
 .branch .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.branch .count { font-size: 11px; color: var(--fg); }
+.branch .count, .sess .count { font-size: 11px; color: var(--fg); }
+.sess.pane-row { height: 26px; gap: 8px; font-size: 12px; }
+.sess.pane-row .name { overflow: hidden; text-overflow: ellipsis; }
 .branch .dot { margin-right: 2px; }
 .branch .chev { color: #797979; display: inline-flex; }
 .branch:hover { background: #1f1f1f; }
@@ -1032,7 +1034,9 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
    and Source Control cards fill it. */
 .rside { flex: none; position: relative; display: flex; flex-direction: column; min-width: 0; padding: 8px 8px 8px 0; }
 .rside-grip { position: absolute; left: -4px; top: 8px; bottom: 8px; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
-.rside-grip:hover { background: linear-gradient(to right, transparent 3px, var(--line-focus) 3px, var(--line-focus) 5px, transparent 5px); }
+/* VIEW-050: the left sidebar's drag edge sits over the gap between it and the workspace, taking no room. */
+.lside-grip { flex: none; width: 8px; margin: 8px -4px; cursor: col-resize; z-index: 2; touch-action: none; }
+.rside-grip:hover, .lside-grip:hover { background: linear-gradient(to right, transparent 3px, var(--line-focus) 3px, var(--line-focus) 5px, transparent 5px); }
 .rside-tabs { flex: none; display: flex; gap: 2px; padding: 0 2px 6px; overflow: hidden; }
 .rside-tab { flex: none; height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .rside-tab:hover { color: var(--fg); }

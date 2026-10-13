@@ -39,13 +39,18 @@ import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 import { GLOSSARY } from "../glossary";
+import VendorMark, { type Agent } from "../chrome/VendorMark";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing" | "tasks";
 
 type Props = {
-  /** Folders a pane is open in: those workspace rows show a live dot and a count. */
+  /** Folders a pane is open in: those workspace rows show a live dot. */
   openDirs: string[];
+  /** VIEW-051: the window's agent and shell panes; a workspace lists its running ones as rows
+   * (own agent mark, own title) and counts them. `onOpenSession` shows that pane. */
+  sessions?: { key: number; agent: string; title: string; cwd: string | null; running: boolean }[];
+  onOpenSession?: (key: number) => void;
   /** PROJ-063: each open folder's strongest agent state and when it last changed. */
   states: Record<string, RowInfo>;
   /** PROJ-063 / TERM-118: workspace paths marked unread, kept by the window; `onUnread` flips one. */
@@ -119,7 +124,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -853,6 +858,19 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const same = (a: string, b: string) => a.replace(/[\\/]+$/, "").toLowerCase() === b.replace(/[\\/]+$/, "").toLowerCase();
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
+  // VIEW-051: only running panes count, so an exited tab drops out; none shows no count.
+  const liveIn = (w: Worktree) => sessions.filter((s) => s.running && s.cwd !== null && same(s.cwd, w.path));
+  const liveCount = (w: Worktree) => {
+    const n = liveIn(w).length;
+    return n > 0 ? <span className="count">{n}</span> : null;
+  };
+  const paneRows = (w: Worktree, depth = 0) =>
+    liveIn(w).map((s) => (
+      <div key={s.key} className="sess pane-row" role="button" tabIndex={0} data-pane={s.key} data-agent={s.agent} style={{ paddingLeft: 44 + depth * 14 }} title={"Show " + s.title} onClick={() => onOpenSession(s.key)} onKeyDown={(e) => e.key === "Enter" && onOpenSession(s.key)}>
+        <VendorMark agent={s.agent as Agent} size={12} />
+        <span className="name">{s.title}</span>
+      </div>
+    ));
   const isSelected = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
   const infoOf = (w: Worktree): RowInfo => {
     const info = Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
@@ -901,6 +919,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           )}
           {pushTag(w)}
           {groupBy !== "project" && <span className="hint">{p.name}</span>}
+          {liveCount(w)}
           {!asking && (
             <button
               className="ib"
@@ -952,6 +971,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </button>
           )}
         </div>
+        {paneRows(w, depth)}
         {moving === w.path && !asking && (
           <div className="sb-form" data-moving={worktreeLabel(w)}>
             <Picker key={`move-${w.path}`} name="Move under" value={up ? worktreeLabel(up) : "No parent"} startOpen items={moveItems(p, w)} onPick={(k) => void move(p, w, k)} />
@@ -1160,12 +1180,13 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                       <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
                       <span className="name">{worktreeLabel(main)}</span>
                       {pushTag(main)}
-                      {isActive(main) && <span className="count">{openCount(main)}</span>}
+                      {liveCount(main)}
                       <span className="chev">
                         <ChevronDown size={12} />
                       </span>
                     </button>
                   )}
+                  {main && paneRows(main)}
                   {settingsFor === p.id && (
                     <div className="sb-form" data-project-settings={p.id}>
                       <label>Workspaces folder for {p.name}</label>
