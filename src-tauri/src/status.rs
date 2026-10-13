@@ -110,6 +110,8 @@ pub struct Session {
     pub history: VecDeque<Entry>,
     /// The quiet alert already went out for this silent spell (STAT-045).
     quiet_fired: bool,
+    /// Where the agent's hooks say its transcript is (CHAT-006 reads it before any folder search).
+    pub transcript: Option<String>,
 }
 
 /// What the window is told when a working agent has printed nothing for too long (STAT-045).
@@ -388,10 +390,26 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
     with_sessions(|s| {
         let session = s.entry(pane_key).or_default();
         session.terminal = terminal.or(session.terminal);
-        let (change, child) = session.apply(agent, event)?;
+        let path = str_of(event, "transcript_path").map(str::to_string);
+        let applied = session.apply(agent, event);
+        // CHAT-006: kept after `apply`, since a fresh session start clears the rest of the record.
+        if path.is_some() {
+            session.transcript = path;
+        }
+        let (change, child) = applied?;
         crate::activity::note(pane_key, change.state);
         Some(Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted })
     })
+}
+
+/// The transcript `pane_key`'s hooks last reported (CHAT-006).
+pub fn transcript_of(pane_key: u32) -> Option<String> {
+    with_sessions(|s| s.get(&pane_key).and_then(|x| x.transcript.clone()))
+}
+
+/// The pane's agent is mid-turn as its hooks tell it (CHAT-006 keeps loading rather than erroring).
+pub fn working(pane_key: u32) -> bool {
+    with_sessions(|s| s.get(&pane_key).is_some_and(|x| x.own.is_some() && x.resolved() == "working"))
 }
 
 /// The panes whose hooks last reported for `terminal`.

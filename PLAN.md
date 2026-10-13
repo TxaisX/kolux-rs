@@ -613,7 +613,9 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### H · theme 3 · Knowing what each agent is doing (14 cards)
 
-- [ ] T-325 · CHAT-002 Which sessions can be shown as chat · CHAT-006 Chat follows the agent's transcript live, even before the file exists · CHAT-007 [compat] Finding and reading each agent's transcript · CHAT-010 Each message once, in order, without system noise · CHAT-011 The reply streams in while it is being written
+- [x] T-325 · CHAT-002 Which sessions can be shown as chat · CHAT-006 Chat follows the agent's transcript live, even before the file exists · CHAT-007 [compat] Finding and reading each agent's transcript · CHAT-010 Each message once, in order, without system noise · CHAT-011 The reply streams in while it is being written
+- [ ] T-325-b · from T-325: the CHAT 007 rules for Grok and omp (each agent's own home environment variable; Grok's wrapper tags and start-up rows removed, its reasoning summaries kept) and CHAT 002's Grok and omp support (`SUPPORTED` in `src-tauri/src/chat.rs`, `CHAT_AGENTS` in `src/chat/model.ts`); needs a public description of both agents' transcript files first
+- [ ] T-325-c · from T-325: the source of CHAT 011's live preview and CHAT 010's scraped-terminal messages: the reply read off the agent's terminal while a turn runs, marked as tool output when it is; the show rule and the merge are built (`previewToShow`, `combine` in `src/chat/model.ts`), only the terminal read is left (terminal grid internals)
 - [ ] T-326 · CHAT-012 Reasoning, compaction, plans and provider notices · CHAT-013 Tool calls fold into the agent's turn · CHAT-014 File edits show as diff cards · CHAT-015 Subagents appear as one roster row · CHAT-016 Responding, thinking and working indicators · also: the Thought row rules of T-027 (a real button, collapsed by default, Enter and Space toggle, toolbar expand-all; rail 268 px in the new look, 240 px otherwise)
 - [ ] T-327 · CHAT-017 Chat message box · CHAT-020 Sending from chat types into the agent's terminal · CHAT-022 Answer an agent's question with a card · CHAT-027 Chat sticks to the newest message
 

@@ -70,6 +70,26 @@ struct Mark {
     program: String,
     /// The agent the program is credited as (`claude`, `codex`), none for another program.
     agent: Option<&'static str>,
+    /// The window pane the session runs in (CHAT-006 finds a pane's program by it).
+    pane: Option<u32>,
+    /// CLAUDE_CONFIG_DIR / CODEX_HOME as the program was started with them.
+    home_env: Vec<(String, String)>,
+    /// The folder the program started in (None: the app's own folder).
+    cwd: Option<String>,
+}
+
+/// What a pane's program session is, for the chat view (CHAT-002, CHAT-006).
+pub struct PaneRun {
+    pub agent: Option<&'static str>,
+    /// When the program started, on the wall clock.
+    pub started: std::time::SystemTime,
+    /// The program has printed something (it is past launching).
+    pub wrote: bool,
+    pub alive: bool,
+    /// CLAUDE_CONFIG_DIR / CODEX_HOME as the program was started with them (CHAT-007).
+    pub home_env: Vec<(String, String)>,
+    /// The folder the program started in (None: the app's own folder).
+    pub cwd: Option<String>,
 }
 
 /// One chunk of program output, base64 so split multi-byte characters survive the trip.
@@ -90,6 +110,9 @@ impl Terminals {
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>) -> Result<u32, String> {
+        // CHAT-007: the agent home folders the program really got; Kolux's account variable (applied last) wins.
+        let home_env: Vec<(String, String)> = own_env.iter().chain(env.iter()).filter(|(k, _)| k == crate::claude_accounts::CONFIG_ENV || k == crate::codex_accounts::HOME_ENV).cloned().collect();
+        let chat_cwd = cwd.clone();
         // ACCT-049: checked before the lock, so a drive that does not answer holds up only this pane.
         if let Some(dir) = cwd.as_deref() {
             check_start_dir(dir, program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p)))?;
@@ -206,12 +229,20 @@ impl Terminals {
         inner.keys.insert(id, key);
         if is_program {
             let agent = program.as_deref().and_then(crate::agents::credited_agent);
-            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent });
+            inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent, pane: pane_key, home_env, cwd: chat_cwd });
         }
         if let Some(dir) = cwd {
             inner.dirs.insert(id, dir);
         }
         Ok(id)
+    }
+
+    /// The newest program session started in window pane `pane` (CHAT-002, CHAT-006).
+    pub fn of_pane(&self, pane: u32) -> Option<PaneRun> {
+        let inner = self.inner.lock().ok()?;
+        let (id, m) = inner.marks.iter().filter(|(_, m)| m.pane == Some(pane)).max_by_key(|(id, _)| **id)?;
+        let started = std::time::SystemTime::now().checked_sub(m.started.elapsed()).unwrap_or(std::time::UNIX_EPOCH);
+        Some(PaneRun { agent: m.agent, started, wrote: m.last_output.is_some(), alive: !inner.ended.contains(id), home_env: m.home_env.clone(), cwd: m.cwd.clone() })
     }
 
     /// ACCT-046: the program session `id` actually started.

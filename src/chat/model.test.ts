@@ -1,0 +1,72 @@
+import { expect, test } from "vitest";
+import { applyRead, chatOffer, combine, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type OfferInput } from "./model";
+
+const base: OfferInput = { credited: "claude", screen: "agents", switchOn: false, showingChat: false, launching: false, readable: true };
+const item = (id: string, role: ChatItem["role"], text: string, at: number): ChatItem => ({ id, role, kind: "text", text, at });
+const read = (items: ChatItem[], reset = false): ChatRead => ({ state: "ready", reset, items, open: false, retryMs: 1000 });
+
+test("CHAT-002: Claude in a pane offers chat, a plain shell does not", () => {
+  expect(chatOffer(base).chat).toBe(true);
+  expect(chatOffer({ ...base, credited: null }).chat).toBe(false);
+});
+
+test("CHAT-002: an unsupported agent renamed to read like Claude is still not offered chat", () => {
+  expect(chatOffer({ ...base, credited: "aider", title: "Claude", hint: "claude" }).chat).toBe(false);
+});
+
+test("CHAT-002: with the switch off a Codex session renders as chat on the Agents screen but not on Terminals", () => {
+  expect(chatOffer({ ...base, credited: "codex" }).chat).toBe(true);
+  expect(chatOffer({ ...base, credited: "codex", screen: "terminals" }).chat).toBe(false);
+  expect(chatOffer({ ...base, credited: "codex", screen: "terminals", switchOn: true }).chat).toBe(true);
+});
+
+test("CHAT-002: no readable transcript stays a terminal; a tab showing chat can always go back; launching shows the chooser; structured has no toggle", () => {
+  expect(chatOffer({ ...base, readable: false }).chat).toBe(false);
+  expect(chatOffer({ ...base, credited: "aider", showingChat: true })).toEqual({ chat: false, back: true, chooser: false });
+  expect(chatOffer({ ...base, launching: true })).toEqual({ chat: false, back: false, chooser: true });
+  expect(chatOffer({ ...base, structured: true, showingChat: true })).toEqual({ chat: true, back: false, chooser: false });
+});
+
+test("CHAT-006: a reset read replaces the view; later reads add new items and replace a grown one", () => {
+  let v = applyRead([], read([item("u1", "user", "hi", 1), item("m1", "assistant", "Looking", 2)], true));
+  v = applyRead(v, read([item("m1", "assistant", "Looking\n\nDone.", 2), item("u2", "user", "next", 3)]));
+  expect(v.map((i) => i.text)).toEqual(["hi", "Looking\n\nDone.", "next"]);
+  expect(applyRead(v, read([], true))).toEqual([]);
+});
+
+test("CHAT-010: a reply that also came through a hook is shown once, the transcript's version", () => {
+  const rows = combine([item("u1", "user", "Fix it", 1000), item("m1", "assistant", "Fixed  the bug.", 2000)], [{ id: "hook-1", role: "assistant", text: "Fixed the bug.", at: 2100 }, { id: "hook-2", role: "assistant", text: "Still going", at: 3000 }], null, []);
+  expect(rows.map((r) => r.id)).toEqual(["u1", "m1", "hook-2"]);
+});
+
+test("CHAT-010: messages run in time order, then by a stable identity", () => {
+  const rows = combine([item("b", "assistant", "two", 5), item("a", "user", "one", 5), item("c", "user", "zero", 1)], [], null, []);
+  expect(rows.map((r) => r.id)).toEqual(["c", "a", "b"]);
+});
+
+test("CHAT-010/011: the preview sits after real content and before sends the transcript has not confirmed", () => {
+  const rows = combine([item("u1", "user", "first", 1000)], [], "Writing the answer", [{ id: "p1", text: "first", at: 900 }, { id: "p2", text: "second", at: 4000 }]);
+  expect(rows.map((r) => `${r.row}:${r.id}`)).toEqual(["message:u1", "preview:preview", "pending:p2"]);
+});
+
+test("CHAT-011: the preview shows only in an active turn, ahead of the last reply, never tool output or blank", () => {
+  expect(previewToShow({ text: "A long answer being written" }, true, undefined)).toBe("A long answer being written");
+  expect(previewToShow({ text: "A long answer" }, false, undefined)).toBeNull();
+  expect(previewToShow({ text: "$ npm test\nPASS", tool: true }, true, undefined)).toBeNull();
+  expect(previewToShow({ text: "   " }, true, undefined)).toBeNull();
+  expect(previewToShow({ text: "Done." }, true, "Done.")).toBeNull();
+  expect(previewToShow({ text: "Done. And more" }, true, "Done.")).toBe("Done. And more");
+});
+
+test("CHAT-011: when the turn ends exactly one reply remains", () => {
+  const items = [item("u1", "user", "Explain", 1), item("m1", "assistant", "The whole answer.", 2)];
+  const shown = previewToShow({ text: "The whole answer." }, false, lastReply(items));
+  expect(combine(items, [], shown, []).filter((r) => r.row !== "message" || r.role === "assistant")).toHaveLength(1);
+  expect(lastReply([item("m1", "assistant", "old", 1), item("u2", "user", "new question", 2)])).toBeUndefined();
+});
+
+test("CHAT-010: timestamps follow the app's language", () => {
+  const at = Date.UTC(2026, 2, 1, 15, 4);
+  expect(stamp(at, "en-US").full).not.toEqual(stamp(at, "de-DE").full);
+  expect(stamp(at, "de-DE").short).toMatch(/\d{1,2}:04/);
+});

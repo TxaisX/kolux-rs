@@ -94,6 +94,7 @@ import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { useUsageAlerts } from "./usage/alerts";
 import ToolNotices from "./launch/ToolNotices";
+import { AgentsChat } from "./chat/ChatView";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -1775,6 +1776,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             </>
           )}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
+          {screen === "agents" && <AgentsChat panes={panes.filter((p) => !p.kind && !p.seats).map((p) => ({ key: p.key, cwd: p.cwd, title: p.title }))} focused={focused} />}
           {!terminals && !board && !inbox && screen !== "artifacts" && (
             <div className="empty">
               <h2>{screens.find((s) => s.id === screen)?.label}</h2>

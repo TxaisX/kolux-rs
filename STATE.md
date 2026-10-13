@@ -18,8 +18,8 @@ Layout 1 / 2 / 4 / 6 strip, split right / down, close, tabs per cell, browser ta
 terminals), each pane a PowerShell, Claude Code, Codex or other installed agent through a Rust
 PTY and xterm.js (WebGL when the GPU allows). Board shows the same panes as cards in lanes (Needs
 you, Working, Done, Stopped, Idle) with a chip saying what each agent is doing, Approve / Deny on
-a card that waits for permission, and the live terminal inside an expanded card. Agents still
-shows only its name (T-050). The Inbox lists what needs you, what is running and what finished
+a card that waits for permission, and the live terminal inside an expanded card. Agents shows the
+conversation of a Claude Code or Codex pane as chat, read from the agent's own transcript (the rail is T-050). The Inbox lists what needs you, what is running and what finished
 today. Agents report their own state through hooks Kolux installs for Claude Code and Codex
 (permission, question, working, done, blocked, interrupted; subagents under their lead), with
 one status vocabulary for every dot, chip and label, desktop notifications on finish and

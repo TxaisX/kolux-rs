@@ -3,6 +3,7 @@ mod agents;
 mod artifacts;
 mod automations;
 mod capture;
+mod chat;
 mod browser;
 mod cap;
 pub mod cli;
@@ -232,6 +233,9 @@ pub fn run() {
             terminal::terminal_spawn,
             terminal::terminal_write,
             status::agent_history,
+            chat::chat_support,
+            chat::chat_read,
+            chat::chat_close,
             activity::activity_counts,
             status::agent_answer,
             terminal::terminal_resize,
