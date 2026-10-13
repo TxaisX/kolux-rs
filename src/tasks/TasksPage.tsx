@@ -1,11 +1,13 @@
 // VIEW-010 / GIT-043: the Tasks page, opened from the sidebar's Tasks row or the view.tasks
 // shortcut: a preset or a typed GitHub search over the workspace's repository, 25 to a page.
 // ponytail: one repository (the workspace's); the multi-repository picker, the remembered choice,
-// new issue, close / reopen / comment and start-from-item are T-231-c; the preview is T-232-b.
+// new issue, close / reopen / comment and start-from-item are T-231-c. Clicking an item opens its
+// preview (GIT-050, TaskDialog).
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Refresh, Search } from "../chrome/icons";
-import { beyondWindow, pageButtons, pageCount, PER_PAGE, PRESETS, type TaskPage, taskKind, taskQueries } from "./model";
+import { beyondWindow, pageButtons, pageCount, PER_PAGE, PRESETS, type Task, type TaskLabel, type TaskPage, taskKind, taskQueries } from "./model";
+import TaskDialog from "./TaskDialog";
 
 type GhRepo = { host: string; owner: string; name: string };
 /** GIT-043: preset, query, page and scroll survive leaving the page and coming back (app session). */
@@ -20,6 +22,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
   const [page, setPage] = useState(kept.page);
   const [result, setResult] = useState<TaskPage | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [open, setOpen] = useState<Task | null>(null);
   const list = useRef<HTMLUListElement>(null);
   const restore = useRef(kept.scroll);
   Object.assign(kept, { preset, query, page });
@@ -110,7 +113,7 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
       ) : (
         <ul className="tasks-list" ref={list} onScroll={(e) => (kept.scroll = e.currentTarget.scrollTop)}>
           {result.items.map((t) => (
-            <li key={t.url} title={t.url} data-task={`${t.kind}-${t.number}`}>
+            <li key={t.url} title={t.url} data-task={`${t.kind}-${t.number}`} tabIndex={0} onClick={() => setOpen(t)} onKeyDown={(e) => e.key === "Enter" && setOpen(t)}>
               <span className={`dot ${t.kind} ${t.state}${t.draft ? " draft" : ""}`} title={t.draft ? "draft" : t.state} />
               <span className="tasks-title">{t.title}</span>
               {t.labels.map((l) => (
@@ -144,6 +147,14 @@ export default function TasksPage({ repo }: { repo: { dir: string; name: string 
           )}
           {beyondWindow(result.deepest) && <span className="tasks-count tasks-window">Results past {pages * PER_PAGE} are beyond GitHub search and cannot be reached; narrow the search.</span>}
         </div>
+      )}
+      {open && gh && (
+        <TaskDialog
+          task={open}
+          host={gh.host}
+          onClose={() => setOpen(null)}
+          onLabels={(labels: TaskLabel[]) => setResult((r) => r && { ...r, items: r.items.map((x) => (x.url === open.url ? { ...x, labels } : x)) })}
+        />
       )}
     </div>
   );

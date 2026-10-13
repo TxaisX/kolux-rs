@@ -834,9 +834,7 @@ fn checks_of(gh: &Path, host: &str, ids: &[String]) -> std::collections::HashMap
 
 /// GIT-043: one page of every search in `queries` on `host`, newest first, each item once.
 pub fn tasks_search(gh: &Path, host: &str, queries: &[String], page: u32) -> Result<TaskPage, String> {
-    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':') {
-        return Err("This repository's GitHub host cannot be read".into());
-    }
+    host_ok(host)?;
     if page == 0 || page * TASKS_PER_PAGE > SEARCH_WINDOW {
         return Err(format!("GitHub search reaches only the first {SEARCH_WINDOW} results; this page cannot be reached"));
     }
@@ -878,6 +876,161 @@ pub fn scm_gh_account(host: String) -> Option<String> {
     let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", &host, "user"]).output().ok()?;
     let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !login.is_empty()).then_some(login)
+}
+
+fn host_ok(host: &str) -> Result<(), String> {
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':') {
+        return Err("This repository's GitHub host cannot be read".into());
+    }
+    Ok(())
+}
+
+/// GIT-050: one entry in an item's timeline. `detail` is the label, the person, the new title or the
+/// start of a comment, as the event has it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskEvent {
+    pub kind: String,
+    pub actor: String,
+    pub at: String,
+    pub detail: String,
+}
+
+/// GIT-050: what the preview dialog shows for one issue or pull request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskDetail {
+    pub title: String,
+    pub body: String,
+    pub state: String,
+    pub labels: Vec<TaskLabel>,
+    pub assignees: Vec<String>,
+    pub updated: String,
+    pub events: Vec<TaskEvent>,
+}
+
+/// The API address of item `number` in `repo` (owner/name), refused unless both are plain names.
+fn item_path(host: &str, repo: &str, number: u64) -> Result<String, String> {
+    host_ok(host)?;
+    let plain = |p: &str| !p.is_empty() && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    match repo.split_once('/') {
+        Some((o, n)) if plain(o) && plain(n) => Ok(format!("repos/{o}/{n}/issues/{number}")),
+        _ => Err("This item's repository cannot be read".into()),
+    }
+}
+
+fn label_list(v: &serde_json::Value) -> Vec<TaskLabel> {
+    let hex = |c: &str| if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) { c.to_string() } else { String::new() };
+    v.as_array().map(|a| a.iter().filter_map(|l| Some(TaskLabel { name: l["name"].as_str()?.into(), color: hex(l["color"].as_str().unwrap_or("")) })).collect()).unwrap_or_default()
+}
+
+fn gh_value(gh: &Path, host: &str, args: &[&str], input: Option<&str>) -> Result<serde_json::Value, String> {
+    let text = gh_run(gh, &std::env::temp_dir(), args, input).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
+}
+
+fn detail_from(v: &serde_json::Value) -> TaskDetail {
+    let merged = v["pull_request"]["merged_at"].is_string() || v["merged_at"].is_string();
+    TaskDetail {
+        title: v["title"].as_str().unwrap_or("").into(),
+        body: v["body"].as_str().unwrap_or("").into(),
+        state: if merged { "merged".into() } else { v["state"].as_str().unwrap_or("").to_lowercase() },
+        labels: label_list(&v["labels"]),
+        assignees: v["assignees"].as_array().map(|a| a.iter().filter_map(|u| u["login"].as_str().map(String::from)).collect()).unwrap_or_default(),
+        updated: v["updated_at"].as_str().unwrap_or("").into(),
+        events: Vec::new(),
+    }
+}
+
+/// GIT-050: the item's body, labels and assignees, and its timeline (the first 100 events).
+// ponytail: one timeline page of 100; follow the Link header when long threads need more.
+pub fn task_detail(gh: &Path, host: &str, repo: &str, number: u64) -> Result<TaskDetail, String> {
+    let path = item_path(host, repo, number)?;
+    let mut d = detail_from(&gh_value(gh, host, &["api", &path, "--hostname", host], None)?);
+    let line = |v: &serde_json::Value| v.as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(200).collect::<String>();
+    let timeline = gh_value(gh, host, &["api", &format!("{path}/timeline"), "--hostname", host, "-X", "GET", "-f", "per_page=100"], None)?;
+    for e in timeline.as_array().into_iter().flatten() {
+        let kind = e["event"].as_str().unwrap_or("");
+        if kind.is_empty() || matches!(kind, "subscribed" | "unsubscribed") {
+            continue;
+        }
+        let detail = match kind {
+            "labeled" | "unlabeled" => line(&e["label"]["name"]),
+            "assigned" | "unassigned" => line(&e["assignee"]["login"]),
+            "review_requested" | "review_request_removed" => line(&e["requested_reviewer"]["login"]),
+            "renamed" => format!("{} \u{2192} {}", line(&e["rename"]["from"]), line(&e["rename"]["to"])),
+            "commented" | "reviewed" => line(&e["body"]),
+            "committed" => line(&e["message"]),
+            "cross-referenced" => line(&e["source"]["issue"]["title"]),
+            "referenced" => e["commit_id"].as_str().unwrap_or("").chars().take(7).collect(),
+            _ => String::new(),
+        };
+        let actor = [&e["actor"]["login"], &e["user"]["login"], &e["author"]["name"]].into_iter().find_map(|a| a.as_str()).unwrap_or("").to_string();
+        let at = [&e["created_at"], &e["submitted_at"], &e["author"]["date"]].into_iter().find_map(|a| a.as_str()).unwrap_or("").to_string();
+        d.events.push(TaskEvent { kind: kind.into(), actor, at, detail });
+    }
+    Ok(d)
+}
+
+/// GIT-050: the labels `repo` offers (its first 100), for the dialog's label picker.
+pub fn repo_labels(gh: &Path, host: &str, repo: &str) -> Result<Vec<TaskLabel>, String> {
+    let path = item_path(host, repo, 0)?;
+    let base = path.trim_end_matches("/issues/0");
+    Ok(label_list(&gh_value(gh, host, &["api", &format!("{base}/labels"), "--hostname", host, "-X", "GET", "-f", "per_page=100"], None)?))
+}
+
+/// Percent-encodes everything but unreserved characters, for a name inside an API address.
+fn path_part(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// GIT-050: adds then removes labels on an item; answers with the labels it has afterwards.
+pub fn task_labels(gh: &Path, host: &str, repo: &str, number: u64, add: &[String], remove: &[String]) -> Result<Vec<TaskLabel>, String> {
+    let path = item_path(host, repo, number)?;
+    let mut now = None;
+    if !add.is_empty() {
+        let fields: Vec<String> = add.iter().map(|l| format!("labels[]={l}")).collect();
+        let mut args = vec!["api", "-X", "POST", "", "--hostname", host];
+        let at = format!("{path}/labels");
+        args[3] = &at;
+        for f in &fields {
+            args.extend(["-f", f.as_str()]);
+        }
+        now = Some(label_list(&gh_value(gh, host, &args, None)?));
+    }
+    for l in remove {
+        let at = format!("{path}/labels/{}", path_part(l));
+        now = Some(label_list(&gh_value(gh, host, &["api", "-X", "DELETE", &at, "--hostname", host], None)?));
+    }
+    match now {
+        Some(l) => Ok(l),
+        None => Ok(detail_from(&gh_value(gh, host, &["api", &path, "--hostname", host], None)?).labels),
+    }
+}
+
+/// GIT-050: saves an item's description; answers with the item as GitHub now has it.
+pub fn task_body(gh: &Path, host: &str, repo: &str, number: u64, body: &str) -> Result<TaskDetail, String> {
+    let path = item_path(host, repo, number)?;
+    let input = serde_json::json!({ "body": body }).to_string();
+    Ok(detail_from(&gh_value(gh, host, &["api", "-X", "PATCH", &path, "--hostname", host, "--input", "-"], Some(&input))?))
+}
+
+#[tauri::command]
+pub async fn scm_task_detail(host: String, repo: String, number: u64) -> Result<TaskDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || task_detail(&gh_program()?, &host, &repo, number)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_repo_labels(host: String, repo: String) -> Result<Vec<TaskLabel>, String> {
+    tauri::async_runtime::spawn_blocking(move || repo_labels(&gh_program()?, &host, &repo)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_task_labels(host: String, repo: String, number: u64, add: Vec<String>, remove: Vec<String>) -> Result<Vec<TaskLabel>, String> {
+    tauri::async_runtime::spawn_blocking(move || task_labels(&gh_program()?, &host, &repo, number, &add, &remove)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_task_body(host: String, repo: String, number: u64, body: String) -> Result<TaskDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || task_body(&gh_program()?, &host, &repo, number, &body)).await.map_err(|e| e.to_string())?
 }
 
 /// GIT-033: what the merge box needs, read in one GraphQL call when the box is opened.
@@ -2043,6 +2196,63 @@ mod tests {
         assert_eq!(checks_word(Some("PENDING")), "running");
         assert_eq!(checks_word(Some("ERROR")), "failing");
         assert_eq!(checks_word(None), "unresolved");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git050_preview_reads_body_and_timeline_and_edits_labels_and_body_through_gh() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git050-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        fs::write(tools.join("issue.json"), r#"{"number":3,"title":"Crash","state":"open","body":"It crashes.","updated_at":"2026-10-10T08:00:00Z","labels":[{"name":"bug","color":"d73a4a"}],"assignees":[{"login":"txais"}]}"#).unwrap();
+        fs::write(tools.join("timeline.json"), r#"[
+            {"event":"labeled","actor":{"login":"txais"},"created_at":"2026-10-09T08:00:00Z","label":{"name":"bug"}},
+            {"event":"subscribed","actor":{"login":"txais"},"created_at":"2026-10-09T08:01:00Z"},
+            {"event":"assigned","actor":{"login":"txais"},"created_at":"2026-10-09T08:02:00Z","assignee":{"login":"mo"}},
+            {"event":"commented","user":{"login":"mo"},"created_at":"2026-10-09T09:00:00Z","body":"Same here."},
+            {"event":"renamed","actor":{"login":"mo"},"created_at":"2026-10-09T10:00:00Z","rename":{"from":"Crsh","to":"Crash"}},
+            {"event":"closed","actor":{"login":"mo"},"created_at":"2026-10-09T11:00:00Z"}]"#).unwrap();
+        fs::write(tools.join("labels.json"), r#"[{"name":"bug","color":"d73a4a"},{"name":"needs info","color":"zzzzzz"}]"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            let script = "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\necho %* | findstr /c:\"/timeline\" >nul && (type \"%~dp0timeline.json\" & exit /b 0)\r\necho %* | findstr /c:\"/labels\" >nul && (type \"%~dp0labels.json\" & exit /b 0)\r\nif \"%3\"==\"PATCH\" (more >>\"%~dp0input.txt\")\r\ntype \"%~dp0issue.json\"\r\n";
+            fs::write(&f, script).unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\ncase \"$*\" in *'/timeline'*) cat \"$d/timeline.json\"; exit 0;; *'/labels'*) cat \"$d/labels.json\"; exit 0;; esac\n[ \"$3\" = PATCH ] && cat >> \"$d/input.txt\"\ncat \"$d/issue.json\"\n";
+            fs::write(&f, script).unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let d = task_detail(&gh, "github.com", "o/r", 3).unwrap();
+        assert_eq!((d.body.as_str(), d.state.as_str(), d.assignees.clone()), ("It crashes.", "open", vec!["txais".to_string()]));
+        assert_eq!(d.labels, vec![TaskLabel { name: "bug".into(), color: "d73a4a".into() }]);
+        // Subscriptions are noise and are left out; the rest keep who, when and what.
+        let seen: Vec<(&str, &str, &str)> = d.events.iter().map(|e| (e.kind.as_str(), e.actor.as_str(), e.detail.as_str())).collect();
+        assert_eq!(seen, vec![("labeled", "txais", "bug"), ("assigned", "txais", "mo"), ("commented", "mo", "Same here."), ("renamed", "mo", "Crsh \u{2192} Crash"), ("closed", "mo", "")]);
+        assert_eq!(d.events[0].at, "2026-10-09T08:00:00Z");
+        // Labels the repository offers, with a colour that is not hex dropped.
+        assert_eq!(repo_labels(&gh, "github.com", "o/r").unwrap()[1], TaskLabel { name: "needs info".into(), color: String::new() });
+        // Adding and removing a label answer with the labels the item has afterwards.
+        assert_eq!(task_labels(&gh, "github.com", "o/r", 3, &["needs info".into()], &["good first/issue".into()]).unwrap().len(), 2);
+        let body = task_body(&gh, "github.com", "o/r", 3, "New \"body\"").unwrap();
+        assert_eq!(body.body, "It crashes.");
+        // Windows quotes some arguments in the log; the words are what matter.
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap().replace('"', "");
+        assert!(calls.contains("api repos/o/r/issues/3 --hostname github.com"), "{calls}");
+        assert!(calls.contains("api repos/o/r/issues/3/timeline --hostname github.com -X GET -f per_page=100"), "{calls}");
+        assert!(calls.contains("api -X POST repos/o/r/issues/3/labels --hostname github.com -f") && calls.contains("labels[]=needs info"), "{calls}");
+        // A label name goes into the address encoded, so a slash cannot reach another path.
+        assert!(calls.contains("api -X DELETE repos/o/r/issues/3/labels/good%20first%2Fissue --hostname github.com"), "{calls}");
+        assert!(calls.contains("api -X PATCH repos/o/r/issues/3 --hostname github.com --input -"), "{calls}");
+        assert!(fs::read_to_string(tools.join("input.txt")).unwrap().contains(r#"{"body":"New \"body\""}"#));
+        // A repository or host that is not plain owner/name is refused before gh runs.
+        let before = fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count();
+        assert!(task_detail(&gh, "github.com", "o/r/../x", 3).is_err());
+        assert!(task_detail(&gh, "github.com", "o", 3).is_err());
+        assert!(task_detail(&gh, "bad host", "o/r", 3).is_err());
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
         let _ = fs::remove_dir_all(&tools);
     }
 

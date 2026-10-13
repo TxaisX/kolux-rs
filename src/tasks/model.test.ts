@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { beyondWindow, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
+import { beyondWindow, eventLine, pageButtons, pageCount, PRESETS, taskKind, taskQueries, tasksRepo } from "./model";
 
 const projects = [
   { id: "a", name: "Alpha", path: "G:/r/alpha" },
@@ -41,4 +41,18 @@ test("GIT-043: pages stop at GitHub's 1000-result search window, and the buttons
   expect(pageButtons(1, 3)).toEqual([1, 2, 3]);
   expect(pageButtons(10, 40)).toEqual([1, null, 8, 9, 10, 11, 12, null, 40]);
   expect(pageButtons(2, 40)).toEqual([1, 2, 3, 4, null, 40]);
+});
+
+test("GIT-050: the preview's timeline says each event in words", () => {
+  const e = (kind: string, actor: string, detail = "") => eventLine({ kind, actor, at: "", detail });
+  expect(e("labeled", "txais", "bug")).toBe("@txais added the label bug");
+  expect(e("unlabeled", "txais", "bug")).toBe("@txais removed the label bug");
+  expect(e("assigned", "txais", "txais")).toBe("@txais self-assigned this");
+  expect(e("assigned", "txais", "mo")).toBe("@txais assigned @mo");
+  expect(e("closed", "mo")).toBe("@mo closed this");
+  expect(e("reopened", "mo")).toBe("@mo reopened this");
+  expect(e("mentioned", "mo")).toBe("@mo was mentioned");
+  expect(e("commented", "mo", "Same here.")).toBe("@mo commented: Same here.");
+  expect(e("renamed", "mo", "Crsh → Crash")).toBe("@mo renamed this: Crsh → Crash");
+  expect(e("head_ref_deleted", "")).toBe("head ref deleted");
 });

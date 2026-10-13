@@ -53,3 +53,31 @@ export function pageButtons(page: number, count: number): (number | null)[] {
   }
   return out;
 }
+
+export type TaskEvent = { kind: string; actor: string; at: string; detail: string };
+export type TaskDetail = { title: string; body: string; state: string; labels: TaskLabel[]; assignees: string[]; updated: string; events: TaskEvent[] };
+
+/** GIT-050: one timeline event in words, such as "@txais added the label bug". */
+export function eventLine(e: TaskEvent): string {
+  const d = e.detail;
+  const verbs: Record<string, string> = {
+    labeled: `added the label ${d}`,
+    unlabeled: `removed the label ${d}`,
+    assigned: d === e.actor ? "self-assigned this" : `assigned @${d}`,
+    unassigned: d === e.actor ? "unassigned themselves" : `unassigned @${d}`,
+    review_requested: `asked @${d} for a review`,
+    review_request_removed: `took back the review request for @${d}`,
+    closed: "closed this",
+    reopened: "reopened this",
+    merged: "merged this",
+    mentioned: "was mentioned",
+    renamed: `renamed this: ${d}`,
+    commented: `commented: ${d}`,
+    reviewed: d ? `reviewed: ${d}` : "reviewed",
+    committed: `committed ${d}`,
+    "cross-referenced": `mentioned this in ${d}`,
+    referenced: `referenced this in commit ${d}`,
+  };
+  const verb = verbs[e.kind] ?? e.kind.replace(/[_-]/g, " ");
+  return e.actor ? `@${e.actor} ${verb}` : verb;
+}
