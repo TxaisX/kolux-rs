@@ -24,3 +24,9 @@ test result: ok. 4 passed; 0 failed
 Full cargo test (CLAUDE_CONFIG_DIR and CODEX_HOME set to G:/Temp/reliability-T-441-b scratch):
 test result: ok. 438 passed; 0 failed   (+ 3 passed in the second target)
 cargo build: Finished; cargo clippy --all-targets -D warnings: Finished, no warnings.
+
+2026-10-13 addendum (T-441-c item 2): lib.rs write_settings needs no change. It reads with
+store.settings() and saves under the same Store lock, so read_failed set by a failed read refuses
+the save built on defaults even after the file reads again. New test:
+test state::tests::t441b_write_settings_shape_a_failed_read_then_a_good_one_saves_nothing ... ok
+Full cargo test 492 passed 0 failed. T-441-b ticked in the T-441-c commit.
