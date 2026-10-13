@@ -2803,7 +2803,16 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
             let front = || -> Result<(), String> {
                 let w = app.get_webview_window("main").ok_or("the Kolux window is gone")?;
                 let _ = w.unminimize();
-                w.show().and_then(|_| w.set_focus()).map_err(|e| e.to_string())
+                w.show().map_err(|e| e.to_string())?;
+                // APP-001: the system can refuse the focus at first; it is asked again for a moment.
+                for _ in 0..10 {
+                    w.set_focus().map_err(|e| e.to_string())?;
+                    if w.is_focused().unwrap_or(true) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Ok(())
             };
             dispatch(&Ctx { claude_config: crate::trust::claude_config_file(), git: &git, store: &store, terminals: &terminals, notify: &notify, front: &front }, req)
         });
@@ -2811,10 +2820,73 @@ pub fn serve(app: tauri::AppHandle, dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// APP-001: the exit code of a second launch that handed over to the copy already running.
+pub const DUPLICATE_EXIT: i32 = 3;
+const LOCK: &str = "instance.lock";
+
+/// APP-001: the profile lock this copy holds for as long as it runs (the system lets go of it when
+/// the process ends, a crash included).
+pub struct Instance(#[allow(dead_code)] std::fs::File);
+
+/// APP-001: takes the profile for this copy. `None` when another copy already holds it.
+pub fn claim(dir: &Path) -> std::io::Result<Option<Instance>> {
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join(LOCK))?;
+    match f.try_lock() {
+        Ok(()) => Ok(Some(Instance(f))),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+/// APP-001: asks the copy holding the profile to bring its window forward, retrying while it is still
+/// starting, for at most `limit`. On Windows that copy is first allowed to take the foreground, which
+/// only the process the user just started may grant, so the window comes to the front rather than
+/// only flashing in the taskbar.
+pub fn hand_over(dir: &Path, limit: Duration) -> bool {
+    let start = Instant::now();
+    loop {
+        if let Ok((port, token)) = read_endpoint(dir) {
+            #[cfg(windows)]
+            if let Some(pid) = std::fs::read_to_string(dir.join(FILE)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["pid"].as_u64()) {
+                // SAFETY: a plain call with a process id; a refusal changes nothing.
+                unsafe { windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid as u32) };
+            }
+            let req = Request { id: request_id(), token, command: "app.open".into(), cwd: String::new(), args: json!({}), pane: None, cli: VERSION.into() };
+            if call_within(port, &req, Duration::from_secs(5)).is_ok_and(|env| env["success"] == true) {
+                return true;
+            }
+        }
+        if start.elapsed() >= limit {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// APP-001: one copy holds the profile; a second claim is refused while the first is held and
+    /// granted once it is let go. A second copy that finds nobody answering gives up within its limit.
+    #[test]
+    fn app001_only_one_copy_holds_the_profile() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-single-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = claim(&dir).unwrap().expect("the first copy holds the profile");
+        assert!(claim(&dir).unwrap().is_none(), "a second copy is refused");
+        assert!(claim(&dir).unwrap().is_none(), "and refused again");
+        drop(first);
+        let again = claim(&dir).unwrap();
+        assert!(again.is_some(), "a copy started after the first quit holds it");
+        drop(again);
+        let t = Instant::now();
+        assert!(!hand_over(&dir, Duration::from_millis(600)), "no cli.json: nobody to hand over to");
+        assert!(t.elapsed() < Duration::from_secs(3));
+        assert_ne!(DUPLICATE_EXIT, 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     fn words(s: &str) -> Vec<String> {
         s.split(' ').map(String::from).collect()

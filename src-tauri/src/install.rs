@@ -111,7 +111,7 @@ pub fn found_after(name: &str, found: bool) -> Result<(), Attention> {
 /// The program search path as Windows now holds it (machine, then user, each expanded), with
 /// any folder this process had on top that the registry does not list kept at the end.
 #[cfg(windows)]
-fn fresh_path(current: &str) -> Option<String> {
+pub(crate) fn fresh_path(current: &str) -> Option<String> {
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ};
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()
@@ -142,7 +142,7 @@ fn fresh_path(current: &str) -> Option<String> {
 }
 
 #[cfg(not(windows))]
-fn fresh_path(_current: &str) -> Option<String> {
+pub(crate) fn fresh_path(_current: &str) -> Option<String> {
     None
 }
 

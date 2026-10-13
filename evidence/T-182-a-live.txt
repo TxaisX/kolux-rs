@@ -1,0 +1,22 @@
+T-182-a live proof, 2026-10-13, lane release dev app (identifier com.txaisxiong.kolux-rs.release), second screen
+
+APP-001: one copy per profile; a second launch brings the running window forward
+before (window minimised by ShowWindow):
+minimised: True visible: True foreground-pid: 43144 (kolux pid 43144) kolux-rs processes: 2
+ran target/debug/kolux-rs.exe a second time (no WebView2 debug flag):
+second launch exit code: 3 after 79 ms
+after:
+minimised: False visible: True foreground-pid: 43144 (kolux pid 43144) kolux-rs processes: 2
+(the second kolux-rs process in the count is the worktrees lane's own dev app, G:/Dev/kolux-rs-lanes/worktrees, started 03:51:12; this lane has one copy, pid 43144)
+first attempt, with the claim in setup: the duplicate restored the window but panicked creating its webview (exit 101), since Tauri builds config windows before setup; the claim moved ahead of the builder, then exit 3 as above.
+screenshot: evidence/T-182-a-forward.png
+
+APP-020: a new terminal's search path (kolux-dev terminal create, cmd set PATH):
+terminal PATH entries: 59; registry machine+user entries: 38; registry entries missing from the terminal: 0
+first three terminal entries:
+  G:\Dev\kolux-rs-lanes\release\src-tauri\target\debug
+  C:\Users\XiongT\.volta\bin
+  G:\Dev\kolux-rs-lanes\release\src-tauri\target\debug\build\kolux-rs-384e89e8df7a019c\out
+app start folder kept (stub at entry 12): 12:G:\Temp\release-T-182a\stub
+Volta (Node version manager) bin at entry 2, system Node at entry 36
+not shown live: a folder added to the stored path while the app runs (Txais's registry Path is not edited; unit test app020 covers the merge)

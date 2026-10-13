@@ -117,11 +117,28 @@ fn quiet_minutes(store: &Mutex<Store>) -> u64 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    // APP-001: one copy per profile, settled before any window exists. A second launch hands over to
+    // the first and exits with a code of its own, so no second window ever opens. The folder is the
+    // one the app's path resolver gives (the roaming app data folder named by the identifier).
+    let dir = std::env::var_os("APPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir).join(&context.config().identifier);
+    let lock = match std::fs::create_dir_all(&dir).and_then(|_| cli::claim(&dir)) {
+        Ok(Some(lock)) => Some(lock),
+        Ok(None) => {
+            cli::hand_over(&dir, std::time::Duration::from_secs(10));
+            std::process::exit(cli::DUPLICATE_EXIT);
+        }
+        // ponytail: a profile the lock file cannot be made in still starts, unguarded.
+        Err(_) => None,
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(lock) = lock {
+                app.manage(lock);
+            }
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
             // APP-048: a damaged settings file keeps its good entries (the damaged copy is kept as .bad).
@@ -347,7 +364,7 @@ pub fn run() {
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {

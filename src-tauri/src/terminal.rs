@@ -36,6 +36,27 @@ struct Inner {
     ended: HashSet<u32>,
 }
 
+/// APP-020: a new terminal's search path: the app's own, then every folder the stored Windows path
+/// (`fresh`) gained since the app started, so a CLI installed while it runs is found by name; Node
+/// version-manager folders (`managers` names the ones set in the environment) go ahead of the rest,
+/// so the runtime the user chose wins over a system-wide one.
+fn terminal_path(current: &str, fresh: Option<String>, managers: &[String]) -> String {
+    let merged = crate::install::merge_path(current, &fresh.unwrap_or_default());
+    let key = |d: &str| d.trim_end_matches(['\\', '/']).replace('/', "\\").to_lowercase();
+    let managed = |d: &str| {
+        let k = key(d);
+        managers.iter().any(|m| key(m) == k) || [r"\fnm_multishells\", r"\volta\", r"\.volta\", r"\nvs\", r"\.nvm\", r"\nvm\"].iter().any(|p| format!("{k}\\").contains(p))
+    };
+    let (first, rest): (Vec<&str>, Vec<&str>) = merged.split(';').partition(|d| managed(d));
+    first.into_iter().chain(rest).collect::<Vec<_>>().join(";")
+}
+
+/// The Node version-manager folders the environment names (nvm-windows, Volta).
+fn node_managers() -> Vec<String> {
+    let var = |v: &str| std::env::var(v).ok().filter(|s| !s.is_empty());
+    [var("NVM_SYMLINK"), var("NVM_HOME"), var("VOLTA_HOME").map(|h| format!(r"{h}\bin"))].into_iter().flatten().collect()
+}
+
 /// `dir` at the front of a search path (CLI-007).
 fn cli_first(dir: &std::path::Path, path: Option<std::ffi::OsString>) -> std::ffi::OsString {
     let rest: Vec<std::path::PathBuf> = path.map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
@@ -97,6 +118,7 @@ impl Terminals {
             None => shell_commands(cwd.as_deref()),
         };
         let key = crate::cli::secret();
+        let (fresh, managers) = (crate::install::fresh_path(""), node_managers());
         for command in commands.iter_mut() {
             // ACCT-048: an ordinary terminal's environment: none of Kolux's own runtime or build
             // variables, no conda activation that came along only in part, no prompt-theme wizard.
@@ -116,6 +138,10 @@ impl Terminals {
             }
             command.env("KOLUX_TERMINAL_HANDLE", handle_of(id));
             command.env("KOLUX_PANE_KEY", &key);
+            // APP-020: the search path the app started with, plus the folders added to the stored path
+            // since, so tools installed since the app started are found by name. (The terminal
+            // library alone would keep only the stored path and drop the app's own folders.)
+            command.env("PATH", terminal_path(&std::env::var("PATH").unwrap_or_default(), fresh.clone(), &managers));
             // CLI-007: the CLI that ships with this copy of Kolux comes first, ahead of any older one
             // registered system-wide, and it is told which app folder to call. An installed copy keeps
             // its CLI in the bin folder of the install (CLI-006); a development build runs kolux-dev
@@ -439,6 +465,21 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// APP-020: a new terminal gets the app's own search path plus every folder the stored Windows
+    /// path gained since (a CLI installed while the app runs), Node version managers ahead of the rest.
+    #[test]
+    fn app020_new_terminals_take_folders_added_since_the_app_started_node_managers_first() {
+        let current = r"C:\stub;C:\Windows;C:\Program Files\nodejs";
+        let fresh = Some(r"C:\Windows;C:\Program Files\nodejs;C:\Users\me\AppData\Local\fnm_multishells\123;C:\new\tool".to_string());
+        let p = terminal_path(current, fresh, &[]);
+        assert_eq!(p, r"C:\Users\me\AppData\Local\fnm_multishells\123;C:\stub;C:\Windows;C:\Program Files\nodejs;C:\new\tool");
+        // nvm-windows names its active folder in NVM_SYMLINK; a folder named that way comes first too
+        let p = terminal_path(r"C:\Windows;C:\nvm4w\nodejs", None, &[r"c:\NVM4W\nodejs\".to_string()]);
+        assert_eq!(p, r"C:\nvm4w\nodejs;C:\Windows");
+        // the stored path cannot be read: the app's own path stands, nothing lost
+        assert_eq!(terminal_path(r"C:\a;C:\b", None, &[]), r"C:\a;C:\b");
+    }
 
     #[test]
     fn the_bundled_cli_folder_comes_first_on_the_search_path() {
