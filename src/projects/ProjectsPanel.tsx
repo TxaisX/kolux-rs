@@ -16,11 +16,11 @@
 // ponytail: which rows are folded lasts until the window closes; nothing saves it.
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
+import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
@@ -123,7 +123,16 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
-  const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones the sidebar shows
+  const [listed, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones not hidden by hand
+  // AUTO-024: the switch that leaves out worktrees made by automation runs; moving to one turns it off.
+  const hideAuto = settings[HIDE_AUTOMATION_SETTING] === true;
+  const worktrees = useMemo(() => withoutAutomationMade(listed, hideAuto), [listed, hideAuto]); // the ones the sidebar shows
+  const wasActive = useRef(activeDir);
+  useEffect(() => {
+    if (jumpUnhides(wasActive.current, activeDir, listed, hideAuto, same)) onSetting(HIDE_AUTOMATION_SETTING, false);
+    wasActive.current = activeDir;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDir, listed]);
   const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
   const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
   const [pushedBy, setPushedBy] = useState<Record<string, Pushed>>({}); // GIT-065: by worktree path
@@ -1110,6 +1119,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                 <option value="smart">Smart: what needs you first</option>
                 <option value="name">Name</option>
               </select>
+              <label className="check">
+                <input type="checkbox" checked={hideAuto} onChange={(e) => onSetting(HIDE_AUTOMATION_SETTING, e.target.checked)} /> Hide workspaces made by automations
+              </label>
             </div>
           )}
           {creating === "" && nameField(null)}

@@ -14,6 +14,23 @@ export type SortBy = "smart" | "name";
 export const GROUP_SETTING = "workspaceGroupBy";
 export const SORT_SETTING = "workspaceSort";
 
+/** AUTO-024: the sidebar switch that hides worktrees made by automation runs. */
+export const HIDE_AUTOMATION_SETTING = "hideAutomationWorktrees";
+
+type Made = { path: string; madeBy?: string | null };
+
+/** AUTO-024: each project's list without the worktrees automation runs made, while the switch is on. */
+export function withoutAutomationMade<W extends Made>(lists: Record<string, W[]>, hide: boolean): Record<string, W[]> {
+  if (!hide) return lists;
+  return Object.fromEntries(Object.entries(lists).map(([id, ws]) => [id, ws.filter((w) => w.madeBy !== "automation")]));
+}
+
+/** AUTO-024: moving to a worktree the switch hides (View run, the palette) turns the switch off so it can be seen. */
+export function jumpUnhides(prev: string | null, next: string | null, lists: Record<string, Made[]>, hide: boolean, same: (a: string, b: string) => boolean): boolean {
+  if (!hide || next === null || (prev !== null && same(prev, next))) return false;
+  return Object.values(lists).some((ws) => ws.some((w) => w.madeBy === "automation" && same(w.path, next)));
+}
+
 /** Strongest first: a permission request outranks everything. */
 const RANK: AgentState[] = ["permission", "blocked", "waiting", "interrupted", "working", "queued", "done", "idle"];
 

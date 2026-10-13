@@ -322,11 +322,13 @@ pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let hidden = load_map(store, HIDDEN_KEY);
+    let origins = load_origins(store);
     Ok(crate::visibility::apply(store, project, &hidden, all)?
         .into_iter()
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
+            w.made_by = origins.get(&name_key(&w.path)).and_then(|o| o["madeBy"].as_str()).map(String::from);
             w
         })
         .collect())
