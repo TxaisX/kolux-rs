@@ -1501,6 +1501,10 @@ filter, jump and tick files off as viewed; large files wait for a click, images 
 T-094-a brings the explorer (EDIT-033). Ctrl+Shift+E, or the right-panel button in the top bar,
 opens the worktree's files on the right; walk it with the arrow keys or the mouse and open a file with
 Enter or a click. Creating, renaming and deleting files from it come next (T-094-b).
+Files made outside the app (an agent, a terminal) show up when the Kolux window gets the focus back,
+when the explorer is shown again, or on a workspace switch (T-444): the tree and its open folders are
+read again in place. There is no watcher yet, so a file made while you look at the window waits for one
+of those.
 
 T-094-b adds file operations to the explorer (EDIT-034, part 1). The + and folder buttons in its header
 make a file or folder, F2 renames, Delete moves the selection to the Recycle Bin after one question, and
