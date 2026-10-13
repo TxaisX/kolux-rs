@@ -766,7 +766,8 @@ pub fn install_claude_from(file: &Path, text: Option<String>, command: &str, sta
     // file must say exactly what the old one did; anything else is a bug and nothing is written.
     let rest = |v: &Value| {
         let mut v = v.clone();
-        agent_hooks::remove_groups(&mut v);
+        // T-152-b (4): a "hooks" object the user had, even an empty one, is part of his file.
+        agent_hooks::remove_groups(&mut v, original.get("hooks").is_none());
         v.as_object_mut().map(|o| o.remove("statusLine"));
         v
     };
@@ -798,9 +799,23 @@ fn write_json(file: &Path, value: &Value, before: Option<&str>) -> Result<(), St
     write_atomic(file, &render(value, before)?, before)
 }
 
+/// The end of the error `write_atomic` gives when the file changed since Kolux read it.
+pub(crate) const CHANGED: &str = "changed since it was read; nothing written";
+
+// Tests put a change to the file here; write_atomic makes it just before its re-read, as if
+// Claude Code had saved the file between Kolux's read and its rename.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BEFORE_REREAD: std::cell::RefCell<Vec<Box<dyn FnOnce()>>> = std::cell::RefCell::new(Vec::new());
+}
+
 /// T-152 (5): `bytes` replace `file` through a temp file in the same folder, written and synced to
 /// disk, then renamed over it, but only while `file` still holds `before` (`None`: it did not
 /// exist): a file changed since Kolux read it is left as it is and nothing is written.
+///
+/// T-152-b (5): one race is left. A save that lands between the re-read below and the rename is
+/// overwritten; the window is one syscall, and Claude Code's own saves are whole-file renames, so
+/// the loser is at most one of its saves (PROVENANCE.md, T-152-b).
 pub(crate) fn write_atomic(file: &Path, bytes: &[u8], before: Option<&str>) -> Result<(), String> {
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -810,6 +825,10 @@ pub(crate) fn write_atomic(file: &Path, bytes: &[u8], before: Option<&str>) -> R
     // STAT-005: the rewritten file keeps the permissions the user's had.
     if let Ok(meta) = std::fs::metadata(file) {
         let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    #[cfg(test)]
+    if let Some(change) = BEFORE_REREAD.with(|c| c.borrow_mut().pop()) {
+        change();
     }
     let now = match std::fs::read(file) {
         Ok(b) => Some(b),
@@ -825,7 +844,7 @@ pub(crate) fn write_atomic(file: &Path, bytes: &[u8], before: Option<&str>) -> R
     }
     if now.as_deref() != before.map(str::as_bytes) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("{} changed since it was read; nothing written", file.display()));
+        return Err(format!("{} {CHANGED}", file.display()));
     }
     std::fs::rename(&tmp, file).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
@@ -924,6 +943,20 @@ pub fn apply_trust(doc: &mut toml_edit::DocumentMut, listing: &[Value], hooks_fi
     n
 }
 
+/// The write half of `install_codex`: Kolux's groups into one Codex home's `hooks.json`, read as
+/// `text`. T-152-b (4): before Kolux's first write a copy of the file is kept (and on every write
+/// checked against its record), so removal gives back its exact bytes. True when written.
+pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Value, command: &str) -> Result<bool, String> {
+    let changed = install_codex_hooks(hooks, command);
+    if changed {
+        let mut record = agent_hooks::backup_of(file).into_os_string();
+        record.push(".sha256");
+        agent_hooks::back_up(file, Path::new(&record))?;
+        write_json(file, hooks, text)?;
+    }
+    Ok(changed)
+}
+
 /// Installs Kolux's hooks into `home/hooks.json` (after the user's own entries) and marks them
 /// trusted in `home/config.toml` with Codex's own fingerprints (STAT-008). An unreadable or
 /// unparsable file is left alone. When trust cannot be set, `hooks.json` goes back exactly as it
@@ -940,10 +973,7 @@ pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
     let text = read(&file)?;
     let mut hooks: Value = serde_json::from_str(text.as_deref().unwrap_or("{}")).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
     let mut doc: toml_edit::DocumentMut = read(&config)?.unwrap_or_default().parse().map_err(|e| format!("{} is not valid TOML ({e}); left alone", config.display()))?;
-    let changed = install_codex_hooks(&mut hooks, command);
-    if changed {
-        write_json(&file, &hooks, text.as_deref())?;
-    }
+    let changed = write_codex_groups(&file, text.as_deref(), &mut hooks, command)?;
     let real = crate::trust::real_path(&file)?;
     // Several launches write trust once: an unchanged file whose entries are all in the table is done.
     let state = doc.get("hooks").and_then(|h| h.get("state")).and_then(toml_edit::Item::as_table);

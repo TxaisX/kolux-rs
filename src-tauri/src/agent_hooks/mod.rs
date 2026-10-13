@@ -8,7 +8,7 @@
 //!
 //! A child of `hooks` so it shares that module's script and settings helpers.
 
-use super::{claude_settings_file, home_dir, install_claude_from, is_my_command, status_command, write_atomic, write_claude_script, write_codex_script, write_json, write_status_script, SCRIPT_DIR, STATUS_PREV};
+use super::{claude_settings_file, home_dir, CHANGED, install_claude_from, is_my_command, status_command, write_atomic, write_claude_script, write_codex_script, write_json, write_status_script, SCRIPT_DIR, STATUS_PREV};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::Write as _;
@@ -108,13 +108,13 @@ pub fn clear_unused(hooks: &mut Map<String, Value>, keep: &[&str]) -> bool {
     changed
 }
 
-/// Takes every Kolux entry out of a `{"hooks": {...}}` file; a `hooks` object only Kolux filled
-/// goes too, so the file reads as it did before the install.
-pub fn remove_groups(root: &mut Value) -> bool {
+/// Takes every Kolux entry out of a `{"hooks": {...}}` file. A `hooks` object left empty goes
+/// too only when `drop_empty` (Kolux created it); T-152-b (4): one the user had, even `{}`, stays.
+pub fn remove_groups(root: &mut Value, drop_empty: bool) -> bool {
     let Some(obj) = root.as_object_mut() else { return false };
     let Some(hooks) = obj.get_mut("hooks").and_then(Value::as_object_mut) else { return false };
     let changed = clear_unused(hooks, &[]);
-    if changed && hooks.is_empty() {
+    if changed && drop_empty && hooks.is_empty() {
         obj.remove("hooks");
     }
     changed
@@ -137,7 +137,8 @@ fn read_opt(file: &Path) -> Result<Option<String>, String> {
 pub fn remove_claude(file: &Path, prev: &Path) -> Result<bool, String> {
     let Some(text) = read_opt(file)? else { return Ok(false) };
     let mut s: Value = serde_json::from_str(&text).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
-    let mut changed = remove_groups(&mut s);
+    let copy = kept(file);
+    let mut changed = remove_groups(&mut s, copy.as_ref().is_none_or(|(_, v)| v.get("hooks").is_none()));
     let slot = prev.with_extension("json");
     if s.get("statusLine").and_then(|l| l.get("command")).and_then(Value::as_str).is_some_and(is_my_command) {
         let exact = fs::read_to_string(&slot).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
@@ -151,9 +152,8 @@ pub fn remove_claude(file: &Path, prev: &Path) -> Result<bool, String> {
         changed = true;
     }
     if changed {
-        let copy = fs::read(backup_of(file)).ok().filter(|b| serde_json::from_slice::<Value>(b).is_ok_and(|v| v == s));
-        match copy {
-            Some(bytes) => write_atomic(file, &bytes, Some(&text))?,
+        match copy.filter(|(_, v)| *v == s) {
+            Some((bytes, _)) => write_atomic(file, &bytes, Some(&text))?,
             None => write_json(file, &s, Some(&text))?,
         }
         let _ = fs::remove_file(prev);
@@ -168,11 +168,23 @@ pub fn remove_codex(home: &Path) -> Result<bool, String> {
     let file = home.join("hooks.json");
     let Some(text) = read_opt(&file)? else { return Ok(false) };
     let mut v: Value = serde_json::from_str(&text).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
-    let changed = remove_groups(&mut v);
+    // With no copy (an install before T-152-b), the empty `{"hooks":{}}` shape Codex itself uses stays.
+    let copy = kept(&file);
+    let changed = remove_groups(&mut v, copy.as_ref().is_some_and(|(_, c)| c.get("hooks").is_none()));
     if changed {
-        write_json(&file, &v, Some(&text))?;
+        match copy.filter(|(_, c)| *c == v) {
+            Some((bytes, _)) => write_atomic(&file, &bytes, Some(&text))?,
+            None => write_json(&file, &v, Some(&text))?,
+        }
     }
     Ok(changed)
+}
+
+/// The `.bak-kolux` copy of `file`, as bytes and parsed, when it is there and reads as JSON.
+fn kept(file: &Path) -> Option<(Vec<u8>, Value)> {
+    let bytes = fs::read(backup_of(file)).ok()?;
+    let v = serde_json::from_slice(&bytes).ok()?;
+    Some((bytes, v))
 }
 
 /// `<file>.bak-kolux`.
@@ -185,20 +197,78 @@ pub fn backup_of(file: &Path) -> PathBuf {
 /// Keeps a copy of `file` from before Kolux's first install; a copy already there is never
 /// replaced, and a missing file has nothing to keep. A copy that cannot be made, or that does not
 /// hash the same as the file, stops the install. T-152 (2): a new copy returns the sha256 of the
-/// file and of the copy, for the caller to record.
-pub fn back_up(file: &Path) -> Result<Option<(String, String)>, String> {
+/// file and of the copy, written to `record` before the copy takes its name (a rebuilt record
+/// returns `None`; it is logged here).
+///
+/// T-152-b (3): on EVERY install the copy already there is checked against `record`: a record
+/// with no line for this copy is rebuilt from the copy and the file as they are (only when the
+/// copy still reads as JSON), and a copy whose hash differs from its record stops the install.
+/// The new copy is written to a temp name and synced to disk, the record is written (and synced),
+/// and only then is the copy renamed into place, so a failed record write never leaves a copy
+/// that the next install would trust.
+pub fn back_up(file: &Path, record: &Path) -> Result<Option<(String, String)>, String> {
     let copy = backup_of(file);
-    if copy.exists() || !file.exists() {
+    let refuse = |e: String| format!("could not keep a copy of {} ({e}); hooks not installed", file.display());
+    if copy.exists() {
+        let have = sha256(&copy).map_err(refuse)?;
+        return match recorded(record, &copy) {
+            Some(want) if want == have => Ok(None),
+            Some(want) => Err(format!(
+                "the kept copy {} hashes {have} but its record {} says {want}; the copy is damaged, so hooks are not installed",
+                copy.display(),
+                record.display()
+            )),
+            None => {
+                let parses = fs::read(&copy).ok().is_some_and(|b| serde_json::from_slice::<Value>(&b).is_ok());
+                if !parses {
+                    return Err(format!("the kept copy {} (sha256 {have}) has no record in {} and is not JSON; hooks not installed", copy.display(), record.display()));
+                }
+                let now = if file.exists() { sha256(file).map_err(refuse)? } else { "missing".into() };
+                write_record(record, file, &now, &copy, &have).map_err(refuse)?;
+                eprintln!("kolux-rs: claude hooks: rebuilt the copy's record: sha256 file now {now}, kept copy {have}");
+                Ok(None)
+            }
+        };
+    }
+    if !file.exists() {
         return Ok(None);
     }
-    let refuse = |e: String| format!("could not keep a copy of {} ({e}); hooks not installed", file.display());
-    fs::copy(file, &copy).map_err(|e| refuse(e.to_string()))?;
-    let (a, b) = (sha256(file).map_err(refuse)?, sha256(&copy).map_err(refuse)?);
-    if a != b {
-        let _ = fs::remove_file(&copy);
-        return Err(refuse(format!("the copy hashes {b}, the file {a}")));
+    let bytes = fs::read(file).map_err(|e| refuse(e.to_string()))?;
+    let tmp = copy.with_extension("bak-kolux.kolux-rs-tmp");
+    let made = fs::File::create(&tmp).and_then(|mut f| f.write_all(&bytes).and_then(|_| f.sync_all())).map_err(|e| e.to_string()).and_then(|_| {
+        let (a, b) = (sha256(file)?, sha256(&tmp)?);
+        if a != b {
+            return Err(format!("the copy hashes {b}, the file {a}"));
+        }
+        write_record(record, file, &a, &copy, &b)?;
+        fs::rename(&tmp, &copy).map_err(|e| e.to_string())?;
+        Ok((a, b))
+    });
+    if made.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    Ok(Some((a, b)))
+    made.map(Some).map_err(refuse)
+}
+
+/// The copy's hash as `record` holds it (`<sha256>  <path>` lines), `None` when it has no line for `copy`.
+fn recorded(record: &Path, copy: &Path) -> Option<String> {
+    let text = fs::read_to_string(record).ok()?;
+    let name = copy.display().to_string();
+    text.lines().find_map(|l| l.split_once("  ").filter(|(h, p)| *p == name && h.len() == 64).map(|(h, _)| h.to_string()))
+}
+
+/// Both hashes, written through a synced temp file and renamed over the record.
+fn write_record(record: &Path, file: &Path, original: &str, copy: &Path, kept: &str) -> Result<(), String> {
+    let text = format!("{original}  {}\n{kept}  {}\n", file.display(), copy.display());
+    let tmp = record.with_extension("sha256.kolux-rs-tmp");
+    let fail = |e: std::io::Error| format!("the copy's record {}: {e}", record.display());
+    if let Some(dir) = record.parent() {
+        fs::create_dir_all(dir).map_err(fail)?;
+    }
+    fs::File::create(&tmp).and_then(|mut f| f.write_all(text.as_bytes()).and_then(|_| f.sync_all())).and_then(|_| fs::rename(&tmp, record)).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        fail(e)
+    })
 }
 
 fn sha256(file: &Path) -> Result<String, String> {
@@ -261,33 +331,54 @@ impl Drop for Lock {
 /// The record of the copy kept before the first install: the sha256 of the file and of the copy.
 pub const BACKUP_RECORD: &str = "claude-settings.sha256";
 
+/// The production app's identifier (`tauri.conf.json`), which is also the name of its profile
+/// folder. A profile folder with any other name belongs to a lane, smoke or test run.
+pub const PRODUCTION_ID: &str = "com.txaisxiong.kolux-rs";
+
+/// A fenced run writes a Claude settings file only when this file sits in its folder or in a
+/// folder above it, inside the temp folder (T-152-b (2)).
+pub const SCRATCH_MARKER: &str = ".kolux-rs-scratch";
+
+/// T-152-b (2): the run is fenced when it is a test or debug build (`cargo test`, `tauri dev`,
+/// `cargo test --release`), or when the profile folder (`%APPDATA%\<identifier>`, or the
+/// `KOLUX_APP_DIR` a lane, smoke or evidence run sets) is not the production one. A production
+/// release build with the production identifier is NOT fenced: it is the product that writes the
+/// user's own file after his yes, and the status hooks switch, off by default, is the gate there.
+pub fn fenced(profile: &Path) -> bool {
+    let production = profile.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(PRODUCTION_ID));
+    cfg!(any(test, debug_assertions)) || !production
+}
+
 /// T-152 (1): the only Claude settings file Kolux writes is the one `CLAUDE_CONFIG_DIR` (or the
-/// home folder) resolves to. A debug build (tests, `tauri dev`, evidence runs) writes it only
-/// inside the temp folder, so a run that inherited the user's own variables can never reach his file.
-pub fn claude_target() -> Result<PathBuf, String> {
+/// home folder) resolves to. A fenced run (see `fenced`) writes it only inside the temp folder
+/// and below a scratch marker, so a run that inherited the user's own variables (or a TEMP set to
+/// a drive root) can never reach his file.
+pub fn claude_target(profile: &Path) -> Result<PathBuf, String> {
     let file = claude_settings_file();
-    if cfg!(debug_assertions) {
+    if fenced(profile) {
         scratch_only(&file, &std::env::temp_dir())?;
     }
     Ok(file)
 }
 
-/// `file`'s folder lies inside `scratch` (both resolved, so `..` and letter case cannot slip past).
+/// `file`'s folder lies inside `scratch` and it, or a folder above it that is still inside
+/// `scratch`, holds the scratch marker. Both sides are resolved, so `..`, links and letter case
+/// cannot slip past; anything that cannot be resolved is refused.
 pub fn scratch_only(file: &Path, scratch: &Path) -> Result<(), String> {
     let inside = match (file.parent().map(fs::canonicalize), fs::canonicalize(scratch)) {
-        (Some(Ok(dir)), Ok(scratch)) => dir.starts_with(&scratch),
+        (Some(Ok(dir)), Ok(scratch)) => dir.starts_with(&scratch) && dir.ancestors().take_while(|a| a.starts_with(&scratch)).any(|a| a.join(SCRATCH_MARKER).is_file()),
         _ => false,
     };
     if inside {
         Ok(())
     } else {
-        Err(format!("a debug build writes agent settings only under {}; {} left alone", scratch.display(), file.display()))
+        Err(format!("a test, dev or lane run writes agent settings only under {} below a {SCRATCH_MARKER} marker; {} left alone", scratch.display(), file.display()))
     }
 }
 
 /// Claude Code's scripts, hooks and status line, after its settings were copied once.
-fn install_claude_all(home: &Path) -> Result<(), String> {
-    install_claude_at(home, &claude_target()?)
+fn install_claude_all(home: &Path, profile: &Path) -> Result<(), String> {
+    install_claude_at(home, &claude_target(profile)?)
 }
 
 pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
@@ -296,12 +387,25 @@ pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
     let dir = home.join(SCRIPT_DIR);
     let prev = dir.join(STATUS_PREV);
     let status = status_command(&status, &prev.to_string_lossy().replace('\\', "/"));
+    let command = format!("\"{path}\" || exit 0");
+    // T-152-b (5): a file Claude Code saved between Kolux's read and its write is read again and
+    // merged once more (the copy check and the status line save included); a second change fails.
+    match install_claude_once(file, &dir, &prev, &command, &status) {
+        Err(e) if e.ends_with(CHANGED) => {
+            eprintln!("kolux-rs: claude hooks: {e}; reading it again");
+            install_claude_once(file, &dir, &prev, &command, &status)
+        }
+        done => done,
+    }
+}
+
+/// One read, check and write of `install_claude_at`.
+fn install_claude_once(file: &Path, dir: &Path, prev: &Path, hook: &str, status: &str) -> Result<(), String> {
     // T-152 (3): a file that is not JSON is refused before anything is written, the copy included.
     let text = read_opt(file)?;
     let had: Option<Value> = text.as_deref().map(serde_json::from_str).transpose().map_err(|e| format!("{} is not JSON ({e}); hooks not installed", file.display()))?;
-    if let Some((original, copy)) = back_up(file)? {
-        let record = format!("{original}  {}\n{copy}  {}\n", file.display(), backup_of(file).display());
-        fs::write(dir.join(BACKUP_RECORD), &record).map_err(|e| format!("claude settings copy record: {e}"))?;
+    // T-152-b (3): the copy is verified against its record on every install, not only the first.
+    if let Some((original, copy)) = back_up(file, &dir.join(BACKUP_RECORD))? {
         eprintln!("kolux-rs: claude hooks: kept a copy before the first write: sha256 original {original}, backup {copy}");
     }
     // T-152 (4): the status line slot as the user had it (`null`: none), put back whole on removal,
@@ -313,12 +417,12 @@ pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
         if !command.is_some_and(is_my_command) {
             fs::write(prev.with_extension("json"), slot.to_string()).map_err(|e| format!("claude status line: {e}"))?;
             if let Some(c) = command.filter(|c| !c.trim().is_empty()) {
-                fs::write(&prev, format!("{c}\n")).map_err(|e| format!("claude status line: {e}"))?;
+                fs::write(prev, format!("{c}\n")).map_err(|e| format!("claude status line: {e}"))?;
             }
         }
     }
     // T-152 (5): against the bytes read above, so a file changed since then is never overwritten.
-    install_claude_from(file, text, &format!("\"{path}\" || exit 0"), &status)?;
+    install_claude_from(file, text, hook, status)?;
     Ok(())
 }
 
@@ -335,8 +439,8 @@ fn managed_codex_homes(profile: &Path) -> Vec<PathBuf> {
 fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
     let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
     match (id, plan) {
-        ("claude", Plan::Install) => install_claude_all(home).map(|_| "installed"),
-        ("claude", Plan::Remove) => remove_claude(&claude_target()?, &prev).map(|_| "removed"),
+        ("claude", Plan::Install) => install_claude_all(home, profile).map(|_| "installed"),
+        ("claude", Plan::Remove) => remove_claude(&claude_target(profile)?, &prev).map(|_| "removed"),
         // T-152 (6): the user's own Codex home is neither written nor cleared while T-025-e is off
         // the cutline, so on and off leave its bytes exactly as they were; only the managed homes a
         // pane starts in (Kolux's own folders) are cleared.

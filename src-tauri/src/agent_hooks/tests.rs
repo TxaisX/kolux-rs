@@ -1,4 +1,4 @@
-use super::super::{install_claude, install_claude_hooks, install_codex_hooks, is_mine, write_script, CLAUDE_EVENTS};
+use super::super::{install_claude, install_claude_hooks, install_codex_hooks, is_mine, write_codex_groups, write_script, CLAUDE_EVENTS, CODEX_EVENTS};
 use super::*;
 use serde_json::json;
 
@@ -100,19 +100,19 @@ fn stat_005_removal_gives_back_the_users_file() {
 fn claude_settings_are_copied_once_before_the_first_install() {
     let dir = temp("backup");
     let file = dir.join("settings.json");
-    back_up(&file).unwrap();
+    back_up(&file, &dir.join(BACKUP_RECORD)).unwrap();
     assert!(!backup_of(&file).exists(), "no file, nothing to keep");
     fs::write(&file, "{\"model\":\"opus\"}").unwrap();
-    back_up(&file).unwrap();
+    back_up(&file, &dir.join(BACKUP_RECORD)).unwrap();
     assert_eq!(backup_of(&file), dir.join("settings.json.bak-kolux"));
     assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), "{\"model\":\"opus\"}");
     fs::write(&file, "{\"model\":\"later\"}").unwrap();
-    back_up(&file).unwrap();
+    back_up(&file, &dir.join(BACKUP_RECORD)).unwrap();
     assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), "{\"model\":\"opus\"}", "the first copy is never replaced");
     // A copy that cannot be made stops the install.
     let folder = dir.join("odd.json");
     fs::create_dir_all(&folder).unwrap();
-    assert!(back_up(&folder).unwrap_err().contains("hooks not installed"));
+    assert!(back_up(&folder, &dir.join(BACKUP_RECORD)).unwrap_err().contains("hooks not installed"));
 }
 
 #[test]
@@ -408,6 +408,7 @@ fn shaped() -> String {
 #[test]
 fn t_152_1_a_debug_build_writes_agent_settings_only_inside_the_temp_folder() {
     let dir = temp("t152-target");
+    fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
     let scratch = std::env::temp_dir();
     assert!(scratch_only(&dir.join("settings.json"), &scratch).is_ok());
     let outside = std::env::current_dir().unwrap().join("settings.json");
@@ -416,8 +417,59 @@ fn t_152_1_a_debug_build_writes_agent_settings_only_inside_the_temp_folder() {
     assert!(scratch_only(&climbed, &scratch).is_err(), "`..` cannot climb out of the temp folder");
     // Whatever this test process inherited, the resolved file is written only when it is scratch.
     let resolved = claude_settings_file();
-    println!("resolved {} -> {:?}", resolved.display(), claude_target());
-    assert_eq!(claude_target().is_ok(), scratch_only(&resolved, &scratch).is_ok());
+    let profile = dir.join(PRODUCTION_ID);
+    println!("resolved {} -> {:?}", resolved.display(), claude_target(&profile));
+    assert_eq!(claude_target(&profile).is_ok(), scratch_only(&resolved, &scratch).is_ok());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_2_a_scratch_settings_folder_needs_the_marker_not_only_the_temp_folder() {
+    let scratch = std::env::temp_dir();
+    let dir = temp("t152b-marker");
+    let (bare, deep, other) = (dir.join("bare"), dir.join("marked").join("a").join("b"), dir.join("other"));
+    for d in [&bare, &deep, &other] {
+        fs::create_dir_all(d).unwrap();
+    }
+    // Under temp but no marker anywhere up to the temp folder: refused (TEMP=G:\ no longer admits all).
+    let err = scratch_only(&bare.join("settings.json"), &scratch).unwrap_err();
+    assert!(err.contains(SCRATCH_MARKER) && err.contains("left alone"), "{err}");
+    // The marker in the folder itself, or two folders up, admits it.
+    fs::write(bare.join(SCRATCH_MARKER), "").unwrap();
+    assert!(scratch_only(&bare.join("settings.json"), &scratch).is_ok());
+    fs::write(dir.join("marked").join(SCRATCH_MARKER), "").unwrap();
+    assert!(scratch_only(&deep.join("settings.json"), &scratch).is_ok(), "a marker two folders up counts");
+    // `..` from a marked folder into an unmarked one, and letter-case spellings, resolve first.
+    let climbed = bare.join("..").join("other").join("settings.json");
+    assert!(scratch_only(&climbed, &scratch).is_err(), "`..` out of a marked folder is refused");
+    let upper = |p: &Path| PathBuf::from(p.to_string_lossy().to_uppercase());
+    if cfg!(windows) {
+        assert!(scratch_only(&upper(&bare).join("settings.json"), &scratch).is_ok(), "case spelling of a marked folder");
+        assert!(scratch_only(&upper(&other).join("settings.json"), &scratch).is_err(), "case spelling of an unmarked folder");
+    }
+    // A marker above the scratch root does not count: with the root set lower, `dir`'s own
+    // marker is outside it.
+    fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
+    assert!(scratch_only(&other.join("settings.json"), &other).is_err(), "a marker above the scratch root is ignored");
+    // A missing folder fails closed.
+    assert!(scratch_only(&dir.join("missing").join("settings.json"), &scratch).is_err());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_2_test_dev_and_lane_runs_are_fenced_and_the_identifier_matches_the_app() {
+    // This is a test build: every profile is fenced, the production one included.
+    assert!(fenced(Path::new(r"C:\Users\me\AppData\Roaming\com.txaisxiong.kolux-rs")));
+    assert!(fenced(Path::new(r"C:\Users\me\AppData\Roaming\com.txaisxiong.kolux-rs.hooks")));
+    assert!(fenced(Path::new(r"G:\Temp\hooks-t152b\profile")));
+    // The production identifier is the one the app is built with.
+    let conf: Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+    assert_eq!(conf["identifier"], PRODUCTION_ID);
+    // With the fence on, the user's own file (as this process resolves it) is refused unless it is
+    // marked scratch; G:\Dev\claude-config holds no marker, so a run that inherited it stays out.
+    let resolved = claude_settings_file();
+    let scratch = std::env::temp_dir();
+    assert_eq!(claude_target(Path::new(PRODUCTION_ID)).is_ok(), scratch_only(&resolved, &scratch).is_ok());
 }
 
 #[test]
@@ -442,7 +494,7 @@ fn t_152_2_the_first_write_keeps_a_hashed_copy_and_a_failed_copy_stops_the_insta
     // A copy that cannot be made: the settings file is left exactly as it was.
     let folder = dir.join("other").join("settings.json");
     fs::create_dir_all(&folder).unwrap();
-    assert!(back_up(&folder).unwrap_err().contains("hooks not installed"));
+    assert!(back_up(&folder, &dir.join(BACKUP_RECORD)).unwrap_err().contains("hooks not installed"));
     assert!(install_claude_at(&home, &folder).is_err());
     assert!(!backup_of(&folder).exists());
 }
@@ -468,7 +520,7 @@ fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
     // Stripped of Kolux's entries both ways, the two files say the same thing.
     let strip_all = |v: &Value| {
         let mut v = v.clone();
-        remove_groups(&mut v);
+        remove_groups(&mut v, true);
         v.as_object_mut().unwrap().remove("statusLine");
         v
     };
@@ -607,13 +659,149 @@ fn t_152_6_a_codex_hooks_file_with_empty_hooks_comes_back_byte_for_byte() {
     let dir = temp("t152-codex-empty");
     let (home, profile) = (dir.join("home"), dir.join("profile"));
     let managed = profile.join(crate::codex_accounts::FOLDER).join("c1");
-    fs::create_dir_all(&managed).unwrap();
-    for text in ["{\"hooks\":{}}", "{\n  \"hooks\": {}\n}\n"] {
-        fs::write(managed.join("hooks.json"), text).unwrap();
-        assert_eq!(apply(&home, &profile, "codex", Plan::Install).unwrap(), "not written (Codex hooks wait for T-025-e)");
+    let file = managed.join("hooks.json");
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    // T-152-b (4): the real managed-home path. A pane start installs into the managed home through
+    // install_codex_home -> install_codex, whose file write is write_codex_groups (the Codex trust
+    // step that follows needs the codex program and writes only config.toml, so it is left out
+    // here); then the switch going off clears every managed home (apply Remove, what clear() runs).
+    for text in ["{\"hooks\":{}}", "{\n  \"hooks\": {}\n}\n", "{}", "{\"model\":\"o3\"}\n"] {
+        let _ = fs::remove_dir_all(&managed);
+        fs::create_dir_all(&managed).unwrap();
+        fs::write(&file, text).unwrap();
+        let mut v: Value = serde_json::from_str(text).unwrap();
+        assert!(write_codex_groups(&file, Some(text), &mut v, command).unwrap(), "{text}: Kolux's groups written");
+        assert_eq!(switch::inspect(&file, &CODEX_EVENTS).0, "installed", "{text}");
+        assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), text, "a copy from before the first write");
         apply(&home, &profile, "codex", Plan::Remove).unwrap();
-        assert_eq!(fs::read_to_string(managed.join("hooks.json")).unwrap(), text, "on then off leaves {text:?}");
-        assert!(!remove_codex(&managed).unwrap(), "nothing of Kolux's: nothing written");
-        assert_eq!(fs::read_to_string(managed.join("hooks.json")).unwrap(), text);
+        let back = fs::read_to_string(&file).unwrap();
+        println!("{text:?} -> on -> off -> {back:?}");
+        assert_eq!(back, text, "on then off gives back {text:?} byte for byte (an empty hooks object is kept, not turned into {{}})");
+        assert!(!remove_codex(&managed).unwrap(), "nothing of Kolux's left: nothing written");
     }
+    // With no copy to go by, a "hooks" object left empty stays: only the copy can say Kolux made it.
+    let mut v = json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": command }] }] } });
+    assert!(remove_groups(&mut v, false));
+    assert_eq!(v, json!({ "hooks": {} }));
+    let mut v = json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": command }] }] } });
+    assert!(remove_groups(&mut v, true));
+    assert_eq!(v, json!({}), "a hooks object Kolux created goes");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_4_a_claude_file_with_an_empty_hooks_object_installs_and_comes_back_byte_for_byte() {
+    let dir = temp("t152b-claude-empty");
+    let home = dir.join("home");
+    for (i, text) in ["{\"hooks\":{}}", "{\n  \"model\": \"opus\",\n  \"hooks\": {}\n}\n"].into_iter().enumerate() {
+        let file = dir.join(format!("c{i}")).join("settings.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, text).unwrap();
+        install_claude_at(&home, &file).unwrap();
+        assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed");
+        remove_claude(&file, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), text, "on then off gives back {text:?}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_3_the_kept_copy_is_checked_against_its_record_on_every_install() {
+    let dir = temp("t152b-record");
+    let (home, file) = (dir.join("home"), dir.join("settings.json"));
+    let record = home.join(SCRIPT_DIR).join(BACKUP_RECORD);
+    let user = shaped();
+    fs::write(&file, &user).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    let off = |f: &Path| remove_claude(f, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+    off(&file);
+    assert_eq!(fs::read_to_string(&file).unwrap(), user);
+    // A missing record is rebuilt from the copy and the file as they are, both lines.
+    fs::remove_file(&record).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    let rebuilt = fs::read_to_string(&record).unwrap();
+    println!("rebuilt record:\n{rebuilt}");
+    let lines: Vec<&str> = rebuilt.lines().collect();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[1].starts_with(&sha256(&backup_of(&file)).unwrap()) && lines[1].ends_with(&backup_of(&file).display().to_string()));
+    assert!(lines[0].ends_with(&file.display().to_string()));
+    off(&file);
+    // A torn copy (truncated) is refused, naming both hashes and both paths; nothing is written.
+    let whole = sha256(&backup_of(&file)).unwrap();
+    fs::write(backup_of(&file), &user.as_bytes()[..user.len() / 2]).unwrap();
+    let torn = sha256(&backup_of(&file)).unwrap();
+    let before = fs::read(&file).unwrap();
+    let err = install_claude_at(&home, &file).unwrap_err();
+    println!("{err}");
+    for part in [whole.as_str(), torn.as_str(), &backup_of(&file).display().to_string(), &record.display().to_string()] {
+        assert!(err.contains(part), "{err} names {part}");
+    }
+    assert_eq!(fs::read(&file).unwrap(), before, "a refused install writes nothing");
+    // A torn copy with no record is not trusted either: it is not JSON, so no record is rebuilt.
+    fs::remove_file(&record).unwrap();
+    assert!(install_claude_at(&home, &file).unwrap_err().contains("not JSON"));
+    assert!(!record.exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_3_a_failed_record_write_leaves_no_copy_the_next_install_trusts() {
+    let dir = temp("t152b-record-fail");
+    let file = dir.join("settings.json");
+    fs::write(&file, "{\"model\":\"opus\"}\n").unwrap();
+    // The record's path is a folder, so writing it fails.
+    let record = dir.join("record");
+    fs::create_dir_all(&record).unwrap();
+    let err = back_up(&file, &record).unwrap_err();
+    println!("{err}");
+    assert!(err.contains("hooks not installed"));
+    assert!(!backup_of(&file).exists(), "no copy under the kept name");
+    let left: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(left.iter().all(|n| !n.contains("bak-kolux")), "no temp copy left: {left:?}");
+    // Once the record can be written, the copy is made, synced, recorded and verified next time.
+    fs::remove_dir_all(&record).unwrap();
+    let (a, b) = back_up(&file, &record).unwrap().unwrap();
+    assert_eq!(a, b);
+    assert_eq!(fs::read(backup_of(&file)).unwrap(), fs::read(&file).unwrap());
+    assert!(back_up(&file, &record).unwrap().is_none(), "an existing copy matching its record is kept");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_5_a_save_between_read_and_write_is_merged_once_and_a_second_one_fails() {
+    use super::super::BEFORE_REREAD;
+    let dir = temp("t152b-retry");
+    let home = dir.join("home");
+    // Claude Code saving the file (a whole-file write) between Kolux's read and its rename.
+    let save = |f: &Path, model: &'static str| -> Box<dyn FnOnce()> {
+        let f = f.to_path_buf();
+        Box::new(move || {
+            let mut v: Value = ev(&fs::read_to_string(&f).unwrap());
+            v["model"] = json!(model);
+            fs::write(&f, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+        })
+    };
+    // One save: read again, merged once more, his save kept and Kolux's entries in.
+    let file = dir.join("one").join("settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, shaped()).unwrap();
+    BEFORE_REREAD.with(|c| c.borrow_mut().push(save(&file, "saved-once")));
+    install_claude_at(&home, &file).unwrap();
+    let after = ev(&fs::read_to_string(&file).unwrap());
+    assert_eq!(after["model"], "saved-once", "his save is kept");
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed", "and Kolux's entries are in");
+    assert!(BEFORE_REREAD.with(|c| c.borrow().is_empty()));
+    // Two saves: the second attempt fails as before, the file holds his second save, nothing of Kolux's.
+    let file = dir.join("two").join("settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, shaped()).unwrap();
+    BEFORE_REREAD.with(|c| c.borrow_mut().extend([save(&file, "saved-twice"), save(&file, "saved-first")]));
+    let err = install_claude_at(&home, &file).unwrap_err();
+    println!("kolux-rs: claude hooks: {err}");
+    assert!(err.ends_with("changed since it was read; nothing written"), "{err}");
+    let now = fs::read_to_string(&file).unwrap();
+    assert_eq!(ev(&now)["model"], "saved-twice");
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "not installed");
+    assert!(!file.with_extension("json.kolux-rs-tmp").exists());
+    let _ = fs::remove_dir_all(&dir);
 }
