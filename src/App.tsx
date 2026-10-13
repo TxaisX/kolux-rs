@@ -28,6 +28,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import CloseAsk from "./terminal/CloseAsk";
+import { CrashDialog, type Report } from "./crash";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
@@ -216,6 +217,14 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
   const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; quit?: boolean } | null>(null);
+  // APP-039: the crash report shown; report null says none was captured.
+  const [crash, setCrash] = useState<{ report: Report | null } | null>(null);
+  useEffect(() => {
+    invoke<Report | null>("crash_pending").then(
+      (report) => report && setCrash({ report }),
+      () => {},
+    );
+  }, []);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
@@ -948,6 +957,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       })),
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
+    {
+      section: "Help",
+      label: "Report Crash",
+      run: () =>
+        void invoke<Report | null>("crash_newest").then(
+          (report) => setCrash({ report }),
+          (err) => setToast(String(err)),
+        ),
+    },
     { section: "Quick actions", label: "New session", run: () => addChooser() },
     {
       section: "Quick actions",
@@ -1522,6 +1540,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onClose={() => setPalette(false)}
           />
         )}
+        {crash && <CrashDialog report={crash.report} onClose={() => setCrash(null)} onToast={setToast} />}
         {asking && (
           <CloseAsk
             title={asking.title}

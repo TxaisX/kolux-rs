@@ -1,0 +1,21 @@
+T-183-b live proof (APP-039), lane release, 2026-10-13. Lane profile backed up first and restored after (cmp same x4, kolux.log same; crashes/ removed).
+
+1. launch with no report: "no dialog"
+2. debug_crash asked over CDP: process ended
+   reports in crashes/: 001791891288374.txt 
+   | Kolux RS 0.1.0 crashed
+   | When: 1791891288 (unix seconds)
+   | System: windows x86_64
+   | Thread: main
+   | What: debug_crash was asked for (a development build's crash test) at src\crash.rs:176
+3. relaunch after the crash: "dialog: Kolux RS closed unexpectedly | buttons: Attach recent diagnostic logs, Copy Details, Open on GitHub (off), Close"; dismissed marker: 001791891288374
+4. Attach recent diagnostic logs: toast "Diagnostic log copied to the clipboard."; clipboard starts: Recent Kolux RS diagnostic log (last 1 lines, scrubbed):|1791774719 secrets: one-off sealing pass sealed 0 settings field(s) and 0 file(s)||
+   redactions in the copied log: 0, lines: 3, home folder named: 0
+5. Copy Details: toast "Crash details copied to the clipboard."; clipboard: Kolux RS 0.1.0 crashed|When: 1791891288 (unix seconds)|System: windows x86_64|Thread: main|What: debug_crash was asked for (a development build's crash test) at src\crash.rs:176||
+6. relaunch again: "no dialog"
+   after a page reload: "no dialog"
+7. Search > Help > Report Crash after dismissal: "dialog: What: debug_crash was asked for (a development build's crash test) at src\\crash.rs:176"
+8. no report captured (crashes/ removed): "No crash report | No crash report was captured on this computer, so there is nothing to send."
+
+Screenshots: T-183-b-dialog.png (the offer at the relaunch), T-183-b-palette.png (Search > Help > Report Crash), T-183-b-none.png (nothing captured).
+Open on GitHub is off: Kolux RS has no public repository yet (OD-16).

@@ -670,6 +670,9 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .ask .btn-row { justify-content: flex-end; }
 /* GIT-061: the first-commit preview */
 .ask.start-git { width: min(520px, calc(100vw - 32px)); }
+.ask.crash { width: min(560px, calc(100vw - 32px)); }
+.crash-text { max-height: 12em; overflow: auto; margin: 0 0 14px; padding: 8px; border: 1px solid var(--line-subtle); border-radius: 6px; font: 11px/1.4 var(--mono, ui-monospace, monospace); color: var(--fg); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ask.crash .btn-row { flex-wrap: wrap; }
 .first-files { list-style: none; margin: 0 0 8px; padding: 6px; max-height: 18rem; overflow: auto; border: 1px solid var(--line-subtle); border-radius: 6px; font-size: 12px; }
 .first-files label { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; min-width: 0; }
 .first-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-row); }

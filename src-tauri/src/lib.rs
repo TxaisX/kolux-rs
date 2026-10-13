@@ -2,6 +2,7 @@ mod agents;
 mod artifacts;
 mod automations;
 mod capture;
+mod crash;
 mod browser;
 mod cap;
 pub mod cli;
@@ -164,6 +165,8 @@ pub fn run() {
                 app.manage(lock);
             }
             let dir = app.path().app_data_dir()?;
+            // APP-039: from here on a panic leaves a crash report for the next launch to offer.
+            crash::install(dir.clone(), app.package_info().version.to_string());
             let store = Store::open(&dir)?;
             if let Some(why) = &store.recovered {
                 secrets::log(&dir, &format!("state: {why}"));
@@ -275,6 +278,10 @@ pub fn run() {
             patch_settings,
             save_point,
             close_heard,
+            crash::crash_pending,
+            crash::crash_newest,
+            crash::crash_logs,
+            crash::debug_crash,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,

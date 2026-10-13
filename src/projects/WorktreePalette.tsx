@@ -10,7 +10,7 @@ import { MAX_QUERY, matchWords, wordsOf } from "./nav";
 /** A row the window supplies: its section, what it shows, and what Enter does. */
 export type PaletteItem = { section: string; label: string; hint?: string; run: () => void };
 
-export const SECTIONS = ["Open tabs", "Worktrees", "Projects", "Settings", "Quick actions", "Pull requests"] as const;
+export const SECTIONS = ["Open tabs", "Worktrees", "Projects", "Settings", "Quick actions", "Pull requests", "Help"] as const;
 
 type Props = {
   projects: Project[];
