@@ -897,6 +897,9 @@ Rules: glyph caches are reset when the computer wakes, while a plain window refo
   alone; pane sizes are re-sent after the window settles; display scaling changes are repaired;
   slept terminals show their output and accept fresh input after wake; when the window regains
   focus, typing returns to the pane that had it, unless the user clicked somewhere else meanwhile.
+  (Kolux RS, T-166: on resume from sleep and on a display-scale change the pane clears its glyph atlas
+  and re-sends its size; a plain window focus only puts typing back in the pane that had it, and only
+  when nothing else holds focus. Sleep itself was not exercised live; the wake path is unit-tested.)
 Acceptance:
   - [ ] After sleep, a pane shows readable text and responds to typing.
   - [ ] Returning to the window puts typing back in the pane that had it, unless the user clicked
@@ -913,6 +916,11 @@ Rules: a stalled write pipeline recovers on its own; lost output deliveries are 
   with agents like Codex stays low; output from many busy terminals is paced so the app stays
   responsive; keystrokes held for a terminal that is not yet connected are capped in size; when a
   stuck pipeline is recovered the user is told, even if part of the clean-up fails.
+  (Kolux RS, T-166: keys typed before the shell starts are held in order and sent once, capped at
+  16 KB with a notice naming the dropped count; spawn and write are async so a pipe that blocks never
+  holds the window; a failed write shows "Typing could not reach the program"; the app clears the
+  inherited "ignore Ctrl+C" flag before its first shell, so Ctrl+C interrupts a pane's program. Not
+  built: self-recovery of a wedged pipeline and output pacing across many terminals; a named follow-up.)
 Acceptance:
   - [ ] A pane whose writes wedge resumes rendering and input without reload.
   - [ ] Keys typed into a terminal that is still connecting arrive once it connects, with nothing
@@ -926,6 +934,10 @@ User does: chooses Copy terminal diagnostics in the pane menu.
 User sees: a diagnostics snapshot is copied for bug reports.
 Rules: secrets and personal paths are redacted; named in the 0.12.0 release; if the snapshot cannot
   be built or copied, a notice says so; it never fails silently.
+  (Kolux RS, T-166: the pane menu's "Copy terminal diagnostics" sends the last 60 rows, soft-wrapped
+  rows joined into whole lines, with the session's facts; the home folder becomes ~ and secrets are
+  scrubbed before the text reaches the clipboard; "Diagnostics copied", "Diagnostics could not be
+  built (...)", "Diagnostics could not be copied (...)" and "No session to describe yet" are the notices.)
 Acceptance:
   - [ ] The copied text has no access tokens.
   - [ ] If the snapshot cannot be copied, a notice says so.
@@ -947,6 +959,11 @@ Rules: leaving a full-screen program restores the shell screen and its scrollbac
   a full-screen program dies without handing the screen back, the shell prompt is reset to a usable
   state; while the pane belongs to a program that fills the screen or captures the mouse, the shell
   never counts as ready or idle.
+  (Kolux RS, T-166: the session watches its own output for the alternate-screen and mouse modes and
+  counts as busy while a program owns either; leaving the program shows the shell screen as the
+  terminal kept it. Not built: the cold-restore cut at an unclosed full-screen session, the prompt
+  reset when a full-screen child dies, and the reattach redraw; there is no background host and no
+  scrollback replay yet, so restore opens fresh shells. A named follow-up.)
 Acceptance:
   - [ ] Run vim, quit it: earlier shell output is visible and scrollable from where it was.
   - [ ] With an agent in full-screen view, quit Kolux and reopen: the pane shows one clean frame, no
@@ -972,6 +989,9 @@ Rules: the width and height the running program sees always end up equal to the 
   cannot be made, Kolux assumes the size it asked for and sends it one time rather than looping;
   when the size changes several times in quick succession the program settles on the latest size,
   never an older one.
+  (Kolux RS, T-166: proven live with a shell printing its own width once a second: two window resizes
+  while visible, two while the tab was hidden, a divider held then released, dragged back, and a
+  cancelled drag all ended with the program at the pane's columns and no width in between.)
 Acceptance:
   - [ ] Start a full-screen program in a split pane and resize the window during startup: the
       program's column count equals the pane's columns.

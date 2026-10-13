@@ -456,3 +456,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-065 · The card PROJ-067, DESIGN.md and the lane's own App.tsx/workspaces.ts; no outside source.
 > 2026-10-12 · T-066 · The card SESS-030, Claude Code's public CLI/hook docs (`claude --resume <id>`, hook `session_id`) and the Codex CLI's public `resume` subcommand, read through context7; the lane's own hooks.rs, layout.ts and agents.rs.
 > 2026-10-12 · T-067 · The four cards, DESIGN.md, the public typings of @xterm/xterm and @xterm/addon-webgl in node_modules and a grep of xterm's lib for mode 2026; the lane's own TerminalPane.tsx, grid.ts and App.tsx; no outside source.
+> 2026-10-12 · T-166 · The five cards, DESIGN.md, xterm's public typings (IBuffer, isWrapped) in node_modules, the vendored portable-pty 0.9.0 (its ConPTY flags) and Microsoft's public SetConsoleCtrlHandler contract; the lane's own TerminalPane.tsx, terminal.rs, App.tsx and cli.rs; no outside source.

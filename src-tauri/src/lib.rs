@@ -232,6 +232,7 @@ pub fn run() {
             scm::scm_stage, scm::scm_discard,
             scm::scm_commit, scm::scm_remote,
             terminal::terminal_busy,
+            terminal::terminal_diagnostics,
             keybindings::keybindings_read,
             keybindings::keybindings_write,
             projects::workspaces_place_get,

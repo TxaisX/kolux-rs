@@ -14,6 +14,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { attachRenderer, watchResume, type RendererMode } from "./renderer";
 import { copySelection } from "./copy";
+import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
@@ -127,7 +128,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     return () => clearTimeout(t);
   }, [flash]);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
+  // TERM-116: the pane menu behind the dots button.
+  const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
   const idRef = useRef<number | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const isHidden = useRef(hidden);
+  isHidden.current = hidden;
   const keymap = useKeymap();
   const keys = useRef(keymap);
   keys.current = keymap;
@@ -187,12 +193,21 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     choice.onFallback(() => setRenderer("dom"));
     fit.fit();
 
+    termRef.current = term;
     let alive = true;
     let ended = false;
     const unlisteners: UnlistenFn[] = [];
+    // TERM-115: keys typed while the shell is still starting are held and sent once it runs
+    // (capped); a write the program side refuses is said out loud rather than lost in silence.
+    const held = new HeldKeys();
     const write = (data: string) => {
       const id = idRef.current;
-      if (id !== null && !ended) invoke("terminal_write", { id, data }).catch(() => {});
+      if (ended) return;
+      if (id === null) {
+        if (!held.push(data)) setFlash("Keys typed before the shell started were dropped past 16 KB");
+        return;
+      }
+      invoke("terminal_write", { id, data }).catch((e) => setFlash(`Typing could not reach the program (${String(e)})`));
     };
     term.onData(write);
     term.onBell(() => bell.current?.());
@@ -282,6 +297,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         }
         idRef.current = id;
         setStatus({ kind: "running", id, account: used });
+        held.drain(write);
+        if (held.dropped > 0) setFlash(`${held.dropped} characters typed before the shell started were dropped`);
         if (isFocused.current) term.focus();
       } catch (err) {
         setStatus({ kind: "failed", error: String(err) });
@@ -309,9 +326,21 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
-    // TERM-103: after the machine slept the GPU's glyph atlas may be stale; a late heartbeat says so.
-    const sleep = watchResume(() => choice.clearGlyphs());
+    // TERM-103 / TERM-114: after the machine slept the GPU's glyph atlas may be stale and the
+    // program's size may be behind; a late heartbeat says so. A display scale change does the same.
+    const wake = () => {
+      choice.clearGlyphs();
+      resize();
+    };
+    const sleep = watchResume(wake);
     const beat = setInterval(sleep.tick, 5000);
+    const scale = watchScale(wake);
+    // TERM-114: the window coming back puts typing in the pane that had it, unless the user
+    // clicked somewhere else meanwhile.
+    const refocus = () => {
+      if (!isHidden.current && shouldRefocus(isFocused.current, document.activeElement)) term.focus();
+    };
+    window.addEventListener("focus", refocus);
 
     return () => {
       alive = false;
@@ -319,6 +348,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       window.removeEventListener(TERMINAL_EVENT, recolour);
       mode.dispose();
       clearInterval(beat);
+      scale.dispose();
+      window.removeEventListener("focus", refocus);
+      termRef.current = null;
       clearTimeout(quiet);
       observer.disconnect();
       unlisteners.forEach((u) => u());
@@ -350,6 +382,31 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     needs.current?.(needsYou);
   }, [needsYou]);
   const drawing = renderer === "webgl" ? "GPU renderer" : renderer === "dom" ? "plain renderer" : "";
+  // TERM-116: the last 60 lines on screen plus what Kolux knows, scrubbed on the Rust side, to the
+  // clipboard; every way it can fail says so in the header.
+  const copyDiagnostics = async () => {
+    const term = termRef.current;
+    const id = idRef.current;
+    if (!term || id === null) {
+      setFlash("No session to describe yet");
+      return;
+    }
+    const screen = screenLines(term.buffer.active);
+    let text: string;
+    try {
+      text = await invoke<string>("terminal_diagnostics", { id, cols: term.cols, rows: term.rows, renderer: drawing || "unknown", screen });
+    } catch (e) {
+      setFlash(`Diagnostics could not be built (${String(e)})`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setFlash("Diagnostics copied");
+    } catch (e) {
+      setFlash(`Diagnostics could not be copied (${e instanceof Error ? e.message : String(e)})`);
+    }
+    term.focus();
+  };
   // The seat's job title names the pane; else the workspace folder (an agent launch's creature
   // name); else "Terminal N" (SESS-024).
   const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
@@ -407,7 +464,16 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             <Ring percent={context ?? 0} />
             {Math.round(context ?? 0)}%
           </span>
-          <button className="ib" title="Pane menu (not built yet)">
+          <button
+            className="ib"
+            title="Pane menu"
+            aria-haspopup="menu"
+            aria-expanded={menuAt !== null}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenuAt({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+            }}
+          >
             <Dots size={12} />
           </button>
           <button
@@ -440,6 +506,25 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           </button>
         </span>
       </header>
+      {menuAt && (
+        <>
+          <div className="menu-backdrop" onClick={() => setMenuAt(null)} onContextMenu={(e) => (e.preventDefault(), setMenuAt(null))} aria-hidden="true" />
+          <div className="menu" role="menu" aria-label="Pane menu" style={menuAt}>
+            <button
+              role="menuitem"
+              className="menu-item"
+              title="A scrubbed snapshot of this pane for a bug report, to the clipboard"
+              onClick={() => {
+                setMenuAt(null);
+                void copyDiagnostics();
+              }}
+            >
+              <span className="agent-mark" />
+              <span className="name">Copy terminal diagnostics</span>
+            </button>
+          </div>
+        </>
+      )}
       {plusAt && (
         <PlusMenu
           agents={agents}
