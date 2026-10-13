@@ -192,23 +192,25 @@ export function buildOnce(o, env = process.env) {
   const pubkey = fs.readFileSync(key + ".pub", "utf8").trim();
   setVersion(dir, version);
   const conf = path.join(dir, "src-tauri", "release.conf.json");
-  // The bundler checks the signature it makes against the configured public key.
-  fs.writeFileSync(conf, JSON.stringify({ bundle: { createUpdaterArtifacts: true }, plugins: { updater: { pubkey } } }));
+  const target = path.resolve(env.CARGO_TARGET_DIR || path.join(dir, "src-tauri", "target"), "release");
+  // The bundler checks the signature it makes against the configured public key. CLI-006: the
+  // installer carries the command line and its kolux.cmd shim in a bin folder of the install.
+  const resources = { [path.join(dir, "src-tauri", "cli", "kolux.cmd").replaceAll("\\", "/")]: "bin/kolux.cmd", [path.join(target, "kolux.exe").replaceAll("\\", "/")]: "bin/kolux.exe" };
+  fs.writeFileSync(conf, JSON.stringify({ bundle: { createUpdaterArtifacts: true, resources }, plugins: { updater: { pubkey } } }));
   const benv = { ...env, TAURI_SIGNING_PRIVATE_KEY: fs.readFileSync(key, "utf8"), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: env.KOLUX_RELEASE_KEY_PASSWORD ?? "", KOLUX_RS_RELEASE_PUBKEY: pubkey };
   say("installing packages");
   tool("pnpm", ["install", "--frozen-lockfile"], { cwd: dir, env: benv });
-  say("building the Windows installer");
+  say("building the command line, then the Windows installer that carries it");
+  tool("cargo", ["build", "--release", "--features", "release-cli", "--bin", "kolux"], { cwd: path.join(dir, "src-tauri"), env: benv });
   tool("pnpm", ["tauri", "build", "--bundles", "nsis", "--config", `"${conf}"`], { cwd: dir, env: benv, echo: true });
-  tool("cargo", ["build", "--release", "--bin", "kolux-dev"], { cwd: path.join(dir, "src-tauri"), env: benv });
 
   // 4. Smoke test: the files are there, and the CLI, the app and the manifest agree on the version.
-  const target = path.resolve(env.CARGO_TARGET_DIR || path.join(dir, "src-tauri", "target"), "release");
   const exe = path.join(target, "bundle", "nsis", installerName(version));
   if (!fs.existsSync(exe) || fs.statSync(exe).size < 1 << 20) throw new Error(`smoke test: no installer at ${exe}`);
   const signature = fs.existsSync(exe + ".sig") ? fs.readFileSync(exe + ".sig", "utf8").trim() : "";
   if (!signature) throw new Error(`smoke test: the installer has no signature (${exe}.sig)`);
-  const cliVersion = sh(path.join(target, "kolux-dev.exe"), ["--version"]);
-  if (cliVersion !== version) throw new Error(`smoke test: kolux-dev --version says ${cliVersion}, the release is ${version}`);
+  const cliVersion = sh(path.join(target, "kolux.exe"), ["--version"]);
+  if (cliVersion !== version) throw new Error(`smoke test: kolux --version says ${cliVersion}, the release is ${version}`);
   const appVersion = JSON.parse(fs.readFileSync(path.join(dir, "src-tauri", "tauri.conf.json"), "utf8")).version;
   if (appVersion !== version) throw new Error(`smoke test: the app says ${appVersion}, the release is ${version}`);
   const out = path.join(dir + "-out", `v${version}`);
@@ -218,7 +220,7 @@ export function buildOnce(o, env = process.env) {
   const m = manifest(version, notes, signature, downloadUrl(version));
   fs.writeFileSync(path.join(out, "latest.json"), JSON.stringify(m, null, 2));
   fs.writeFileSync(path.join(out, "notes.md"), notes);
-  say(`smoke test passed: installer, signature, kolux-dev --version and the manifest all say ${version}`);
+  say(`smoke test passed: installer, signature, kolux --version and the manifest all say ${version}`);
   if (o.noPublish) {
     say(`built ${version}, not published; the files are in ${out}`);
     return { version, sha, notes, out, published: false };

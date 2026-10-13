@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, shortTokens, tone, usageLine } from "./meter";
+import { capOn, contextFill, meterOf, meterText, percentMode, planOf, readsLeft, shortTokens, shownPercent, tone, usageLine } from "./meter";
 import Ring from "./Ring";
 import type { ClaudeLimit } from "./claude";
 import type { CodexUsage } from "./codex";
@@ -77,4 +77,19 @@ test("USAGE-004 / VIEW-018: the Agents footer gives the provider's 5-hour figure
   expect(readsLeft({})).toBe(false);
   expect(readsLeft({ usageReads: "remaining" })).toBe(false);
   expect(readsLeft({ usageReads: "left" })).toBe(true);
+  // MERGE 13: the T-263 Appearance pick reads left too.
+  expect(readsLeft({ usagePercentages: "remaining" })).toBe(true);
+  expect(readsLeft({ usagePercentages: "used" })).toBe(false);
+});
+
+test("T-263 USAGE-025: usage percentages read as used or left; missing or unknown means used, a broken value reads 0", () => {
+  expect(percentMode(undefined)).toBe("used");
+  expect(percentMode("left-ish")).toBe("used");
+  expect(percentMode("remaining")).toBe("remaining");
+  expect(shownPercent(30, "remaining")).toBe(70);
+  expect(shownPercent(30, "used")).toBe(30);
+  expect(shownPercent(29.6, "used")).toBe(30);
+  expect(shownPercent(140, "remaining")).toBe(0);
+  expect(shownPercent(-5, "used")).toBe(0);
+  expect(shownPercent(Number.NaN, "remaining")).toBe(0);
 });

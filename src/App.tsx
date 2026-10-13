@@ -18,31 +18,50 @@
 // Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { saveChanged } from "./settings/saveChanged";
+import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { windowTitle, type AppInfo } from "./app-info";
 import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
-import CloseAsk from "./terminal/CloseAsk";
+import Ask from "./chrome/Ask";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { closeSet, returnTab, type Which } from "./terminal/tabClose";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
-import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, titleBarButton } from "./settings/general";
-import { OPEN_SETTINGS, openSettings, type SettingsTarget } from "./settings/pages";
-import LayoutStrip, { type NewTab } from "./chrome/LayoutStrip";
-import BrowserPane from "./browser/BrowserPane";
+import KeyLostNotice from "./settings/KeyLostNotice";
+import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, stripOn } from "./settings/general";
+import { cacheDue, cacheMinutes } from "./projects/cache";
+import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
+import WorktreePalette, { dirMark, type PaletteItem } from "./projects/WorktreePalette";
+import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
+import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
+import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
+import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
+import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
+import LineNotes from "./scm/LineNotes";
+import ChecksPanel from "./scm/ChecksPanel";
 import PreviewPane from "./editor/PreviewPane";
+import ReviewNotes from "./editor/ReviewNotes";
+import { copiers } from "./editor/EditorPane";
+import { notesMarkdown, reviewOn, selections, sendTargets, type Note, type Picked } from "./editor/notes";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
+import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
+import Wizard from "./onboarding/Wizard";
+import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, oneClick, openAt, REOPEN_WIZARD, type Outcome } from "./onboarding/firstRun";
+import { KITS, RECALL_KEY, assignRoles, readyVendors, remember, type Kit, type Vendor } from "./kits/catalog";
+import KitStrip, { useKitCheck } from "./kits/KitStrip";
+import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
+import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
-import { open } from "@tauri-apps/plugin-dialog";
-import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking } from "./terminal/grid";
+import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount } from "./terminal/grid";
 import { gpuOn } from "./terminal/renderer";
 import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
@@ -58,16 +77,19 @@ import { accountLabel, accountPrompt, type CodexAccount } from "./terminal/accou
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
+import TasksPage from "./tasks/TasksPage";
+import { tasksRepo } from "./tasks/model";
 import SourceControlPanel from "./scm/SourceControlPanel";
-import { SCM_AGENT_KEY, SUMMARY_UPSTREAM_KEY } from "./scm/model";
+import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_VIEW_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
-import { DEFAULT_AGENT_KEY, defaultAgentId, menuAgents, offeredAgents } from "./launch/agents";
-import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
+import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
+import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
 import { FINISH_FIELD, STOPPED_FIELD } from "./settings/NotificationSwitches";
-import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
-import { Bell, Globe, StatusGlyph } from "./chrome/icons";
+import { marksUnread, tabBadge, tabMenu as tabMenuItems, waitingInGrid, type Badge } from "./terminal/tabs";
+import NameField from "./terminal/NameField";
+import { Bell, Globe, Spinner, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
@@ -76,19 +98,28 @@ import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine, type ContextReading } from "./usage/meter";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape } from "./launch/seats";
-import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
+import { folderName, NESTING_KEY, workItem, type Created, type WorkItem, type CliWorkspace, type PendingCreate, type Project, type SetupLine, type SetupWhere, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
 import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { useUsageAlerts } from "./usage/alerts";
+import ToolNotices from "./launch/ToolNotices";
+import PlanSheet from "./terminal/PlanSheet";
+import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean };
+/** SKILL-008: a seat waiting for the role it depends on. */
+type KitWait = { role: string; upstream: string; key: number; prompt: string };
+/** A kit run started in this window; `prompts` are each role's first message, kept for Restart and Move to (SKILL-011). */
+type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number>; prompts: string[] };
+/** Which kit AI a pane runs, from its mark or, for Grok, its program. */
+const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; agentId?: string; program: string | null; args: string[]; session?: string; env?: [string, string][]; account?: string | null; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string; preview?: boolean; jump?: { line: number; at: number } };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -145,18 +176,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   // the grid stays mounted (hidden) behind it.
   // SET-028: Model routing opens the same way until Settings > Agents exists.
   const [page, setPage] = useState<Page | null>(() => openPageAt(initial)); // VIEW-011: the page open at quit
-  const [scmOpen, setScmOpen] = useState(false);
   // GIT-004: a half-written commit message per worktree, kept through closing the panel.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  // EDIT-033: the explorer on the right; closed at start (DT-R17). A bump of explorerFocus moves focus into its tree.
-  const [explorerOpen, setExplorerOpen] = useState(false);
+  // EDIT-033: a bump of explorerFocus moves focus into the explorer's tree.
   const [explorerFocus, setExplorerFocus] = useState(0);
-  const toggleExplorer = () => {
-    if (explorerOpen && document.activeElement?.closest(".explorer")) return setExplorerOpen(false);
-    setScreen("terminals");
-    setExplorerOpen(true);
-    setExplorerFocus((n) => n + 1);
-  };
+  // VIEW-056: the right sidebar's width while its edge is being dragged; saved when let go.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
   // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
   const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? [{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
   const [focused, setFocused] = useState(layout?.focused ?? 1);
@@ -190,7 +215,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   // STAT-050: when each pane's state last moved, and whether that turn was interrupted; the Inbox's clock.
   const [stamp, setStamp] = useState<Record<number, { at: number; interrupted: boolean }>>({});
   // VIEW-023: what each pane's last event said it was doing, and the newest file it wrote this session.
-  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo }>>({});
+  // TERM-036: the agent's own session id per pane, from its hooks.
+  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean }>>({});
+  // SAFE-002..004: the pane whose plan is open for review, and each plan's unsent comments.
+  // SAFE-007: the sheet holds the plan it opened with, so it can tell when the pane moved on.
+  const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean } | null>(null);
+  const [planDrafts, setPlanDrafts] = useState<Record<string, PlanDraft>>({});
   // STAT-045: the terminal has printed nothing for the quiet window; cleared by the next event.
   const [stale, setStale] = useState<Record<number, boolean>>({});
   const [context, setContext] = useState<Record<number, ContextReading>>({}); // STAT-040: each Claude pane's last context reading
@@ -216,6 +246,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const markDir = (dir: string, un: boolean) => setUnreadDirs((u) => new Set(un ? [...u, dir] : [...u].filter((d) => !sameDir(d, dir))));
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
+  const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
   const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
   const recentTabs = useRef<number[]>([]); // TERM-044: panes focused, newest first, so a closed tab returns to the one used before it
@@ -227,6 +258,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   }, [tabMenu]);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
+  const [agentPass, setAgentPass] = useState<AgentPass>(FIRST_PASS); // SESS-002
+  const [shells, setShells] = useState<ShellInfo[]>([]); // SESS-006
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
   const [settingsRead, setSettingsRead] = useState(false); // USAGE-009: no alert before this is true
   useUsageAlerts(settingsRead ? settings : null);
@@ -246,13 +279,26 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
+  const [standIns, setStandIns] = useState<PendingCreate[]>([]); // PROJ-020: creates Git is still working on
   const [stacked, setStacked] = useState<Record<string, boolean>>(layout?.stacked ?? {}); // TERM-006: a single pane split down makes a stacked pair
+  const [createName, setCreateName] = useState(""); // PROJ-057: the palette's typed name, prefilled there
+  const [palette, setPalette] = useState(false); // PROJ-057 / VIEW-037: the worktree palette is open
+  const [hist, setHist] = useState(EMPTY_HISTORY); // VIEW-046: workspaces and pages shown, for back and forward
   const [weights, setWeights] = useState<Record<string, number[]>>({}); // TERM-010: dragged column / row weights, per folder and pane count
   const dragRef = useRef<{ gap: Gap; at: number; start: number[]; px: number } | null>(null);
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
   const [toast, setToastText] = useState<string | null>(null);
+  // GIT-042: review notes on Markdown, kept until copied or cleared.
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [picked, setPicked] = useState<Picked | null>(null);
+  const [sendMenu, setSendMenu] = useState(false);
+  // TERM-027: a Set Title shortcut bumps the pane's counter, which opens its name field.
+  const [askName, setAskName] = useState<Record<number, number>>({});
+  // TERM-048: the tab whose name is being edited in the tab strip.
+  const [renamingTab, setRenamingTab] = useState<number | null>(null);
+  // TERM-048: the tab right-click menu, at the pointer.
   const toastTimer = useRef<number | null>(null);
   const setToast = (text: string) => {
     setToastText(text);
@@ -262,13 +308,20 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const nextKey = useRef(layout ? Math.max(1, ...layout.panes.map((p) => p.key)) + 1 : 2);
   // TERM-106: the tabs that came back from the saved layout replay their saved output first.
   const restoredKeys = useRef(new Set((layout?.panes ?? []).map((p) => p.key)));
+  const runPanes = useRef<Record<string, number>>({});
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
-    const readAgents = () => void invoke<AgentInfo[]>("agent_list").then(setAgents).catch(() => setAgents([]));
-    readAgents();
-    // SET-027: Refresh on the Agents page looks again; the window takes the new list too.
-    const offAgents = listen("agents-changed", readAgents);
+    refreshAgents();
+    invoke<ShellInfo[]>("shell_list").then(setShells, () => setShells([]));
+    // SET-027: Refresh on the Agents page looks again; the window takes the list it found, so
+    // one refresh is one search (SESS-002).
+    // An install that finished (SET-026) says so with no list: the window searches once for everyone.
+    const offAgents = listen<AgentInfo[] | null>("agents-changed", (e) => {
+      if (!Array.isArray(e.payload)) return refreshAgents();
+      setAgents(e.payload);
+      setAgentPass({ looking: false, done: true, error: null });
+    });
     // SET-001: the saved look is put on the window every time the settings are read.
     const readSettings = () =>
       void invoke<Record<string, unknown>>("get_settings")
@@ -286,10 +339,137 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     };
   }, []);
 
+  // SESS-002: one refresh is one search. An errored search keeps the last list but blocks
+  // launching until a search succeeds; nothing counts as missing before the first one is done.
+  function refreshAgents() {
+    setAgentPass((p) => ({ ...p, looking: true }));
+    invoke<AgentInfo[]>("agent_list").then(
+      (list) => {
+        setAgents(list);
+        setAgentPass({ looking: false, done: true, error: null });
+        void emit("agents-changed", list).catch(() => {});
+      },
+      (err) => setAgentPass((p) => ({ ...p, looking: false, error: String(err) || "the search failed" })),
+    );
+  }
+  // SESS-002 / SESS-003: once a search is done, a seat whose agent is gone (or switched off) is
+  // emptied for good, never refilled when the agent comes back.
+  const offeredKey = installedIds.join(",");
+  useEffect(() => {
+    if (!agentPass.done || agentPass.error) return;
+    setPanes((ps) => {
+      let changed = false;
+      const next = ps.map((p) => {
+        if (!p.seats) return p;
+        const seats = clearMissing(p.seats, installedIds);
+        if (seats.every((s, i) => s === p.seats![i])) return p;
+        changed = true;
+        return { ...p, seats };
+      });
+      return changed ? next : ps;
+    });
+  }, [agentPass, offeredKey]);
+
+  // SKILL-002: the kit gallery and a kit's setup float over every screen; any part of the app opens
+  // the gallery with the kolux-open-kits event.
+  const [kits, setKits] = useState<{ kit: string | null; sampleDir: string | null } | null>(null);
+  const [samplesBusy, setSamplesBusy] = useState(false);
+  const [kitConflict, setKitConflict] = useState<string | null>(null);
+  // SKILL-006 / SKILL-008: each folder's kit run in this window: its start, the seats in role order
+  // (null when not every seat started), the roles still waiting and when each waiting one was sent.
+  const kitRuns = useRef<Record<string, KitRun>>({});
+  const [kitTick, setKitTick] = useState(0);
+  const [kitFolded, setKitFolded] = useState(false);
+  // SKILL-014: the recent kit runs the gallery lists, read each time it opens.
+  const [kitRecent, setKitRecent] = useState<Past[]>([]);
+  const galleryOpen = kits !== null && kits.kit === null;
+  useEffect(() => {
+    if (galleryOpen) invoke<Past[]>("kit_history").then(setKitRecent, () => setKitRecent([]));
+  }, [galleryOpen]);
+  // SESS-019: a chooser's Set up kit names the kit and the chooser, which closes once the kit starts.
+  const chooserSetup = useRef<number | null>(null);
+  useEffect(() => {
+    const show = (e: Event) => {
+      const from = (e as CustomEvent<{ kit: string; chooser?: number } | undefined>).detail;
+      if (!from) return setKits((k) => k ?? { kit: null, sampleDir: null });
+      chooserSetup.current = from.chooser ?? null;
+      pickKit(from.kit);
+    };
+    window.addEventListener(OPEN_KITS, show);
+    return () => window.removeEventListener(OPEN_KITS, show);
+  }, []);
+  // GIT-036: a page asked for in the built-in browser opens as a new tab in the focused split.
+  useEffect(() => {
+    const show = (e: Event) => {
+      const url = (e as CustomEvent<string>).detail;
+      const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+      const key = nextKey.current++;
+      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "browser", url }]);
+      setFocused(key);
+    };
+    window.addEventListener(OPEN_IN_BROWSER, show);
+    return () => window.removeEventListener(OPEN_IN_BROWSER, show);
+  }, [panes, focused, activeDir]);
+  // SKILL-003: Claude, Codex and Grok, when found and not switched off, can take kit roles.
+  // ONB-005 / SKILL-003: `agents` is already the switched-on set, so a kit never counts or casts an AI turned off on the Agents page.
+  const kitAIs = useMemo(() => readyVendors(agents), [agents]);
+  const pickKit = (id: string) => {
+    setKitConflict(null);
+    setKits({ kit: id, sampleDir: null });
+    invoke<string>("kit_samples_dir", { kit: id }).then((d) => setKits((k) => (k?.kit === id ? { ...k, sampleDir: d } : k)), () => {});
+  };
+  // ONB-004 opens a sample the same way, with no launch window (select opens one plain tab).
+  const openSamples = async (id: string) => {
+    const p = await invoke<{ path: string; name: string }>("kit_samples", { kit: id });
+    setRefresh((n) => n + 1);
+    select(p.path, null);
+  };
+  const trySamples = (id: string) => {
+    setSamplesBusy(true);
+    openSamples(id)
+      .catch((err) => setToast(`Kolux could not set up the sample data: ${String(err)}`))
+      .finally(() => setSamplesBusy(false));
+  };
+  // GIT-040 / GIT-041: review notes on diff lines, kept per workspace in settings. A save that fails
+  // puts the notes back as they were and says so.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const notesFor = (dir: string | null) => lineNotesOf(settingsRef.current[LINE_NOTES_KEY], dir);
+  const saveNotes = (dir: string, notes: LineNote[]) => {
+    const was = settingsRef.current;
+    const next = { ...was, [LINE_NOTES_KEY]: withLineNotes(was[LINE_NOTES_KEY], dir, notes) };
+    settingsRef.current = next;
+    setSettings(next);
+    saveChanged(was, next).catch((err) => {
+      setSettings((s) => ({ ...s, [LINE_NOTES_KEY]: was[LINE_NOTES_KEY] }));
+      setToast(`The review note was not saved, so the change was undone: ${String(err)}`);
+    });
+  };
+  const putNote = (dir: string, n: LineNote) => saveNotes(dir, [...notesFor(dir).filter((x) => x.id !== n.id), n]);
+  const dropNotes = (dir: string, ids: string[]) => saveNotes(dir, notesFor(dir).filter((x) => !ids.includes(x.id)));
   const saveSetting = (key: string, value: unknown) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
-    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+    saveChanged(settings, next).catch((err) => setNotice(String(err)));
+  };
+  // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
+  const right = readRight(settings);
+  const explorerOpen = right.open && right.tab === "explorer";
+  const scmOpen = right.open && right.tab === "scm";
+  const saveRight = (patch: Partial<Record<keyof typeof RIGHT_KEYS, unknown>>) => {
+    const next = { ...settings };
+    for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
+    setSettings(next);
+    saveChanged(settings, next).catch((err) => setNotice(String(err)));
+  };
+  const showRight = (tab: RightTab) => {
+    setScreen("terminals");
+    saveRight({ open: true, tab });
+  };
+  const toggleExplorer = () => {
+    if (explorerOpen && document.activeElement?.closest(".explorer")) return saveRight({ open: false });
+    showRight("explorer");
+    setExplorerFocus((n) => n + 1);
   };
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
@@ -358,7 +538,9 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       // the ones Kolux has no action for yet are left to CodeMirror.
       const hit =
         (kind === "browser" && matchEvent(keymap, e, ["browser"])) ||
-        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]);
+        matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
+        // GIT-042: a preview tab takes the one editor shortcut that applies to it.
+        (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
       if (!hit) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       switch (hit.id) {
@@ -385,10 +567,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
           setSidebarOpen((o) => !o);
           break;
         case "sidebar.sourceControl.toggle":
+          if (terminals && scmOpen) saveRight({ open: false });
+          else showRight("scm");
+          break;
         case "sidebar.right.toggle":
-          // ponytail: the right sidebar holds only Source Control until VIEW-056/057 (T-146).
-          setScreen("terminals");
-          setScmOpen((o) => !o);
+          if (terminals && right.open) saveRight({ open: false });
+          else showRight(right.tab);
           break;
         case "workspace.delete":
           setScreen("terminals");
@@ -398,10 +582,48 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         case "workspace.create":
           setScreen("terminals");
           setSidebarOpen(true);
+          setCreateName("");
           setCreateRequest((n) => n + 1);
+          break;
+        case "worktree.palette":
+          setPalette(true);
+          break;
+        // PROJ-055 / VIEW-046: keyboard moves follow the sidebar list as shown (a project's main
+        // checkout row, then its workspace rows), so folded rows are skipped; the sidebar is
+        // brought up first so there is a list to follow.
+        case "worktree.navigateUp":
+        case "worktree.navigateDown":
+        case "workspace.selectByIndex":
+        case "sidebar.focusWorktreeList": {
+          flushSync(() => {
+            setScreen("terminals");
+            setSidebarOpen(true);
+          });
+          const rows = [...document.querySelectorAll<HTMLElement>(".sidebar :is(button.branch, .sess[role=button])")];
+          const at = rows.findIndex((r) => r.classList.contains("sel"));
+          if (hit.id === "sidebar.focusWorktreeList") {
+            rows[Math.max(at, 0)]?.focus();
+            break;
+          }
+          const i = navTarget(rows.length, at, hit.id === "workspace.selectByIndex" ? { index: hit.index ?? 0 } : { step: hit.id === "worktree.navigateDown" ? 1 : -1 });
+          if (i === null) return;
+          rows[i].click();
+          rows[i].scrollIntoView({ block: "nearest" });
+          break;
+        }
+        case "worktree.history.back":
+        case "worktree.history.forward":
+          if (!step(hit.id === "worktree.history.back" ? -1 : 1)) return;
           break;
         case "view.cycleWorkspaceView":
           if (!classic) setScreen((s) => nextScreen(s));
+          break;
+        case "view.tasks":
+          setScreen("terminals");
+          setPage((p) => (terminals && p === "tasks" ? null : "tasks"));
+          break;
+        case "sidebar.sleeping.toggle":
+          saveSetting(SHOW_SLEEPING_SETTING, !showSleepingFrom(settings[SHOW_SLEEPING_SETTING]));
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
@@ -412,6 +634,22 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         case "tab.newBrowser":
           void newTab("browser");
           break;
+        case "editor.copyContext":
+          if (!copiers.get(focused)?.()) return;
+          break;
+        case "sourceControl.sendReviewNotes":
+          if (!reviewOn(settings) || notes.length === 0) return;
+          setSendMenu(true);
+          break;
+        case "editor.addReviewNote": {
+          // EDIT-020: holding the keys adds one note.
+          if (e.repeat) break;
+          // With nothing selected, or the review tools off, the shortcut does nothing.
+          const got = reviewOn(settings) ? selections.get(focused)?.() : null;
+          if (!got) return;
+          setPicked(got);
+          break;
+        }
         case "editor.nextChange":
         case "editor.previousChange": {
           const step = diffNav.get(focused);
@@ -430,15 +668,23 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
           else setPicking("file");
           break;
         case "tab.openMarkdown":
-          if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
-          else setPicking("markdown");
+          void newTab("markdown-open");
           break;
         case "tab.newMarkdown":
-          if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
-          else invoke<string>("md_new", { root: activeDir }).then(openFile, (err) => setToast(String(err)));
+          void newTab("markdown-new");
+          break;
+        case "sessions.add":
+          addChooser();
+          break;
+        case "sessions.remove":
+          removeSession();
           break;
         case "tab.newAgent": {
-          // SET-027: with no default (switched off), the first agent available
+          if (agentPass.error) {
+            setNotice(`Kolux could not look for agents (${agentPass.error}). Refresh agents, then try again.`);
+            break;
+          }
+          // SET-027 / SESS-010: with no default, the first agent available
           const a = defaultId ? agents.find((x) => x.id === defaultId && x.installed) : agents.find((x) => x.installed);
           if (!a) setNotice(defaultId ? `The default agent (${defaultId}) is not installed or is switched off.` : "No agent is installed and switched on.");
           else void newTab(a);
@@ -459,9 +705,32 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
           // with none waiting, focus stays where it is.
           const k = nextNeedsYou(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)), focused);
           if (k === null) return;
-          const p = panes.find((x) => x.key === k);
-          if (p && !sameDir(p.cwd, activeDir)) setActiveDir(p.cwd);
-          setFocused(k);
+          openPane(k); // EDIT-041: the same jump as Open in Code
+          break;
+        }
+        case "terminal.setTitle":
+        case "terminal.clearPaneTitle":
+        case "tab.rename": {
+          // TERM-027, TERM-048: name the focused chat or terminal; in a cell with tabs, the tab
+          // strip takes the rename, else the pane header does. No default key on Windows.
+          const p = inFront ? panes.find((x) => x.key === focused && !x.kind) : undefined;
+          if (!p) return;
+          if (hit.id === "terminal.clearPaneTitle") {
+            if (!p.title) return;
+            renamePane(p.key, undefined);
+          } else if (hit.id === "tab.rename" && panes.filter((x) => groupOf(x) === groupOf(p)).length > 1) setRenamingTab(p.key);
+          else setAskName((m) => ({ ...m, [p.key]: (m[p.key] ?? 0) + 1 }));
+          break;
+        }
+        case "terminal.focusNextPane":
+        case "terminal.focusPreviousPane": {
+          // TERM-012: the next or previous cell in grid order, wrapping; its tab on top takes focus.
+          if (!inFront) return;
+          const order = cellsOf(panesIn(panes, activeDir)).map(activeOf);
+          const at = cellsOf(panesIn(panes, activeDir)).findIndex((c) => c.panes.some((p) => p.key === focused));
+          const t = navTarget(order.length, at, { step: hit.id === "terminal.focusNextPane" ? 1 : -1 });
+          if (t === null) return;
+          setFocused(order[t]);
           break;
         }
         case "terminal.splitRight":
@@ -490,11 +759,22 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     setFocused(key);
   };
 
-  // SESS-007: a pane that asks what to run, in the workspace in front.
+  // SESS-007: a pane that asks what to run, in the workspace in front. SESS-008: a grid holds
+  // up to MAX_PANES.
   const addChooser = () => {
+    if (cellsOf(panesIn(panes, activeDir)).length >= MAX_PANES) return setToast(`A workspace holds up to ${MAX_PANES} panes.`);
     const key = nextKey.current++;
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }]);
     setFocused(key);
+  };
+  // SESS-008: the remove-session shortcut closes the newest chooser pane in front without asking;
+  // with none, the focused session, which asks first (once) when a program would stop. A lone
+  // chooser stays, so the grid never drops below one pane.
+  const removeSession = () => {
+    const t = removeTarget(panesIn(panes, activeDir), focused);
+    if (!t) return;
+    if (t.chooser) dropPane(t.key);
+    else if (!asking) closePane(t.key); // at most one question per press
   };
   // TERM-040 / TERM-041: a new tab joins the focused pane's cell (or opens its own cell) and
   // starts in the workspace folder; an agent tab runs the agent's start line there. Outside any
@@ -516,8 +796,28 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       setFocused(key);
       return;
     }
+    if (what === "chooser") return addChooser();
+    if (what === "markdown-open") {
+      if (!activeDir) setToast("Open a workspace to pick from its markdown files.");
+      else setPicking("markdown");
+      return;
+    }
+    if (what === "markdown-new") {
+      if (!activeDir) setToast("Open a workspace to start a markdown note in it.");
+      else invoke<string>("md_new", { root: activeDir }).then(openFile, (err) => setToast(String(err)));
+      return;
+    }
+    if (what !== null && typeof what === "object" && "shell" in what) {
+      // SESS-006: another installed shell, as a tab beside the focused pane.
+      const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+      const key = nextKey.current++;
+      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: what.shell.program, args: what.shell.args, word: what.shell.name }]);
+      setFocused(key);
+      return;
+    }
     if (what === "file") {
-      const path = await open({ multiple: false, directory: false, defaultPath: activeDir ?? undefined, title: "Open a file" }).catch(() => null);
+      // ACCT-055: Kolux shows the picker itself, so only the chosen file is granted to the window.
+      const path = await invoke<string | null>("file_pick", { defaultPath: activeDir }).catch((err) => (setToast(String(err)), null));
       if (typeof path === "string") openFile(path);
       return;
     }
@@ -556,12 +856,23 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
 
   // EDIT-027: a changed file's diff opens as a tab beside the focused pane; its staged and
   // unstaged diffs are separate tabs, and one already open in that cell comes to the front.
-  const openDiff = (path: string, staged: boolean) => {
+  // GIT-037: a click in Source Control opens it as the cell's preview tab, which the next click
+  // reuses unless it holds unsaved edits.
+  const openDiff = (path: string, staged: boolean, preview = false, line?: number) => {
     const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+    const jump = line === undefined ? undefined : { line, at: Date.now() };
     const same = here && panes.find((p) => p.kind === "diff" && !!p.staged === staged && groupOf(p) === groupOf(here) && keyOf(p.path ?? "") === keyOf(path));
-    if (same) return setFocused(same.key);
+    if (same) {
+      if (jump) setPanes((ps) => ps.map((p) => (p.key === same.key ? { ...p, jump } : p)));
+      return setFocused(same.key);
+    }
+    const old = preview && here && panes.find((p) => p.kind === "diff" && p.preview && groupOf(p) === groupOf(here) && !dirty[p.key]);
+    if (old) {
+      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...p, path, staged, jump } : p)));
+      return setFocused(old.key);
+    }
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "diff", path, staged }]);
+    setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "diff", path, staged, preview: preview || undefined, jump }]);
     setFocused(key);
   };
 
@@ -600,25 +911,48 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   };
 
   // TERM-006: a split opens a shell in the pane's own folder, beside it (right) or under it.
-  const splitPane = (key: number, dir: "right" | "down") => {
+  // CLI-026: a split from the command line works on the pane named, wherever it is, and leaves the
+  // active tab and the focus alone.
+  const splitPane = (key: number, dir: "right" | "down", cli?: { ask: string; command: string | null }) => {
     const src = panes.find((p) => p.key === key);
-    if (!src) return;
-    const shown = cellsOf(panesIn(panes, activeDir));
-    if (shown.length >= MAX_PANES) {
-      setToast(`A workspace holds up to ${MAX_PANES} panes.`);
+    if (!src) {
+      if (cli) cliFailed.current[cli.ask] = "that terminal is not in the window";
       return;
     }
-    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [] };
+    const shown = cellsOf(panesIn(panes, src.cwd));
+    if (shown.length >= MAX_PANES) {
+      if (cli) cliFailed.current[cli.ask] = `its worktree already holds ${MAX_PANES} panes; open a tab with terminal create instead`;
+      else setToast(`A workspace holds up to ${MAX_PANES} panes.`);
+      return;
+    }
+    const pane: Pane = { key: nextKey.current++, cwd: src.cwd, branch: src.branch, agent: "shell", program: null, args: [], typed: cli?.command ?? undefined, ask: cli?.ask };
     // one pane split down becomes a stacked pair; a split right puts the pair side by side again
     const stack = dir === "down" && shown.length === 1;
     setStacked((st) => ({ ...st, [activeDir ?? ""]: stack }));
     const at = splitIndex(shown.map((c) => c.group), groupOf(src), dir, columnsFor(shown.length + 1, stack));
     setPanes(insertBefore(panes, shown[at]?.panes[0], pane));
-    setFocused(pane.key);
+    if (!cli) setFocused(pane.key);
   };
 
   const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
   const setChooser = (key: number, patch: Partial<Pane>) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+
+  // SESS-021: a lineup is kept per project once one of its agent seats has really started (its
+  // pane reports a running program); until then it waits here under its batch.
+  const pendingLineup = useRef<Record<number, { pid: string; lineup: Lineup }>>({});
+  const lineupsOf = (s: Record<string, unknown>) => (s[LAST_LINEUP_KEY] ?? {}) as Record<string, Lineup>;
+  const rememberLineup = (batch: number) => {
+    const wait = pendingLineup.current[batch];
+    if (!wait) return;
+    delete pendingLineup.current[batch];
+    void invoke<Record<string, unknown>>("get_settings")
+      .then((s) => {
+        const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
+        setSettings(next);
+        return saveChanged(s, next);
+      })
+      .catch((err) => setNotice(String(err)));
+  };
 
   // SESS-014: a chooser can copy only inside a Git project: its workspace, or (outside any
   // workspace) the registered projects.
@@ -644,7 +978,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       const separate = inGitFor(chooser) && (chooser.copies ?? defaultCopies(seats.length, inGitFor(chooser))) === "separate";
       const pid = projectOf(chooser.cwd) ?? projectFor(null);
       const fresh = async (): Promise<{ cwd: string; branch: string | null }> => {
-        if (!pid) throw new Error("Add a project first: an agent needs a repository to work in.");
+        if (!pid) throw new Error("Add a project first: an agent needs a project folder to work in.");
         const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
         return { cwd: wt.path, branch: wt.branch };
       };
@@ -669,7 +1003,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         const note = a && side ? await invoke<string>("handoff_note_prepare", { root, name: separate ? folderName(cwd) : `${folderName(cwd)}-seat-${i + 1}` }) : null;
         prompts.push(a ? openingPrompt(seats[i], task, note && rulesBlock(note)) : "");
       }
-      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: modelArgs(seats[i].model), prompt: prompts[i] }) : null)));
+      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: seatArgs(seats[i]), prompt: prompts[i], picked: true }) : null)));
       const made: Pane[] = seats.map((s, i) => {
         const a = picked[i];
         const line = lines[i];
@@ -680,6 +1014,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
           ? { key: k, cwd, branch, agent: markFor(a.id), agentId: a.id, program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
           : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
+      if (pid && picked.some(Boolean)) pendingLineup.current[batch] = { pid, lineup: lineupOf(chooser.shape ?? "custom", separate ? "separate" : "shared", seats) };
       setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
       // VIEW-021: a preset started from the Agents rail stays the selected session once it runs.
       setAgentSel((sel) => (sel === key ? made[0].key : sel));
@@ -697,11 +1032,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
 
   // PROJ-038: the agent is the new workspace's first tab, started with its prompt; nothing else
   // opens there. Shown only when the sidebar says the user has not moved on.
-  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string) => {
+  const startIn = async (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean, extra: string[] = [], title?: string): Promise<number | null> => {
     try {
-      await openIn(agent, dir, branch, prompt, show, extra, title);
+      return await openIn(agent, dir, branch, prompt, show, extra, title);
     } catch (err) {
       setNotice(String(err));
+      return null;
     }
   };
   // The start itself; it throws when the start line or the folder's trust cannot be set up, so a
@@ -710,11 +1046,66 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     await pretrust(agent.id, [dir]);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
-    setPanes((ps) => [...ps, { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined }]);
+    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentId: agent.id, program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined };
+    // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
+    setPanes((ps) => {
+      const free = freeCell(cellsOf(panesIn(ps, dir)));
+      return free ? ps.map((p) => (p === free ? pane : p)) : [...ps, pane];
+    });
     if (show) {
       setActiveDir(dir);
       setFocused(key);
     }
+    return key;
+  };
+  // PROJ-033 / SESS-037: the setup script runs in a Setup terminal of the new workspace: a tab
+  // beside its first pane, or a cell of its own to the right or below. `then` runs once it ends
+  // (the agent waiting for setup), whatever its exit code, and lands as a tab beside it.
+  const afterSetup = useRef<Record<number, () => void>>({});
+  const startSetup = (dir: string, branch: string | null, line: SetupLine, where: SetupWhere, show: boolean, then?: () => Promise<number | null> | void) => {
+    const key = nextKey.current++;
+    setPanes((ps) => {
+      const cells = cellsOf(panesIn(ps, dir));
+      const tab = where === "tab" || cells.length >= MAX_PANES;
+      if (!tab && where === "down" && cells.length === 1) setStacked((st) => ({ ...st, [dir]: true }));
+      return [...ps, { key, cwd: dir, branch, agent: "shell", program: line.program, args: line.args, title: "Setup", word: line.program.split(/[\\/]/).pop()?.replace(/\.exe$/i, ""), group: tab ? cells[0]?.group : undefined }];
+    });
+    if (then)
+      afterSetup.current[key] = () =>
+        void Promise.resolve(then()).then((k) => {
+          if (typeof k === "number") setPanes((ps) => ps.map((p) => (p.key === k ? { ...p, group: groupOf(ps.find((x) => x.key === key) ?? p) } : p)));
+        });
+    if (show) {
+      setActiveDir(dir);
+      setFocused(key);
+    }
+  };
+  // PROJ-033: a workspace made outside the composer runs its setup script in a background tab.
+  const runSetup = (dir: string, branch: string | null) =>
+    invoke<SetupLine | null>("workspace_setup", { path: dir })
+      .then((line) => line && cli.current.startSetup(dir, branch, line, "tab", false))
+      .catch((err) => setNotice(String(err)));
+  // PROJ-037: a workspace straight from an issue or pull request address, shown once made.
+  const fromItem = (item: WorkItem) => {
+    setToast(`Making a workspace from ${item.kind === "pull" ? "pull request" : "issue"} #${item.number}…`);
+    invoke<Created>("workspace_from_item", { item })
+      .then((made) => {
+        setRefresh((n) => n + 1);
+        cli.current.select(made.path, made.branch, true);
+        void runSetup(made.path, made.branch);
+      })
+      .catch((err) => setNotice(String(err)));
+  };
+  // VIEW-042: a name typed in the palette is made at once in that project; the palette has closed.
+  const fromName = (projectId: string, name: string) => {
+    setToast(`Making the workspace ${name}…`);
+    invoke<Created>("workspace_create", { projectId, name, base: null, branch: null, parent: null, ticket: null, issue: null })
+      .then((made) => {
+        setRefresh((n) => n + 1);
+        cli.current.select(made.path, made.branch, true);
+        void runSetup(made.path, made.branch);
+      })
+      .catch((err) => setNotice(String(err)));
   };
   // VIEW-011: the open page is written down, so it is shown again after a restart.
   useEffect(() => {
@@ -728,37 +1119,152 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.
-  const select = (dir: string, branch: string | null) => {
+  // TERM-005: `fresh` says the workspace was just made: its grid starts with the default pane
+  // count, the shell counting as one and the rest empty. Only then, so nothing re-seeds later.
+  const select = (dir: string, branch: string | null, fresh = false) => {
     setPage(null);
     recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
     setActiveDir(dir);
     if (screen === "artifacts") setScreen("terminals");
     if (panesIn(panes, dir).length > 0) setFocused((f) => focusIn(panes, dir, f));
-    else addShell(dir, branch);
+    else {
+      addShell(dir, branch);
+      const more = fresh ? seedCount(settings[DEFAULT_PANES_FIELD], readLook(settings) === "classic") - 1 : 0;
+      if (more > 0) setPanes((ps) => [...ps, ...Array.from({ length: more }, (): Pane => ({ key: nextKey.current++, cwd: dir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }))]);
+    }
   };
+
+  // VIEW-046: every workspace and page shown is a stop for back and forward; a step back lands on
+  // the place already current, which visit leaves alone.
+  useEffect(() => setHist((h) => visit(h, { dir: activeDir, page })), [activeDir, page]);
+  // Deleted workspaces are skipped: a place counts while some project still lists its folder.
+  const stillThere = (p: Place) => p.dir === null || Object.keys(owner).some((d) => sameDir(d, p.dir));
+  const step = (dir: 1 | -1) => {
+    const i = travel(hist, dir, stillThere);
+    if (i === null) return false;
+    const p = hist.list[i];
+    setHist({ ...hist, at: i });
+    setScreen("terminals");
+    if (p.dir === null) setActiveDir(null);
+    else if (!sameDir(p.dir, activeDir)) select(p.dir, null);
+    setPage(p.page as Page | null);
+    return true;
+  };
+  // PROJ-057 / VIEW-037: the palette's rows besides worktrees and projects.
+  const paletteItems = (): PaletteItem[] => [
+    ...panes
+      .filter((p) => !p.seats)
+      .map((p) => ({
+        section: "Open tabs",
+        label: tabName(p, titles),
+        hint: p.cwd ? folderName(p.cwd) : "Home",
+        // VIEW-040: the tab's own badge, with how long it has been in that state.
+        ...(!p.kind ? { mark: tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key]), since: stamp[p.key]?.at ?? 0 } : {}),
+        dir: p.cwd ?? undefined,
+        run: () => {
+          setScreen("terminals");
+          if (!sameDir(p.cwd, activeDir)) {
+            setPage(null);
+            setActiveDir(p.cwd);
+          }
+          setFocused(p.key);
+        },
+      })),
+    ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
+    { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
+    { section: "Quick actions", label: "New session", run: () => addChooser() },
+    // VIEW-042: actions on the worktree in front, not runnable while none is open
+    { section: "Quick actions", label: "Source control for this workspace", needs: "worktree", run: () => showRight("scm") },
+    {
+      section: "Quick actions",
+      label: "Delete this workspace",
+      needs: "worktree",
+      run: () => {
+        setScreen("terminals");
+        setSidebarOpen(true);
+        setDeleteRequest((n) => n + 1);
+      },
+    },
+    {
+      section: "Quick actions",
+      label: "New workspace",
+      run: () => {
+        setScreen("terminals");
+        setSidebarOpen(true);
+        setCreateName("");
+        setCreateRequest((n) => n + 1);
+      },
+    },
+  ];
 
   // PROJ-066: removing a workspace closes every pane in it, wherever it was; the view stays
   // unless it was the one removed, then it falls back to the home group.
   // PROJ-070: the removed one gives way to the sibling used last that still has panes; the shown
   // workspace is read when the delete finishes, so a user who went elsewhere meanwhile stays there.
-  const removed = (path: string) => {
-    const left = withoutDir(panes, path);
-    const pid = projectOf(path);
-    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !sameDir(d, path) && panesIn(left, d).length > 0).map(([d]) => d);
-    const next = activeAfterRemove(activeRef.current, path, recentDirs.current, siblings);
+  // PROJ-053: putting workspaces to sleep closes their panes the same way, all at once.
+  const removedAll = (paths: string[]) => {
+    if (paths.length === 0) return;
+    const left = paths.reduce((ps, d) => withoutDir(ps, d), panes);
+    const gone = (d: string) => paths.some((x) => sameDir(d, x));
+    const pid = projectOf(paths[0]);
+    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !gone(d) && panesIn(left, d).length > 0).map(([d]) => d);
+    const hit = paths.find((x) => activeRef.current !== null && activeAfterRemove(activeRef.current, x) !== activeRef.current);
+    const next = hit === undefined ? activeRef.current : activeAfterRemove(activeRef.current, hit, recentDirs.current.filter((d) => !gone(d)), siblings);
     setPanes(left);
     setActiveDir(next);
     setFocused((f) => focusIn(left, next, f));
   };
+  const removed = (path: string) => removedAll([path]);
 
   // PROJ-077: a workspace made or removed from the command line shows up like one made here;
   // the handlers are read through a ref so the one listener never goes stale.
-  const cli = useRef({ startIn, select, removed });
-  cli.current = { startIn, select, removed };
+  // CLI-026, CLI-027: the terminal commands. A new terminal joins the worktree's last pane as a
+  // tab; unless asked to come into view it leaves that pane's shown tab and the focus as they were.
+  const keyOfHandle = (h: string) => Number(Object.keys(ptys.current).find((k) => `term-${ptys.current[Number(k)]}` === h) ?? NaN);
+  const showDir = (dir: string | null) => {
+    setPage(null);
+    if (dir !== null) recentDirs.current = [dir, ...recentDirs.current.filter((d) => !sameDir(d, dir))].slice(0, 20);
+    setActiveDir(dir);
+    setScreen("terminals");
+  };
+  const termCreate = (c: { path: string; branch: string | null; command: string | null; title: string | null; focus: boolean; ask: string }) => {
+    const here = cellsOf(panesIn(panes, c.path));
+    const last = here[here.length - 1];
+    const key = nextKey.current++;
+    if (last && !c.focus) {
+      const on = last.panes.some((p) => p.key === activeTab[last.group]) ? activeTab[last.group] : last.panes[last.panes.length - 1].key;
+      setActiveTab((m) => ({ ...m, [last.group]: on }));
+    }
+    setPanes((ps) => [...ps, { key, cwd: c.path, branch: c.branch, agent: "shell", program: null, args: [], typed: c.command ?? undefined, title: c.title ?? undefined, ask: c.ask, group: last?.group }]);
+    if (c.focus) {
+      showDir(c.path);
+      setFocused(key);
+    }
+  };
+  const termSwitch = (handle: string) => {
+    const p = panes.find((x) => x.key === keyOfHandle(handle));
+    if (!p) return;
+    showDir(p.cwd);
+    setFocused(p.key);
+  };
+  const renamePane = (key: number, title: string | undefined) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title } : p)));
+  const termRename = (handle: string, title: string | null) => {
+    const key = keyOfHandle(handle);
+    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title: title ?? undefined } : p)));
+  };
+  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (_k: number) => {} });
+  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, runSetup, dropPane: (k: number) => dropPane(k) };
   useEffect(() => {
     const off = listen<CliWorkspace>("cli-workspace", (e) => {
       const p = e.payload;
+      const c = cli.current;
+      if (p.kind === "terminal-create") return c.termCreate(p);
+      if (p.kind === "terminal-split") return c.splitPane(c.keyOfHandle(p.handle), p.dir, p);
+      if (p.kind === "terminal-rename") return c.termRename(p.handle, p.title);
+      if (p.kind === "terminal-switch") return c.termSwitch(p.handle);
+      if (p.kind === "terminal-close") return p.handles.map(c.keyOfHandle).filter(Number.isFinite).forEach(c.dropPane);
       setRefresh((n) => n + 1);
+      if (p.kind === "repo" || p.kind === "changed") return;
       if (p.kind === "removed") {
         cli.current.removed(p.path);
         return;
@@ -766,12 +1272,19 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       // ORCH-016: a worker starts as a background tab in its worktree, named after its task.
       if (p.kind === "start") {
         const a = agents.find((x) => x.id === p.agent);
-        if (a) void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined);
+        if (a)
+          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined).then((key) => {
+            // AUTO-013: an automation run remembers its pane, so View run opens that terminal.
+            if (key !== null && p.runId) runPanes.current[p.runId] = key;
+          });
         return;
       }
       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
       if (a) void cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate);
       else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
+      // PROJ-033: a workspace made from the command line runs its setup script in a background tab
+      // unless it was told to skip it.
+      if (p.setup !== "skip") void cli.current.runSetup(p.worktree.path, p.worktree.branch);
     });
     return () => {
       off.then((f) => f()).catch(() => undefined);
@@ -809,16 +1322,14 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const launch = async (agent: AgentInfo, projectId: string | null) => {
     const pid = projectFor(projectId);
     if (!pid) {
-      setNotice("Add a project first: an agent needs a repository to work in.");
+      setNotice("Add a project first: an agent needs a project folder to work in.");
       return;
     }
     setLaunching(true);
     try {
       const wt = await invoke<Worktree>("workspace_create_fresh", { projectId: pid });
-      const key = nextKey.current++;
-      setPanes((ps) => [...ps, { key, cwd: wt.path, branch: wt.branch, agent: markFor(agent.id), agentId: agent.id, program: agent.program, args: agent.args }]);
-      setActiveDir(wt.path);
-      setFocused(key);
+      // The agent's own start line (its options, permission mode and unpicked model default).
+      if ((await startIn(agent, wt.path, wt.branch, "", true)) === null) return;
       setRefresh((n) => n + 1);
       setNotice(null);
     } catch (err) {
@@ -828,11 +1339,180 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     }
   };
 
+  // SKILL-006: Start kit. One titled seat per role in the project's own checkout (never a
+  // worktree), the waiting roles idle with no prompt; earlier results kept in a dated copy and the
+  // run recorded first. A folder holding another kit's run asks inline before anything starts.
+  /** Resolves true once at least one of the kit's AIs started. */
+  const startKit = async (kit: Kit, values: Record<string, string>, assigned: (Vendor | null)[], dir: string): Promise<boolean> => {
+    const before = await invoke<RunCheck | null>("kit_check", { dir }).catch(() => null);
+    if (before && before.record.kit !== kit.id && kitConflict === null) {
+      const other = KITS.find((k) => k.id === before.record.kit)?.title ?? before.record.title;
+      setKitConflict(`This folder holds the results of \u201c${other}\u201d. Starting \u201c${kit.title}\u201d here puts both kits' results side by side.`);
+      return false;
+    }
+    setKitConflict(null);
+    setKits(null);
+    const roles = kit.roles.map((r, i) => ({ id: r.id, ai: assigned[i] ?? "" }));
+    const earlierName = datedName(before?.record.title ?? "Earlier run", before?.record.started ?? Date.now());
+    // SKILL-015: a folder that is not a project or under samples, or an unknown kit, starts nothing.
+    let prep: { started: number; earlier: string | null; earlierError: string | null; recordError: string | null };
+    try {
+      prep = await invoke("kit_prepare", { dir, kit: kit.id, title: kit.title, roles, earlierName });
+    } catch (err) {
+      setToast(`The kit did not start: ${String(err)}`);
+      return false;
+    }
+    // An idle, empty first tab is reused for the first seat.
+    const here = panesIn(panes, dir);
+    const first = here.length === 1 && here[0].agent === "shell" && !here[0].program ? here[0] : null;
+    if (first) {
+      const id = ptys.current[first.key];
+      const busy = id === undefined ? false : await invoke<boolean[]>("terminal_busy", { ids: [id] }).then((b) => b[0], () => true);
+      if (!busy) dropPane(first.key);
+    }
+    const branch = here[0]?.branch ?? null;
+    const keys: (number | null)[] = [];
+    const waiting: KitWait[] = [];
+    const prompts: string[] = [];
+    for (const [i, role] of kit.roles.entries()) {
+      const agent = agents.find((x) => x.id === assigned[i] && x.installed);
+      const prompt = rolePrompt(kit, role, values);
+      prompts.push(prompt);
+      if (!agent) {
+        keys.push(null);
+        continue;
+      }
+      const key = await startIn(agent, dir, branch, role.waitsFor ? "" : prompt, i === 0, [], seatTitle(role, agent.id as Vendor));
+      keys.push(key);
+      if (key !== null && role.waitsFor) waiting.push({ role: role.id, upstream: role.waitsFor, key, prompt });
+    }
+    const started = keys.filter((k) => k !== null).length;
+    if (started === 0) {
+      setToast("Not one AI started for the kit, so nothing is running.");
+      return false;
+    }
+    // The role-to-session mapping is kept only when every seat started.
+    kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {}, prompts };
+    setKitTick((n) => n + 1);
+    const words = [`${started} ${started === 1 ? "AI is" : "AIs are"} on the kit; most kits need 5 to 20 minutes.`];
+    if (prep.earlier) words.push(`The last run's results were copied to kit-results\\${prep.earlier}.`);
+    if (prep.earlierError) words.push(`The last run's results could not be copied: ${prep.earlierError}`);
+    if (prep.recordError) words.push(`Kolux could not write the kit's run record, so its results may not be tracked: ${prep.recordError}`);
+    if (started < keys.length) words.push(`${keys.length - started} of its roles did not start.`);
+    setToast(words.join(" "));
+    return true;
+  };
+
+  // ONB-001..005: the first-run wizard floats over the app while its record says it is open.
+  const [wizard, setWizard] = useState<number | null>(null);
+  const wizardSetup = useRef(false);
+  useEffect(() => {
+    invoke<{ step: number } | null>("onboarding_get").then((r) => setWizard(openAt(r)), () => {});
+  }, []);
+  // ONB-007: the close is stored before the wizard goes; a failed store keeps it open with a toast,
+  // and the next click on any of its ways out tries that same close again.
+  const [wizardClose] = useState(() =>
+    closer(
+      (outcome) => invoke("onboarding_close", { outcome }),
+      () => {
+        setWizard(null);
+        wizardSetup.current = false;
+      },
+      (err) => setToast(`Kolux could not keep your setup progress (${String(err)}). Click the same button again to try once more.`),
+    ),
+  );
+  const endWizard = (outcome: Outcome, after?: () => void) => wizardClose.end(outcome, after);
+  // ONB-009: Onboarding in the sidebar help menu starts the wizard over on screen one.
+  useEffect(() => {
+    const counts = oneClick();
+    const reopen = () => {
+      if (!counts()) return;
+      invoke("onboarding_reopen").then(
+        () => setWizard(0),
+        (err) => setToast(`Kolux could not reopen onboarding (${String(err)}).`),
+      );
+    };
+    window.addEventListener(REOPEN_WIZARD, reopen);
+    return () => window.removeEventListener(REOPEN_WIZARD, reopen);
+  }, []);
+  // ONB-010: armed by Pick a folder, or by Skip while no project exists; the next project added
+  // starts the saved default agent in it, once.
+  const firstFolder = useRef(false);
+  const projectAdded = (dir: string, branch: string | null) => {
+    if (!firstFolder.current) return;
+    firstFolder.current = false;
+    const agent = firstFolderAgent(offeredAgents(agents, settings), defaultAgentId(settings));
+    if (agent) void startIn(agent, dir, branch, "", true);
+  };
+  // ONB-005: Start kit launches at once in the kit's own sample folder with an AI ready; otherwise
+  // the setup dialog opens, the wizard hides behind it, and a start from there completes it.
+  const wizardKit = async (id: string) => {
+    if (wizardClose.retry()) return;
+    const kit = KITS.find((k) => k.id === id);
+    if (!kit) return;
+    const sampleDir = await invoke<string>("kit_samples_dir", { kit: id }).catch(() => null);
+    if (activeDir && kitLaunch(activeDir, sampleDir, kitAIs) === "launch") {
+      if (await startKit(kit, startValues(kit, activeDir, sampleDir, settings), assignRoles(kit, kitAIs), activeDir)) return endWizard("completed");
+    } else setKitConflict(null);
+    wizardSetup.current = true;
+    setKits({ kit: id, sampleDir });
+  };
+  // ONB-005: one plain session on the first available agent (the default first), empty prompt;
+  // nothing without an agent and a workspace.
+  const wizardSession = async () => {
+    if (wizardClose.retry()) return;
+    const agent = menuAgents(offeredAgents(agents, settings), defaultAgentId(settings))[0];
+    if (!agent || !activeDir) return;
+    if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed");
+  };
+
+  // SKILL-008: a waiting role gets its prompt once the role it waits on has written this run's
+  // marker and its session is found; once only, and a failed send is tried again next time.
+  // ponytail: checks every ten seconds (and on any pane state change) while a role waits, whether
+  // or not the strip is unfolded; a file watcher would make it instant.
+  const sending = useRef(false);
+  const pendingKits = Object.values(kitRuns.current).some((r) => r.waiting.length > 0);
+  useEffect(() => {
+    if (!pendingKits) return;
+    const tick = async () => {
+      if (sending.current) return;
+      sending.current = true;
+      try {
+        for (const [dir, run] of Object.entries(kitRuns.current)) {
+          if (run.waiting.length === 0) continue;
+          const check = await invoke<RunCheck | null>("kit_check", { dir }).catch(() => null);
+          if (!check || check.record.started !== run.started) continue;
+          for (const w of [...run.waiting]) {
+            const id = ptys.current[w.key];
+            if (!roleDone(check, w.upstream) || id === undefined) continue;
+            try {
+              await invoke("terminal_write", { id, data: w.prompt });
+              await new Promise((r) => setTimeout(r, 300));
+              await invoke("terminal_write", { id, data: "\r" });
+              run.waiting = run.waiting.filter((x) => x !== w);
+              run.sent[w.role] = Date.now();
+              setKitTick((n) => n + 1);
+            } catch (err) {
+              console.warn(`kit: ${String(err)}`);
+            }
+          }
+        }
+      } finally {
+        sending.current = false;
+      }
+    };
+    void tick();
+    const t = window.setInterval(() => void tick(), 10_000);
+    return () => window.clearInterval(t);
+  }, [pendingKits, kitTick, running, needs]);
+
   // TERM-014: closing a pane ends its program (the pane's own cleanup kills it); the next tab of
   // its cell takes over, else the neighbouring cells take the space; closing the last pane leaves
   // the workspace's empty placeholder.
   // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
   const failedPane = (key: number, error: string) => {
+    const ask = panes.find((p) => p.key === key)?.ask;
+    if (ask) cliFailed.current[ask] = error;
     const { panes: rest, batchEmpty } = withoutFailed(panes, key);
     setPanes(rest);
     setFocused((f) => (f === key ? focusIn(rest, activeDir, f) : f));
@@ -891,6 +1571,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     });
   };
 
+  const dropPane = (key: number) => dropPanes([key]);
+
   // TERM-045: every close (keyboard, a tab's x, the pane header) asks first when a program would
   // stop; a tab's panes are checked together so a split tab asks once. Idle, switched off, or a
   // failed check: the tab closes at once.
@@ -903,6 +1585,85 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   };
   const closePane = (key: number) => void closeTab([key]);
 
+  // SKILL-009 / SKILL-010: the shown workspace's kit run and its seats.
+  const [kitCheck] = useKitCheck(activeDir, kitFolded, kitTick);
+  const kitSeats = kitCheck && activeDir !== null
+    ? matchSeats(
+        kitCheck.record,
+        kitRuns.current[activeDir]?.started === kitCheck.record.started ? kitRuns.current[activeDir].seats : null,
+        panesIn(panes, activeDir).filter((p) => !p.kind).map((p) => ({ key: p.key, ai: aiOf(p) })),
+      )
+    : [];
+  // SKILL-013: Collect results copies every role's declared files into one dated folder.
+  const kitCollect = async () => {
+    if (!activeDir || !kitCheck) return;
+    const kit = KITS.find((k) => k.id === kitCheck.record.kit);
+    if (!kit) return setToast("Kolux does not know this kit any more, so it cannot collect its results.");
+    const roles = kit.roles.map((r) => ({ id: r.id, title: r.title, files: r.delivers }));
+    try {
+      const got = await invoke<{ folder: string; copied: string[]; missing: string[] }>("kit_collect", { dir: activeDir, roles, name: datedName(kit.title, Date.now()) });
+      const miss = got.missing.length ? ` ${got.missing.length} ${got.missing.length === 1 ? "file was" : "files were"} not there: ${got.missing.join(", ")}.` : "";
+      setToast(`Collected ${got.copied.length} ${got.copied.length === 1 ? "file" : "files"} into kit-results\\${got.folder}, with a README and a Results page.${miss}`);
+    } catch (err) {
+      setToast(`Kolux could not collect the results this time: ${String(err)}`);
+    }
+  };
+  // SKILL-012: Preview shows a result beside the role's session, in a split of its own that the
+  // next preview uses again; it never replaces the AI's tab.
+  const kitPreview = (i: number, file: string) => {
+    const role = kitCheck?.record.roles[i];
+    if (!activeDir || !role) return;
+    const path = `${activeDir.replace(/[\\/]+$/, "")}\\kit-results\\${role.id}\\${file}`;
+    const here = panesIn(panes, activeDir);
+    const old = here.find((p) => p.kitPreview);
+    const pane: Pane = { key: nextKey.current++, cwd: activeDir, branch: here[0]?.branch ?? null, agent: "shell", program: null, args: [], kind: previewKind(file), path, kitPreview: true };
+    if (old) {
+      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...pane, group: groupOf(old) } : p)));
+    } else {
+      const shown = cellsOf(here);
+      if (shown.length >= MAX_PANES) return setToast(`A workspace holds up to ${MAX_PANES} panes; close one to preview ${file}.`);
+      const seat = panes.find((p) => p.key === kitSeats[i]);
+      const at = seat ? splitIndex(shown.map((c) => c.group), groupOf(seat), "right", columnsFor(shown.length + 1, false)) : shown.length;
+      setPanes(insertBefore(panes, shown[at]?.panes[0], pane));
+    }
+    setFocused(pane.key);
+  };
+  const kitOpenFile = (i: number, file: string) => {
+    const role = kitCheck?.record.roles[i];
+    if (activeDir && role) invoke("kit_open_file", { dir: activeDir, role: role.id, file }).catch((err) => setToast(`Kolux could not open ${file}: ${String(err)}`));
+  };
+  // SKILL-011: Restart and Move to start one seat for the role on the chosen AI and make it the
+  // role's session; with the settings unreadable nothing starts.
+  /** SKILL-011: why a kit seat's hooks say it is stopped, while it is. */
+  const kitStop = (k: number) => {
+    const cause = hook[k] === "blocked" ? turn[k]?.stop?.cause : undefined;
+    return cause === "limit" || cause === "signin" ? cause : null;
+  };
+  const kitRestart = async (i: number, ai: string) => {
+    const dir = activeDir;
+    const check = kitCheck;
+    const kit = check && KITS.find((k) => k.id === check.record.kit);
+    const role = kit?.roles[i];
+    if (!dir || !check || !kit || !role) return;
+    try {
+      await invoke("get_settings");
+    } catch (err) {
+      return setToast(`Nothing started: Kolux could not read its settings (${String(err)}).`);
+    }
+    const agent = agents.find((x) => x.id === ai && x.installed);
+    if (!agent) return setToast(`${ai} is not installed, so the ${role.title} role cannot start there.`);
+    const run = kitRuns.current[dir];
+    const prompt = run?.started === check.record.started ? run.prompts[i] : undefined;
+    if (!run || prompt === undefined) return setToast("Kolux no longer holds this run's inputs; start the kit again from Starter kits.");
+    const waits = !!role.waitsFor && !roleDone(check, role.waitsFor);
+    const key = await startIn(agent, dir, panesIn(panes, dir)[0]?.branch ?? null, waits ? "" : prompt, true, [], seatTitle(role, agent.id as Vendor));
+    if (key === null) return;
+    run.seats = (run.seats ?? kitSeats).map((k, n) => (n === i ? key : k));
+    run.waiting = run.waiting.filter((w) => w.role !== role.id);
+    if (waits && role.waitsFor) run.waiting.push({ role: role.id, upstream: role.waitsFor, key, prompt });
+    else run.sent[role.id] = Date.now();
+    setKitTick((n) => n + 1);
+  };
   const terminals = screen === "terminals";
   const board = screen === "board";
   const inbox = screen === "inbox";
@@ -923,12 +1684,39 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       const m = stamp[p.key];
       return { key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, state, interrupted: m?.interrupted ?? false, running: running[p.key] !== false, changed: m?.at ?? 0, finishedAt: state === "done" ? (m?.at ?? null) : null };
     });
+  // AUTO-013: a run's terminal counts as live only while its pane is still open in the run's worktree.
+  const runPane = (id: string, worktree?: string) => {
+    const key = runPanes.current[id];
+    return panes.find((x) => x.key === key && !!worktree && sameDir(x.cwd, worktree));
+  };
+  // EDIT-041: Open in Code goes to the Code view, the pane's workspace (its sidebar row scrolled
+  // into sight by ProjectsPanel) and the pane itself, its tab brought to the top.
+  const [reveal, setReveal] = useState(0);
+  // TERM-036: a copied id says so; a clipboard that refuses says that instead, never both.
+  const copyId = (p: Pane, what: "session" | "terminal" | "pane") => {
+    const label = { session: "session ID", terminal: "terminal ID", pane: "pane ID" }[what];
+    const pty = ptys.current[p.key];
+    const text = what === "session" ? p.session : what === "pane" ? String(p.key) : pty === undefined ? undefined : `term-${pty}`;
+    if (!text) return setToast(`Could not copy the ${label}: this pane has none yet.`);
+    Promise.resolve()
+      .then(() => navigator.clipboard.writeText(text))
+      .then(
+        () => setToast(`Copied the ${label}: ${text}`),
+        () => setToast(`Could not copy the ${label}: the clipboard is not available.`),
+      );
+  };
+  // TERM-096: a printed handle opens its pane when it names an open terminal.
+  const findHandle = (h: string) => {
+    const k = keyOfHandle(h);
+    return Number.isNaN(k) ? undefined : () => openPane(k);
+  };
   const openPane = (key: number) => {
     const p = panes.find((x) => x.key === key);
     if (!p) return;
     setScreen("terminals");
-    if (p.cwd) setActiveDir(p.cwd);
+    if (!sameDir(p.cwd, activeDir)) setActiveDir(p.cwd);
     setFocused(key);
+    setReveal((n) => n + 1);
   };
   const live = panes.filter((p) => running[p.key]);
   const openDirs = panes.map((p) => p.cwd).filter((d): d is string => d !== null);
@@ -938,10 +1726,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   // STAT-001: a hook-fed state wins over the guess from the program's state.
   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
   const rowStates: Record<string, RowInfo> = {};
+  const cacheFor = cacheMinutes(settings); // SET-059
   for (const [dir, states] of Object.entries(byDir)) {
     const state = strongest(states);
     const prev = rowRef.current[dir];
-    rowStates[dir] = prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null };
+    const cache = cacheDue(panes.filter((p) => p.cwd === dir).map((p) => ({ agent: p.agent, state: hook[p.key], since: stamp[p.key]?.at ?? 0 })), cacheFor);
+    rowStates[dir] = { ...(prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null }), cache };
   }
   rowRef.current = rowStates;
   const cells = cellsOf(panes);
@@ -991,6 +1781,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     document.documentElement.removeAttribute(DRAG_ATTR);
     window.dispatchEvent(new Event(DIVIDER_DONE));
   };
+  // TERM-029: this grid's sessions waiting on a permission or a question, in grid order.
+  const waiting = stripOn(settings) ? waitingInGrid(shown.flatMap((c) => c.panes.map((p) => p.key)), hook).map((k) => panes.find((p) => p.key === k)!) : [];
   const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
   // VIEW-015 / VIEW-021: the Agents rail groups sessions under the saved (switched-on, installed)
   // agents; the shown session is the remembered pick, else the first agent's newest; + adds a
@@ -1004,8 +1796,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const savedName = (p: Pane) => saved.find((a) => a.id === p.agentId)?.name;
   // USAGE-004 / VIEW-018: the rail's rings are the tab rings; the footer is the picked session's 5-hour window.
   const ringOf = (p: Pane) => (context[p.key] ? { percent: contextFill(context[p.key], capOn(settings)), title: meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {}) } : null);
-  const picked = panes.find((p) => p.key === selected);
-  const footer = picked ? usageLine(picked.seats ? markFor(picked.agentId ?? "") : picked.agent, plan.claude, plan.codex, readsLeft(settings)) : "";
+  const railPick = panes.find((p) => p.key === selected);
+  const footer = railPick ? usageLine(railPick.seats ? markFor(railPick.agentId ?? "") : railPick.agent, plan.claude, plan.codex, readsLeft(settings)) : "";
   const planLine = (p: Pane) => {
     const f = planOf(p.agent, plan.claude, plan.codex);
     return f ? meterText({ plan: f }) : undefined;
@@ -1028,6 +1820,71 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
       })
       .catch(() => {});
+  // SAFE-003, SAFE-004: Approve is the agent's own yes; Request changes is its no, then the
+  // feedback typed into its prompt as one paste once it has left the question.
+  // SAFE-005: the drafts are per pane and exact plan text, in memory only.
+  const dropDraft = (key: string) => setPlanDrafts((d) => Object.fromEntries(Object.entries(d).filter(([k]) => k !== key)));
+  // SAFE-007: an answer goes only while the pane still waits on the plan the sheet shows.
+  const planLive = (p: Pane, plan: string) => stillPending(hookRef.current[p.key], turn[p.key], plan);
+  const approvePlan = (p: Pane, plan: string) => {
+    if (!planLive(p, plan)) return;
+    setReviewing(null);
+    dropDraft(draftKey(p.key, plan));
+    void answer(p, true);
+  };
+  const requestChanges = async (p: Pane, plan: string) => {
+    if (!planLive(p, plan)) return;
+    const d = planDrafts[draftKey(p.key, plan)] ?? { comments: [], note: "" };
+    const text = feedbackMessage(d.comments, d.note);
+    setReviewing(null);
+    dropDraft(draftKey(p.key, plan));
+    await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).catch(() => {});
+    for (let i = 0; i < 30 && (hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission"); i++) await new Promise((r) => setTimeout(r, 100));
+    const id = ptys.current[p.key];
+    if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
+    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 300));
+    await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
+    setHook((h) => ({ ...h, [p.key]: "working" }));
+    setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+  };
+  // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
+  // pasted message; a note edited while the send was in flight is not marked sent.
+  const pasteInto = async (id: number, text: string) => {
+    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" });
+    await new Promise((r) => setTimeout(r, 300));
+    await invoke("terminal_write", { id, data: "\r" });
+  };
+  const sendNotes = async (dir: string): Promise<string | null> => {
+    const notes = notesFor(dir);
+    if (notes.length === 0) return "There are no notes to send.";
+    const agent = [...panes].sort((a, b) => Number(b.key === focused) - Number(a.key === focused)).find((p) => !p.kind && p.agent !== "shell" && sameDir(p.cwd, dir) && ptys.current[p.key] !== undefined);
+    if (!agent) return "No agent is running in this workspace. Start one, or copy the notes instead.";
+    try {
+      await pasteInto(ptys.current[agent.key], noteBlocks(notes, dir));
+    } catch (err) {
+      return `The notes were not sent: ${String(err)}`;
+    }
+    saveNotes(dir, markSent(notesFor(dir), notes));
+    return null;
+  };
+  // EDIT-020: the agents in this worktree the Markdown and file notes can go to.
+  const inWorktree = (p: Pane) => activeDir !== null && sameDir(p.cwd, activeDir) && ptys.current[p.key] !== undefined;
+  const reviewTargets = sendMenu ? sendTargets(panes, inWorktree, stamp, Date.now(), (p) => tabName(p, titles)) : [];
+  // The chosen agent is checked again at the click; a failed delivery keeps the notes.
+  const sendReview = async (key: number): Promise<string | null> => {
+    const p = panesRef.current.find((x) => x.key === key);
+    if (!p || !inWorktree(p)) return "That agent is no longer running, so nothing was sent. The notes are kept.";
+    try {
+      await pasteInto(ptys.current[key], notesMarkdown(notes));
+    } catch (err) {
+      return `The notes were not sent, so they are kept: ${String(err)}`;
+    }
+    setNotes([]);
+    setToast(`The review notes were sent to ${tabName(p, titles)}.`);
+    return null;
+  };
+  const reviewPane = reviewing && panes.find((p) => p.key === reviewing.key);
   // TERM-118: a pane is in view when its workspace is in front and it is the tab on top (the Board
   // shows every pane); a finish or bell anywhere else marks tab, pane and workspace row unread
   // and says so in the window. A desktop notification and the settings that gate it are T-026.
@@ -1036,6 +1893,27 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     if (!cell) return false;
     return board || (terminals && sameDir(cell.panes[0].cwd, activeDir) && activeOf(cell) === key);
   };
+  // CLI-023: the command line learns where each terminal sits (its worktree pane, its tab, its
+  // name, whether it is in view) from this report, sent whenever that changes.
+  const layoutSent = useRef("");
+  const reportLayout = () => {
+    const rows: Record<string, unknown>[] = [];
+    for (const c of cells) {
+      const here = cells.filter((x) => sameDir(x.panes[0].cwd, c.panes[0].cwd));
+      c.panes.forEach((p, i) => {
+        const id = ptys.current[p.key];
+        if (id !== undefined) rows.push({ handle: `term-${id}`, dir: p.cwd, cell: here.indexOf(c) + 1, tab: i + 1, title: tabName(p, titles), custom: p.title ?? null, shown: inView(p.key), ask: p.ask ?? null });
+      });
+    }
+    for (const [ask, error] of Object.entries(cliFailed.current)) rows.push({ ask, error });
+    const sent = JSON.stringify(rows);
+    if (sent === layoutSent.current) return;
+    layoutSent.current = sent;
+    void invoke("terminal_layout", { rows }).catch(() => undefined);
+  };
+  const report = useRef(reportLayout);
+  report.current = reportLayout;
+  useEffect(() => report.current());
   // STAT-041: the note names the repository when more than one has agents running.
   const repoOf = (p: Pane): string | null => {
     const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
@@ -1069,12 +1947,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   panesRef.current = panes;
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string; session?: string } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, session } = e.payload;
+    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string } & Turn>("agent-status", (e) => {
+      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, plan, planCut, session } = e.payload;
       // SESS-030: the newest session id is what a restart resumes (a /clear or a resume brings a new one).
       if (session) setPanes((ps) => (ps.some((p) => p.key === paneKey && p.session !== session) ? ps.map((p) => (p.key === paneKey ? { ...p, session } : p)) : ps));
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
-      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
+      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, plan, planCut, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
       setStale((m) => (m[paneKey] ? { ...m, [paneKey]: false } : m));
       const prev = hookRef.current[paneKey];
       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
@@ -1121,7 +1999,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
       <TopBar
         appName={chromeShown(settings, "titleBarAppName")}
         automations={
-          titleBarButton(settings, "automations")
+          chromeShown(settings, "automationsButton")
             ? {
                 open: terminals && page === "automations",
                 onToggle: () => {
@@ -1133,12 +2011,44 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         }
         screen={screen}
         classic={classic}
-        onScreen={setScreen} installed={installedIds} onSettings={() => setSettingsOpen(true)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && (scmOpen || explorerOpen)} onToggleRight={() => { if (terminals && (scmOpen || explorerOpen)) { setScmOpen(false); setExplorerOpen(false); } else { setScreen("terminals"); setScmOpen(true); } }} />
+        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body">
+        {palette && (
+          <WorktreePalette
+            projects={projects}
+            items={paletteItems()}
+            prOf={(d) => Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1].pr ?? null}
+            atOf={(d) => {
+              const row = Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1];
+              const mark = dirMark(row?.state ?? null, [...unreadDirs].some((x) => sameDir(x, d)));
+              return mark ? { mark, since: row?.changed ?? 0 } : null;
+            }}
+            recent={recentDirs.current}
+            scope={[]}
+            hasWorktree={activeDir !== null && projectOf(activeDir) !== null}
+            onWorktree={(w) => {
+              setScreen("terminals");
+              select(w.path, w.branch ?? null);
+            }}
+            onCreate={(name, repo) => {
+              setScreen("terminals");
+              const item = workItem(name);
+              if (item) return fromItem(item);
+              const pid = repo ?? projectOf(activeDir) ?? projectFor(null);
+              if (pid) return fromName(pid, name);
+              setSidebarOpen(true);
+              setCreateName(name);
+              setCreateRequest((n) => n + 1);
+            }}
+            onClose={() => setPalette(false)}
+          />
+        )}
         {asking && (
-          <CloseAsk
+          <Ask
             title={asking.title}
             body={asking.body}
+            confirm="Close tab"
+            enter
             onCancel={() => setAsking(null)}
             onConfirm={() => {
               dropPanes(asking.keys);
@@ -1159,6 +2069,15 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
               }}
             />
             <div className="menu" role="menu" aria-label="Tab" style={{ top: tabMenu.top, left: tabMenu.left }}>
+              {/* TERM-048: Rename tab heads the menu for terminal and agent tabs (tabs.ts tabMenu). */}
+              {tabMenuItems(panes.find((p) => p.key === tabMenu.key)?.kind)
+                .filter((i) => i.id === "rename")
+                .map((i) => (
+                  <button key={i.id} role="menuitem" className="menu-item" onClick={() => (setTabMenu(null), setRenamingTab(tabMenu.key))}>
+                    <span className="name">{i.label}</span>
+                    {i.keys && <Kbd id={i.keys} />}
+                  </button>
+                ))}
               {(
                 [
                   ["Close", "one"],
@@ -1192,6 +2111,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
         {(terminals || screen === "artifacts") && sidebarOpen && (
           <ProjectsPanel
+            reveal={reveal}
             openDirs={openDirs}
             states={rowStates}
             unread={unreadDirs}
@@ -1201,11 +2121,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}
+            onSleep={removedAll}
             nest={settings[NESTING_KEY] !== false}
             onNest={(on) => {
               const next = { ...settings, [NESTING_KEY]: on };
               setSettings(next);
-              invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              saveChanged(settings, next).catch((err) => setNotice(String(err)));
             }}
             agents={agents}
             defaultId={defaultId}
@@ -1214,14 +2135,21 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
             onLaunch={launch}
             onChoose={addChooser}
             onTerminal={() => void newTab(null)}
+            allOff={allSwitchedOff(allAgents, settings)}
+            pass={agentPass}
+            onRefresh={refreshAgents}
             page={page}
             onPage={(next) => setPage((p) => (p === next ? null : next))}
             refresh={refresh}
             createRequest={createRequest}
+            createName={createName}
             deleteRequest={deleteRequest}
             onStartIn={startIn}
+            onAdded={projectAdded}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
+            onPending={setStandIns}
+            onSetup={startSetup}
             onIndex={(list, dirs, typed) => {
               setProjects(list);
               setOwner(dirs);
@@ -1247,31 +2175,76 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
         )}
         <div className="content">
           <SignInNotice />
+          <KeyLostNotice />
+          {terminals && page === null && <ToolNotices projects={projects.map((p) => p.id).join(",")} />}
+          {terminals && reviewPane && reviewing && (
+            <PlanSheet
+              title={nameOf(names, reviewPane.cwd) ?? (reviewPane.cwd ? folderName(reviewPane.cwd) : tabName(reviewPane, titles))}
+              plan={reviewing.plan}
+              cut={reviewing.cut}
+              closed={!stillPending(hook[reviewPane.key], turn[reviewPane.key], reviewing.plan)}
+              draft={planDrafts[draftKey(reviewPane.key, reviewing.plan)] ?? { comments: [], note: "" }}
+              onDraft={(d) => setPlanDrafts((m) => keepDraft(m, draftKey(reviewPane.key, reviewing.plan), d))}
+              onApprove={() => approvePlan(reviewPane, reviewing.plan)}
+              onRequest={() => void requestChanges(reviewPane, reviewing.plan)}
+              onClose={() => setReviewing(null)}
+            />
+          )}
           {terminals && page === "automations" && (
             <AutomationsPage
               onClose={() => setPage(null)}
+              liveRun={(r) => !!runPane(r.id, r.worktree)}
+              onViewRun={(r) => {
+                const p = runPane(r.id, r.worktree);
+                if (!p) return;
+                setPage(null);
+                openPane(p.key);
+              }}
+              onResume={(r) => r.worktree && select(r.worktree, null)}
               projects={projects}
               agents={agents}
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                saveChanged(settings, next).catch((err) => setNotice(String(err)));
               }}
             />
           )}
+          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} />}
           {terminals && page === "routing" && (
             <RoutingPage
               agents={agents}
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                saveChanged(settings, next).catch((err) => setNotice(String(err)));
               }}
             />
           )}
           {terminals && (
             <>
-              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} onNewTab={(a) => void newTab(a)} />}
+              {page === null && activeDir && kitCheck && (
+                <KitStrip
+                  check={kitCheck}
+                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k], stop: kitStop(k), ai: aiOf(panes.find((p) => p.key === k) ?? { agent: "shell", program: null }) }))}
+                  sent={kitRuns.current[activeDir]?.sent ?? {}}
+                  now={Date.now()}
+                  folded={kitFolded}
+                  onFold={setKitFolded}
+                  onOpen={() => invoke("kit_open_results", { dir: activeDir, folder: null }).catch((err) => setToast(`Kolux could not open the results folder: ${String(err)}`))}
+                  connected={kitAIs}
+                  onCollect={() => void kitCollect()}
+                  onPreview={kitPreview}
+                  onOpenFile={kitOpenFile}
+                  onRestart={(i, ai) => void kitRestart(i, ai)}
+                  onSignIn={() => openSettings("accounts")}
+                  onFocusSeat={(key) => {
+                    setActiveDir(activeDir);
+                    setFocused(key);
+                  }}
+                />
+              )}
+              {page === null && <LayoutStrip count={shown.length} onLayout={setCount} agents={agents.filter((a) => a.installed)} shells={shells} onNewTab={(a) => void newTab(a)} />}
               {picking === "file" && activeDir && (
                 <FilePicker
                   root={activeDir}
@@ -1342,6 +2315,30 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
               <p>No session yet.</p>
             </div>
           )}
+          {terminals && page === null && waiting.length > 0 && (
+            <div className="needs-strip" role="list" aria-label="Sessions that need you">
+              {waiting.map((p) => (
+                <button key={p.key} role="listitem" className="needs-chip" onClick={() => openPane(p.key)} title={VOCAB[hook[p.key]].explain}>
+                  <StatusGlyph glyph="attention" size={11} />
+                  <span className="name">{tabName(p, titles)}</span>
+                  <span className="why">{hook[p.key] === "permission" ? "needs permission" : "asked a question"}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {terminals && page === null && standIns.length > 0 && (
+            // PROJ-020: a stand-in tab for each workspace Git is still making; it gives way to
+            // the workspace's own tabs once it opens, and never pulls focus.
+            <div className="tabs standins" role="tablist" aria-label="Workspaces being created">
+              {standIns.map((c) => (
+                <div key={c.ticket} role="tab" aria-selected={false} aria-busy="true" className="tab standin" data-standin={c.name} title={`Git is making ${c.name}; it opens when it is ready`}>
+                  <Spinner size={12} />
+                  <span className="tab-name">{c.name}</span>
+                  <span className="hint">creating…</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div
             className={board ? "board" : agentsScreen ? "grid agents" : "grid"}
             hidden={(!terminals && !board && !agentsScreen) || (terminals && page !== null) || (agentsScreen && selected === null)}
@@ -1390,11 +2387,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                             className="tab"
                             tabIndex={0}
                             onMouseDown={() => setFocused(p.key)}
+                            onDoubleClick={() => !p.kind && setRenamingTab(p.key)}
                             onContextMenu={(e) => {
                               // TERM-049: the tab menu opens where the pointer is; this click never closes it.
                               e.preventDefault();
                               e.stopPropagation();
-                              setTabMenu({ key: p.key, top: e.clientY, left: e.clientX });
+                              setTabMenu({ key: p.key, top: Math.min(e.clientY, window.innerHeight - 220), left: Math.min(e.clientX, window.innerWidth - 240) });
                             }}
                             onAuxClick={(e) => {
                               // TERM-049: middle-click closes the tab (pinned tabs, once they exist, are exempt).
@@ -1406,7 +2404,11 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                             {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
-                            <span className="tab-name">{tabName(p, titles)}</span>
+                            {renamingTab === p.key ? (
+                              <NameField value={tabName(p, titles)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
+                            ) : (
+                              <span className="tab-name">{tabName(p, titles)}</span>
+                            )}
                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
@@ -1417,12 +2419,14 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || settingsOpen || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} url={p.url ?? p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.kind === "editor" && p.path ? (
                   <EditorPane
                     key={p.key}
                     id={p.key}
                     path={p.path}
+                    root={p.cwd}
+                    readOnly={p.kitPreview}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
@@ -1442,6 +2446,10 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                     onClose={() => closePane(p.key)}
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
+                    notes={notesFor(p.cwd).filter((n) => keyOf(n.path) === keyOf(p.path ?? ""))}
+                    onSaveNote={p.cwd === null ? undefined : (n) => putNote(p.cwd as string, n)}
+                    onDeleteNote={(n) => p.cwd !== null && dropNotes(p.cwd, [n.id])}
+                    jump={p.jump}
                   />
                 ) : p.kind === "changes" && p.cwd ? (
                   <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
@@ -1454,13 +2462,24 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                     hidden={!board && p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
-                    agents={agents.filter((a) => a.installed)}
-                    seats={clearMissing(p.seats, installedIds)}
+                    agents={agents}
+                    detecting={!agentPass.done}
+                    seats={p.seats}
+                    pass={agentPass}
+                    onRefresh={refreshAgents}
+                    lastLineup={offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds)}
+                    onUseLineup={() => {
+                      const l = offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds);
+                      if (l) setChooser(p.key, { ...applyLineup(l, installedIds), copies: l.copies });
+                    }}
                     onSeats={(s) => setSeats(p.key, s)}
                     shape={p.shape ?? "custom"}
                     onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
                     task={p.task ?? ""}
                     onTask={(task) => setChooser(p.key, { task })}
+                    kit={p.kit ?? null}
+                    onKit={(kit) => setChooser(p.key, { kit })}
+                    vendors={kitAIs}
                     onStart={(s) => void startSeats(p.key, s)}
                     copies={p.copies ?? defaultCopies(p.seats.length, inGitFor(p))}
                     inGit={inGitFor(p)}
@@ -1501,6 +2520,11 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                       if (on) setStamp((m) => (m[p.key] ? m : { ...m, [p.key]: { at: Date.now(), interrupted: false } }));
                       // The program is gone: its last hook state goes with it.
                       if (!on && p.key in hookRef.current) setHook((h) => Object.fromEntries(Object.entries(h).filter(([k]) => Number(k) !== p.key)));
+                      const then = !on && runRef.current[p.key] && afterSetup.current[p.key];
+                      if (then) {
+                        delete afterSetup.current[p.key];
+                        then();
+                      }
                     }}
                     hook={hook[p.key]}
                     crew={crew[p.key]}
@@ -1509,17 +2533,32 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                     unread={unreadPanes.has(p.key)}
                     onPty={(id, account) => {
                       ptys.current[p.key] = id;
+                      report.current();
+                      if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                       // ACCT-023: a Codex pane remembers the account it began on.
                       if (p.agent === "codex" && p.account !== account) setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, account } : x)));
                     }}
                     account={p.account}
                     notice={noticeFor(p)}
-                    onFailed={(error) => failedPane(p.key, error)}
+                    onFailed={(error) => {
+                      failedPane(p.key, error);
+                      const then = afterSetup.current[p.key];
+                      delete afterSetup.current[p.key];
+                      then?.();
+                    }}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title || nameOf(names, p.cwd)}
+                    custom={!!p.title}
+                    onRename={(name) => renamePane(p.key, name)}
+                    renameAsk={askName[p.key]}
+                    sessionKnown={!!p.session}
+                    onCopyId={(what) => copyId(p, what)}
+                    findHandle={findHandle}
                     typed={p.typed}
+                    shellName={p.word}
                     number={p.key}
                     onClose={() => closePane(p.key)}
+                    onReviewPlan={showsReview(hook[p.key], turn[p.key]) ? () => setReviewing({ key: p.key, plan: turn[p.key]?.plan ?? "", cut: !!turn[p.key]?.planCut }) : undefined}
                     agents={agents}
                     defaultId={defaultId}
                     onSetDefault={setDefault}
@@ -1534,8 +2573,16 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
             })}
           </div>
         </div>
-        {terminals && scmOpen && (
-          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => setScmOpen(false)} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} onAgentAction={async (a, prompt) => {
+        <RightSidebar tab={right.tab} width={clampWidth(dragWidth ?? right.width, window.innerWidth, sidebarOpen ? 297 : 0)} hidden={!terminals || !right.open} onTab={(tab) => saveRight({ tab })} onWidth={(w, done) => {
+          const used = clampWidth(w, window.innerWidth, sidebarOpen ? 297 : 0);
+          setDragWidth(done ? null : used);
+          if (done) saveRight({ width: used });
+        }}>
+        {scmOpen && (
+          <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
+            const p = projects.find((x) => x.id === projectOf(activeDir));
+            if (p) void invoke<Project>("project_set", { projectId: p.id, workspacesDir: p.workspacesDir ?? "", base }).then((u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x))));
+          }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} view={settings[SCM_VIEW_KEY] === "tree" ? "tree" : "list"} onView={(v) => saveSetting(SCM_VIEW_KEY, v)} onOpenDiff={(path, staged) => activeDir !== null && openDiff(`${activeDir.replace(/[\\/]+$/, "")}/${path}`, staged, true)} onAllChanges={() => void newTab("changes")} notesSection={activeDir !== null && <LineNotes dir={activeDir} notes={notesFor(activeDir)} onOpen={(n) => openDiff(n.path, n.staged, true, n.end ?? n.line)} onDrop={(ids) => dropNotes(activeDir, ids)} onClearSent={() => saveNotes(activeDir, clearDelivered(notesFor(activeDir)))} onSend={() => sendNotes(activeDir)} />} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {
             if (activeDir === null) return "Open a workspace first.";
             try {
               await openIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, prompt, true);
@@ -1545,9 +2592,108 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
             }
           }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
-        {activeDir && <Explorer key={activeDir} root={activeDir} hidden={!terminals || !explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => setExplorerOpen(false)} />}
+        {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
+        {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
+        {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
+        </RightSidebar>
       </div>
+      {kits && kits.kit === null && (
+        <KitGallery
+          connected={kitAIs}
+          onPick={pickKit}
+          onClose={() => setKits(null)}
+          recent={kitRecent}
+          onResults={(r) => invoke("kit_open_results", { dir: r.dir, folder: r.collected }).catch((err) => (setKits(null), setToast(`Kolux could not open the results of ${r.title}: ${String(err)}`)))}
+          onProject={(r) => {
+            const project = projects.find((p) => sameDir(p.path, r.dir));
+            // The toast shows under the gallery, so the gallery closes for it.
+            setKits(null);
+            if (!project) return setToast(`No project in Kolux matches ${r.dir} any more; add the folder again to open it.`);
+            setScreen("terminals");
+            setActiveDir(project.path);
+          }}
+        />
+      )}
+      {kits && kits.kit !== null && (() => {
+        const kit = KITS.find((k) => k.id === kits.kit)!;
+        return (
+          <KitSetup
+            key={kit.id}
+            kit={kit}
+            connected={kitAIs}
+            dir={activeDir}
+            sampleDir={kits.sampleDir}
+            settings={settings}
+            samplesBusy={samplesBusy}
+            onSamples={() => trySamples(kit.id)}
+            conflict={kitConflict}
+            onBack={() => {
+              setKitConflict(null);
+              setKits({ kit: null, sampleDir: null });
+            }}
+            onClose={() => {
+              setKitConflict(null);
+              setKits(null);
+              wizardSetup.current = false;
+              chooserSetup.current = null;
+            }}
+            onStart={(values, assigned) => {
+              const fromWizard = wizardSetup.current;
+              const chooser = chooserSetup.current;
+              // SKILL-005: real inputs are remembered for this workspace; a sample workspace's are not.
+              const real = !!activeDir && !sameDir(activeDir, kits.sampleDir);
+              if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
+              if (activeDir)
+                void startKit(kit, values, assigned, activeDir).then((ok) => {
+                  if (ok && fromWizard) endWizard("completed");
+                  if (ok && chooser !== null) closePane(chooser);
+                });
+            }}
+          />
+        );
+      })()}
+      {wizard !== null && (
+        <Wizard
+          start={wizard}
+          vendors={kitAIs}
+          ping={settings[FINISH_FIELD] !== false}
+          onPing={(on) => saveSetting(FINISH_FIELD, on)}
+          hidden={kits !== null}
+          onSample={openSamples}
+          onKit={(id) => void wizardKit(id)}
+          onSession={() => void wizardSession()}
+          onPickFolder={() => {
+            if (wizardClose.retry()) return;
+            endWizard("completed", () => {
+              firstFolder.current = true;
+              window.dispatchEvent(new CustomEvent(ADD_PROJECT));
+            });
+          }}
+          onClose={() => {
+            if (wizardClose.retry()) return;
+            const none = projects.length === 0;
+            endWizard("dismissed", () => (firstFolder.current = none));
+          }}
+        />
+      )}
       <UpdateCenter />
+      {reviewOn(settings) && (
+        <ReviewNotes
+          picked={picked}
+          notes={notes}
+          onAdd={(n) => {
+            setNotes((ns) => [...ns, n]);
+            setPicked(null);
+          }}
+          onCancel={() => setPicked(null)}
+          onRemove={(i) => setNotes((ns) => ns.filter((_, k) => k !== i))}
+          onClear={() => setNotes([])}
+          targets={reviewTargets}
+          menu={sendMenu}
+          onMenu={setSendMenu}
+          onSend={sendReview}
+        />
+      )}
       {readStatusBar(settings).visible && (
       <StatusBar
         hidden={readStatusBar(settings).hidden}

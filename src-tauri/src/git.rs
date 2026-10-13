@@ -34,7 +34,18 @@ pub struct Worktree {
     pub kind: String,
     /// For an external worktree, where its visibility comes from (`visibility.rs`).
     pub source: Option<String>,
+    /// AUTO-024: who made it, from Kolux's record of how it came to be ("app", "cli" or
+    /// "automation"); none when Kolux has no record.
+    pub made_by: Option<String>,
+    /// VIEW-038: the issue or pull request number it is linked to, so the palette finds it by number.
+    pub number: Option<u64>,
+    /// EDIT-047: the comment it was made with (`worktree create --comment`); the palette shows it.
+    pub comment: Option<String>,
 }
+
+/// GIT-063: what an unattended git is given, so it fails at once instead of waiting on a password
+/// prompt no one can see, Git Credential Manager's window included. Saved credentials still work.
+pub const NO_PROMPT: [(&str, &str); 2] = [("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never")];
 
 pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
@@ -52,7 +63,7 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
 }
 
 /// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
-fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
+pub(crate) fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(out.stdout)
@@ -411,7 +422,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None });
         }
     }
     out
@@ -421,6 +432,30 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn an_unattended_git_fails_fast_on_a_remote_that_wants_a_password() {
+        use std::io::{Read, Write};
+        // A remote that answers every request with "who are you?" and nothing else.
+        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = server.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut conn in server.incoming().flatten().take(8) {
+                let mut buf = [0u8; 4096];
+                let _ = conn.read(&mut buf);
+                let _ = conn.write_all(b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"private\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            }
+        });
+        let began = std::time::Instant::now();
+        let url = format!("http://127.0.0.1:{port}/private.git");
+        let mut cmd = command(&["-c", "credential.helper=", "ls-remote", &url], None);
+        cmd.envs(NO_PROMPT).stdin(std::process::Stdio::null());
+        let out = cmd.output().unwrap();
+        let said = String::from_utf8_lossy(&out.stderr).to_lowercase();
+        assert!(!out.status.success());
+        assert!(said.contains("terminal prompts disabled"), "{said}");
+        assert!(began.elapsed() < std::time::Duration::from_secs(10));
+    }
 
     fn temp_repo(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kolux-rs-git-{name}-{}", std::process::id()));

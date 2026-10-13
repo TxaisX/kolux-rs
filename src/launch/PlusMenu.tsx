@@ -1,4 +1,4 @@
-// The plus menu (SESS-001, SESS-004): which agent to start in a new pane. The list comes from the
+// The plus menu (SESS-001, SESS-004, SESS-002, SESS-003, SESS-010): which agent to start in a new pane. The list comes from the
 // Rust side, which looks each agent's program up on the PATH and in the usual install folders;
 // only agents that were found are offered, the rest stay out of sight (SESS-001). The default
 // agent is listed first with its shortcut beside it, when one is bound; every other row has a
@@ -9,13 +9,20 @@
 import { useState, type CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import { Kbd, useLabel } from "../keys/KeymapContext";
-import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal } from "./agents";
+import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
+import { openSettings } from "../settings/pages";
 
-export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null };
+export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
 
 /** Which vendor mark an agent id draws; anything unknown gets the plain-shell glyph. */
 export function markFor(id: string): Agent {
   return id === "claude" || id === "codex" ? id : "shell";
+}
+
+/** ACCT-046: the pane-header word for the shell an automatic pane actually started. */
+export function shellWord(path: string): string {
+  const stem = (path.split(/[\\/]/).pop() ?? path).replace(/\.exe$/i, "").toLowerCase();
+  return ({ pwsh: "PowerShell 7", powershell: "Windows PowerShell", cmd: "Command Prompt" } as Record<string, string>)[stem] ?? stem;
 }
 
 /** The pane-header word for what runs in a pane. */
@@ -25,7 +32,7 @@ export function programWord(agent: Agent): string {
 
 type Props = {
   agents: AgentInfo[];
-  /** The default agent's id: listed first, with the "new agent tab" shortcut beside it. */
+  /** The default agent's id: listed first and marked, with the "new agent tab" shortcut beside it. */
   defaultId?: string;
   onPick: (agent: AgentInfo) => void;
   onSetDefault?: (id: string) => void;
@@ -38,9 +45,14 @@ type Props = {
   onManage?: () => void;
   busy?: boolean;
   style?: CSSProperties;
+  /** SESS-003: agents are installed but every one is switched off. */
+  allOff?: boolean;
+  /** SESS-002: where the agent search stands, and a way to look again. */
+  pass?: AgentPass;
+  onRefresh?: () => void;
 };
 
-export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDefault, onChoose, onClose, onTerminal, onManage, busy = false, style }: Props) {
+export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault, onChoose, onClose, onTerminal, onManage, busy = false, style, allOff = false, pass, onRefresh }: Props) {
   const [query, setQuery] = useState("");
   const [more, setMore] = useState(false);
   const { top, more: folded } = agentRows(agents, defaultId);
@@ -50,6 +62,12 @@ export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDe
   const terminalRow = onTerminal && (found === null ? !query.trim() || query.length > MAX_SEARCH : wantsTerminal(query));
   const bound = useLabel("tab.newAgent").length > 0;
   const first = () => (shown[0] ? !busy && onPick(shown[0]) : terminalRow && onTerminal?.());
+  // With no default the new-agent shortcut opens the first agent listed (SET-027).
+  const opens = shown.find((a) => a.id === defaultId) ?? (defaultId === "" ? shown[0] : undefined);
+  const agentSettings = () => {
+    onClose();
+    openSettings("agents", "agents");
+  };
   return (
     <>
       <div className="menu-backdrop" onClick={onClose} aria-hidden="true" />
@@ -69,23 +87,32 @@ export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDe
             }}
           />
         )}
-        {agents.length === 0 && <div className="menu-hint">Looking for agents…</div>}
         {found !== null && found.length === 0 && !terminalRow && <div className="menu-hint">No installed agent matches.</div>}
-        {agents.length > 0 && installed === 0 && (
-          <div className="menu-hint">No agent found. Kolux looked for {agents.map((a) => a.program).join(", ")} on the PATH and in the usual install folders.</div>
+        {pass?.error ? (
+          <div className="menu-hint warn" role="alert">
+            Kolux could not look for agents ({pass.error}). Nothing can start until a search succeeds.
+          </div>
+        ) : (pass ? !pass.done : agents.length === 0) ? (
+          <div className="menu-hint">Looking for agents…</div>
+        ) : allOff ? (
+          <div className="menu-hint">No agent is switched on. Turn one on in agent settings.</div>
+        ) : (
+          agents.length > 0 &&
+          installed === 0 && <div className="menu-hint">No agent found. Kolux looked for {agents.map((a) => a.program).join(", ")} on the PATH and in the usual install folders.</div>
         )}
         {shown.map((a) => (
           <div className="menu-row" key={a.id}>
-            <button role="menuitem" className="menu-item" disabled={busy} onClick={() => onPick(a)} title={`Start ${a.name} (${a.path}) in a new pane inside a fresh workspace`}>
+            <button role="menuitem" className="menu-item" disabled={busy || !!pass?.error} onClick={() => onPick(a)} title={`Start ${a.name} (${a.path}) in a new pane inside a fresh workspace`}>
               <span className="agent-mark">
                 <VendorMark agent={markFor(a.id)} size={13} />
               </span>
               <span className="name">{a.name}</span>
-              {a.id === defaultId && bound && <Kbd id="tab.newAgent" />}
+              {a.id === defaultId && <span className="menu-chip">Default</span>}
+              {a === opens && bound && <Kbd id="tab.newAgent" />}
             </button>
             {a.id !== defaultId && onSetDefault && (
               <button className="menu-default" title={`Make ${a.name} the default agent`} onClick={() => onSetDefault(a.id)}>
-                default
+                Set as default
               </button>
             )}
           </div>
@@ -114,6 +141,16 @@ export default function PlusMenu({ agents, defaultId = "claude", onPick, onSetDe
         {onManage && (
           <button role="menuitem" className="menu-item muted" onClick={onManage}>
             <span className="name">Manage agents</span>
+          </button>
+        )}
+        {onRefresh && (
+          <button role="menuitem" className="menu-item muted" disabled={pass?.looking} onClick={onRefresh} title="Look for installed agent CLIs again">
+            {pass?.looking ? "Looking for agents…" : "Refresh agents"}
+          </button>
+        )}
+        {!onManage && (
+          <button role="menuitem" className="menu-item muted" onClick={agentSettings} title="Switch agents on or off, and pick the default, in Settings › Agents">
+            {allOff ? "Agent settings…" : "Hide agents…"}
           </button>
         )}
         <button role="menuitem" className="menu-item muted" onClick={onClose}>

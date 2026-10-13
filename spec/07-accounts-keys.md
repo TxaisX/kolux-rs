@@ -72,8 +72,10 @@ Rules: every account gets a private Claude configuration folder of its own, Kolu
   when the per-account entry is absent, only a shared entry that has changed is accepted (this
   covers older Claude builds); when the keychain copy and the file copy disagree, the newer one
   wins.
-  (Kolux RS, T-043-d: the macOS keychain rules are not built yet, task T-043-e in PLAN.md; this
-  build keeps the credentials file in the account's folder on every platform.)
+  (Kolux RS, T-043-e: the macOS keychain rules are a rule table, proven against an invented
+  keychain; calling it from the sign-in, and proving it live, waits for a Mac, task T-043-f in
+  PLAN.md. Until then this build keeps the credentials file in the account's folder on every
+  platform.)
 Acceptance:
   - [ ] Add a Claude account → the browser opens, and after sign-in the row shows email and
         organisation within a few seconds.
@@ -514,7 +516,7 @@ Rules: stale panes are matched by account identity, not by label; sign-in errors
   account's home is in place; if the original account's sign-in is still unavailable after about two
   seconds, the resume fails with a try-again message rather than carrying on as another account.
   (Kolux RS, T-139-b: a pane keeps the account id it started on and a restart hands it back to
-  `terminal_spawn`, which waits up to 2 s for that account's home; an account no longer listed
+  the pane start, which waits up to 2 s for that account's home; an account no longer listed
   refuses the start with a try-again message. Panes are not yet restored across a Kolux restart
   and sign-in errors printed in a pane are not scanned, T-139-d.)
 Acceptance:

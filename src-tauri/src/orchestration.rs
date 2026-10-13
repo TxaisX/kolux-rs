@@ -37,6 +37,20 @@ pub struct Mail {
     pub answers: BTreeMap<String, Value>,
     pub seq: u64,
     pub gates: Vec<Gate>,
+    /// ORCH-030: when each receipt in `answers` was written, so old ones can be pruned.
+    pub stamps: BTreeMap<String, u64>,
+    /// ORCH-030: requests that take a while (a worker start) and have not finished, with when they
+    /// began and the process that runs them.
+    pub pending: BTreeMap<String, Value>,
+}
+
+/// ORCH-030: how long a finished request's receipt is kept for a retry to find.
+pub const RECEIPT_TTL_MS: u64 = 7 * 24 * 3_600_000;
+/// ORCH-030: unfinished requests the ledger tracks before it turns new changes away.
+pub const MAX_PENDING: usize = 32;
+
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// ORCH-028: a decision the coordinator still has to make, holding one task blocked meanwhile.
@@ -130,7 +144,7 @@ pub fn caller_of(from: Option<&str>, pane: Option<(&str, &str)>, by_key: &dyn Fn
     }
 }
 
-fn finished(d: &Value) -> bool {
+pub(crate) fn finished(d: &Value) -> bool {
     FINISHED.contains(&d["status"].as_str().unwrap_or_default())
 }
 
@@ -205,6 +219,210 @@ pub fn abandon(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Opt
     Ok(json!({ "dispatchId": id, "taskId": task, "status": "abandoned", "terminal": terminal_of(d), "terminalKept": true, "taskStatus": task_status, "mode": d["mode"] }))
 }
 
+/// ORCH-012: moves task `id` to `to`, its dispatch with it. Completing or failing a dispatched
+/// task settles its worker the same way, which frees the slot it held; any other move fences the
+/// worker off, so a task is never dispatched with no worker or with two. Only dispatch and
+/// worker-start make a task dispatched. A worker whose dispatch was fenced off, or whose process
+/// already ended, cannot settle the task from its terminal (`caller`).
+#[allow(clippy::too_many_arguments)]
+pub fn task_update(tasks: &mut [Value], dispatches: &mut [Value], id: &str, to: &str, result: Option<&str>, run: Option<&str>, caller: Option<&str>, now: u64) -> Result<Value, Fail> {
+    if !TASK_STATES.contains(&to) {
+        return Err(args(format!("--status takes one of {}", TASK_STATES.join(", "))));
+    }
+    if result.is_some_and(|r| r.len() > SPEC_MAX) {
+        return Err(Fail::new("too_large", format!("the result is longer than the {SPEC_MAX} bytes Kolux stores")));
+    }
+    let i = task_in(tasks, id, run)?;
+    if let Some(d) = dispatches.iter().rev().find(|d| d["taskId"] == id && d["runId"].as_str() == run && caller.is_some() && terminal_of(d).as_deref() == caller) {
+        let did = d["id"].as_str().unwrap_or_default();
+        if finished(d) {
+            return Err(Fail::new("dispatch_finished", format!("{did} was {}: its worker can no longer change {id}", d["status"].as_str().unwrap_or_default())));
+        }
+        if !d["exitedAt"].is_null() {
+            return Err(Fail::new("worker_exited", format!("{did}'s agent had already ended, so it cannot report {id} {to}; its Run was told and its terminal is kept to read")));
+        }
+    }
+    let was = status(&tasks[i]).to_string();
+    let open = tasks[i]["dispatchId"].as_str().map(str::to_string).filter(|_| was == "dispatched");
+    if to == "dispatched" && open.is_none() {
+        return Err(Fail::new("invalid_transition", format!("{id} is {was}; a task is dispatched only by orchestration dispatch or worker-start, so it always has one worker")));
+    }
+    let mut settled = Value::Null;
+    if let (Some(did), true) = (&open, to != "dispatched") {
+        if let Some(d) = dispatches.iter_mut().find(|d| d["id"] == did.as_str() && !finished(d)) {
+            let s = if to == "completed" || to == "failed" { to } else { "abandoned" };
+            d["status"] = json!(s);
+            d["settledAt"] = json!(now);
+            settled = json!(s);
+        }
+        if to != "completed" && to != "failed" {
+            if let Some(o) = tasks[i].as_object_mut() {
+                o.remove("dispatchId");
+            }
+        }
+    }
+    tasks[i]["status"] = json!(to);
+    tasks[i]["updated"] = json!(now);
+    if let Some(r) = result {
+        tasks[i]["result"] = json!(r);
+    }
+    Ok(json!({ "taskId": id, "status": to, "previous": was, "result": tasks[i]["result"], "dispatchId": open, "dispatchStatus": settled }))
+}
+
+/// ORCH-015: what a done report or heartbeat on a dispatch does beyond being mail. From the terminal
+/// the worker runs in, a heartbeat stamps the dispatch with when Kolux got it (never a time the
+/// sender gives), and a done report settles its task: succeeded completes it and frees the tasks
+/// waiting on it, failed fails it. From any other pane, or for a worker terminal of an earlier
+/// start, it settles nothing and says why. A report that cannot be shown to settle its task fails.
+/// Anything else is Null.
+pub fn report(tasks: &mut [Value], dispatches: &mut [Value], from: &str, a: &Value, now: u64) -> Result<Value, Fail> {
+    let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let kind = text("type").unwrap_or("status");
+    let (true, Some(id)) = (kind == "worker_done" || kind == "heartbeat", text("dispatchId")) else {
+        return Ok(Value::Null);
+    };
+    let Some(i) = dispatches.iter().position(|d| d["id"] == id) else {
+        return Ok(Value::Null);
+    };
+    match terminal_of(&dispatches[i]) {
+        Some(t) if t == from => {}
+        Some(t) => return Ok(json!({ "dispatchId": id, "settles": false, "why": format!("{id} runs in {t}; only a report from {t} itself counts, so this one is mail only") })),
+        None => return Ok(json!({ "dispatchId": id, "settles": false, "why": format!("{id}'s worker terminal is from an earlier start of Kolux, so this report cannot be vouched for and is mail only") })),
+    }
+    if kind == "heartbeat" {
+        dispatches[i]["lastBeatAt"] = json!(now);
+        return Ok(json!({ "dispatchId": id, "lastBeatAt": now }));
+    }
+    let task = dispatches[i]["taskId"].as_str().unwrap_or_default().to_string();
+    let run = dispatches[i]["runId"].as_str().map(str::to_string);
+    let unknown = |why: String| Fail::new("outcome_unknown", format!("Kolux could not settle {task} from this report, so its outcome is unknown: {why}"));
+    let t = task_in(tasks, &task, run.as_deref()).map_err(|e| unknown(e.message))?;
+    if tasks[t]["dispatchId"] != id {
+        return Err(unknown(format!("{task} is no longer on {id}")));
+    }
+    let to = if text("outcome") == Some("succeeded") { "completed" } else { "failed" };
+    let out = task_update(tasks, dispatches, &task, to, text("body").or(text("subject")), run.as_deref(), Some(from), now).map_err(|e| unknown(e.message))?;
+    promote(tasks);
+    Ok(out)
+}
+
+/// ORCH-022: fences dispatch `id` off as stopped and hands back the terminal to end, when Kolux
+/// still holds it. The worktree and every other terminal stay, and its task can be handed on
+/// again. A terminal from an earlier start of Kolux reads as unverifiable, never as ended.
+/// Stopping twice answers the same.
+// ponytail: a terminal the user has typed into is ended like any other; ORCH-036 keeps it open.
+pub fn stop(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option<&str>, now: u64) -> Result<(Value, Option<u32>), Fail> {
+    let d = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    let was = d["status"].as_str().unwrap_or_default().to_string();
+    let term = terminal_of(d);
+    let mut kill = None;
+    if was != "stopped" {
+        if finished(d) {
+            return Err(Fail::new("dispatch_finished", format!("{id} is already {was}; there is no worker to stop")));
+        }
+        let process = if !d["exitedAt"].is_null() {
+            "ended"
+        } else if term.is_none() {
+            "unverifiable"
+        } else {
+            kill = d["terminal"].as_u64().map(|t| t as u32);
+            "ended"
+        };
+        d["status"] = json!("stopped");
+        d["stoppedAt"] = json!(now);
+        d["process"] = json!(process);
+    }
+    let task = d["taskId"].as_str().unwrap_or_default().to_string();
+    let receipt = json!({ "dispatchId": id, "taskId": task, "status": "stopped", "terminal": term, "process": d["process"], "worktree": d["worktree"], "worktreeKept": true });
+    if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task.as_str() && t["dispatchId"] == id && status(t) == "dispatched") {
+        t["status"] = json!("ready");
+        if let Some(o) = t.as_object_mut() {
+            o.remove("dispatchId");
+        }
+    }
+    let mut receipt = receipt;
+    receipt["taskStatus"] = tasks.iter().find(|t| t["id"] == task.as_str()).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+    Ok((receipt, kill))
+}
+
+/// ORCH-026: the terminal states worker-list can filter by. Release pending and release unknown
+/// belong to worker-release, which is not built yet, so nothing is in them today.
+pub const TERMINAL_STATES: [&str; 6] = ["active", "reclaimable", "retained", "release_pending", "release_unknown", "released"];
+
+/// ORCH-026: what is left of a worker's terminal, apart from its task status. A kept worker stays
+/// kept after its process ends or Kolux restarts (ORCH-025); a settled worker whose terminal is
+/// gone has nothing left to clean up.
+fn terminal_state(d: &Value, live: &dyn Fn(&str) -> bool) -> &'static str {
+    if d["released"] == true {
+        "released"
+    } else if !finished(d) {
+        "active"
+    } else if d["retained"] == true {
+        "retained"
+    } else if terminal_of(d).is_some_and(|h| live(&h)) {
+        "reclaimable"
+    } else {
+        "released"
+    }
+}
+
+/// ORCH-026: the workers in one Run (or every Run), a page at a time. The cursor is opaque and
+/// carries the scope it came from, so it cannot page another Run's list.
+#[allow(clippy::too_many_arguments)]
+pub fn worker_list(tasks: &[Value], dispatches: &[Value], run: Option<&str>, from: &str, state: Option<&str>, cursor: Option<&str>, limit: usize, live: &dyn Fn(&str) -> bool) -> Result<Value, Fail> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let scope = run.unwrap_or("*");
+    let start = match cursor {
+        None => 0,
+        Some(c) => {
+            let raw = b64.decode(c.trim()).ok().and_then(|b| String::from_utf8(b).ok()).ok_or_else(|| args("that cursor is not one worker-list gave out"))?;
+            let (of, at) = raw.rsplit_once('|').ok_or_else(|| args("that cursor is not one worker-list gave out"))?;
+            if of != scope {
+                return Err(args("that cursor came from another Run's worker list; start again without --cursor"));
+            }
+            at.parse::<usize>().map_err(|_| args("that cursor is not one worker-list gave out"))?
+        }
+    };
+    let rows: Vec<Value> = dispatches
+        .iter()
+        .filter(|d| run.is_none() || d["runId"].as_str() == run)
+        .map(|d| {
+            let ts = terminal_state(d, live);
+            let handle = terminal_of(d);
+            let id = d["id"].as_str().unwrap_or_default();
+            let next = match (ts, &handle) {
+                ("active", _) => Some(format!("{CLI} orchestration worker-stop --dispatch {id}")),
+                // ponytail: worker-release (ORCH-024) is not built, so the way to free a settled
+                // worker's terminal is closing it by hand; release replaces this once it lands.
+                ("reclaimable" | "retained", Some(h)) => Some(format!("{CLI} terminal close --terminal {h}")),
+                _ => None,
+            };
+            let task = tasks.iter().find(|t| t["id"] == d["taskId"]).map(|t| t["status"].clone()).unwrap_or(Value::Null);
+            json!({ "dispatchId": d["id"], "taskId": d["taskId"], "taskStatus": task, "status": d["status"], "terminalState": ts, "terminal": handle, "worktree": d["worktree"], "agent": d["agent"], "runId": d["runId"], "lastBeatAt": d["lastBeatAt"], "next": next })
+        })
+        .filter(|w| state.is_none_or(|s| w["terminalState"] == s))
+        .collect();
+    let page: Vec<Value> = rows.iter().skip(start).take(limit).cloned().collect();
+    let next = (start + limit < rows.len()).then(|| b64.encode(format!("{scope}|{}", start + limit)));
+    Ok(json!({ "workers": page, "nextCursor": next, "total": rows.len(), "scope": { "run": run, "from": from } }))
+}
+
+/// ORCH-025: keep a settled worker's terminal open on purpose. The mark lives on the stored
+/// dispatch, so it survives a restart; keeping twice does no harm.
+pub fn retain(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool, id: &str, run: Option<&str>) -> Result<Value, Fail> {
+    let d = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    let already = d["retained"] == true;
+    if !already {
+        match terminal_state(d, live) {
+            "active" => return Err(Fail::new("dispatch_active", format!("{id} is still working; keep its terminal once it has settled, or stop it with worker-stop"))),
+            "released" => return Err(Fail::new("terminal_gone", format!("{id}'s terminal is already gone, so there is nothing to keep"))),
+            _ => d["retained"] = json!(true),
+        }
+    }
+    Ok(json!({ "dispatchId": id, "taskId": d["taskId"], "terminal": terminal_of(d), "terminalState": "retained", "alreadyRetained": already }))
+}
+
 /// ORCH-040: the open dispatches tied to one worktree, by the folder they were started in or by a
 /// live terminal that sits there.
 pub fn workers_in(dispatches: &[Value], here: &dyn Fn(&str) -> bool, homed: &dyn Fn(&str) -> bool) -> Vec<Value> {
@@ -256,16 +474,69 @@ impl Mail {
         b.epoch += 1;
     }
 
-    /// A retry request id makes a change safe to repeat: the same id hands back the first answer.
+    /// A retry request id makes a change safe to repeat: the same id hands back the first answer
+    /// (ORCH-030). A change that fails leaves no receipt, so the same id later runs fresh.
     pub fn once(&mut self, key: Option<String>, f: impl FnOnce(&mut Mail) -> Result<Value, Fail>) -> Result<Value, Fail> {
         if let Some(v) = key.as_ref().and_then(|k| self.answers.get(k)) {
             return Ok(v.clone());
         }
+        if key.is_some() {
+            self.room()?;
+        }
         let v = f(self)?;
         if let Some(k) = key {
-            self.answers.insert(k, v.clone());
+            self.finish(&k, Some(v.clone()));
         }
         Ok(v)
+    }
+
+    fn room(&self) -> Result<(), Fail> {
+        if self.pending.len() >= MAX_PENDING {
+            return Err(Fail::new("busy", format!("{MAX_PENDING} earlier requests have not finished yet, so Kolux takes no new change until one does; ask about one with request-show")));
+        }
+        Ok(())
+    }
+
+    /// ORCH-030: a long request is under way; a retry with its id waits for it.
+    pub fn begin(&mut self, key: &str, runtime: u64) -> Result<(), Fail> {
+        self.room()?;
+        self.pending.insert(key.to_string(), json!({ "at": wall_ms(), "runtime": runtime }));
+        Ok(())
+    }
+
+    /// ORCH-030: the request is over: its receipt is kept (`Some`) or it left none, and finished
+    /// receipts older than `RECEIPT_TTL_MS` are dropped.
+    pub fn finish(&mut self, key: &str, answer: Option<Value>) {
+        let now = wall_ms();
+        self.pending.remove(key);
+        if let Some(v) = answer {
+            self.answers.insert(key.to_string(), v);
+            self.stamps.insert(key.to_string(), now);
+        }
+        for k in self.answers.keys() {
+            self.stamps.entry(k.clone()).or_insert(now);
+        }
+        let old: Vec<String> = self.stamps.iter().filter(|(_, at)| now.saturating_sub(**at) > RECEIPT_TTL_MS).map(|(k, _)| k.clone()).collect();
+        for k in old {
+            self.answers.remove(&k);
+            self.stamps.remove(&k);
+        }
+    }
+
+    /// ORCH-030: what became of the request this terminal sent with `--retry-request <id>`:
+    /// completed (with its result), pending, or absent. It changes nothing. A pending request left
+    /// by an earlier start of Kolux (`runtime` is this one's process id) is marked interrupted.
+    pub fn request_show(&self, pane: &str, id: &str, runtime: u64) -> Value {
+        let tail = format!("|{pane}|{id}");
+        let command = |k: &str| k.strip_suffix(&tail).unwrap_or_default().to_string();
+        if let Some((k, v)) = self.answers.iter().find(|(k, _)| k.ends_with(&tail)) {
+            return json!({ "request": id, "state": "completed", "command": command(k), "result": v });
+        }
+        if let Some((k, p)) = self.pending.iter().find(|(k, _)| k.ends_with(&tail)) {
+            let interrupted = p["runtime"].as_u64() != Some(runtime);
+            return json!({ "request": id, "state": "pending", "command": command(k), "since": p["at"], "interrupted": interrupted });
+        }
+        json!({ "request": id, "state": "absent" })
     }
 
     fn run_view(&self, id: &str) -> Value {
@@ -361,16 +632,8 @@ impl Mail {
                 let id = d["id"].as_str().unwrap_or_default();
                 return Err(Fail::new("dispatch_finished", format!("{id} was {}: Kolux takes no more reports on it", d["status"].as_str().unwrap_or_default())));
             }
-            // CLI-039: a report on a dispatch comes only from the terminal its worker runs in, so
-            // another pane can never settle someone else's task.
-            if let Some(d) = text("dispatchId").and_then(|id| dispatches.iter().find(|d| d["id"] == id.as_str())) {
-                let id = d["id"].as_str().unwrap_or_default();
-                match terminal_of(d) {
-                    Some(t) if t == from => {}
-                    Some(t) => return Err(Fail::new("not_your_dispatch", format!("{id} runs in {t}; a report on it must come from {t} itself, not from {from}"))),
-                    None => return Err(Fail::new("not_your_dispatch", format!("{id}'s worker terminal is from an earlier start of Kolux, so a report on it cannot be vouched for"))),
-                }
-            }
+            // CLI-039, ORCH-015: a report from any other pane is still delivered as mail; only
+            // `report` decides whether it settles anything.
         }
         let payload = text("payload").map(|p| serde_json::from_str::<Value>(&p)).transpose().map_err(|_| args("--payload takes JSON"))?;
         let named = text("run");
@@ -907,6 +1170,32 @@ mod tests {
         v["messages"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect()
     }
 
+    /// ORCH-034: the store (state.db and the companion files SQLite adds beside it) opens to the
+    /// current user alone, the way the app folder is set at every launch.
+    #[cfg(windows)]
+    #[test]
+    fn the_orchestration_store_opens_to_the_current_user_only() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-orch-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::state::Store::open(&dir).unwrap();
+        crate::secrets::restrict_to_user(&dir, &dir);
+        let mut m = Mail::default();
+        m.begin("orchestration.worker-start||r1", 1).unwrap();
+        m.save(&store).unwrap();
+        let user = std::env::var("USERNAME").unwrap().to_lowercase();
+        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains("state.db")).collect();
+        assert!(!files.is_empty());
+        for path in std::iter::once(dir.clone()).chain(files) {
+            let out = std::process::Command::new("icacls").arg(&path).output().unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).replace(&path.to_string_lossy().to_string(), "").to_lowercase();
+            let aces: Vec<&str> = text.lines().map(str::trim).filter(|l| l.contains(":(")).collect();
+            assert!(!aces.is_empty() && aces.iter().all(|a| a.contains(&format!("\\{user}:"))), "{} is open to more than {user}: {aces:?}", path.display());
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_pane_is_tied_only_when_the_runtime_knows_it() {
         let by_key = |k: &str| (k == "s3cret").then(|| "term-1".to_string());
@@ -936,6 +1225,48 @@ mod tests {
         assert_eq!(m.run_current("term-1")["runId"], id);
         assert_eq!(m.run_current("term-2")["runId"], Value::Null);
         assert_eq!(first["binding"]["terminal"], "term-1");
+    }
+
+    #[test]
+    fn receipts_answer_retries_say_how_a_request_went_and_expire() {
+        let mut m = Mail::default();
+        let key = |c: &str, id: &str| Some(format!("{c}|term-1|{id}"));
+        let first = m.once(key("orchestration.run-create", "r1"), |m| Ok(m.run_create("term-1", "ship it", 5))).unwrap();
+        let shown = m.request_show("term-1", "r1", 7);
+        assert_eq!((shown["state"].as_str(), shown["command"].as_str()), (Some("completed"), Some("orchestration.run-create")));
+        assert_eq!(shown["result"], first);
+        assert_eq!(m.request_show("term-1", "nope", 7)["state"], "absent");
+        assert_eq!(m.request_show("term-2", "r1", 7)["state"], "absent", "another terminal's request is not this one's");
+
+        // Turned away before it took effect: no receipt, so the same id runs fresh.
+        assert!(m.once(key("orchestration.send", "r2"), |_| Err(args("no such task"))).is_err());
+        assert_eq!(m.request_show("term-1", "r2", 7)["state"], "absent");
+        assert!(m.once(key("orchestration.send", "r2"), |_| Ok(json!({ "ok": true }))).is_ok());
+
+        // A long request is pending until it finishes; one left by an earlier start says so.
+        let w = key("orchestration.worker-start", "w1").unwrap();
+        m.begin(&w, 7).unwrap();
+        assert_eq!(m.request_show("term-1", "w1", 7)["state"], "pending");
+        assert_eq!(m.request_show("term-1", "w1", 8)["interrupted"], true);
+        m.finish(&w, Some(json!({ "dispatchId": "dispatch-1" })));
+        assert_eq!(m.request_show("term-1", "w1", 7)["result"]["dispatchId"], "dispatch-1");
+
+        // A full ledger of unfinished requests turns new changes away rather than losing track.
+        for n in 0..MAX_PENDING {
+            m.begin(&format!("orchestration.worker-start|term-1|p{n}"), 7).unwrap();
+        }
+        assert_eq!(m.once(key("orchestration.send", "r3"), |_| Ok(json!({}))).unwrap_err().code, "busy");
+        assert_eq!(m.begin("orchestration.worker-start|term-1|one-more", 7).unwrap_err().code, "busy");
+        assert_eq!(m.request_show("term-1", "r3", 7)["state"], "absent");
+        for n in 0..MAX_PENDING {
+            m.finish(&format!("orchestration.worker-start|term-1|p{n}"), None);
+        }
+
+        // Old finished receipts are pruned when the next one is written.
+        m.stamps.insert(key("orchestration.run-create", "r1").unwrap(), 1);
+        m.once(key("orchestration.send", "r4"), |_| Ok(json!({}))).unwrap();
+        assert_eq!(m.request_show("term-1", "r1", 7)["state"], "absent");
+        assert_eq!(m.request_show("term-1", "r4", 7)["state"], "completed");
     }
 
     #[test]
@@ -1189,6 +1520,83 @@ mod tests {
     }
 
     #[test]
+    fn orch012_task_update_keeps_tasks_and_workers_in_step() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let r = Some(run.as_str());
+        let me = std::process::id();
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), Some(run.clone()), 1).unwrap();
+        task_create(&mut tasks, &json!({ "spec": "b" }), Some(run.clone()), 1).unwrap();
+        task_create(&mut tasks, &json!({ "spec": "c" }), Some(run.clone()), 1).unwrap();
+        for (i, t) in tasks.iter_mut().take(2).enumerate() {
+            t["status"] = json!("dispatched");
+            t["dispatchId"] = json!(format!("dispatch-{}", i + 1));
+        }
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": me }),
+            json!({ "id": "dispatch-2", "runId": run, "taskId": "task-2", "status": "running", "terminal": 3, "runtime": me }),
+        ];
+        // Unknown states, other Runs' tasks and a hand-made dispatched state are turned away.
+        assert!(task_update(&mut tasks, &mut d, "task-1", "done", None, r, None, 5).unwrap_err().message.contains("pending, ready, dispatched, completed, failed, blocked"));
+        assert_eq!(task_update(&mut tasks, &mut d, "task-1", "completed", None, Some("run-9"), None, 5).unwrap_err().code, "not_found");
+        assert_eq!(task_update(&mut tasks, &mut d, "task-3", "dispatched", None, r, None, 5).unwrap_err().code, "invalid_transition");
+        // A worker whose process already ended cannot claim the task done.
+        d[0]["exitedAt"] = json!(4);
+        assert_eq!(task_update(&mut tasks, &mut d, "task-1", "completed", None, r, Some("term-2"), 5).unwrap_err().code, "worker_exited");
+        assert_eq!((tasks[0]["status"].as_str(), d[0]["status"].as_str()), (Some("dispatched"), Some("running")));
+        d[0].as_object_mut().unwrap().remove("exitedAt");
+        // Completing a dispatched task settles its worker in the same change.
+        let done = task_update(&mut tasks, &mut d, "task-1", "completed", Some("all green"), r, Some("term-1"), 6).unwrap();
+        assert_eq!((done["status"].as_str(), done["previous"].as_str(), done["dispatchStatus"].as_str()), (Some("completed"), Some("dispatched"), Some("completed")));
+        assert_eq!((tasks[0]["status"].as_str(), tasks[0]["result"].as_str(), d[0]["status"].as_str()), (Some("completed"), Some("all green"), Some("completed")));
+        assert!(finished(&d[0]), "its worker slot is free");
+        assert_eq!(task_update(&mut tasks, &mut d, "task-1", "dispatched", None, r, None, 7).unwrap_err().code, "invalid_transition");
+        // Sending a dispatched task back fences its worker, so it never has two.
+        let back = task_update(&mut tasks, &mut d, "task-2", "ready", None, r, None, 8).unwrap();
+        assert_eq!(back["dispatchStatus"], "abandoned");
+        assert_eq!((tasks[1]["status"].as_str(), tasks[1].get("dispatchId")), (Some("ready"), None));
+        // ...and that worker can no longer settle it.
+        assert_eq!(task_update(&mut tasks, &mut d, "task-2", "completed", None, r, Some("term-3"), 9).unwrap_err().code, "dispatch_finished");
+        assert_eq!(tasks[1]["status"], "ready");
+        // Every task is still either dispatched to exactly one open worker or held by none.
+        for t in &tasks {
+            let open = d.iter().filter(|x| x["taskId"] == t["id"] && !finished(x)).count();
+            assert_eq!(open, usize::from(t["status"] == "dispatched"), "{t}");
+        }
+    }
+
+    #[test]
+    fn orch022_stopping_a_worker_ends_its_terminal_and_keeps_its_worktree() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
+        let r = Some(run.as_str());
+        let mut tasks = Vec::new();
+        task_create(&mut tasks, &json!({ "spec": "a" }), Some(run.clone()), 1).unwrap();
+        task_create(&mut tasks, &json!({ "spec": "b" }), Some(run.clone()), 1).unwrap();
+        tasks[0]["status"] = json!("dispatched");
+        tasks[0]["dispatchId"] = json!("dispatch-1");
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 4, "runtime": std::process::id(), "worktree": "W" }),
+            json!({ "id": "dispatch-2", "runId": run, "taskId": "task-2", "status": "running", "terminal": 5, "runtime": 1, "worktree": "V" }),
+        ];
+        assert_eq!(stop(&mut tasks, &mut d, "dispatch-1", Some("run-9"), 5).unwrap_err().code, "not_found");
+        let (got, kill) = stop(&mut tasks, &mut d, "dispatch-1", r, 5).unwrap();
+        assert_eq!(kill, Some(4), "only the worker's own terminal is ended");
+        assert_eq!((got["status"].as_str(), got["worktree"].as_str(), got["worktreeKept"].as_bool()), (Some("stopped"), Some("W"), Some(true)));
+        assert_eq!((d[0]["status"].as_str(), tasks[0]["status"].as_str()), (Some("stopped"), Some("ready")));
+        // Stopping twice answers the same and ends nothing more.
+        let (again, kill) = stop(&mut tasks, &mut d, "dispatch-1", r, 6).unwrap();
+        assert_eq!((again["status"].as_str(), kill), (Some("stopped"), None));
+        // A terminal Kolux has lost touch with is reported as unverifiable, never as ended.
+        let (lost, kill) = stop(&mut tasks, &mut d, "dispatch-2", r, 7).unwrap();
+        assert_eq!((lost["process"].as_str(), kill), (Some("unverifiable"), None));
+        // A worker that already finished has nothing to stop.
+        d[0]["status"] = json!("completed");
+        assert_eq!(stop(&mut tasks, &mut d, "dispatch-1", r, 8).unwrap_err().code, "dispatch_finished");
+    }
+
+    #[test]
     fn orch023_an_abandoned_dispatch_takes_no_more_reports() {
         let mut m = Mail::default();
         let run = m.run_create("term-1", "o", 1)["run"]["id"].as_str().unwrap().to_string();
@@ -1229,15 +1637,68 @@ mod tests {
         for kind in [json!({ "type": "worker_done", "outcome": "succeeded" }), json!({ "type": "heartbeat" })] {
             let mut a = json!({ "to": to, "subject": "task-1 done", "taskId": "task-1", "dispatchId": "dispatch-1" });
             a.as_object_mut().unwrap().extend(kind.as_object().unwrap().clone());
-            let no = m.send("term-3", &a, &d, &live, 2).unwrap_err();
-            assert_eq!(no.code, "not_your_dispatch", "{}", no.message);
-            assert!(no.message.contains("term-2") && no.message.contains("term-3"), "{}", no.message);
+            // ORCH-015: another pane's report is delivered as mail, but it settles nothing.
+            let (mut t, mut dd) = (vec![json!({ "id": "task-1", "runId": run, "status": "dispatched", "dispatchId": "dispatch-1" })], d.clone());
+            assert!(m.send("term-3", &a, &d, &live, 2).is_ok());
+            let no = report(&mut t, &mut dd, "term-3", &a, 2).unwrap();
+            assert_eq!(no["settles"], false, "{no}");
+            assert!(no["why"].as_str().unwrap().contains("term-2"), "{no}");
+            assert_eq!((t[0]["status"].as_str(), dd[0].get("lastBeatAt")), (Some("dispatched"), None));
             assert!(m.send("term-2", &a, &d, &live, 3).is_ok(), "its own worker reports");
         }
         // A dispatch whose worker terminal belongs to an earlier start cannot be vouched for.
-        let old = vec![json!({ "id": "dispatch-1", "runId": run, "status": "running", "terminal": 2, "runtime": u64::from(std::process::id()) + 1 })];
+        let mut old = vec![json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2, "runtime": u64::from(std::process::id()) + 1 })];
         let a = json!({ "to": to, "subject": "done", "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1" });
-        assert_eq!(m.send("term-2", &a, &old, &live, 4).unwrap_err().code, "not_your_dispatch");
+        let mut t = vec![json!({ "id": "task-1", "runId": run, "status": "dispatched", "dispatchId": "dispatch-1" })];
+        assert!(report(&mut t, &mut old, "term-2", &a, 4).unwrap()["why"].as_str().unwrap().contains("earlier start"));
+        assert_eq!(t[0]["status"], "dispatched");
+    }
+
+    #[test]
+    fn orch015_a_done_report_settles_its_task_and_a_heartbeat_keeps_the_worker_alive() {
+        let mut m = Mail::default();
+        let run = m.run_create("term-1", "work", 1)["run"]["id"].as_str().unwrap().to_string();
+        let mut tasks = vec![
+            json!({ "id": "task-1", "runId": run, "status": "dispatched", "dispatchId": "dispatch-1", "deps": [] }),
+            json!({ "id": "task-2", "runId": run, "status": "pending", "deps": ["task-1"] }),
+            json!({ "id": "task-3", "runId": run, "status": "dispatched", "dispatchId": "dispatch-2", "deps": [] }),
+        ];
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": run, "taskId": "task-1", "status": "running", "terminal": 2 }),
+            json!({ "id": "dispatch-2", "runId": run, "taskId": "task-3", "status": "running", "terminal": 3 }),
+        ];
+        let to = format!("run:{run}");
+        // A heartbeat from the worker's own terminal is stamped with when Kolux got it.
+        let beat = json!({ "to": to, "subject": "working", "type": "heartbeat", "dispatchId": "dispatch-1" });
+        assert_eq!(report(&mut tasks, &mut d, "term-2", &beat, 50).unwrap()["lastBeatAt"], 50);
+        assert_eq!(d[0]["lastBeatAt"], 50);
+        let rows = worker_list(&tasks, &d, Some(&run), "named", None, None, 50, &live).unwrap();
+        assert_eq!(rows["workers"].as_array().unwrap().iter().find(|w| w["dispatchId"] == "dispatch-1").unwrap()["lastBeatAt"], 50);
+        // The coordinator writing one on the worker's behalf: delivered as mail, settles nothing.
+        let done = json!({ "to": to, "subject": "task-1 done", "type": "worker_done", "outcome": "succeeded", "dispatchId": "dispatch-1", "filesModified": "a.rs" });
+        assert!(m.send("term-1", &done, &d, &live, 60).is_ok());
+        assert_eq!(report(&mut tasks, &mut d, "term-1", &done, 60).unwrap()["settles"], false);
+        assert_eq!((tasks[0]["status"].as_str(), d[0]["status"].as_str(), tasks[1]["status"].as_str()), (Some("dispatched"), Some("running"), Some("pending")));
+        // The worker's own succeeded report completes the task and frees the one waiting on it.
+        let own = report(&mut tasks, &mut d, "term-2", &done, 70).unwrap();
+        assert_eq!((own["status"].as_str(), own["dispatchStatus"].as_str()), (Some("completed"), Some("completed")), "{own}");
+        assert_eq!((tasks[0]["status"].as_str(), tasks[0]["result"].as_str(), tasks[1]["status"].as_str()), (Some("completed"), Some("task-1 done"), Some("ready")));
+        // Once settled, a replayed report or a late heartbeat is turned away and changes nothing.
+        for again in [&done, &beat] {
+            assert_eq!(m.send("term-2", again, &d, &live, 80).unwrap_err().code, "dispatch_finished");
+        }
+        assert_eq!(d[0]["lastBeatAt"], 50);
+        // A failed report fails its task; a report on a task already handed to another dispatch
+        // is not taken, never read as success.
+        let failed = json!({ "to": to, "subject": "tests red", "body": "two tests fail", "type": "worker_done", "outcome": "failed", "dispatchId": "dispatch-2" });
+        tasks[2]["dispatchId"] = json!("dispatch-9");
+        assert_eq!(report(&mut tasks, &mut d, "term-3", &failed, 90).unwrap_err().code, "outcome_unknown");
+        tasks[2]["dispatchId"] = json!("dispatch-2");
+        report(&mut tasks, &mut d, "term-3", &failed, 91).unwrap();
+        assert_eq!((tasks[2]["status"].as_str(), tasks[2]["result"].as_str(), d[1]["status"].as_str()), (Some("failed"), Some("two tests fail"), Some("failed")));
+        // Ordinary mail, and a report naming no dispatch, settle nothing.
+        assert!(report(&mut tasks, &mut d, "term-2", &json!({ "subject": "hi" }), 92).unwrap().is_null());
+        assert!(report(&mut tasks, &mut d, "term-2", &json!({ "subject": "x", "type": "worker_done", "outcome": "succeeded" }), 92).unwrap().is_null());
     }
 
     #[test]
@@ -1398,5 +1859,69 @@ mod tests {
         assert_eq!((m.runs.len(), m.deliveries.len(), m.bindings.len()), (0, 0, 0));
         assert_eq!(m.seq, seq, "ids keep counting up, so nothing cleared is named again");
         assert!(m.reset("everything").is_err());
+    }
+    #[test]
+    fn orch026_worker_list_shows_terminal_accounting_apart_from_task_status() {
+        let me = std::process::id();
+        let tasks = vec![json!({ "id": "task-1", "status": "dispatched" }), json!({ "id": "task-2", "status": "completed" })];
+        let d = vec![
+            json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "running", "terminal": 4, "runtime": me, "worktree": "W" }),
+            json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-2", "status": "completed", "terminal": 5, "runtime": me }),
+            json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-2", "status": "stopped", "terminal": 6, "runtime": me }),
+            json!({ "id": "dispatch-4", "runId": "run-1", "taskId": "task-2", "status": "completed", "terminal": 7, "runtime": 1, "retained": true }),
+            json!({ "id": "dispatch-5", "runId": "run-2", "taskId": "task-9", "status": "failed", "terminal": 8, "runtime": me }),
+            // A very old record, from before dispatches carried a runtime or a status.
+            json!({ "id": "dispatch-6", "runId": "run-1", "taskId": "task-1" }),
+        ];
+        let live = |h: &str| ["term-4", "term-5", "term-8"].contains(&h);
+        let all = |run, state, cursor, limit| worker_list(&tasks, &d, run, "named", state, cursor, limit, &live);
+        let got = all(Some("run-1"), None, None, 100).unwrap();
+        let states: Vec<(&str, &str)> = got["workers"].as_array().unwrap().iter().map(|w| (w["dispatchId"].as_str().unwrap(), w["terminalState"].as_str().unwrap())).collect();
+        assert_eq!(states, [("dispatch-1", "active"), ("dispatch-2", "reclaimable"), ("dispatch-3", "released"), ("dispatch-4", "retained"), ("dispatch-6", "active")]);
+        assert_eq!((got["scope"]["run"].as_str(), got["scope"]["from"].as_str()), (Some("run-1"), Some("named")));
+        let w = &got["workers"][0];
+        assert_eq!((w["taskStatus"].as_str(), w["status"].as_str(), w["terminal"].as_str(), w["worktree"].as_str()), (Some("dispatched"), Some("running"), Some("term-4"), Some("W")));
+        assert_eq!(w["next"].as_str(), Some(format!("{CLI} orchestration worker-stop --dispatch dispatch-1").as_str()));
+        assert_eq!(got["workers"][1]["next"].as_str(), Some(format!("{CLI} terminal close --terminal term-5").as_str()));
+        assert!(got["workers"][2]["next"].is_null(), "nothing is left to clean up after a released worker");
+        assert!(got["workers"][4]["status"].is_null() && got["workers"][4]["worktree"].is_null(), "an old record lists in the current shape");
+        // Only settled workers not yet released are reclaimable.
+        let r = all(Some("run-1"), Some("reclaimable"), None, 100).unwrap();
+        assert_eq!(r["workers"].as_array().unwrap().len(), 1);
+        // No Run in scope: every Run's workers.
+        assert_eq!(worker_list(&tasks, &d, None, "all", None, None, 100, &live).unwrap()["workers"].as_array().unwrap().len(), 6);
+        // Pages: an opaque cursor carries on, and one from another Run's list is turned away.
+        let p1 = all(Some("run-1"), None, None, 2).unwrap();
+        let c = p1["nextCursor"].as_str().unwrap().to_string();
+        assert!(!c.contains("run-1"), "the cursor is opaque");
+        let p2 = all(Some("run-1"), None, Some(&c), 2).unwrap();
+        assert_eq!(p2["workers"][0]["dispatchId"], "dispatch-3");
+        assert_eq!(all(Some("run-2"), None, Some(&c), 2).unwrap_err().code, "invalid_arguments");
+        assert_eq!(all(Some("run-1"), None, Some("nonsense"), 2).unwrap_err().code, "invalid_arguments");
+        let last = all(Some("run-1"), None, Some(p2["nextCursor"].as_str().unwrap()), 2).unwrap();
+        assert!(last["nextCursor"].is_null());
+    }
+
+    #[test]
+    fn orch025_keeping_a_settled_worker_lasts_and_lists_apart() {
+        let me = std::process::id();
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "completed", "terminal": 4, "runtime": me }),
+            json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-2", "status": "running", "terminal": 5, "runtime": me }),
+        ];
+        let live = |h: &str| h == "term-4" || h == "term-5";
+        assert_eq!(retain(&mut d, &live, "dispatch-1", Some("run-9")).unwrap_err().code, "not_found");
+        assert_eq!(retain(&mut d, &live, "dispatch-2", Some("run-1")).unwrap_err().code, "dispatch_active");
+        let r = retain(&mut d, &live, "dispatch-1", Some("run-1")).unwrap();
+        assert_eq!((r["terminalState"].as_str(), r["alreadyRetained"].as_bool()), (Some("retained"), Some(false)));
+        assert_eq!(d[0]["retained"], true, "the mark is on the stored record, so it outlives a restart");
+        assert_eq!(retain(&mut d, &live, "dispatch-1", Some("run-1")).unwrap()["alreadyRetained"], true);
+        // After a restart the terminal handle means no one, yet the worker still lists as kept.
+        d[0]["runtime"] = json!(1);
+        let got = worker_list(&[], &d, Some("run-1"), "tied", Some("retained"), None, 100, &|_| false).unwrap();
+        assert_eq!(got["workers"][0]["dispatchId"], "dispatch-1");
+        // A worker whose terminal is already gone has nothing to keep.
+        d.push(json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-3", "status": "stopped", "terminal": 9, "runtime": 1 }));
+        assert_eq!(retain(&mut d, &live, "dispatch-3", Some("run-1")).unwrap_err().code, "terminal_gone");
     }
 }

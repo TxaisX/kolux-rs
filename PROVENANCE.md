@@ -198,7 +198,13 @@ The column headings mean:
 | 21 | 45 | 0 (register area; covered by the Wave 2 audits) | n/a | 57 | 5 | +1 card (HID-045); 0 leaks, 1 similarity fix |
 | **Total** | **1,263** | | 2 areas | **650** | 234 (mixed units) | **+8 cards, 4 amended** |
 
-Every area ended its firewall pass at 0 token-check hits.
+Every area ended its firewall pass at 0 token-check hits. That held for the spec as committed
+(7dad8dd: spec/, SPEC.md and COMPAT.md re-checked 2026-10-13 with the unchanged allowlist, 0 hits),
+but it no longer describes the spec of today: 41 later builder commits added "(Kolux RS ...)" notes
+and amendments that carry 53 hits (Kolux RS's own file names, settings keys and public Claude Code
+status-line field names; no old-app identifier is known among them, but the check cannot tell them
+apart). Since T-541 those 53 are the recorded baseline in `scripts/firewall-baseline.txt`, and
+`scripts/firewall-check.ps1 -Baseline` (CI and the merge gate) fails on any hit beyond it.
 
 The cards by tier:
 
@@ -436,6 +442,74 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-043-d · Context7 `/anthropics/claude-code` (one query: the `claude auth` subcommands and where credentials are stored; nothing documents a renewal command or the keychain entry). The Claude Code CLI installed on this PC, used as a user would: `claude auth status --json` against an empty configuration folder (`loggedIn: false`).
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
+
+> 2026-10-12 · T-105 · the CLI-023, CLI-026 and CLI-027 spec cards and the T-105 and T-185-b plan lines; the Tauri command type files in the cargo registry. The command shapes, messages and the layout report were written from the cards. Nothing from the old app.
+> 2026-10-12 · T-104 · the ACCT-046, ACCT-047, ACCT-048, ACCT-049 and ACCT-065 spec cards and the T-104 plan line; the portable-pty CommandBuilder type files in the cargo registry; the public Windows documentation for ComSpec, chcp, subst and icacls. The shell order, the variable list and the folder messages were written from the cards. Nothing from the old app.
+> 2026-10-12 · T-103-a · the VIEW-036 and VIEW-108 spec cards and the T-103 plan line; no app code changed; the cdp.mjs wheel command and the console-mouse stand-in program were written for this task, the latter from the public Windows console API documentation (SetConsoleMode, ReadConsoleInput). Nothing from the old app.
+> 2026-10-12 · T-101-a · the TERM-002, TERM-005, TERM-007, TERM-009 and TERM-012 spec cards and the T-101 plan line; the seeding, empty-pane, focus and settings code was written for this task; the live test used stand-in scripts for Claude Code and Codex and a throwaway repository, written for it. Nothing from the old app.
+> 2026-10-12 · T-100-a · the SESS-011, SESS-016, SESS-021, SESS-028 and SESS-029 spec cards and the T-100 plan line; Claude Code's public documentation (through context7) for --model, --effort, its effort levels and the fastMode setting; Cursor CLI's and Grok Build's public documentation for their model listings (read for T-100-b, nothing built from them yet); the option, lineup and start-line code was written for this task; the live test used stand-in scripts for Claude Code and Codex and two throwaway repositories, written for it. Nothing from the old app.
+> 2026-10-12 · T-098 · the PROJ-055, PROJ-057, VIEW-046 and VIEW-037 spec cards, the T-098 plan line and the keybinding ids already in the keymap; the matching, history and palette code were written for this task; the live test used two throwaway repositories and a stand-in script for Claude, written for it. Nothing from the old app.
+> 2026-10-12 · T-205 · the SKILL-006..010 spec cards, the T-205 plan line and COMPAT's results-folder and marker notes; Windows' own pseudo-console documentation for the cursor-position query a new console sends when it inherits the cursor; the seven rules' wording and the role prompts were written for this task; the live test used a stand-in script for each AI, written for it. Nothing from the old app.
+> 2026-10-12 · T-204 · the SKILL-001..005 spec cards, the T-204 plan line and COMPAT's results-folder note; Tauri's own docs for the webview drag-drop event and the dialog plugin's open filters; the six kits' wording, prompts and sample data files (all fictional) were written for this task. Nothing from the old app
+> 2026-10-12 · T-203 · the GIT-061 spec card and the T-203 plan line; Git's own documentation (git help for init, ls-files --others --exclude-standard -z, --git-dir and --work-tree, add --, commit --allow-empty); the secret-name list is common knowledge of credential file names (dotenv files, SSH and TLS key files, package-manager and netrc credential files), written for this task. Nothing from the old app
+> 2026-10-12 · T-202 · the ACCT-015 spec card and the T-202 plan line; Grok Build's shipped user guide (02-authentication.md, already in the T-092-b throwaway GROK_HOME) for its sign-out command, `grok logout`; the public Codex CLI command reference (learn.chatgpt.com/docs/developer-commands, reached from developers.openai.com/codex/cli/reference) for `codex logout`, which removes saved credentials; Rust std docs (Arc::ptr_eq, Mutex::new in a static, fs::remove_dir_all). The stand-in codex.exe for the live check was written for it and never contacts OpenAI. Nothing from the old app
+> 2026-10-12 · T-185-a · the CLI-006/010/038 spec cards and COMPAT 2.1/7; cmd's own documented batch syntax (%~dp0, %*, exit /b, if /i, goto) and Windows' default PATHEXT order; Rust std docs for io::ErrorKind::TimedOut/WouldBlock and Command on .cmd files; portable-pty 0.9's CommandBuilder::env_remove in the cargo registry; the tauri config schema in node_modules (bundle.resources as a source-to-target map); RFC 4122's version-4 UUID layout
+> 2026-10-11 · T-099 · the SESS-002/003/006/008/010 spec cards; the windows-sys crate source in the cargo registry (RegGetValueW, RRF_RT_ANY) and this PC's own per-user registry (the Lxss key's DefaultDistribution value, read for its presence only); Git for Windows' default install folder (Program Files/Git/bin/bash.exe) and the shells' own command-line flags (powershell -NoLogo, bash --login -i)
+> 2026-10-11 · T-092-b · Grok Build 1.0.50's own help text (`grok login --help`, `grok inspect --help`) and the authentication guide it ships (docs/user-guide/02-authentication.md, written into a throwaway GROK_HOME), plus what `grok login --device-auth` printed in that throwaway home before it was stopped; the binary was the portable download from WinGet's xAI.GrokBuild manifest, run from G:Temp and never installed
+> 2026-10-11 · T-092-a · WinGet's public return-code list (github.com/microsoft/winget-cli, doc/windows/package-manager/winget/returnCodes.md); `winget show` for OpenAI.Codex, Anthropic.ClaudeCode and xAI.GrokBuild (package ids, x.ai/cli homepage) and WinGet 1.29's own printed progress, seen in a download-only run; windows-sys 0.61 RegGetValueW in the cargo registry
+
+> 2026-10-12 · T-116-a-fix · moved this repo's own T-116-a code (SET-031 card) to the Settings page; no old Kolux source read
+
+> 2026-10-12 · T-138-b · rules from the ACCT-019 card; no OpenAI token-claim source used (none is public), so the label is the user's own; no old Kolux source read.
+>
+> 2026-10-12 · note: while finding the ACCT-019 card I ran a recursive filename grep from the lane root (`grep -rln ACCT-019 --include=*.md .`), which also scanned the lane's own copy of `provenance/dirty-room/firewall/` and printed one matching file name (07-accounts-keys.md). Only the path was shown, no content was opened or displayed; later searches exclude `provenance/`.
+
+> 2026-10-12 · T-146-a · rules from the VIEW-056 and VIEW-057 cards and DT-R17; Pointer Events setPointerCapture from MDN; no old Kolux source read
+
+> 2026-10-12 · T-153-a · rules from the VIEW-067 and VIEW-116 cards; git restore and git clean behaviour from the public git documentation; no old Kolux source read
+
+> 2026-10-12 · T-154-a · rules from the ACCT-010 and ACCT-011 cards; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-157 · rules from the SAFE-026 and ACCT-009 cards; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-200 · rules from the PROJ-002 card; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-201-a · rules from the SESS-017 card; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-209-a · rules from the ONB-036 card; TypeScript's compiler API (already a dev dependency) parses the scanned files; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-210-a · rules from the SET-017 card; the browser's Intl APIs (Collator, RelativeTimeFormat, DateTimeFormat) and navigator.languages from public MDN docs; no outside source and no old Kolux source read
+
+> 2026-10-12 · T-211 · rules from the APP-023 card; Rust std::process and the gh manual's `gh auth status` (public cli.github.com docs); no outside source and no old Kolux source read
+
+> 2026-10-12 · T-136-b · rules from the USAGE-012 / USAGE-013 cards (and USAGE-016 / 017 for counting once). Log shapes under Txais's option (a) (STATE.md Needs Txais, RESOLVED 2026-10-12): a throwaway script outside the repo printed only field names and value types, never a value, from 4 of his Claude Code transcripts ($CLAUDE_CONFIG_DIR/projects/*/*.jsonl; 51,031 records, none unparsable) and 3 Codex session files (~/.codex/sessions/**/*.jsonl; 123 records); the script and its output were deleted. Observed 2026-10-12:
+>   Claude Code, one JSON record per line: type, timestamp (ISO text), sessionId, cwd, isSidechain (bool), uuid, parentUuid, requestId, apiBlockIndex (int), gitBranch, version, entrypoint, agentId; message.id, message.model, message.role, message.type; message.usage.input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens (int); message.usage.cache_creation.ephemeral_5m_input_tokens and ephemeral_1h_input_tokens (int); message.usage.output_tokens_details.thinking_tokens (int or null); message.usage.iterations[] (the same counters), service_tier, inference_geo, server_tool_use. apiBlockIndex means one reply can span several records, so replies are counted once by message.id.
+>   Codex, one JSON record per line: timestamp (ISO text), type, payload (object), ordinal (int), metadata; payload.cwd, payload.model, payload.model_provider, payload.session_id, payload.id; payload.info.total_token_usage and payload.info.last_token_usage, each with input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens, total_tokens (int); payload.info.model_context_window; the same counters also as payload.usage, payload.turn_token_usage and payload.thread_token_usage; payload.rate_limits.primary / secondary with used_percent, window_minutes, resets_at.
+>   The parser reads only the fields it needs, ignores the rest, and skips a line, record or file that does not fit; the test fixtures and the live-check logs are invented records with these field names. That cached input is part of Codex's input count and reasoning part of output follows OpenAI's public usage-object docs. No outside source and no old Kolux source read.
+
+> 2026-10-12 · T-137-a · rules from the USAGE-014 / USAGE-015 cards. Prices from two public pages read 2026-10-12: Anthropic's https://platform.claude.com/docs/en/about-claude/pricing (model table, cache multipliers, long-context section) and OpenAI's https://developers.openai.com/api/docs/pricing (Standard tier text-token table, short and long context, "Long context: >272K input tokens"). Model ids follow the public naming on those pages. No log value read (the stand-in logs are invented), no old Kolux source read.
+
+> 2026-10-12 · T-206 · rules from the SKILL-011..015 cards; pulldown-cmark 0.13 API (Parser, Options, Event, Tag, html::push_html) from its public docs.rs pages via context7; sha2 0.10 public docs; no old Kolux source read
+
+> 2026-10-12 · T-207 · rules from the ONB-001..005 cards; CSS backdrop-filter and prefers-reduced-motion from public MDN docs; no old Kolux source read
+
+> 2026-10-12 · T-208 · rules from the ONB-006, 007, 008, 010 and 012 cards and DT-25; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-201-b · rules from the SESS-017 and SESS-019 cards; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-153-b · rules from the VIEW-089 and VIEW-099 cards; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-154-b · rules from the ACCT-055 card; tauri-plugin-dialog 2.8.1 Rust API (FileDialogBuilder::blocking_pick_file, set_directory, set_title) read from its public crate source in the local cargo registry; no old Kolux source read
+
+> 2026-10-12 · T-171 · rules from the ACCT-014 and ACCT-024 cards and COMPAT 5.7; no outside source used; no old Kolux source read
+
+> 2026-10-12 · T-170 · rules from the USAGE-016 and USAGE-017 cards; log field names as recorded in section 5 (T-136-b); test records invented; no old Kolux source read
+
+> 2026-10-12 · T-136-c · rules from the USAGE-011 card and SET-006; hook event names from this tree's own hooks.rs; no outside source used; no old Kolux source read
+
+> 2026-10-12 · T-137-b / T-139-c · source check only: docs.x.ai/build/cli/reference and docs.x.ai/build/features/status-line read; neither documents Grok credit figures or a session-file format; nothing built or copied
+
+> 2026-10-12 · T-339 · rules from SET-020, VIEW-011, VIEW-116, USAGE-010, ORCH-031 and ACCT-001 cards and DT-A6; no outside source used; no old Kolux source read
 > 2026-10-12 · T-134-a · The cards CLI-024/CLI-025, COMPAT 2.1 rows for terminal read/send/wait, the xterm.js public typings in node_modules (`buffer.active`, `viewportY`, `translateToString`). Nothing from the old app.
 > 2026-10-12 · T-139-b · The cards ACCT-023/ACCT-064 and the repo's own codex_accounts and terminal modules. Nothing from the old app.
 > 2026-10-12 · T-145-b · The card TERM-098, the public win32-input-mode spec in microsoft/terminal's doc/specs (via context7) for the key-event sequence, the vendored portable-pty 0.9.0 source for the pseudoconsole flags. Nothing from the old app.
@@ -458,3 +532,9 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-067 · The four cards, DESIGN.md, the public typings of @xterm/xterm and @xterm/addon-webgl in node_modules and a grep of xterm's lib for mode 2026; the lane's own TerminalPane.tsx, grid.ts and App.tsx; no outside source.
 > 2026-10-12 · T-166 · The five cards, DESIGN.md, xterm's public typings (IBuffer, isWrapped) in node_modules, the vendored portable-pty 0.9.0 (its ConPTY flags) and Microsoft's public SetConsoleCtrlHandler contract; the lane's own TerminalPane.tsx, terminal.rs, App.tsx and cli.rs; no outside source.
 > 2026-10-12 · T-068 · The card, DESIGN.md, xterm's public typings (IBuffer, scrollLines, onWriteParsed, onKey) in node_modules, Microsoft's public ConPTY behaviour observed in my own panes; the lane's own terminal.rs, TerminalPane.tsx, App.tsx, main.tsx and layout.ts; no outside source.
+> 2026-10-13 · T-541 · cargo-deny configuration docs (github.com/EmbarkStudios/cargo-deny, docs/src/checks: advisories ignore entries with a reason, bans, sources) and the public GitHub Action taiki-e/install-action, used by name with its tool input (installs cargo-deny on a Windows runner; nothing read from it); RustSec advisory RUSTSEC-2024-0370 as printed by cargo-deny; no code copied; no old Kolux source read
+> 2026-10-13 · T-108-b · public docs read 2026-10-13: GSD's npm package get-shit-done-cc 1.42.3, file get-shit-done/references/worktree-path-safety.md (https://cdn.jsdelivr.net/npm/get-shit-done-cc@1.42.3/get-shit-done/references/worktree-path-safety.md): its executors run in Claude Code isolation worktrees on `worktree-agent-*` branches and write `gsd-spawn-toplevel` into the worktree's Git folder; and Claude Code's worktree page https://code.claude.com/docs/en/worktrees (`.claude/worktrees/` default folder, subagent isolation). Only the file name and folder facts were used; no GSD code was copied · area 01
+> 2026-10-13 · T-109-b · public docs relied on from general knowledge (not opened this pass): the GitHub CLI manual for `gh issue list` and `gh pr list` (`--search`, `--json number,title,url`) at https://cli.github.com/manual/, and GitHub's search docs ("About searching on GitHub": queries longer than 256 characters are not supported) at https://docs.github.com/en/search-github/getting-started-with-searching-on-github/about-searching-on-github. Behaviour only, no text or code copied · area 02
+
+> 2026-10-13 · T-112-a · public sources read 2026-10-13 for the two setup-file formats: Conductor's conductor.json docs (https://www.conductor.build/docs/core/conductor-json: scripts.setup, scripts.run, scripts.archive); the Codex app's local environments page (https://learn.chatgpt.com/docs/environments/local-environment: config lives in the project's .codex folder) and, for the file's key names, public example files at .codex/environments/environment.toml in public GitHub repositories (unpkg/unpkg, petyosi/react-virtuoso, sketch-hq/fig2sketch, ccusage/ccusage, akarras/ultros, read with `gh api` contents; keys version, name, [setup] script, [setup.windows] script, [cleanup] script) and public conductor.json files (vercel/next.js, RSSNext/Folo, tambo-ai/tambo). Only key names and meanings taken; no code.
+> 2026-10-13 · T-542 · rules from the council consensus section 4 row E and the pass brief; selectors, IPC command names and the hook request shape from this tree's own src/, src-tauri/hooks.rs and scripts/evidence/cdp.mjs (read, not edited); no outside source used; no old Kolux source read

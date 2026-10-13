@@ -6,7 +6,9 @@
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::thread;
+use std::time::Duration;
 
 /// TERM-098 (Windows): a terminal's reply to a program's colour question (OSC 4/10/11/12 with
 /// `rgb:`) or light/dark question (CSI ? 997 ; 1|2 n) reaches the console layer as plain bytes,
@@ -25,26 +27,166 @@ pub fn as_key_events(data: &[u8]) -> Vec<u8> {
     String::from_utf8_lossy(data).chars().map(|c| format!("\x1b[0;0;{0};1;0;1_\x1b[0;0;{0};0;0;1_", c as u32)).collect::<String>().into_bytes()
 }
 
-/// Which program a new pane runs. Windows PowerShell ships with every Windows install; `pwsh`
-/// (PowerShell 7) is used only when the user has it on the path. The shell starts in `cwd` when
-/// that folder exists (a workspace's folder), otherwise in the user's home folder.
-pub fn shell_command(cwd: Option<&str>) -> CommandBuilder {
-    let mut cmd = if cfg!(windows) {
-        let mut c = CommandBuilder::new("powershell.exe");
-        c.arg("-NoLogo");
-        c
-    } else {
-        CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "sh".into()))
+/// ACCT-046: the shells an automatic pick tries, best first. On Windows: PowerShell 7 (passed over
+/// when the copy found is a Microsoft Store alias), then Windows PowerShell, then the command
+/// prompt, which is always last, found through the system's ComSpec setting when that is set, and
+/// started in UTF-8. Elsewhere the login shell, else sh.
+// ponytail: PowerShell gets no prompt markers yet; nothing in Kolux reads them (DT-R36).
+pub fn auto_shells(find: impl Fn(&str) -> Option<PathBuf>, comspec: Option<PathBuf>) -> Vec<(PathBuf, Vec<&'static str>)> {
+    if !cfg!(windows) {
+        return vec![(std::env::var_os("SHELL").map(PathBuf::from).unwrap_or_else(|| "sh".into()), Vec::new())];
+    }
+    let mut out = Vec::new();
+    out.extend(find("pwsh.exe").filter(|p| !store_alias(p)).map(|p| (p, vec!["-NoLogo"])));
+    out.extend(find("powershell.exe").map(|p| (p, vec!["-NoLogo"])));
+    let cmd = comspec.filter(|p| p.is_file()).or_else(|| find("cmd.exe")).unwrap_or_else(|| "cmd.exe".into());
+    out.push((cmd, CMD_ARGS.to_vec()));
+    out
+}
+
+/// The command prompt, switched to UTF-8 before its first prompt.
+const CMD_ARGS: [&str; 4] = ["/k", "chcp", "65001", ">nul"];
+
+/// A Microsoft Store app alias: a stand-in under WindowsApps rather than the program itself.
+fn store_alias(p: &Path) -> bool {
+    p.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps"))
+}
+
+/// The automatic shells for a new pane (ACCT-046), each starting in `cwd`, or in the home folder
+/// when there is none. ACCT-049: on Windows the home folder is the home drive plus the home path
+/// when that folder exists, else the user profile.
+pub fn shell_commands(cwd: Option<&str>) -> Vec<CommandBuilder> {
+    let dir = cwd.map(PathBuf::from).or_else(home_dir);
+    auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from))
+        .into_iter()
+        .map(|(program, args)| {
+            let mut c = CommandBuilder::new(program);
+            c.args(args);
+            if let Some(d) = &dir {
+                c.cwd(d);
+            }
+            c
+        })
+        .collect()
+}
+
+fn home_dir() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return std::env::var_os("HOME").map(PathBuf::from);
+    }
+    let joined = std::env::var_os("HOMEDRIVE").zip(std::env::var_os("HOMEPATH")).map(|(mut d, p)| {
+        d.push(p);
+        PathBuf::from(d)
+    });
+    joined.filter(|p| p.is_dir()).or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+/// ACCT-049: whether a pane may start in `dir`. A folder that is gone, or on a drive that is not
+/// connected, gets a message instead of a silent start somewhere else, and an `agent` never
+/// starts by itself in the root of a drive. The check stops waiting after two seconds, so a
+/// network drive that does not answer cannot hold the app.
+// ponytail: each pane waits on its own, so many panes on a dead drive wait two seconds each; share
+// one answer per drive if that ever bites.
+pub fn check_start_dir(dir: &str, agent: bool) -> Result<(), String> {
+    let path = PathBuf::from(dir);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let probe = path.clone();
+    thread::spawn(move || {
+        let root: PathBuf = probe.components().take_while(|c| matches!(c, Component::Prefix(_) | Component::RootDir)).collect();
+        let _ = tx.send((probe.is_dir(), root.as_os_str().is_empty() || root.exists(), root));
+    });
+    let Ok((is_dir, mounted, root)) = rx.recv_timeout(Duration::from_secs(2)) else {
+        return Err(format!("The folder {dir} is not answering. If it is on a network or external drive, check that the drive is connected, then open the pane again."));
     };
-    match cwd.filter(|d| std::path::Path::new(d).is_dir()) {
-        Some(dir) => cmd.cwd(dir),
-        None => {
-            if let Ok(home) = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
-                cmd.cwd(home);
+    if !mounted {
+        return Err(format!("The drive {} is not connected, so {dir} cannot be opened. Plug the drive in or reconnect it, then open the pane again.", root.display()));
+    }
+    if !is_dir {
+        return Err(format!("The folder {dir} no longer exists. It may have been moved or deleted; open the project from where it is now."));
+    }
+    if agent && path.parent().is_none() {
+        return Err(format!("Kolux does not start an agent by itself in {dir}, the root of a drive. Open a project folder and start it there."));
+    }
+    Ok(())
+}
+
+/// Whether a pane's program is one of the shells rather than an agent (ACCT-049).
+pub fn is_shell_program(program: &str) -> bool {
+    let stem = Path::new(program).file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    ["pwsh", "powershell", "cmd", "bash", "wsl", "zsh", "fish", "sh"].contains(&stem.as_str())
+}
+
+/// ACCT-048: an inherited variable a pane should not see: Kolux's own runtime and build ones
+/// (Tauri, WebView2, a cargo or npm script run) or a conda activation that came along only in part.
+/// CLI-010: also another copy's data-folder override (KOLUX_USER_DATA_PATH), which a Kolux started
+/// from that copy's terminal inherits and which would send this pane's commands to the other app.
+// ponytail: the folders a dev run puts on PATH stay; strip them if a dev build's panes ever mislead.
+pub fn inherited_noise(name: &str) -> bool {
+    const PREFIXES: [&str; 9] = ["TAURI_", "__TAURI", "WEBVIEW2_", "CARGO_PKG_", "CARGO_MANIFEST_", "CARGO_BIN_", "npm_", "PNPM_SCRIPT_", "CONDA_PREFIX"];
+    const NAMES: [&str; 7] = ["CARGO_CRATE_NAME", "CARGO_PRIMARY_PACKAGE", "INIT_CWD", "CONDA_DEFAULT_ENV", "CONDA_SHLVL", "CONDA_PROMPT_MODIFIER", "KOLUX_USER_DATA_PATH"];
+    PREFIXES.iter().any(|p| name.starts_with(p)) || NAMES.contains(&name)
+}
+
+/// SESS-006: a shell the create menu offers, one item each. The first is the one Ctrl+T opens.
+#[derive(serde::Serialize, Debug, PartialEq)]
+pub struct ShellInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+/// The installed shells: on Windows, Windows PowerShell (always there), PowerShell 7, Command
+/// Prompt, Git Bash and WSL when found, PowerShell 7 first when it is installed; elsewhere the login shell, then bash, zsh and fish.
+pub fn shells(find: impl Fn(&str) -> Option<std::path::PathBuf>) -> Vec<ShellInfo> {
+    let mut out: Vec<ShellInfo> = Vec::new();
+    let mut add = |id, name, program: Option<std::path::PathBuf>, args: &[&str]| {
+        if let Some(p) = program {
+            let program = p.to_string_lossy().into_owned();
+            if !out.iter().any(|s| s.program.eq_ignore_ascii_case(&program)) {
+                out.push(ShellInfo { id, name, program, args: args.iter().map(|a| a.to_string()).collect() });
             }
         }
+    };
+    if cfg!(windows) {
+        // ACCT-046: the automatic pick's order, so the first item (the one Ctrl+T opens) names it.
+        let pwsh = find("pwsh.exe");
+        add("pwsh", "PowerShell 7", pwsh.clone().filter(|p| !store_alias(p)), &["-NoLogo"]);
+        add("powershell", "Windows PowerShell", Some(find("powershell.exe").unwrap_or_else(|| "powershell.exe".into())), &["-NoLogo"]);
+        add("pwsh", "PowerShell 7", pwsh, &["-NoLogo"]);
+        add("cmd", "Command Prompt", find("cmd.exe"), &CMD_ARGS);
+        // Git for Windows' own bash, never the WSL launcher that System32 calls bash.exe.
+        let git = std::env::var_os("ProgramFiles").map(|p| std::path::PathBuf::from(p).join("Git").join("bin").join("bash.exe")).filter(|p| p.is_file());
+        add("gitbash", "Git Bash", git, &["--login", "-i"]);
+        // wsl.exe ships with Windows even with no Linux installed; it counts once a distribution is.
+        add("wsl", "WSL", find("wsl.exe").filter(|_| wsl_has_distro()), &[]);
+    } else {
+        add("login", "Login shell", std::env::var_os("SHELL").map(std::path::PathBuf::from), &[]);
+        add("bash", "bash", find("bash"), &[]);
+        add("zsh", "zsh", find("zsh"), &[]);
+        add("fish", "fish", find("fish"), &[]);
     }
-    cmd
+    out
+}
+
+/// WSL keeps its default distribution under the user's Lxss key once one is installed.
+#[cfg(windows)]
+fn wsl_has_distro() -> bool {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_ANY};
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (key, name) = (wide(r"Software\Microsoft\Windows\CurrentVersion\Lxss"), wide("DefaultDistribution"));
+    let mut len = 0u32;
+    // SAFETY: both strings are NUL-terminated and live across the call; only the size is asked for.
+    unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_ANY, std::ptr::null_mut(), std::ptr::null_mut(), &mut len) == 0 }
+}
+#[cfg(not(windows))]
+fn wsl_has_distro() -> bool {
+    false
+}
+
+#[tauri::command]
+pub fn shell_list() -> Vec<ShellInfo> {
+    shells(crate::agents::find_program)
 }
 
 /// TERM-040: where a new terminal starts. A requested folder may be relative to the workspace or
@@ -96,6 +238,8 @@ pub struct PtySession {
     writer: Option<Box<dyn Write + Send>>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
+    /// The program that started (ACCT-046: an automatic shell may be a fallback).
+    program: String,
 }
 
 impl PtySession {
@@ -105,13 +249,42 @@ impl PtySession {
         cmd: CommandBuilder,
         cols: u16,
         rows: u16,
+        on_output: impl FnMut(&[u8]) + Send + 'static,
+        on_exit: impl FnOnce(Option<u32>) + Send + 'static,
+    ) -> Result<Self, String> {
+        Self::spawn_first(vec![cmd], cols, rows, on_output, on_exit)
+    }
+
+    /// ACCT-046: tries each of `cmds` in turn and keeps the first that starts, so a shell that is
+    /// refused (access denied, say) gives way to the next one; the error names each that failed.
+    pub fn spawn_first(
+        cmds: Vec<CommandBuilder>,
+        cols: u16,
+        rows: u16,
         mut on_output: impl FnMut(&[u8]) + Send + 'static,
         on_exit: impl FnOnce(Option<u32>) + Send + 'static,
     ) -> Result<Self, String> {
         let pair = native_pty_system()
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| e.to_string())?;
-        let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+        let mut failed = Vec::new();
+        let mut started = None;
+        for cmd in cmds {
+            let name = cmd.get_argv().first().map(|a| a.to_string_lossy().into_owned()).unwrap_or_default();
+            match pair.slave.spawn_command(cmd) {
+                Ok(c) => {
+                    started = Some((c, name));
+                    break;
+                }
+                Err(e) => failed.push((name, e.to_string())),
+            }
+        }
+        let Some((mut child, program)) = started else {
+            return Err(match failed.len() {
+                1 => failed.remove(0).1,
+                _ => format!("No shell would start. Kolux tried {}.", failed.iter().map(|(n, e)| format!("{n} ({e})")).collect::<Vec<_>>().join(", ")),
+            });
+        };
         drop(pair.slave);
         let killer = child.clone_killer();
         let pid = child.process_id();
@@ -138,7 +311,7 @@ impl PtySession {
             })
             .map_err(|e| e.to_string())?;
 
-        Ok(Self { master: Some(pair.master), writer: Some(writer), killer, pid })
+        Ok(Self { master: Some(pair.master), writer: Some(writer), killer, pid, program })
     }
 
     /// Sends keystrokes (already encoded as the terminal would) to the program.
@@ -157,6 +330,11 @@ impl PtySession {
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
         let m = self.master.as_ref().ok_or("session already closed")?;
         m.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).map_err(|e| e.to_string())
+    }
+
+    /// The program that started.
+    pub fn program(&self) -> &str {
+        &self.program
     }
 
     /// The started program's process id, when the platform reports one.
@@ -200,13 +378,31 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn the_create_menu_lists_each_installed_shell_once_best_first() {
+        let found = |name: &str| match name {
+            "pwsh.exe" => Some(std::path::PathBuf::from("C:/pf/pwsh.exe")),
+            "cmd.exe" => Some(std::path::PathBuf::from("C:/Windows/System32/cmd.exe")),
+            _ => None,
+        };
+        let list = shells(found);
+        let ids: Vec<_> = list.iter().map(|s| s.id).collect();
+        assert_eq!(&ids[..3], &["pwsh", "powershell", "cmd"]);
+        assert_eq!(list[1].program, "powershell.exe");
+        assert_eq!(list[2].args, ["/k", "chcp", "65001", ">nul"]);
+        assert!(!ids.contains(&"wsl"));
+        // Nothing found but the built-in one: still one item.
+        assert_eq!(shells(|_| None).first().map(|s| s.id), Some("powershell"));
+    }
+
     /// The round trip every pane depends on: a real shell, a typed command, its output read back.
     #[test]
     fn shell_echoes_a_marker_back_through_the_pty() {
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
         let mut session = PtySession::spawn(
-            shell_command(None),
+            shell_commands(None).remove(0),
             100,
             30,
             move |chunk| {
@@ -404,6 +600,71 @@ mod tests {
         let _ = std::fs::remove_dir(&sub);
     }
 
+    /// ACCT-046: PowerShell 7, then Windows PowerShell, then the command prompt in UTF-8, taken
+    /// from ComSpec when that is set; a Store alias of PowerShell 7 is passed over.
+    #[cfg(windows)]
+    #[test]
+    fn acct046_the_automatic_shell_order_ends_with_a_utf8_command_prompt() {
+        let comspec = std::env::temp_dir().join("kolux-rs-acct046-cmd.exe");
+        std::fs::write(&comspec, b"").unwrap();
+        let line = |v: Vec<(PathBuf, Vec<&str>)>| v.into_iter().map(|(p, a)| format!("{} {}", p.to_string_lossy(), a.join(" "))).collect::<Vec<_>>();
+        let all = |n: &str| Some(PathBuf::from(format!("C:/pf/{n}")));
+        let cmd = format!("{} /k chcp 65001 >nul", comspec.to_string_lossy());
+        assert_eq!(line(auto_shells(all, Some(comspec.clone()))), ["C:/pf/pwsh.exe -NoLogo".to_string(), "C:/pf/powershell.exe -NoLogo".into(), cmd]);
+        let store = |n: &str| (n == "pwsh.exe").then(|| PathBuf::from("C:/Users/u/AppData/Local/Microsoft/WindowsApps/pwsh.exe"));
+        assert_eq!(line(auto_shells(store, None)), ["cmd.exe /k chcp 65001 >nul".to_string()]);
+        let _ = std::fs::remove_file(&comspec);
+    }
+
+    /// ACCT-046: a shell that will not start gives way to the next one; when none starts, the
+    /// error names each one tried.
+    #[test]
+    fn acct046_a_shell_that_will_not_start_gives_way_to_the_next() {
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let mut cmds = vec![program_command("kolux-rs-no-such-shell-7f3a", &[], None)];
+        cmds.extend(shell_commands(None));
+        let mut session = PtySession::spawn_first(cmds, 80, 24, move |c| {
+            let _ = tx.send(c.to_vec());
+        }, |_| {})
+        .expect("falls back to a shell that starts");
+        assert!(rx.recv_timeout(Duration::from_secs(30)).is_ok(), "the fallback shell prints");
+        session.kill();
+        let none = PtySession::spawn_first(vec![program_command("kolux-rs-no-such-a", &[], None), program_command("kolux-rs-no-such-b", &[], None)], 80, 24, |_| {}, |_| {});
+        let err = none.err().expect("nothing starts");
+        assert!(err.contains("kolux-rs-no-such-a") && err.contains("kolux-rs-no-such-b"), "{err}");
+    }
+
+    /// ACCT-049: a folder that is gone or on a drive that is not there gets a message, and an
+    /// agent is kept out of a drive root while a shell may open there.
+    #[test]
+    fn acct049_start_folders_that_are_gone_unplugged_or_a_drive_root_are_refused() {
+        let tmp = std::env::temp_dir();
+        assert!(check_start_dir(&tmp.to_string_lossy(), true).is_ok());
+        let gone = tmp.join("kolux-rs-acct049-gone");
+        assert!(check_start_dir(&gone.to_string_lossy(), false).unwrap_err().contains("no longer exists"));
+        let root: PathBuf = tmp.components().take(if cfg!(windows) { 2 } else { 1 }).collect();
+        assert!(check_start_dir(&root.to_string_lossy(), false).is_ok(), "a shell may open at a drive root");
+        assert!(check_start_dir(&root.to_string_lossy(), true).unwrap_err().contains("root of a drive"));
+        if cfg!(windows) {
+            if let Some(d) = (b'D'..=b'Z').rev().map(|b| format!("{}:/", b as char)).find(|d| !Path::new(d).exists()) {
+                assert!(check_start_dir(&format!("{d}repo"), false).unwrap_err().contains("is not connected"));
+            }
+        }
+        assert!(is_shell_program("C:/Program Files/PowerShell/7/pwsh.exe") && is_shell_program("cmd.exe") && !is_shell_program("claude"));
+    }
+
+    /// ACCT-048: Kolux's own runtime and build variables and a partial conda activation are
+    /// dropped; the user's own settings stay.
+    #[test]
+    fn acct048_runtime_build_and_partial_conda_variables_are_not_passed_down() {
+        for n in ["TAURI_ENV_DEBUG", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "npm_lifecycle_event", "npm_config_user_agent", "INIT_CWD", "CONDA_PREFIX", "CONDA_PREFIX_1", "CONDA_SHLVL", "CONDA_DEFAULT_ENV", "KOLUX_USER_DATA_PATH"] {
+            assert!(inherited_noise(n), "{n}");
+        }
+        for n in ["PATH", "CARGO_HOME", "NPM_CONFIG_PREFIX", "CONDA_EXE", "HOME", "KOLUX_TERMINAL_HANDLE"] {
+            assert!(!inherited_noise(n), "{n}");
+        }
+    }
+
     #[test]
     fn a_missing_program_is_refused_at_spawn() {
         let r = PtySession::spawn(program_command("kolux-rs-no-such-program-7f3a", &[], None), 80, 24, |_| {}, |_| {});
@@ -414,7 +675,7 @@ mod tests {
     #[test]
     fn kill_ends_a_running_shell() {
         let (exit_tx, exit_rx) = mpsc::channel::<Option<u32>>();
-        let mut session = PtySession::spawn(shell_command(None), 80, 24, |_| {}, move |code| {
+        let mut session = PtySession::spawn(shell_commands(None).remove(0), 80, 24, |_| {}, move |code| {
             let _ = exit_tx.send(code);
         })
         .expect("spawn shell in a pty");

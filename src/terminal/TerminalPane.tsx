@@ -28,11 +28,17 @@ import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/ic
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import Ring from "../usage/Ring";
 import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
-import PlusMenu, { programWord, type AgentInfo } from "../launch/PlusMenu";
+import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { stopLine, type StopInfo } from "./notify";
+import NameField from "./NameField";
+import { handlesIn } from "./tabs";
+import { Kbd, useLabel } from "../keys/KeymapContext";
+
+// TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
+const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
 
 type Status = { kind: "starting" } | { kind: "running"; id: number; account: string | null } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
@@ -85,6 +91,20 @@ type Props = {
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
   title?: string;
+  /** SESS-006: the shell picked in the create menu names itself in the header. */
+  shellName?: string;
+  /** TERM-027: the title is one the user (or a seat) set, so Clear Pane Title is offered. */
+  custom?: boolean;
+  /** TERM-027: saves a typed name; undefined gives the automatic title back. */
+  onRename?: (name: string | undefined) => void;
+  /** TERM-027: bumped by the Set Title shortcut to open the name field. */
+  renameAsk?: number;
+  /** TERM-036: the agent's session id is known, so Copy Session ID is offered. */
+  sessionKnown?: boolean;
+  /** TERM-036: copies one of the pane's ids; the window says whether it worked. */
+  onCopyId?: (what: "session" | "terminal" | "pane") => void;
+  /** TERM-096: the opener for a printed handle of an open terminal; undefined for anything else. */
+  findHandle?: (handle: string) => (() => void) | undefined;
   /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
   typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
@@ -92,6 +112,8 @@ type Props = {
   onFocus?: () => void;
   /** Close was asked for; the window decides (TERM-045) and drops the pane, which ends its program. */
   onClose?: () => void;
+  /** SAFE-002: set while the agent waits on its plan; the header then offers Review plan. */
+  onReviewPlan?: () => void;
   /** The plus menu behind the header's "+" button. */
   agents?: AgentInfo[];
   launching?: boolean;
@@ -116,9 +138,20 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null, restored = false }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null, restored = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
+  const handleRef = useRef(findHandle);
+  handleRef.current = findHandle;
+  const termRef = useRef<Terminal | null>(null);
+  const box = useRef<HTMLElement>(null);
+  // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
+  // the keyboard is already somewhere inside it (a click on its own header field).
+  useEffect(() => {
+    if (focused && !hidden && !box.current?.contains(document.activeElement)) termRef.current?.focus();
+  }, [focused, hidden]);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
+  const [started, setStarted] = useState<string | null>(null); // ACCT-046: the shell that really started
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
   const [glow, setGlow] = useState(false); // TERM-023: finished while not focused
   const [now, setNow] = useState(() => Date.now());
@@ -131,10 +164,16 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     return () => clearTimeout(t);
   }, [flash]);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
-  // TERM-116: the pane menu behind the dots button.
+  // TERM-027 / TERM-116: the pane menu and the inline name field.
   const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
+  const [naming, setNaming] = useState(false);
+  // The menu shows a shortcut only once one is assigned (both start with none).
+  const setKey = useLabel("terminal.setTitle").length > 0;
+  const clearKey = useLabel("terminal.clearPaneTitle").length > 0;
+  useEffect(() => {
+    if (renameAsk > 0 && onRename) setNaming(true);
+  }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
   const idRef = useRef<number | null>(null);
-  const termRef = useRef<Terminal | null>(null);
   const isHidden = useRef(hidden);
   isHidden.current = hidden;
   const keymap = useKeymap();
@@ -191,14 +230,33 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
+    termRef.current = term;
+    // TERM-096: a printed handle of an open terminal (term-N) is a link that opens its pane.
+    term.registerLinkProvider({
+      provideLinks(y, done) {
+        const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+        const links = handlesIn(text).flatMap(({ start, end, handle }) => {
+          const go = handleRef.current?.(handle);
+          return go ? [{ range: { start: { x: start + 1, y }, end: { x: end, y } }, text: handle, activate: go }] : [];
+        });
+        done(links.length > 0 ? links : undefined);
+      },
+    });
     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu);
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
     fit.fit();
 
-    termRef.current = term;
     let alive = true;
     let ended = false;
+    // Output can arrive before terminal_spawn hands back this pane's id (several panes starting at
+    // once); it is held and replayed, else the console's opening cursor query goes unanswered and
+    // the program never starts.
+    let early: { id: number; run: () => void }[] | null = [];
+    const mine = (id: number, run: () => void) => {
+      if (idRef.current === null) early?.push({ id, run });
+      else if (id === idRef.current) run();
+    };
     const unlisteners: UnlistenFn[] = [];
     // TERM-115: keys typed while the shell is still starting are held and sent once it runs
     // (capped); a write the program side refuses is said out loud rather than lost in silence.
@@ -260,10 +318,15 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
 
     (async () => {
       unlisteners.push(
+        // TERM-098: a chunk tagged with this pane's key is drawn at once, before terminal_spawn answers;
+        // anything else that arrives first is held until the id is known and replayed then.
         await listen<OutputEvent>("terminal-output", (e) => {
-          if (!forPane(e.payload, idRef.current, number)) return;
-          term.write(decodeOutput(e.payload.data));
-          sawOutput();
+          const draw = () => {
+            term.write(decodeOutput(e.payload.data));
+            sawOutput();
+          };
+          if (idRef.current === null && forPane(e.payload, null, number)) draw();
+          else mine(e.payload.id, draw);
         }),
         // CLI-024: the app asks for the frame as it looks now; the rows on screen go back by id.
         await listen<{ id: number; request: string }>("terminal-screen-request", (e) => {
@@ -273,18 +336,19 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           for (let y = 0; y < term.rows; y++) rows.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? "");
           invoke("terminal_screen_reply", { request: e.payload.request, rows }).catch(() => {});
         }),
-        await listen<ExitEvent>("terminal-exit", (e) => {
-          if (e.payload.id !== idRef.current) return;
-          ended = true;
-          // VIEW-069 / SESS-051: a program that ends before its typed-in opening prompt could be
-          // handed over is a launch that failed, not a session that ran.
-          if (pending !== null) {
-            pending = null;
-            failed.current?.("the program ended before its opening prompt could be typed in");
-          }
+        await listen<ExitEvent>("terminal-exit", (e) =>
+          mine(e.payload.id, () => {
+            ended = true;
+            // VIEW-069 / SESS-051: a program that ends before its typed-in opening prompt could be
+            // handed over is a launch that failed, not a session that ran.
+            if (pending !== null) {
+              pending = null;
+              failed.current?.("the program ended before its opening prompt could be typed in");
+            }
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
-          setStatus({ kind: "ended", code: e.payload.code });
-        }),
+            setStatus({ kind: "ended", code: e.payload.code });
+          }),
+        ),
       );
       if (!alive) {
         // Unmounted while the listeners were registering (StrictMode's double mount): let them go,
@@ -317,7 +381,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             keepInView = true;
           }
         }
-        const { id, account: used } = await invoke<{ id: number; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number, account: account ?? null });
+        const { id, program: ran, account: used } = await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number, account: account ?? null });
+        setStarted(ran);
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
@@ -331,10 +396,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           });
         }
         setStatus({ kind: "running", id, account: used });
+        const queued = early ?? [];
+        early = null;
+        for (const h of queued) if (h.id === id) h.run();
         held.drain(write);
         if (held.dropped > 0) setFlash(`${held.dropped} characters typed before the shell started were dropped`);
         if (isFocused.current) term.focus();
       } catch (err) {
+        early = null;
         setStatus({ kind: "failed", error: String(err) });
         failed.current?.(String(err));
       }
@@ -449,7 +518,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const model = agent === "shell" ? null : modelOf(args);
 
   return (
-    <section className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
+    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
       <header className="pane-head">
         <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
@@ -457,9 +526,25 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         <span className="agent-mark" title={agentLabel}>
           <VendorMark agent={agent} size={13} />
         </span>
-        <span className="title" title={cwd ?? undefined}>
-          {title}
-        </span>
+        {naming && onRename ? (
+          <NameField
+            value={title}
+            label="Pane title"
+            onSave={(name) => {
+              setNaming(false);
+              onRename(name);
+              termRef.current?.focus();
+            }}
+            onCancel={() => {
+              setNaming(false);
+              termRef.current?.focus();
+            }}
+          />
+        ) : (
+          <span className="title" title={cwd ?? undefined}>
+            {title}
+          </span>
+        )}
         {branch && (
           <span className="chip" title={branch}>
             {branch}
@@ -467,7 +552,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
         <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
-          {name ?? programWord(agent)}
+          {name ?? shellName ?? (agent === "shell" && !program && started ? shellWord(started) : programWord(agent))}
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`} data-tip={explain}>
@@ -493,6 +578,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             <span className="meter-plan" title="This agent's plan: its 5-hour and weekly windows">
               {plan}
             </span>
+          )}
+          {onReviewPlan && (
+            <button className="btn plan-review-btn" onClick={onReviewPlan} title="Read the plan, comment on it, then approve or ask for changes">
+              Review plan
+            </button>
           )}
           <span className={`gauge ${toneOf(context ?? 0)}`.trim()} title={context === undefined ? "Context used (agents only)" : `Context used: ${Math.round(context)}%`}>
             <Ring percent={context ?? 0} />
@@ -543,7 +633,47 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       {menuAt && (
         <>
           <div className="menu-backdrop" onClick={() => setMenuAt(null)} onContextMenu={(e) => (e.preventDefault(), setMenuAt(null))} aria-hidden="true" />
-          <div className="menu" role="menu" aria-label="Pane menu" style={menuAt}>
+          <div className="menu" role="menu" aria-label="Pane menu" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
+            {onRename && (
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenuAt(null);
+                  setNaming(true);
+                }}
+              >
+                <span className="name">Set Title…</span>
+                {setKey && <Kbd id="terminal.setTitle" />}
+              </button>
+            )}
+            {onRename && custom && (
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenuAt(null);
+                  onRename(undefined);
+                }}
+              >
+                <span className="name">Clear Pane Title</span>
+                {clearKey && <Kbd id="terminal.clearPaneTitle" />}
+              </button>
+            )}
+            {onCopyId &&
+              COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => (
+                <button
+                  key={what}
+                  role="menuitem"
+                  className="menu-item"
+                  onClick={() => {
+                    setMenuAt(null);
+                    onCopyId(what);
+                  }}
+                >
+                  <span className="name">{label}</span>
+                </button>
+              ))}
             <button
               role="menuitem"
               className="menu-item"

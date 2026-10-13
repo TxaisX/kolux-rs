@@ -16,6 +16,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "kolux-dev"
 path = "src/bin/kolux-dev.rs"
 
+# CLI-006: the shipped command line. Only the release script builds it, so a development build
+# never puts a `kolux` on its panes' search path that would stand in for the installed one.
+[[bin]]
+name = "kolux"
+path = "src/bin/kolux.rs"
+required-features = ["release-cli"]
+
+[features]
+release-cli = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -38,6 +48,9 @@ trash = "5"
 # Already in the build through the updater; fetches CDN scripts for offline artifacts (SKILL-035).
 reqwest = { version = "0.13", default-features = false, features = ["native-tls"] }
 unicode_names2 = "4.0.0"
+# SKILL-013: the collected Results page renders Markdown, and the README lists SHA-256 hashes (sha2 is already in the tree).
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Registry", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_DataExchange", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_ProcessStatus", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

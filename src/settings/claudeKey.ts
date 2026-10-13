@@ -2,6 +2,8 @@
 // back end (src-tauri/src/claude_key.rs) runs the hidden setup and keeps the key sealed; the
 // window only ever sees these figures, never the key itself.
 import { fixFor, type Attention } from "./Attention";
+import { CONNECT } from "../glossary";
+import { locale } from "../language";
 
 export type KeyStatus = {
   connected: boolean;
@@ -28,7 +30,7 @@ export type KeyCard = {
 
 /** "October 2027": the month the key must be renewed in. */
 export function monthYear(ms: number): string {
-  return new Date(ms).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  return new Date(ms).toLocaleDateString(locale(), { month: "long", year: "numeric" });
 }
 
 export function keyCard(s: KeyStatus | null): KeyCard {
@@ -60,11 +62,11 @@ export function keyCard(s: KeyStatus | null): KeyCard {
     };
   }
   // A fix replaces Connect; a reason with no fix keeps it, since connecting is still the way in.
-  if (s.attention && s.attention.reason !== "usage-limit") return { state: "attention", headline: "Needs attention", detail: "", attention: s.attention, actions: fixFor(s.attention, "claude-key") ? [] : ["connect"] };
+  if (s.attention && s.attention.reason !== "usage-limit") return { state: "attention", headline: "Needs attention", detail: "", attention: s.attention, actions: fixFor(s.attention, "claude-key") ? ["cancel"] : ["connect", "cancel"] };
   return {
     state: "disconnected",
     headline: "Connect with a key that lasts a year",
-    detail: "Connect opens Claude's sign-in page in your browser once and keeps a key that lasts a year.",
+    detail: CONNECT.claude,
     attention: s.attention,
     actions: ["connect"],
   };

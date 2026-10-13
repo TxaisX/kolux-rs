@@ -1,10 +1,12 @@
 import React from "react";
+import { saveChanged } from "./settings/saveChanged";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } from "./theme";
 import { stampLook } from "./settings/general";
+import { applyLanguage, LANGUAGE_FIELD } from "./language";
 import { LAYOUT_FIELD, restoreLayout, resumeArgs, stillThere } from "./terminal/layout";
 import "./styles.css";
 
@@ -19,9 +21,11 @@ async function start() {
     new Promise<null>((r) => setTimeout(() => r(null), 1500)),
   ]);
   if (saved) applyAppearance(readAppearance(saved));
+  // SET-017: the saved language is in force before the first frame draws.
+  applyLanguage(saved?.[LANGUAGE_FIELD]);
   // SET-037: the look is written down on the first start, so a fresh profile stays New.
   const stamped = saved && stampLook(saved);
-  if (stamped) void invoke("save_settings", { value: stamped }).catch(() => {});
+  if (stamped) void saveChanged(saved, stamped).catch(() => {});
   // PROJ-067: the saved tabs come back, less those whose folder is gone.
   let layout = restoreLayout((stamped || saved || {})[LAYOUT_FIELD]);
   if (layout) {

@@ -2,6 +2,7 @@
 // (SET-002) and the terminal colours picker with "Match app theme" (SET-003). Every change shows at
 // once on the whole window; the save follows a moment later so a slider drag is one write.
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
@@ -11,8 +12,9 @@ import { useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
+import { PERCENT_FIELD, percentMode, type PercentMode } from "../usage/meter";
 import { Segmented } from "./GeneralPage";
-import { TITLE_BAR_FIELD, titleBarButton } from "./general";
+import { applyLanguage, LANGUAGE_FIELD, LANGUAGES, savedLanguage, systemLanguage, type LanguageChoice } from "../language";
 
 const MODE_LABEL: Record<Mode, string> = { system: "System", light: "Light", dark: "Dark" };
 
@@ -117,7 +119,28 @@ function FontField({ label, value, placeholder, onPick }: { label: string; value
 const firstFamily = (stack: string) => stack.split(",")[0].replace(/"/g, "").trim();
 
 /** `windowPart` and `windowSummary` fill the Window & Sidebar section (they live in other settings). */
-export function AppearanceView({ look, onChange, windowPart, windowSummary = "" }: { look: Appearance; onChange: (a: Appearance) => void; windowPart?: ReactNode; windowSummary?: string }) {
+/** SET-017: the interface language, each choice in its own language; System says what it resolves to. */
+export function LanguageView({ value, onPick, os = navigator.languages }: { value: LanguageChoice; onPick: (v: LanguageChoice) => void; os?: readonly string[] }) {
+  const sys = LANGUAGES.find((l) => l.id === systemLanguage(os))?.name;
+  return (
+    <section className="conn-card" data-section="language">
+      <h2 className="conn-name">Language</h2>
+      <label className="look-select">
+        <span>Language</span>
+        <select aria-label="Interface language" value={value} onChange={(e) => onPick(e.target.value as LanguageChoice)}>
+          {LANGUAGES.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.id === "system" ? `System (${sys})` : l.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="conn-detail">Dates, times and sorted lists follow the language. Kolux's own words stay in English until its language packs arrive.</p>
+    </section>
+  );
+}
+
+export function AppearanceView({ look, onChange, windowPart, windowSummary = "", languagePart }: { look: Appearance; onChange: (a: Appearance) => void; windowPart?: ReactNode; windowSummary?: string; languagePart?: ReactNode }) {
   const classic = look.theme === "classic";
   // All three sections open at first; a link into a folded one unfolds it (SettingsPage).
   const [open, setOpen] = useState({ interface: true, terminal: true, window: true });
@@ -134,6 +157,7 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "" 
         </div>
         {look.mode === "system" && <p className="conn-detail">Follows Windows, also while Kolux is running.</p>}
       </section>
+      {languagePart}
       <section className="conn-card" data-section="theme">
         <h2 className="conn-name">Colour theme</h2>
         <div className="look-row">
@@ -263,6 +287,22 @@ function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: A
   );
 }
 
+/** USAGE-025: how plan usage percentages read. Only the Agents screen's usage footer follows it. */
+export function UsagePercentPick({ value, onPick }: { value: PercentMode; onPick: (v: PercentMode) => void }) {
+  return (
+    <>
+      <div className="look-select">
+        <span>Usage percentages</span>
+        <select aria-label="Usage percentages" className="field" value={value} onChange={(e) => onPick(percentMode(e.target.value))}>
+          <option value="used">Used</option>
+          <option value="remaining">Remaining</option>
+        </select>
+      </div>
+      <p className="conn-detail">How the Agents screen's usage footer reads plan use; the top bar always shows what is left.</p>
+    </>
+  );
+}
+
 /** SET-020: the app name, the Tasks and Automations buttons, and the status bar with its items.
  *  VIEW-096: a status bar hidden from its right-click menu comes back here. */
 function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings>) {
@@ -306,40 +346,22 @@ function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings
             </label>
           ))}
         </div>
+        <UsagePercentPick value={percentMode(settings[PERCENT_FIELD])} onPick={(v) => void save({ [PERCENT_FIELD]: v })} />
         {error && <p className="conn-detail warn">{error}</p>}
       </section>
     </>
   );
 }
 
-/** VIEW-011: the title-bar page buttons, each off by default. */
-export function TitleBarView({ automations, onAutomations }: { automations: boolean; onAutomations: (on: boolean) => void }) {
-  return (
-    <section className="conn-card" data-section="title-bar">
-      <h2 className="conn-name">Title bar</h2>
-      <label className="conn-switch">
-        <input type="checkbox" role="switch" checked={automations} onChange={(e) => onAutomations(e.target.checked)} />
-        <span>
-          Automations button
-          <small>A button in the title bar that opens the Automations page.</small>
-        </span>
-      </label>
-    </section>
-  );
-}
 
 export default function AppearancePage() {
   const [look, setLook] = useState<Appearance | null>(null);
-  const [automations, setAutomations] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const status = useSettings();
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => {
     invoke<Record<string, unknown>>("get_settings")
-      .then((s) => {
-        setLook(readAppearance(s));
-        setAutomations(titleBarButton(s, "automations"));
-      })
+      .then((s) => setLook(readAppearance(s)))
       .catch((e) => setError(String(e)));
     return () => window.clearTimeout(timer.current);
   }, []);
@@ -349,21 +371,14 @@ export default function AppearancePage() {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       invoke<Record<string, unknown>>("get_settings")
-        .then((s) => invoke("save_settings", { value: writeAppearance(s, next) }))
+        .then((s) => saveChanged(s, writeAppearance(s, next)))
         .catch((e) => setError(String(e)));
     }, 250);
-  };
-  const toggle = (on: boolean) => {
-    setAutomations(on);
-    invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [TITLE_BAR_FIELD.automations]: on } }))
-      .catch((e) => setError(String(e)));
   };
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
-      {look && <AppearanceView look={look} onChange={change} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
-      {automations !== null && <TitleBarView automations={automations} onAutomations={toggle} />}
+      {look && <AppearanceView look={look} onChange={change} languagePart={status.settings && <LanguageView value={savedLanguage(status.settings[LANGUAGE_FIELD])} onPick={(v) => { applyLanguage(v); void status.save({ [LANGUAGE_FIELD]: v }); }} />} windowPart={<WindowSwitches {...status} />} windowSummary={status.settings ? windowSummary(status.settings) : ""} />}
     </>
   );
 }

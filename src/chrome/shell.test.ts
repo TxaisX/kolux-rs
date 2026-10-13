@@ -83,3 +83,16 @@ test("VIEW-011: the Automations button shows only when it is turned on, pressed 
   expect(on).toContain('title="Automations"');
   expect(on).toMatch(/aria-pressed="true"[^>]*title="Automations"|title="Automations"[^>]*aria-pressed="true"/);
 });
+
+test("SESS-006: the create menu has a terminal per installed shell, Choose agent, a browser and markdown", () => {
+  const shells = [
+    { id: "powershell", name: "Windows PowerShell", program: "powershell.exe", args: ["-NoLogo"] },
+    { id: "pwsh", name: "PowerShell 7", program: "C:\pf\pwsh.exe", args: ["-NoLogo"] },
+  ];
+  const html = renderToString(createElement(LayoutStrip, { count: 1, onLayout: () => {}, agents: [], shells, onNewTab: () => {}, open: true }));
+  expect(html).toContain("Terminal · Windows PowerShell");
+  expect(html).toContain("Terminal · PowerShell 7");
+  expect(html).toMatch(/Terminal · PowerShell 7[\s\S]*Choose agent…[\s\S]*Browser[\s\S]*New markdown file[\s\S]*Open markdown file…/);
+  // Without the shell list (an old back end) the one default terminal is still there.
+  expect(renderToString(createElement(LayoutStrip, { count: 1, onLayout: () => {}, onNewTab: () => {}, open: true }))).toContain(">Terminal</span>");
+});

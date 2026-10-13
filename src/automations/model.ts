@@ -1,3 +1,4 @@
+import { locale } from "../language";
 // The Automations list (AUTO-016) as pure functions: rows, sorting, filters and search, so the
 // rules are tested without a window. The rows come from the back end (src-tauri/src/automations.rs).
 
@@ -17,6 +18,14 @@ export type Automation = {
   nextRunAt?: number | null;
   /** AUTO-005: the branch a new-per-run worktree is cut from; empty means the project's default. */
   baseBranch?: string;
+  /** AUTO-010: whether each new-per-run worktree runs the project setup; missing means skip. */
+  runSetup?: boolean;
+  /** AUTO-007: how many minutes late a missed run may still start; 0 skips it. */
+  missedRunGraceMinutes?: number;
+  precheck?: string;
+  precheckTimeoutSeconds?: number;
+  /** From the back end (AUTO-022): what keeps it from running (project, worktree or sign-in). */
+  problem?: string | null;
   /** From the back end (AUTO-001): the timetable in words, e.g. "Monday to Friday at 09:00 (UTC)". */
   timetable?: string;
   /** From the back end: the next run in the timetable's zone, e.g. "Monday 09:00". */
@@ -32,7 +41,7 @@ export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", da
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
-export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; worktree?: string; worktreeName?: string };
+export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean; dispatchedAt?: number; finishedAt?: number };
 
 export type SortKey = "name" | "trigger" | "agent" | "project" | "lastRun" | "nextRun";
 export type Filters = { state: "all" | "on" | "paused"; result: "all" | "never" | RunStatus; agents: string[] };
@@ -43,9 +52,14 @@ export const PROMPT_SEARCH_CHARS = 2048;
 /** A query longer than this is refused rather than run. */
 export const MAX_QUERY = 200;
 
-const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
-/** Names sort the way people count: "Run 2" before "Run 10", case ignored. */
-export const naturalCompare = (a: string, b: string): number => collator.compare(a, b);
+let collator: [string, Intl.Collator] | null = null;
+/** Names sort the way people count: "Run 2" before "Run 10", case ignored, in the interface
+ * language's own order (SET-017). */
+export const naturalCompare = (a: string, b: string): number => {
+  const l = locale();
+  if (collator?.[0] !== l) collator = [l, new Intl.Collator(l, { numeric: true, sensitivity: "base" })];
+  return collator[1].compare(a, b);
+};
 
 /** The newest run of an automation, or none when it never ran. */
 export function lastRun(id: string, runs: Run[]): Run | undefined {
@@ -113,6 +127,29 @@ export function triggerLabel(a: Automation): string {
   return cron ? `Custom: ${cron}` : "No timetable";
 }
 
+const CAUSE: Record<string, string> = { missed: "Kolux was away", signin: "sign-in needed", precheck: "precheck failed" };
+
+/** AUTO-008: how long a precheck may take, in seconds. */
+export const PRECHECK: [number, string][] = [
+  [60, "1 minute"],
+  [120, "2 minutes"],
+  [300, "5 minutes"],
+  [600, "10 minutes"],
+];
+export const precheckWord = (s: number | undefined) => (PRECHECK.find((p) => p[0] === (s ?? 60)) ?? PRECHECK[0])[1];
+
+/** AUTO-007's choices for a run missed while Kolux was away, in minutes. */
+export const GRACE: [number, string][] = [
+  [0, "Skip it"],
+  [30, "Start it up to 30 minutes late"],
+  [60, "Start it up to 1 hour late"],
+  [180, "Start it up to 3 hours late"],
+  [720, "Start it up to 12 hours late"],
+  [1440, "Start it up to 24 hours late"],
+  [2880, "Start it up to 48 hours late"],
+];
+export const graceWord = (m: number | undefined) => (GRACE.find((g) => g[0] === (m ?? 0)) ?? GRACE[0])[1];
+
 export function statusWord(r: Run): string {
   switch (r.status) {
     case "pending":
@@ -124,18 +161,24 @@ export function statusWord(r: Run): string {
     case "completed":
       return "Completed";
     case "skipped":
-      return r.cause ? `Skipped (${r.cause})` : "Skipped";
+      if (r.cause === "precheck" && r.timedOut) return "Skipped (precheck timed out)";
+      return (r.cause ? `Skipped (${CAUSE[r.cause] ?? r.cause})` : "Skipped") + ((r.repeats ?? 1) > 1 ? ` · ${r.repeats} times` : "");
     case "failed":
-      return "Failed to start";
+      return r.dispatchedAt === undefined ? "Failed to start" : "Failed";
   }
 }
 
 export function ago(at: number, now: number): string {
   const s = Math.max(0, Math.round((now - at) / 1000));
-  if (s < 60) return "just now";
   const m = Math.round(s / 60);
-  if (m < 60) return `${m} min ago`;
   const h = Math.round(m / 60);
+  // SET-017: other languages say it their own way; English keeps its short words.
+  if (locale() !== "en") {
+    const r = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
+    return s < 60 ? r.format(0, "second") : m < 60 ? r.format(-m, "minute") : h < 48 ? r.format(-h, "hour") : r.format(-Math.round(h / 24), "day");
+  }
+  if (s < 60) return "just now";
+  if (m < 60) return `${m} min ago`;
   if (h < 48) return `${h} h ago`;
   return `${Math.round(h / 24)} days ago`;
 }
@@ -215,3 +258,24 @@ export function pageKey(e: { key: string; mods: boolean; control: boolean; searc
 /** AUTO-017: the selection stays put; when its row is gone it moves to the row now at its place. */
 export const keepSelection = (rows: string[], selected: string | null, lastIndex: number): string | null =>
   rows.length === 0 ? null : selected !== null && rows.includes(selected) ? selected : rows[Math.min(lastIndex, rows.length - 1)];
+
+/** AUTO-013: what a run in an automation's Runs tab offers. A run that never got a workspace
+ *  (skipped ones included) shows its details only; Rerun is for a failed run of an automation
+ *  that still exists. The first action is what Enter does. */
+export type RunAction = "view" | "resume" | "snapshot" | "rerun";
+export function runActions(r: Run, o: { live: boolean; exists: boolean }): RunAction[] {
+  const out: RunAction[] = [];
+  if (r.worktree) out.push(r.worktreeGone ? "snapshot" : o.live ? "view" : "resume");
+  if (r.status === "failed" && o.exists) out.push("rerun");
+  return out;
+}
+
+/** AUTO-013: Up and Down step through `count` runs (Down with none selected picks the first),
+ *  Enter opens the selected one; a key with a modifier held or mid-composition does nothing. */
+export function runStep(e: { key: string; mods: boolean; composing: boolean }, at: number | null, count: number): number | "open" | null {
+  if (e.mods || e.composing || count === 0) return null;
+  if (e.key === "ArrowDown") return at === null ? 0 : Math.min(count - 1, at + 1);
+  if (e.key === "ArrowUp") return at === null ? 0 : Math.max(0, at - 1);
+  if (e.key === "Enter") return at === null ? null : "open";
+  return null;
+}

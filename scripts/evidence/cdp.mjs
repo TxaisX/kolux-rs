@@ -9,6 +9,7 @@
 //        node cdp.mjs <targetMatch> key <Enter|Escape|...> [mods: Alt=1 Ctrl=2 Shift=8]
 //        node cdp.mjs <targetMatch> focus "<css selector>"
 //        node cdp.mjs <targetMatch> hover "<css selector>"   (moves the pointer to its centre)
+//        node cdp.mjs <targetMatch> wheel "<css selector>" <deltaY>   (the mouse wheel over its middle)
 // targetMatch is a substring of the target's url or title; "main" = the localhost dev page.
 const PORT = process.env.CDP_PORT || "9222";
 const [match, cmd, ...rest] = process.argv.slice(2);
@@ -29,9 +30,9 @@ ws.onmessage = (ev) => { const m = JSON.parse(ev.data); if (m.id && waiting.has(
 const send = (method, params = {}) => new Promise((r) => { const i = ++id; waiting.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const KEYS = { Enter: { code: "Enter", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }, Escape: { code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 }, Tab: { code: "Tab", key: "Tab", windowsVirtualKeyCode: 9 }, Backspace: { code: "Backspace", key: "Backspace", windowsVirtualKeyCode: 8 } };
+const KEYS = { Enter: { code: "Enter", key: "Enter", windowsVirtualKeyCode: 13, text: "\r" }, Escape: { code: "Escape", key: "Escape", windowsVirtualKeyCode: 27 }, Tab: { code: "Tab", key: "Tab", windowsVirtualKeyCode: 9 }, Backspace: { code: "Backspace", key: "Backspace", windowsVirtualKeyCode: 8 }, ArrowUp: { code: "ArrowUp", key: "ArrowUp", windowsVirtualKeyCode: 38 }, ArrowDown: { code: "ArrowDown", key: "ArrowDown", windowsVirtualKeyCode: 40 }, ArrowLeft: { code: "ArrowLeft", key: "ArrowLeft", windowsVirtualKeyCode: 37 }, ArrowRight: { code: "ArrowRight", key: "ArrowRight", windowsVirtualKeyCode: 39 }, BracketLeft: { code: "BracketLeft", key: "[", windowsVirtualKeyCode: 219 }, BracketRight: { code: "BracketRight", key: "]", windowsVirtualKeyCode: 221 } };
 const key = async (name, mods = 0) => {
-  const k = KEYS[name] || { code: "Key" + name.toUpperCase(), key: name, windowsVirtualKeyCode: name.toUpperCase().charCodeAt(0) };
+  const k = KEYS[name] || { code: (/^[0-9]$/.test(name) ? "Digit" : "Key") + name.toUpperCase(), key: name, windowsVirtualKeyCode: name.toUpperCase().charCodeAt(0) };
   await send("Input.dispatchKeyEvent", { type: "keyDown", modifiers: mods, ...k });
   await send("Input.dispatchKeyEvent", { type: "keyUp", modifiers: mods, ...k });
 };
@@ -65,6 +66,12 @@ if (cmd === "eval") {
   if (!at) { console.error("missing", rest[0]); process.exit(1); }
   await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] });
   console.log("hover", at.join(","));
+} else if (cmd === "wheel") {
+  const r = await send("Runtime.evaluate", { expression: `(()=>{const e=[...document.querySelectorAll(${JSON.stringify(rest[0])})].find(x=>x.offsetParent!==null); if(!e) return null; const b=e.getBoundingClientRect(); return [b.x+b.width/2,b.y+b.height/2];})()`, returnByValue: true });
+  const at = r.result?.result?.value;
+  if (!at) { console.error("missing", rest[0]); process.exit(2); }
+  await send("Input.dispatchMouseEvent", { type: "mouseWheel", x: at[0], y: at[1], deltaX: 0, deltaY: Number(rest[1] || 0) });
+  console.log("wheel", rest[1], "at", at.map(Math.round).join(","));
 } else {
   console.error("unknown cmd", cmd); process.exit(2);
 }

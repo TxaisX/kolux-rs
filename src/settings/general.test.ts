@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { openPageAt, readLook, savedFirst, stampLook, startScreen, titleBarButton } from "./general";
+import { openPageAt, readLook, savedFirst, stampLook, startScreen } from "./general";
 
 test("a fresh profile is New, an existing one without the choice is Classic", () => {
   expect(readLook({})).toBe("new");
@@ -20,10 +20,8 @@ test("the first screen counts only under New", () => {
   expect(savedFirst({ firstScreen: "elsewhere" })).toBe("terminals");
 });
 
-test("VIEW-011: the Automations title-bar button is off by default and the page open at quit comes back", () => {
-  expect(titleBarButton({}, "automations")).toBe(false);
-  expect(titleBarButton({ titleBarAutomations: true }, "automations")).toBe(true);
-  expect(titleBarButton({ titleBarAutomations: "yes" }, "automations")).toBe(false);
+test("VIEW-011: the page open at quit comes back", () => {
+  expect(openPageAt({ openPage: "tasks" })).toBe("tasks");
   expect(openPageAt({ openPage: "automations" })).toBe("automations");
   expect(openPageAt({ openPage: "routing" })).toBe("routing");
   expect(openPageAt({ openPage: "skills" })).toBe(null);

@@ -1,8 +1,9 @@
 // Reading and saving the text of a file shown in an editor tab (EDIT-001). A save goes to a
 // temporary file beside the target and is then moved over it, so a failed write never leaves a
-// half-written file behind. EDIT-045: every path from the interface goes through `links::fence`
-// first (inside a project or granted exactly, never out through a link); large and binary files
-// are EDIT-046 (T-178).
+// half-written file behind. Every command here takes only paths inside the user's projects and
+// worktrees (ACCT-055, fence.rs); EDIT-045's `links::fence` guards the file operations and
+// `path_kind` (inside a project or granted exactly, never out through a link); the WSL and share
+// parts of EDIT-045 are T-062; large and binary files are EDIT-046 (T-178).
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -32,13 +33,28 @@ type Grants<'a> = tauri::State<'a, crate::links::Grants>;
 /// SAFE-021 / EDIT-045: a path on another machine, outside the projects, or leading out through a
 /// link is refused before the file is touched.
 #[tauri::command]
-pub fn file_read(store: Store<'_>, grants: Grants<'_>, path: String) -> Result<String, String> {
-    read_text(&crate::links::fence(&path, &crate::links::roots(&store), &grants.snapshot(), true)?)
+pub fn file_read(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
+    read_text(&fence.allow(&path, &store, &git, true)?)
 }
 
 #[tauri::command]
-pub fn file_write(store: Store<'_>, grants: Grants<'_>, path: String, text: String) -> Result<(), String> {
-    write_text(&crate::links::fence(&path, &crate::links::roots(&store), &grants.snapshot(), true)?, &text)
+pub fn file_write(path: String, text: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    write_text(&fence.allow(&path, &store, &git, true)?, &text)
+}
+
+/// ACCT-055: Open a file shows the system picker here, so only the file the user chose is
+/// granted (never its folder); none when the picker was cancelled.
+#[tauri::command]
+pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut pick = app.dialog().file().set_title("Open a file");
+    if let Some(dir) = default_path {
+        pick = pick.set_directory(dir);
+    }
+    let Some(chosen) = pick.blocking_pick_file() else { return Ok(None) };
+    let path = chosen.into_path().map_err(|e| e.to_string())?;
+    fence.grant(&path, &*store.lock().map_err(|e| e.to_string())?)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
 /// The worktree's markdown files for the Mod+Shift+O picker (EDIT-012), at most 2000 of them.
@@ -49,8 +65,8 @@ pub struct Notes {
 }
 
 #[tauri::command]
-pub fn md_list(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<Notes, String> {
-    let (files, capped) = git.markdown_files(Path::new(&root), 2000)?;
+pub fn md_list(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Notes, String> {
+    let (files, capped) = git.markdown_files(&fence.allow(&root, &store, &git, false)?, 2000)?;
     Ok(Notes { files, capped })
 }
 
@@ -129,10 +145,11 @@ pub fn shape(raw: &str, cap: usize) -> (Vec<String>, bool) {
 }
 
 #[tauri::command]
-pub async fn file_list(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<FileList, String> {
+pub async fn file_list(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<FileList, String> {
+    let root = fence.allow(&root, &store, &git, false)?;
     let git = git.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let root = Path::new(&root);
+        let root = root.as_path();
         // A one-off failure to start ripgrep is tried once more; only "not found" means it is missing.
         let out = rg(root).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Err(e) } else { rg(root) });
         match out {
@@ -181,28 +198,28 @@ pub struct Sides {
 }
 
 #[tauri::command]
-pub fn diff_sides(path: String, staged: bool, git: tauri::State<'_, crate::git::Git>) -> Result<Sides, String> {
-    let (original, modified) = git.diff_sides(Path::new(&path), staged)?;
+pub async fn diff_sides(path: String, staged: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Sides, String> {
+    let (original, modified) = git.diff_sides(&fence.allow(&path, &store, &git, false)?, staged)?;
     Ok(Sides { original, modified })
 }
 
 /// The changed files the diff picker lists (EDIT-027).
 #[tauri::command]
-pub fn git_changes(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Change>, String> {
-    git.changes(Path::new(&root))
+pub fn git_changes(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Change>, String> {
+    git.changes(&fence.allow(&root, &store, &git, false)?)
 }
 
 /// Every change of the worktree for All Changes (EDIT-029); see Git::change_entries.
 #[tauri::command]
-pub fn change_entries(root: String, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Entry>, String> {
-    git.change_entries(Path::new(&root))
+pub async fn change_entries(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Entry>, String> {
+    git.change_entries(&fence.allow(&root, &store, &git, false)?)
 }
 
 /// One side of a changed image, as bytes (EDIT-029: images load on their own); empty when the
 /// file is not on that side.
 #[tauri::command]
-pub fn diff_image(path: String, staged: bool, new: bool, git: tauri::State<'_, crate::git::Git>) -> Result<tauri::ipc::Response, String> {
-    let (old, now) = git.diff_bytes(Path::new(&path), staged)?;
+pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<tauri::ipc::Response, String> {
+    let (old, now) = git.diff_bytes(&fence.allow(&path, &store, &git, false)?, staged)?;
     Ok(tauri::ipc::Response::new(if new { now } else { old }))
 }
 
@@ -210,8 +227,8 @@ pub fn diff_image(path: String, staged: bool, new: bool, git: tauri::State<'_, c
 /// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
 /// first save is EDIT-054 (T-237).
 #[tauri::command]
-pub fn md_new(root: String) -> Result<String, String> {
-    new_note(Path::new(&root))
+pub fn md_new(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
+    new_note(&fence.allow(&root, &store, &git, false)?)
 }
 
 pub fn new_note(root: &Path) -> Result<String, String> {
@@ -256,8 +273,8 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
-pub fn dir_list(store: Store<'_>, grants: Grants<'_>, path: String) -> Result<Vec<DirEntry>, String> {
-    list_dir(&crate::links::fence(&path, &crate::links::roots(&store), &grants.snapshot(), true)?)
+pub fn dir_list(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<DirEntry>, String> {
+    list_dir(&fence.allow(&path, &store, &git, false)?)
 }
 
 /// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not

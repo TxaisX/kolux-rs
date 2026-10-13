@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cardReducer, initialCard, mainAction, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
+import { barItem, cardReducer, initialCard, mainAction, tipVisible, type Action, type CardState, type UpdateInfo } from "./card";
 
 const info = (version: string, notes: string[] = ["One", "Two", "Three", "Four", "Five"]): UpdateInfo => ({ version, currentVersion: "0.1.0", notes });
 const run = (s: CardState, ...actions: Action[]) => actions.reduce(cardReducer, s);
@@ -155,5 +155,33 @@ describe("ready pop-up (APP-025)", () => {
     let s = quietReady(initialCard(null, true), "0.2.0");
     s = run(s, { type: "notReady" });
     expect(s.popup).toBeNull();
+  });
+});
+
+describe("status bar item (VIEW-100)", () => {
+  it("shows nothing while idle, checking or up to date", () => {
+    expect(barItem({ kind: "idle" })).toBeNull();
+    expect(barItem({ kind: "checking" })).toBeNull();
+    expect(barItem({ kind: "upToDate" })).toBeNull();
+  });
+
+  it("names an available, downloading, ready or failed update", () => {
+    expect(barItem({ kind: "available", info: info("0.2.0") })).toMatchObject({ tone: "info", text: "Update 0.2.0" });
+    expect(barItem({ kind: "downloading", info: info("0.2.0"), received: 25, total: 100 })).toMatchObject({ tone: "info", text: "Downloading 0.2.0 · 25%" });
+    expect(barItem({ kind: "downloading", info: info("0.2.0"), received: 25, total: null })).toMatchObject({ text: "Downloading 0.2.0" });
+    expect(barItem({ kind: "ready", info: info("0.2.0") })).toMatchObject({ tone: "ready", text: "Restart to update" });
+    const failed = barItem({ kind: "error", message: "m", next: "n", info: info("0.2.0"), retry: "download" });
+    expect(failed).toMatchObject({ tone: "error", text: "Update failed" });
+  });
+
+  it("a click brings back a dismissed or collapsed card, and the failure item stays until then", () => {
+    let s = run(initialCard(null, true), { type: "checkStart", requested: false }, { type: "checkDone", requested: false, found: info("0.2.0") }, { type: "downloadStart", info: info("0.2.0") });
+    s = run(s, { type: "downloadFailed", info: info("0.2.0"), message: "signature", offline: false }, { type: "collapse" });
+    expect(barItem(s.phase)?.tone).toBe("error");
+    s = run(s, { type: "show" });
+    expect(s.shown && !s.collapsed).toBe(true);
+    s = run(initialCard(null, true), { type: "ready", info: info("0.2.0") }, { type: "dismiss" }, { type: "show" });
+    expect(s.shown).toBe(true);
+    expect(run(initialCard(null, true), { type: "show" }).shown).toBe(false);
   });
 });

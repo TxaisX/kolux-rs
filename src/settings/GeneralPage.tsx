@@ -4,7 +4,8 @@ import { useState } from "react";
 import type { AppInfo } from "../app-info";
 import { screens } from "../chrome/TopBar";
 import { useSettings } from "./useSettings";
-import { FIRST_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
+import { FIRST_FIELD, LOOK_FIELD, NEEDS_STRIP_FIELD, readLook, savedFirst, stripOn, type Look } from "./general";
+import { REVIEW_FIELD, reviewOn } from "../editor/notes";
 import { feedbackUrl, OUTBOUND } from "./privacy";
 
 /** A row of buttons that behaves as one radio group. */
@@ -36,6 +37,14 @@ export function GeneralView({ settings, onSave }: { settings: Record<string, unk
         <Segmented label="Opens first" options={screens} value={classic ? "terminals" : savedFirst(settings)} off={classic ? ["agents", "board"] : []} onPick={(v) => onSave({ [FIRST_FIELD]: v })} />
       </div>
       {classic && <p className="conn-detail">Switch the look to New to open on Agents or Board.</p>}
+      <label className="conn-switch">
+        <input type="checkbox" aria-label="Review notes" checked={reviewOn(settings)} onChange={(e) => onSave({ [REVIEW_FIELD]: e.target.checked })} />
+        <span>Review notes: select text in a file and press Ctrl+Shift+A to add a note for an agent.</span>
+      </label>
+      <label className="conn-switch">
+        <input type="checkbox" aria-label="Needs you strip" checked={stripOn(settings)} onChange={(e) => onSave({ [NEEDS_STRIP_FIELD]: e.target.checked })} />
+        <span>Needs you strip: a row above the grid lists the sessions waiting on a permission or a question.</span>
+      </label>
     </section>
   );
 }

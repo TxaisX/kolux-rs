@@ -226,12 +226,15 @@ pub fn fence(path: &str, roots: &[String], grants: &HashSet<String>, follow: boo
 
 /// EDIT-045: allows `path` for this run, that exact path and nothing beneath it.
 #[tauri::command]
-pub fn file_grant(store: tauri::State<'_, Mutex<crate::state::Store>>, grants: tauri::State<'_, Grants>, path: String) -> Result<(), String> {
+pub fn file_grant(store: tauri::State<'_, Mutex<crate::state::Store>>, grants: tauri::State<'_, Grants>, fence: tauri::State<'_, crate::fence::Fence>, path: String) -> Result<(), String> {
     refuse_host(&path, &roots(&store))?;
     if !Path::new(&path).is_absolute() {
         return Err(format!("{path} is not a full path"));
     }
     grants.0.lock().unwrap_or_else(|e| e.into_inner()).insert(fence_key(&path));
+    // The editor reads and saves through ACCT-055's fence, so a file is granted there too; a
+    // folder or a missing file is not (that fence grants only existing files).
+    let _ = fence.grant(Path::new(&path), &store.lock().unwrap_or_else(|e| e.into_inner()));
     Ok(())
 }
 

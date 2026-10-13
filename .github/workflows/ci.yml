@@ -35,7 +35,7 @@ jobs:
         run: pnpm exec vitest run --shard=${{ matrix.shard }}/4
       # The Rust side and the checks are spread over the shards so each is about as long.
       - name: Rust toolchain
-        if: matrix.shard == 1 || matrix.shard == 2
+        if: matrix.shard <= 3
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -47,12 +47,22 @@ jobs:
         if: matrix.shard == 2
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
-      - name: Licence check (Rust)
+      # T-541: all four cargo-deny checks (advisories, bans, licences, sources), not licences alone.
+      # Installed as a binary because the cargo-deny Docker action cannot run on a Windows runner.
+      - name: Install cargo-deny
         if: matrix.shard == 3
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: taiki-e/install-action@v2
         with:
-          manifest-path: src-tauri/Cargo.toml
-          command: check licenses
+          tool: cargo-deny
+      - name: Dependency check (Rust advisories, bans, licences, sources)
+        if: matrix.shard == 3
+        working-directory: src-tauri
+        run: cargo deny check
+      # T-541: the clean-room firewall over the spec fails on any hit not in scripts/firewall-baseline.txt.
+      - name: Spec firewall (new hits only)
+        if: matrix.shard == 3
+        shell: pwsh
+        run: ./scripts/firewall-check.ps1 -Baseline
       - name: Types, licences, plan and workflows
         if: matrix.shard == 4
         run: |

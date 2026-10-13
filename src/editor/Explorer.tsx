@@ -424,7 +424,8 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         const ratio = window.devicePixelRatio || 1;
         const [x, y] = [p.position.x / ratio, p.position.y / ratio];
         const b = el.getBoundingClientRect();
-        const over = x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+        // A dialog over the explorer (a kit's setup) takes the drop instead.
+        const over = x >= b.left && x <= b.right && y >= b.top && y <= b.bottom && el.contains(document.elementFromPoint(x, y));
         const dir = over ? dirAt(live.current.rows, rowAt(y), root, live.current.isDir) : null;
         if (p.type !== "drop") return setDropAt(dir);
         setDropAt(null);

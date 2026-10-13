@@ -6,8 +6,9 @@
  * model id, "default" for "the program's own default" (an explicit pick), or null. `title` is
  * the seat's job title (SESS-024): it names the pane; blank means none. `prompt` is the opening
  * prompt (SESS-051), handed to the agent by its own route; blank means none. `role` is the seat's
- * role in a launch shape (SESS-012); none in Custom. */
-export type Seat = { agent: string | null; model: string | null; title?: string; prompt?: string; role?: Role };
+ * role in a launch shape (SESS-012); none in Custom. `effort` and `fast` (SESS-016) are the seat's
+ * own options, offered only for a model that has them; unset means the model's own default. */
+export type Seat = { agent: string | null; model: string | null; title?: string; prompt?: string; role?: Role; effort?: string; fast?: boolean };
 
 export const TERMINAL = "terminal";
 
@@ -46,12 +47,18 @@ export function seatReady(s: Seat): boolean {
 
 export const allReady = (seats: Seat[]): boolean => seats.length > 0 && seats.every(seatReady);
 
+/** SESS-019: what the footer says the first unfinished seat still lacks; null when all are ready. */
+export function seatGap(seats: Seat[]): string | null {
+  const i = seats.findIndex((s) => !seatReady(s));
+  return i < 0 ? null : `Seat ${i + 1} still needs ${seats[i].agent === null ? "an AI" : "a model"}`;
+}
+
 /** SESS-015 "Same for all": the first finished seat's AI and model go into every other seat;
  * job titles stay per seat. Unchanged when no seat is finished. */
 export function sameForAll(seats: Seat[]): Seat[] {
   const first = seats.find(seatReady);
   if (!first) return seats;
-  return seats.map((s) => ({ ...s, agent: first.agent, model: first.model }));
+  return seats.map((s) => ({ ...s, agent: first.agent, model: first.model, effort: first.effort, fast: first.fast }));
 }
 
 /** SESS-024: a pane whose session failed to start is dropped. `batchEmpty` says the whole
@@ -63,14 +70,18 @@ export function withoutFailed<T extends { key: number; batch?: number }>(panes: 
   return { panes: rest, batchEmpty };
 }
 
-/** A model choice: its id on the agent's command line and the label the user reads. */
-export type ModelChoice = { id: string; label: string };
+/** A model choice: its id on the agent's command line, the label the user reads, and (SESS-016)
+ * the effort levels and fast mode it offers, when it has them. */
+export type ModelChoice = { id: string; label: string; efforts?: string[]; fast?: boolean };
+
+/** Claude Code's effort levels (its `--effort` flag). */
+const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 // ponytail: built-in lists only (ACCT-032); the live per-account lookup is SESS-029 (T-100).
 const BUILT_IN: Record<string, ModelChoice[]> = {
   claude: [
-    { id: "opus", label: "Claude Opus" },
-    { id: "sonnet", label: "Claude Sonnet" },
+    { id: "opus", label: "Claude Opus", efforts: CLAUDE_EFFORTS, fast: true },
+    { id: "sonnet", label: "Claude Sonnet", efforts: CLAUDE_EFFORTS },
     { id: "haiku", label: "Claude Haiku" },
   ],
   codex: [
@@ -105,6 +116,49 @@ export function modelsFor(agentId: string): ModelChoice[] {
 /** The arguments a model pick adds to the start line; none for the program's own default. */
 export function modelArgs(model: string | null): string[] {
   return model === null || model === DEFAULT_MODEL ? [] : ["--model", model];
+}
+
+/** The seat's model as a choice, when its agent lists it. */
+export const choiceOf = (s: Seat): ModelChoice | undefined => (s.agent ? modelsFor(s.agent).find((m) => m.id === s.model) : undefined);
+
+/** Fast mode for one session: Claude Code reads a settings object from its `--settings` flag. */
+export const FAST_SETTINGS = '{"fastMode":true}';
+
+/** SESS-016: a seat's start arguments: its model, then the effort and fast mode it chose, each only
+ * when its model offers it. */
+// ponytail: only Claude models list efforts, so the flag is Claude Code's `--effort`; another
+// agent's flag goes on ModelChoice when its models gain efforts (T-100-b).
+export function seatArgs(s: Seat): string[] {
+  const m = choiceOf(s);
+  const out = modelArgs(s.model);
+  if (s.effort && m?.efforts?.includes(s.effort)) out.push("--effort", s.effort);
+  if (s.fast && m?.fast) out.push("--settings", FAST_SETTINGS);
+  return out;
+}
+
+/** SESS-021: what "Use last lineup" brings back for a project: the shape, the files choice and
+ * each seat's agent and model; never the options, titles or prompts. */
+export type Lineup = { shape: Shape; copies: Copies; seats: { agent: string | null; model: string | null }[] };
+
+export const LAST_LINEUP_KEY = "lastLineups";
+
+export const lineupOf = (shape: Shape, copies: Copies, seats: Seat[]): Lineup => ({ shape, copies, seats: seats.map((s) => ({ agent: s.agent, model: s.model })) });
+
+/** The agents a lineup remembers, each once, in seat order; terminals left out. */
+export const lineupAgents = (l: Lineup): string[] => [...new Set(l.seats.flatMap((s) => (s.agent && s.agent !== TERMINAL ? [s.agent] : [])))];
+
+/** The lineup to offer, or null when there is none or none of its agents is available any more. */
+export function offeredLineup(saved: unknown, installedIds: string[]): Lineup | null {
+  const l = saved as Lineup | null | undefined;
+  if (!l || !Array.isArray(l.seats) || !SHAPES.some((s) => s.id === l.shape)) return null;
+  return lineupAgents(l).some((a) => installedIds.includes(a)) ? l : null;
+}
+
+/** Puts a lineup back: its shape with its roles, and each seat's agent and model; a seat whose
+ * agent is gone is left blank. */
+export function applyLineup(l: Lineup, installedIds: string[]): { shape: Shape; seats: Seat[] } {
+  const seats = clearMissing(l.seats.map((s) => ({ agent: s.agent, model: s.model })), installedIds);
+  return resizeLineup(l.shape, seats, seats.length);
 }
 
 /** SESS-012: the four roles, each with its own short brief that goes ahead of the shared task. */
@@ -211,3 +265,13 @@ export function renameShape(list: SavedShape[], i: number, name: string): SavedS
 
 /** SESS-020: the seats back as saved; a seat whose agent is no longer installed comes back blank. */
 export const restoreShape = (shape: SavedShape, installedIds: string[]): Seat[] => clearMissing(shape.seats.map((s) => ({ ...s })), installedIds);
+
+/** SESS-008: what the remove-session shortcut closes among the panes in front: the newest chooser
+ * (silently, `chooser` true), else the focused pane, else the last one. A lone chooser stays, so
+ * the grid never drops below one pane. */
+export function removeTarget<T extends { key: number; seats?: Seat[] }>(shown: T[], focused: number): { key: number; chooser: boolean } | null {
+  const chooser = [...shown].reverse().find((p) => p.seats);
+  if (chooser) return shown.length > 1 ? { key: chooser.key, chooser: true } : null;
+  const target = shown.find((p) => p.key === focused) ?? shown[shown.length - 1];
+  return target ? { key: target.key, chooser: false } : null;
+}

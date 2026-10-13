@@ -18,9 +18,27 @@ export type Status = {
   changed: Change[];
   untracked: Change[];
   conflicts: Change[];
+  /** GIT-015: the merge, rebase, cherry-pick or revert stopped part-way. */
+  operation: string | null;
+  /** GIT-015: conflicted files with their clash markers gone, waiting to be staged. */
+  resolved: string[];
+  /** GIT-001: `[added, removed]` by path per section; a binary file has no entry. */
+  lines?: { staged: Record<string, [number, number]>; changed: Record<string, [number, number]>; untracked: Record<string, [number, number]> };
 };
 
-export const emptyStatus: Status = { branch: null, upstream: null, ahead: 0, behind: 0, rewritten: false, base: null, head: null, staged: [], changed: [], untracked: [], conflicts: [] };
+/** GIT-065: whether a workspace's commits are on its remote (`scm_pushed`). */
+export type Pushed = { path: string; state: "synced" | "ahead" | "unpublished" | "unknown"; count: number };
+
+/** GIT-065: the sidebar badge; none for a detached HEAD or a new branch with nothing of its own yet. */
+export function pushBadge(p: Pushed | undefined): { text: string; tone: "good" | "warn" } | null {
+  if (!p) return null;
+  if (p.state === "synced") return { text: "synced", tone: "good" };
+  if (p.state === "ahead") return { text: `${p.count} unpushed`, tone: "warn" };
+  if (p.state === "unknown") return { text: "cannot be checked", tone: "warn" };
+  return p.count > 0 ? { text: `unpublished \u00b7 ${p.count}`, tone: "warn" } : null;
+}
+
+export const emptyStatus: Status = { branch: null, upstream: null, ahead: 0, behind: 0, rewritten: false, base: null, head: null, staged: [], changed: [], untracked: [], conflicts: [], operation: null, resolved: [] };
 
 /** What a commit attempt came to (GIT-004): `id` when it worked, else git's words and whether a hook refused. */
 export type CommitOutcome = { id: string | null; blocked: boolean; output: string };
@@ -37,7 +55,42 @@ export const isCommitShortcut = (e: KeyLike): boolean => e.key === "Enter" && (e
 /** The sum of every section, for the panel's header. */
 export const changeCount = (s: Status | null): number => (s ? s.staged.length + s.changed.length + s.untracked.length + s.conflicts.length : 0);
 
-export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" | "publish" | "rebase";
+/** The sections whose rows can be discarded (VIEW-067); conflicts are resolved, not discarded. */
+export type Section = "Staged" | "Changes" | "Untracked";
+
+/** What a discard prompt says and which paths it hands to git. */
+export type DiscardAsk = { title: string; body: string; confirm: string; paths: string[] };
+
+/** VIEW-067: an untracked or newly added file is deleted, a deleted tracked file is restored,
+ * anything else loses its changes. */
+const discardKind = (section: Section, c: Change): "delete" | "restore" | "discard" => (section === "Untracked" || c.status === "A" ? "delete" : c.status === "D" ? "restore" : "discard");
+
+const lost = " This cannot be undone.";
+
+/** VIEW-067: the confirmation for discarding these rows of one section (all of it when `all`), in
+ * singular or plural; a staged rename sends its old name too, so it comes back. */
+export const discardAsk = (section: Section, rows: Change[], all: boolean): DiscardAsk => {
+  const paths = rows.flatMap((r) => (section === "Staged" && r.from ? [r.from, r.path] : [r.path]));
+  const kinds = rows.map((r) => discardKind(section, r));
+  if (!all && rows.length === 1) {
+    const name = rows[0].path;
+    if (kinds[0] === "delete")
+      return { title: `Delete ${name}?`, body: (section === "Untracked" ? "It is untracked, so it is deleted from disk." : "It is a staged new file, so discarding deletes it from disk, not just from the index.") + lost, confirm: "Delete", paths };
+    if (kinds[0] === "restore") return { title: `Restore ${name}?`, body: "The deleted file comes back as git last had it.", confirm: "Restore", paths };
+    return { title: `Discard changes to ${name}?`, body: (section === "Staged" ? "Its staged and unstaged changes are lost." : "Its unstaged changes are lost; anything staged stays.") + lost, confirm: "Discard", paths };
+  }
+  const n = (k: (typeof kinds)[number]) => kinds.filter((x) => x === k).length;
+  const [del, back, gone] = [n("delete"), n("restore"), n("discard")];
+  const parts = [
+    del > 0 && `${plural(del, "file")} ${del === 1 ? "is" : "are"} deleted`,
+    back > 0 && `${plural(back, "deleted file")} ${back === 1 ? "is" : "are"} restored`,
+    gone > 0 && `${plural(gone, "file")} ${gone === 1 ? "loses its" : "lose their"} changes`,
+  ].filter(Boolean);
+  const stagedNew = section === "Staged" && del > 0 ? " Staged new files are deleted, not just unstaged." : "";
+  return { title: `Discard all ${rows.length} in ${section}?`, body: `${parts.join("; ")}.${stagedNew}${del + gone > 0 ? lost : ""}`, confirm: "Discard all", paths };
+};
+
+export type RemoteAction = "push" | "pull" | "sync" | "fetch" | "ff" | "force" | "publish" | "rebase" | "pullpush";
 
 /** What the main button offers; `reason` is why it waits, null when it can go. */
 export type Step = { label: string; action: "stage" | "commit" | "pr" | RemoteAction; reason: string | null };
@@ -55,6 +108,121 @@ export const nextStep = (s: Status | null, message: string): Step => {
   if (s.behind > 0) return { label: `Pull ${s.behind}`, action: "pull", reason: null };
   if (s.ahead > 0) return { label: `Push ${s.ahead}`, action: "push", reason: null };
   return { label: "Create pull request", action: "pr", reason: null };
+};
+
+/** GIT-035: one commit of the history as `scm_history` gives it. */
+export type Commit = { hash: string; short: string; parents: string[]; author: string; time: number; subject: string; message: string; labels: { name: string; kind: string }[]; outgoing: boolean; incoming: boolean };
+
+/** GIT-035: a lane waiting for the commit `hash`; `color` stays with the lane while it lasts. */
+export type Lane = { hash: string; color: number };
+export type GraphRow = { hash: string; parents: string[]; col: number; color: number; lanesIn: Lane[]; lanesOut: Lane[] };
+
+/** GIT-035: lays commits (newest first, topological order) out on lanes. Each row keeps the lanes
+ * coming in from above and going out below, which is all that is needed to draw it. */
+export function graph(commits: Commit[]): GraphRow[] {
+  let lanes: Lane[] = [];
+  let next = 0;
+  return commits.map((c) => {
+    const lanesIn = lanes;
+    let col = lanes.findIndex((l) => l.hash === c.hash);
+    let out = lanes.slice();
+    let color: number;
+    if (col < 0) {
+      col = out.length;
+      color = next++;
+      out.push({ hash: c.hash, color });
+    } else color = out[col].color;
+    // Other lanes waiting for this commit end in it (they all sit after `col`).
+    out = out.filter((l, i) => i === col || l.hash !== c.hash);
+    const [first, ...rest] = c.parents;
+    if (first === undefined) out.splice(col, 1);
+    else out[col] = { hash: first, color };
+    for (const p of rest) if (!out.some((l) => l.hash === p)) out.push({ hash: p, color: next++ });
+    lanes = out;
+    return { hash: c.hash, parents: c.parents, col, color, lanesIn, lanesOut: out };
+  });
+}
+
+/** One stroke of a row: from lane `from` to lane `to`, starting at the top edge or the dot and
+ * ending at the dot or the bottom edge. */
+export type Stroke = { from: number; to: number; top: boolean; bottom: boolean; color: number };
+
+/** GIT-035: the strokes of one row: lanes ending in the dot, lanes passing by (kept by identity,
+ * so two lanes waiting for one commit stay apart), and the dot's lines down to its parents. */
+export function graphLines(r: GraphRow): Stroke[] {
+  const lines: Stroke[] = r.lanesIn.map((l, j) => (l.hash === r.hash ? { from: j, to: r.col, top: true, bottom: false, color: l.color } : { from: j, to: r.lanesOut.indexOf(l), top: true, bottom: true, color: l.color }));
+  r.parents.forEach((p, i) => {
+    const k = i === 0 ? r.col : r.lanesOut.findIndex((o) => o.hash === p);
+    if (k >= 0) lines.push({ from: r.col, to: k, top: false, bottom: true, color: r.lanesOut[k].color });
+  });
+  return lines;
+}
+
+/** GIT-036: what Explain changes asks the agent. */
+export const explainPrompt = (c: Commit): string => `Explain the changes in commit ${c.hash} ("${c.subject}") in plain language: what changed, why it probably changed, and anything that looks risky. Read it with: git show ${c.hash}`;
+
+/** GIT-036: a commit's page on GitHub, or null when the project is not on GitHub. */
+export const commitUrl = (repo: { host: string; owner: string; name: string } | null, hash: string): string | null => (repo ? `https://${repo.host}/${repo.owner}/${repo.name}/commit/${hash}` : null);
+
+/** GIT-021: a branch's pull request; `state` is OPEN, MERGED or CLOSED; `head` its branch. */
+export type Pr = { number: number; url: string; state: string; title?: string | null; head?: string | null; draft?: boolean };
+
+/** GIT-025: the settings key of the pull requests linked by hand, by worktree path. */
+export const SCM_LINKED_PR_KEY = "scmLinkedPrs";
+
+/** GIT-025: the saved links, keeping only text values. */
+export const linkedPrs = (v: unknown): Record<string, string> =>
+  v !== null && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, u]) => typeof u === "string")) : {};
+
+/** GIT-025: the links with one workspace's set, or removed when `url` is null. */
+export const withLink = (map: Record<string, string>, dir: string, url: string | null): Record<string, string> => {
+  const next = { ...map };
+  if (url === null) delete next[dir];
+  else next[dir] = url;
+  return next;
+};
+
+/** GIT-025: a hand link whose branch is not the workspace's is flagged, never quietly replaced. */
+export const prMismatch = (pr: Pr | null, branch: string | null): string | null => (pr?.head && branch && pr.head !== branch ? `Linked by hand to the pull request for ${pr.head}, not ${branch}` : null);
+
+/** GIT-025: the state as the panel shows it. */
+export const prStateWord = (pr: Pr): string => (pr.state === "OPEN" ? (pr.draft ? "Draft" : "Open") : pr.state === "MERGED" ? "Merged" : pr.state === "CLOSED" ? "Closed" : pr.state);
+/** GIT-023: what the panel knows of the branch's pull request while it looks it up. */
+export type PrLook = { loading: boolean; pr: Pr | null; error: string | null };
+
+/** GIT-027: how often the shown pull request is looked up again, and how old it may get before
+ * the window gaining focus looks it up at once. */
+export const PR_STALE_MS = 60_000;
+/** GIT-027: the wait before the next lookup; each failure in a row doubles it, up to 15 minutes. */
+export const prRefreshDelay = (failures: number): number => Math.min(PR_STALE_MS * 2 ** Math.min(failures, 10), 15 * 60_000);
+/** GIT-027: a lookup's answer; a failure keeps the pull request known last, with the reason. */
+export const prLooked = (prev: PrLook, got: { pr: Pr | null } | { error: string }): PrLook => ("error" in got ? { loading: false, pr: prev.pr, error: got.error } : { loading: false, pr: got.pr, error: null });
+
+/** GIT-023: why Create pull request cannot run yet, null when it can. Untracked files do not
+ * block it; tracked changes, a missing push and a missing base do. */
+export const prReason = (s: Status | null, look: PrLook): string | null => {
+  if (s === null) return "Loading";
+  if (s.conflicts.length > 0) return "Resolve the conflicts first";
+  if (s.staged.length + s.changed.length > 0) return "Commit your changes first";
+  if (s.branch === null) return "No branch checked out";
+  if (s.base !== null && (s.base === s.branch || s.base === `origin/${s.branch}`)) return "Move to a feature branch first";
+  if (s.upstream === null) return "Push the branch first";
+  if (!s.upstream.startsWith("origin/")) return `Fork head not supported: the branch tracks ${s.upstream}; push it to origin first`;
+  if (s.behind > 0) return `Sync first: the remote has ${plural(s.behind, "commit")} this copy lacks`;
+  if (s.ahead > 0) return `Push ${plural(s.ahead, "commit")} first`;
+  if (s.base === null) return "No base branch on the remote";
+  if (look.loading) return "Checking for a pull request";
+  if (look.error) return look.error;
+  if (look.pr?.state === "MERGED") return `Pull request #${look.pr.number} already merged`;
+  return null;
+};
+
+/** GIT-021: the main button's pull-request step waits while the check loads and opens the
+ * branch's open pull request once it has one. Other steps pass through. */
+export const withPr = (step: Step, s: Status | null, look: PrLook): Step => {
+  if (step.action !== "pr") return step;
+  if (look.pr?.state === "OPEN") return { label: `Open pull request #${look.pr.number}`, action: "pr", reason: null };
+  return { ...step, reason: prReason(s, look) };
 };
 
 export type RemoteItem = { id: RemoteAction; label: string; reason: string | null };
@@ -83,7 +251,32 @@ export const remoteItems = (s: Status | null): RemoteItem[] => {
 export type Lines = { added: number; removed: number };
 
 /** VIEW-068: the branch against `against` (the pinned base, the upstream or the default branch). */
-export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines };
+export type Summary = { against: string; ahead: number; behind: number; source: Lines; tests: Lines; generated: Lines; files: number; committed: Change[] };
+
+/** GIT-011: the branch row's file count. */
+export const filesWord = (n: number): string => `${n} ${n === 1 ? "file" : "files"} changed`;
+
+const CLASHES: Record<string, string> = { UU: "changed on both sides", AA: "added on both sides", DD: "deleted on both sides", DU: "deleted on one side", UD: "deleted on one side", AU: "added on one side", UA: "added on one side" };
+/** GIT-015: the kind of clash, from git's two-letter conflict code. */
+export const clashWord = (code: string): string => CLASHES[code] ?? "in conflict";
+/** GIT-015: the abort button names the operation it ends; none without one. */
+export const abortLabel = (op: string | null | undefined): string | null => (op ? `Abort ${op}` : null);
+/** GIT-015: the most conflict cards drawn; the rest are counted. */
+export const CONFLICT_CAP = 100;
+export const capped = <T>(rows: T[], cap: number): { shown: T[]; more: number } => ({ shown: rows.slice(0, cap), more: Math.max(0, rows.length - cap) });
+
+/** GIT-066: the settings key of the order the Source Control groups are listed in. */
+export const SCM_GROUP_ORDER_KEY = "scmGroupOrder";
+/** GIT-001: the panel shows a flat list ("list", the default) or a folder tree ("tree"). */
+export const SCM_VIEW_KEY = "scmView";
+export type ScmGroup = "conflicts" | "staged" | "changes" | "untracked";
+/** GIT-066: the orders on offer, `[id, label, groups]`; conflicts lead in each, since they block a commit. */
+export const SCM_GROUP_ORDERS: [string, string, ScmGroup[]][] = [
+  ["staged-first", "Staged first", ["conflicts", "staged", "changes", "untracked"]],
+  ["changes-first", "Changes first", ["conflicts", "changes", "untracked", "staged"]],
+];
+/** GIT-066: the groups in the saved order; anything else reads as the first one. */
+export const scmGroups = (order: unknown): ScmGroup[] => (SCM_GROUP_ORDERS.find((o) => o[0] === order) ?? SCM_GROUP_ORDERS[0])[2];
 
 /** The settings key of the off-by-default choice to measure against the branch's upstream. */
 export const SUMMARY_UPSTREAM_KEY = "scmSummaryUpstream";
@@ -138,7 +331,39 @@ export const bulk = (s: Status, selected: string[]): { present: string[]; stage:
 };
 
 /** What a remote action came to (GIT-007). */
-export type ActionOutcome = { ok: boolean; output: string };
+export type ActionOutcome = { ok: boolean; output: string; kind?: FailureKind | null; detail?: string | null };
+/** GIT-009: how the back end sorted a failed remote action. */
+export type FailureKind = "protected" | "sign-in" | "network" | "submodule" | "non-fast-forward" | "hook" | "other";
+
+const FAILURE_WORDS: Record<FailureKind, string> = {
+  protected: "refused: the branch is protected on the remote",
+  "sign-in": "failed: the remote wants you to sign in",
+  network: "failed: the remote could not be reached",
+  submodule: "failed: a submodule has commits that are not on its remote",
+  "non-fast-forward": "refused: the remote has commits this copy lacks; pull first",
+  hook: "blocked by a hook (a lint or test check failed)",
+  other: "failed",
+};
+
+/** GIT-009: the notice's title, naming the kind of failure. */
+export const failureTitle = (label: string, out: ActionOutcome): string => `${label} ${FAILURE_WORDS[out.kind ?? "other"]}`;
+
+/** GIT-005: one item of the commit button's dropdown; `id` is the remote step after the commit. */
+export type CommitItem = { id: "push" | "sync" | "force" | "pullpush"; label: string; title: string; reason: string | null };
+
+/** GIT-005: commit and push, sync, force push with lease, or pull and push; each says why when it cannot run. */
+export const commitItems = (s: Status | null, message: string): CommitItem[] => {
+  const st = s ?? emptyStatus;
+  const first =
+    s === null ? "Loading" : st.conflicts.length > 0 ? "Resolve the conflicts first" : st.staged.length === 0 ? "Nothing staged to commit" : !message.trim() ? "Write a commit message first" : st.upstream === null ? "Branch unpublished; publish it first" : null;
+  const item = (id: CommitItem["id"], label: string, title: string, own: string | null = null): CommitItem => ({ id, label, title, reason: first ?? own });
+  return [
+    item("push", "Commit and push", "Commit, then push; nothing is pushed when the commit fails", st.behind > 0 ? `The remote has ${plural(st.behind, "commit")} this copy lacks; use commit and sync` : null),
+    item("sync", "Commit and sync", "Commit, then pull and push"),
+    item("force", "Commit and force push", "Commit, then push with a lease: commits on the remote that this copy has not seen are never overwritten"),
+    item("pullpush", "Commit, then pull and push", "Commit, then pull (rebasing the new commit onto the remote's) and push"),
+  ];
+};
 
 /** EDIT-040: one workspace's handoff note as the back end keeps it. */
 export type Note = { text: string; updated: number | null };
@@ -172,6 +397,63 @@ export const SCM_AGENT_KEY = "scmAgent";
 export const savedFixAgent = <A extends { id: string; installed: boolean }>(agents: A[], saved: unknown): A | null =>
   typeof saved === "string" ? (agents.find((a) => a.id === saved && a.installed) ?? null) : null;
 
+/** GIT-033: what the merge box reads, in one GraphQL call when it is opened (`scm_merge_info`). */
+export type MergeInfo = { state: string; draft: boolean; mergeable: string; mergeState: string; review: string | null; checks: string | null; inQueue: boolean; queueEnabled: boolean; autoMerge: string | null; methods: string[]; autoAllowed: boolean };
+export type MergeAction = { action: "merge" | "auto" | "disable-auto" | "queue" | "ready" | "close" | "reopen"; method: string | null; label: string };
+
+const METHOD_WORDS: Record<string, string> = { merge: "Create a merge commit", squash: "Squash and merge", rebase: "Rebase and merge" };
+
+/** What holds an open pull request back, or "Ready to merge". */
+function mergeHold(m: MergeInfo): string {
+  if (m.mergeable === "CONFLICTING" || m.mergeState === "DIRTY") return "Conflicts";
+  if (m.review === "CHANGES_REQUESTED") return "Changes requested";
+  if (m.checks === "FAILURE" || m.checks === "ERROR") return "Checks failed";
+  if (m.checks === "PENDING" || m.checks === "EXPECTED") return "Checks pending";
+  if (m.review === "REVIEW_REQUIRED") return "Approval required";
+  if (m.mergeState === "BEHIND") return "Behind the base branch";
+  if (m.mergeState === "BLOCKED") return "Blocked";
+  if (m.mergeable === "UNKNOWN" || m.mergeState === "UNKNOWN") return "Checking";
+  return "Ready to merge";
+}
+
+export function mergeLabel(m: MergeInfo): string {
+  if (m.state === "MERGED") return "Merged";
+  if (m.state === "CLOSED") return "Closed";
+  if (m.inQueue) return "In merge queue";
+  if (m.draft) return "Draft";
+  const hold = mergeHold(m);
+  return m.autoMerge ? `Auto-merge on (${m.autoMerge}) · ${hold}` : hold;
+}
+
+/** Only the actions possible right now; merge methods are the repository's own. */
+export function mergeActions(m: MergeInfo): MergeAction[] {
+  if (m.state === "MERGED") return [];
+  if (m.state === "CLOSED") return [{ action: "reopen", method: null, label: "Reopen" }];
+  const close: MergeAction = { action: "close", method: null, label: "Close pull request" };
+  if (m.draft) return [{ action: "ready", method: null, label: "Mark ready for review" }, close];
+  const hold = mergeHold(m);
+  if (m.inQueue || hold === "Conflicts") return [close];
+  if (m.queueEnabled) return [{ action: "queue", method: null, label: "Add to merge queue" }, close];
+  if (m.autoMerge) return [{ action: "disable-auto", method: null, label: "Turn off auto-merge" }, close];
+  const methods = m.methods.filter((x) => x in METHOD_WORDS);
+  if (hold === "Ready to merge") return [...methods.map((x): MergeAction => ({ action: "merge", method: x, label: METHOD_WORDS[x] })), close];
+  const unstable = m.mergeState === "UNSTABLE" || hold === "Checks failed";
+  if (m.autoAllowed && !unstable) return [...methods.map((x): MergeAction => ({ action: "auto", method: x, label: `${METHOD_WORDS[x]} when ready` })), close];
+  return [close];
+}
+
+/** GIT-028: one GitHub API budget (`scm_gh_budget`); `reset` is in Unix seconds. */
+export type Budget = { name: string; limit: number; remaining: number; reset: number };
+
+export function budgetLine(b: Budget, nowSec: number): string {
+  const mins = Math.max(1, Math.ceil((b.reset - nowSec) / 60));
+  const n = (x: number) => x.toLocaleString("en-US");
+  return `${b.name}: ${b.remaining === 0 ? "used up" : `${n(b.remaining)} of ${n(b.limit)} left`}, resets in ${mins} min`;
+}
+
+/** Under a tenth left. */
+export const budgetLow = (b: Budget): boolean => b.remaining * 10 < b.limit;
+
 /** GIT-003: the question before uncommitted work is thrown away, worded for what the rows are. */
 export type DiscardPlan = { title: string; body: string; button: "Delete" | "Restore" | "Discard" };
 
@@ -201,3 +483,50 @@ export const discardPlan = (rows: Change[]): DiscardPlan => {
   if (gone === n) return { title: `Restore ${n} files?`, body, button: "Restore" };
   return { title: `Discard ${n} changes?`, body, button: "Discard" };
 };
+
+/** GIT-001: one row of the tree view: a folder (with every file beneath it) or a file. */
+export type TreeItem = { kind: "dir"; path: string; name: string; depth: number; files: string[] } | { kind: "file"; change: Change; name: string; depth: number };
+
+/** GIT-001: a section's files as a folder tree, folders before files, each level by name; the
+ *  folders in `closed` keep their row but hide what is beneath them. */
+export function fileTree(rows: Change[], closed: Set<string>): TreeItem[] {
+  type Node = { dirs: Map<string, Node>; files: Change[] };
+  const root: Node = { dirs: new Map(), files: [] };
+  for (const r of rows) {
+    const parts = r.path.split("/");
+    let at = root;
+    for (const d of parts.slice(0, -1)) {
+      if (!at.dirs.has(d)) at.dirs.set(d, { dirs: new Map(), files: [] });
+      at = at.dirs.get(d)!;
+    }
+    at.files.push(r);
+  }
+  const byName = (a: string, b: string) => a.localeCompare(b);
+  const all = (n: Node): string[] => [...n.files.map((f) => f.path), ...[...n.dirs.values()].flatMap(all)].sort(byName);
+  const out: TreeItem[] = [];
+  const walk = (n: Node, prefix: string, depth: number) => {
+    for (const name of [...n.dirs.keys()].sort(byName)) {
+      const sub = n.dirs.get(name)!;
+      const path = prefix + name;
+      out.push({ kind: "dir", path, name, depth, files: all(sub) });
+      if (!closed.has(path)) walk(sub, path + "/", depth + 1);
+    }
+    for (const f of [...n.files].sort((a, b) => byName(a.path, b.path))) out.push({ kind: "file", change: f, name: f.path.slice(prefix.length), depth });
+  };
+  walk(root, "", 0);
+  return out;
+}
+
+/** GIT-016: the most files each list in the review prompt names before it counts the rest. */
+export const REVIEW_CAP = 50;
+/** GIT-016: the prompt for Review changes: the base, the files the branch changed (`total` may be
+ *  more than `committed` holds) and the uncommitted ones; null when there is nothing to look at. */
+export function reviewPrompt(base: string, committed: Change[], total: number, uncommitted: string[]): string | null {
+  if (total === 0 && uncommitted.length === 0) return null;
+  const list = (paths: string[], all: number) => [...paths.slice(0, REVIEW_CAP).map((p) => `- ${p}`), ...(all > Math.min(paths.length, REVIEW_CAP) ? [`- and ${all - Math.min(paths.length, REVIEW_CAP)} more`] : [])].join("\n");
+  const parts = [`Review the work on this branch before it ships. It will merge into ${base}.`];
+  if (total > 0) parts.push(`Files this branch changed since ${base} (${total}):\n${list(committed.map((c) => c.path), total)}`);
+  if (uncommitted.length > 0) parts.push(`Files with changes not committed yet (${uncommitted.length}):\n${list(uncommitted, uncommitted.length)}`);
+  parts.push("Look for bugs, missing tests and anything that does not fit the rest of the code. Report what you find, most serious first, before changing anything.");
+  return parts.join("\n\n");
+}

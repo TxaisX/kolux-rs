@@ -10,7 +10,7 @@ use crate::creatures::creature_name;
 use crate::git::{Git, Worktree};
 use crate::names::safe_name;
 use crate::state::Store;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tauri::State;
@@ -43,7 +43,7 @@ pub struct Created {
 }
 
 /// GIT-067: creations in one repository take turns; a failed one hands the turn on at once.
-fn repo_turn(repo: &Path) -> Arc<Mutex<()>> {
+pub(crate) fn repo_turn(repo: &Path) -> Arc<Mutex<()>> {
     static TURNS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
     let key = repo.to_string_lossy().to_lowercase();
     TURNS.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner).entry(key).or_default().clone()
@@ -59,6 +59,8 @@ pub struct Place {
     pub prefix: String,
     /// Why the custom prefix is not used, when Git would refuse it.
     pub prefix_warning: Option<String>,
+    /// GIT-066: bring a local base branch up to its upstream before the workspace starts from it.
+    pub refresh: bool,
 }
 
 const PROJECTS_KEY: &str = "projects";
@@ -82,9 +84,13 @@ const USED_DIRS_SETTING: &str = "workspacesDirsUsed";
 /// PROJ-022: "user" (the Git user name, the default), "custom" or "none".
 pub const PREFIX_SETTING: &str = "branchPrefix";
 pub const PREFIX_CUSTOM_SETTING: &str = "branchPrefixCustom";
+/// GIT-066: refresh the local base before a new workspace (off by default).
+pub const REFRESH_BASE_SETTING: &str = "refreshBaseFirst";
+/// GIT-066: a user name longer than this (once cleaned) makes no branch prefix.
+pub const MAX_USER_PREFIX: usize = 40;
 
 /// Compares two folders the way Windows does: same canonical path, letter case ignored.
-fn same_folder(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase();
     norm(a) == norm(b)
 }
@@ -95,6 +101,17 @@ pub fn load_projects(store: &Store) -> Vec<Project> {
 
 fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
     store.set(PROJECTS_KEY, &serde_json::to_string(projects).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+/// PROJ-015: takes projects out of Kolux's list; their folders on disk are not touched. (The
+/// rest of removing a project, PROJ-008, comes with T-214-b.)
+pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut projects = load_projects(store);
+    projects.retain(|p| !ids.contains(&p.id));
+    save_projects(store, &projects)
 }
 
 fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
@@ -177,6 +194,12 @@ fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
     store.get(ORIGINS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
+/// VIEW-038: the issue or pull request number an origin links to: `issue`, or the number at the
+/// end of a `pr` address.
+pub fn item_number(origin: &serde_json::Value) -> Option<u64> {
+    origin["issue"].as_u64().or_else(|| origin["pr"].as_str()?.rsplit('/').next()?.parse().ok())
+}
+
 /// Records (or with `None`, forgets) how the workspace at `path` came to be.
 pub fn set_origin(store: &Store, path: &str, origin: Option<&serde_json::Value>) -> Result<(), String> {
     let mut all = load_origins(store);
@@ -231,8 +254,14 @@ pub fn note_seen(store: &Store, project: &Project, path: &str) -> Result<(), Str
 /// made again later counts as new.
 /// ponytail: the sidebar polls this every 5 s instead of watching folders (DT-O2); a watcher can feed
 /// the same call if 5 s ever feels slow.
+#[cfg(test)]
 pub fn unseen(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
-    let list = list_workspaces(git, store, project)?;
+    unseen_of(store, project, git.worktrees(Path::new(&project.path))?)
+}
+
+/// `unseen` over a worktree list already scanned, so the scan can run without the store (T-442).
+pub fn unseen_of(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
+    let list = decorate(store, project, all)?;
     let keys: Vec<String> = list.iter().map(|w| name_key(&w.path)).collect();
     let Some(seen) = seen_of(store, project) else {
         save_seen(store, project, &keys)?;
@@ -246,6 +275,7 @@ pub fn unseen(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktre
 }
 
 /// The review is closed: everything listed now counts as seen.
+#[cfg(test)]
 pub fn mark_all_seen(git: &Git, store: &Store, project: &Project) -> Result<(), String> {
     let keys: Vec<String> = git.worktrees(Path::new(&project.path))?.iter().map(|w| name_key(&w.path)).collect();
     save_seen(store, project, &keys)
@@ -316,11 +346,16 @@ pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let hidden = load_map(store, HIDDEN_KEY);
+    let origins = load_origins(store);
     Ok(crate::visibility::apply(store, project, &hidden, all)?
         .into_iter()
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
+            w.made_by = origins.get(&name_key(&w.path)).and_then(|o| o["madeBy"].as_str()).map(String::from);
+            let origin = origins.get(&name_key(&w.path));
+            w.number = origin.and_then(item_number);
+            w.comment = origin.and_then(|o| o["comment"].as_str()).filter(|c| !c.trim().is_empty()).map(String::from);
             w
         })
         .collect())
@@ -350,7 +385,102 @@ pub fn add_project(git: &Git, store: &Store, path: &Path) -> Result<Project, Str
     crate::visibility::ensure(store, &projects)?;
     projects.insert(0, project.clone());
     save_projects(store, &projects)?;
+    let _ = crate::activity::touch(store, &project.path); // PROJ-051: a new project starts at the top of Recent
     Ok(project)
+}
+
+/// GIT-061: one file of a plain folder's proposed first commit; a secret-looking one starts left out.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstFile {
+    pub path: String,
+    pub secret: bool,
+}
+
+/// GIT-061: a name that looks like a key, a token or an environment secrets file. Example and
+/// template env files are not secrets. ponytail: a name list, not a content scan.
+pub fn looks_secret(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_ascii_lowercase();
+    let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    let template = matches!(ext, "example" | "sample" | "template" | "dist");
+    if name == ".env" || name.ends_with(".env") || (name.starts_with(".env.") && !template) {
+        return true;
+    }
+    let keyish = matches!(ext, "pem" | "key" | "p12" | "pfx" | "jks" | "keystore" | "ppk" | "kdbx");
+    let known = matches!(
+        name.as_str(),
+        "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519" | ".netrc" | "_netrc" | ".npmrc" | ".pypirc" | ".git-credentials" | "credentials" | "credentials.json" | "service-account.json"
+    );
+    let data = matches!(ext, "json" | "txt" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "") || ext == name.trim_start_matches('.');
+    keyish || known || (data && !template && (name.contains("secret") || name.contains("token")))
+}
+
+/// GIT-061: only a full path to an existing folder that is not in a Git repository yet.
+fn plain_folder(folder: &Path) -> Result<(), String> {
+    if !folder.is_absolute() {
+        return Err(format!("{} is not a full path; choose the folder itself", folder.display()));
+    }
+    if !folder.is_dir() {
+        return Err(format!("{} is not an existing folder", folder.display()));
+    }
+    if crate::git::run(&["rev-parse", "--show-toplevel"], Some(folder)).is_ok() || folder.join(".git").exists() {
+        return Err(format!("{} is already a Git repository", folder.display()));
+    }
+    Ok(())
+}
+
+/// GIT-061: what a first commit of this plain folder would hold, honouring its .gitignore. It
+/// asks Git through a scratch repository elsewhere, so the folder itself is not touched.
+pub fn first_commit_preview(folder: &Path) -> Result<Vec<FirstFile>, String> {
+    plain_folder(folder)?;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let scratch = std::env::temp_dir().join(format!("kolux-rs-first-commit-{}-{nanos}", std::process::id()));
+    let listed = crate::git::run(&["init", "-q", &scratch.to_string_lossy()], None).and_then(|_| {
+        let git_dir = scratch.join(".git");
+        crate::git::output(&["--git-dir", &git_dir.to_string_lossy(), "--work-tree", &folder.to_string_lossy(), "ls-files", "--others", "--exclude-standard", "-z"], Some(folder))
+    });
+    let _ = std::fs::remove_dir_all(&scratch);
+    let text = String::from_utf8_lossy(&listed?).into_owned();
+    let mut files: Vec<FirstFile> = text.split('\0').filter(|f| !f.is_empty()).map(|f| FirstFile { path: f.to_string(), secret: looks_secret(f) }).collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// GIT-061: starts Git in a plain folder and commits exactly `files` as its first commit
+/// (`ident` is extra `-c` settings, for tests). If any step fails the new .git is removed, so the
+/// folder is left as it was.
+pub fn start_git(folder: &Path, files: &[String], ident: &[&str]) -> Result<(), String> {
+    plain_folder(folder)?;
+    crate::git::run(&["init", "-q"], Some(folder))?;
+    let commit = || -> Result<(), String> {
+        for chunk in files.chunks(100) {
+            let mut args = vec!["add", "--"];
+            args.extend(chunk.iter().map(String::as_str));
+            crate::git::run(&args, Some(folder))?;
+        }
+        let mut args = ident.to_vec();
+        args.extend(["commit", "-q", "--allow-empty", "-m", "First commit"]);
+        crate::git::run(&args, Some(folder)).map(|_| ())
+    };
+    let done = commit();
+    if done.is_err() {
+        let _ = std::fs::remove_dir_all(folder.join(".git"));
+    }
+    done
+}
+
+#[tauri::command]
+pub fn git_first_commit_preview(path: String) -> Result<Vec<FirstFile>, String> {
+    first_commit_preview(Path::new(path.trim()))
+}
+
+/// GIT-061: Start Git and commit, then the folder is added like any repository.
+#[tauri::command]
+pub fn git_start(git: State<'_, Git>, store: StoreState<'_>, path: String, files: Vec<String>) -> Result<Project, String> {
+    let folder = Path::new(path.trim());
+    start_git(folder, &files, &[])?;
+    let store = store.lock().map_err(|e| e.to_string())?;
+    add_project(&git, &store, folder)
 }
 
 /// The default workspaces root: `kolux-rs\workspaces` in the user's home folder. A different
@@ -383,9 +513,15 @@ pub fn workspaces_dir(store: &Store) -> PathBuf {
 pub fn place_for(store: &Store, project: &Project) -> Place {
     let own = project.workspaces_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
     let settings = store.settings();
-    let user = || crate::git::run(&["config", "user.name"], Some(Path::new(&project.path))).ok();
+    let user = || prefix_user(|| crate::git::run(&["config", "user.name"], Some(Path::new(&project.path))).ok(), crate::scm::gh_login);
     let (prefix, prefix_warning) = branch_prefix(settings[PREFIX_SETTING].as_str(), settings[PREFIX_CUSTOM_SETTING].as_str(), user, &git_accepts);
-    Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning }
+    let refresh = settings[REFRESH_BASE_SETTING].as_bool() == Some(true);
+    Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning, refresh }
+}
+
+/// GIT-066: the name behind the default prefix: the configured git user name, else the gh login.
+pub fn prefix_user(git_name: impl Fn() -> Option<String>, gh_login: impl Fn() -> Option<String>) -> Option<String> {
+    git_name().filter(|n| !n.trim().is_empty()).or_else(|| gh_login().filter(|n| !n.trim().is_empty()))
 }
 
 /// PROJ-022 / SET-031: the branch prefix for `mode`. The Git user name (the default) is cleaned
@@ -395,7 +531,13 @@ pub fn branch_prefix(mode: Option<&str>, custom: Option<&str>, user: impl Fn() -
     let p = match mode {
         Some("none") => return (String::new(), None),
         Some("custom") => custom.unwrap_or("").trim().trim_end_matches('/').to_string(),
-        _ => user().and_then(|u| safe_name(&u)).unwrap_or_default(),
+        _ => {
+            let p = user().and_then(|u| safe_name(&u)).unwrap_or_default();
+            if p.chars().count() > MAX_USER_PREFIX {
+                return (String::new(), Some(format!("the user name \"{p}\" is too long for a branch prefix (over {MAX_USER_PREFIX} characters), so this branch has no prefix")));
+            }
+            p
+        }
     };
     if p.is_empty() {
         return (String::new(), None);
@@ -423,7 +565,7 @@ pub struct PrefixCheck {
 
 #[tauri::command]
 pub fn branch_prefix_check(mode: Option<String>, custom: Option<String>) -> PrefixCheck {
-    let user = || crate::git::run(&["config", "user.name"], None).ok();
+    let user = || prefix_user(|| crate::git::run(&["config", "user.name"], None).ok(), crate::scm::gh_login);
     let (prefix, warning) = branch_prefix(mode.as_deref(), custom.as_deref(), user, &git_accepts);
     PrefixCheck { prefix, refused: warning.is_some() }
 }
@@ -482,13 +624,135 @@ pub fn resolve_base(git: &Git, repo: &Path, project: &Project, chosen: Option<&s
     Ok((base, note))
 }
 
+/// GIT-066: brings the local branch `base` up to its upstream (already fetched by
+/// `resolve_base`) when `apply` is on. Fast-forward only: a base with commits of its own, or one
+/// whose worktree has uncommitted changes, is left alone with a note. With `apply` off it only
+/// says the base is behind, and says nothing when its worktree is dirty.
+fn refresh_base(git: &Git, repo: &Path, base: &str, apply: bool) -> Option<String> {
+    let run = |args: &[&str], dir: &Path| crate::git::run(args, Some(dir));
+    run(&["show-ref", "--verify", "--quiet", &format!("refs/heads/{base}")], repo).ok()?;
+    let up = run(&["rev-parse", "--abbrev-ref", &format!("{base}@{{upstream}}")], repo).ok()?;
+    let count = |range: String| run(&["rev-list", "--count", &range], repo).ok().and_then(|n| n.parse::<usize>().ok());
+    let behind = count(format!("{base}..{up}"))?;
+    if behind == 0 {
+        return None;
+    }
+    let commits = if behind == 1 { "1 commit".to_string() } else { format!("{behind} commits") };
+    let home = git.worktrees(repo).ok()?.into_iter().find(|w| w.branch.as_deref() == Some(base));
+    let dirty = home.as_ref().is_some_and(|w| run(&["status", "--porcelain"], Path::new(&w.path)).map_or(true, |s| !s.is_empty()));
+    if !apply {
+        return (!dirty).then(|| format!("{base} is {commits} behind {up}; update it, or turn on Refresh the base first in Settings > Git & worktrees"));
+    }
+    if dirty {
+        return Some(format!("{base} was not refreshed: its worktree has uncommitted changes, so this workspace starts from the local {base}"));
+    }
+    if count(format!("{up}..{base}"))? > 0 {
+        return Some(format!("{base} was not refreshed: it has commits of its own that {up} lacks, so this workspace starts from the local {base}"));
+    }
+    let moved = match &home {
+        Some(w) => run(&["merge", "--ff-only", "--quiet", &up], Path::new(&w.path)).map(drop),
+        None => {
+            let (new, old) = (run(&["rev-parse", &up], repo).ok()?, run(&["rev-parse", base], repo).ok()?);
+            run(&["update-ref", &format!("refs/heads/{base}"), &new, &old], repo).map(drop)
+        }
+    };
+    moved.err().map(|e| format!("{base} could not be refreshed ({e}), so this workspace starts from the local {base}"))
+}
+
+/// PROJ-020: the answer a create gives when a newer one overtook it.
+pub const OVERTAKEN: &str = "cancelled: a newer workspace creation took its place";
+
+/// PROJ-020: the window's create tickets that a newer create overtook. A ticket can be dropped
+/// before its create even reaches Git (it then makes nothing) or while Git works (what it made
+/// is removed again).
+fn dropped_tickets() -> &'static Mutex<HashSet<u64>> {
+    static DROPPED: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
+    DROPPED.get_or_init(Default::default)
+}
+
+pub fn drop_create(ticket: u64) {
+    dropped_tickets().lock().unwrap_or_else(PoisonError::into_inner).insert(ticket);
+}
+
+pub fn dropped(ticket: Option<u64>) -> bool {
+    ticket.is_some_and(|t| dropped_tickets().lock().unwrap_or_else(PoisonError::into_inner).contains(&t))
+}
+
+/// Forgets a ticket once its create has answered.
+pub fn settle_create(ticket: u64) {
+    dropped_tickets().lock().unwrap_or_else(PoisonError::into_inner).remove(&ticket);
+}
+
+/// PROJ-020: the window cancels a create that a newer one overtook.
+#[tauri::command]
+pub fn workspace_create_cancel(ticket: u64) {
+    drop_create(ticket);
+}
+
+/// Undoes a create that was overtaken after Git made its worktree: the folder goes, and the
+/// branch too unless it existed before (`branch` None).
+fn undo_create(git: &Git, repo: &Path, dest: &Path, branch: Option<&str>) -> String {
+    crate::include::unlink_shared(repo, dest);
+    match git.worktree_remove(repo, dest, branch) {
+        Ok(_) => OVERTAKEN.to_string(),
+        Err(e) => format!("{OVERTAKEN}, but its folder could not be removed: {e}"),
+    }
+}
+
+/// SESS-038: the retry policy for a failed `git worktree add`. A lock another Git process holds
+/// is waited out: two more tries, 0.2 s and then 0.8 s later. Any other failure is final at once.
+const CREATE_WAITS_MS: [u64; 2] = [200, 800];
+
+/// Whether Git refused because another Git process holds one of its lock files.
+pub fn lock_held(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains(".lock") || e.contains("another git process") || e.contains("cannot lock") || e.contains("could not lock")
+}
+
+/// What a failed `git worktree add` may have left: the folder (it did not exist before), Git's
+/// record of it, and `made`, the branch the add was creating (none of that name existed before).
+fn clear_failed_add(repo: &Path, dest: &Path, made: Option<&str>) {
+    let _ = std::fs::remove_dir_all(dest);
+    let _ = crate::git::run(&["worktree", "prune"], Some(repo));
+    if let Some(branch) = made.filter(|b| crate::git::run(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")], Some(repo)).is_ok()) {
+        let _ = crate::git::run(&["branch", "-D", branch], Some(repo));
+    }
+}
+
+/// `add` (a `git worktree add` into `dest`, creating branch `made` if any) under the retry
+/// policy: each failed try is cleared away first, and a cancel stops the waiting.
+pub fn add_retrying(repo: &Path, dest: &Path, made: Option<&str>, overtaken: &dyn Fn() -> bool, add: impl Fn() -> Result<(), String>) -> Result<(), String> {
+    let mut waits = CREATE_WAITS_MS.iter();
+    while let Err(e) = add() {
+        clear_failed_add(repo, dest, made);
+        if overtaken() {
+            return Err(OVERTAKEN.to_string());
+        }
+        match waits.next() {
+            Some(ms) if lock_held(&e) => std::thread::sleep(std::time::Duration::from_millis(*ms)),
+            _ => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>) -> Result<Created, String> {
+    create_workspace_until(git, place, project, typed_name, start, &|| false)
+}
+
+/// `create_workspace`, asking `overtaken` before Git starts and again once the worktree is made:
+/// a yes before makes nothing, a yes after removes the half-made checkout (PROJ-020).
+pub fn create_workspace_until(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>, overtaken: &dyn Fn() -> bool) -> Result<Created, String> {
     // SESS-036: a name that cleans up to nothing becomes "workspace" (numbered when taken).
     let base = safe_name(typed_name).unwrap_or_else(|| "workspace".to_string());
     let repo = Path::new(&project.path);
     let turn = repo_turn(repo);
     let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    if overtaken() {
+        return Err(OVERTAKEN.to_string());
+    }
     let (from, note) = resolve_base(git, repo, project, start)?;
+    let refreshed = refresh_base(git, repo, &from, place.refresh);
     // PROJ-021: a name taken by a branch (local or on a remote) or a folder gets a number.
     let (safe, dest) = (1..)
         .map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") })
@@ -501,9 +765,13 @@ pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name:
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    git.worktree_add(repo, &dest, &format!("{}{safe}", place.prefix), &from)?;
-    let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().collect();
+    let new_branch = format!("{}{safe}", place.prefix);
+    add_retrying(repo, &dest, Some(&new_branch), overtaken, || git.worktree_add(repo, &dest, &new_branch, &from))?;
+    let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().chain(refreshed).collect();
     warnings.extend(crate::include::bring_along(repo, &dest));
+    if overtaken() {
+        return Err(undo_create(git, repo, &dest, Some(&new_branch)));
+    }
     let worktree = git
         .worktrees(repo)?
         .into_iter()
@@ -593,7 +861,14 @@ pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force:
 /// PROJ-030: a workspace on a branch that exists already, locally or only on a remote (Git then
 /// makes the local branch that tracks it). The folder takes `folder` when given, else the
 /// branch's name, numbered when taken; the branch itself never changes and is kept at removal.
+#[cfg(test)]
 pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch: &str, folder: Option<&str>) -> Result<Created, String> {
+    open_branch_workspace_until(git, place, project, branch, folder, &|| false)
+}
+
+/// `open_branch_workspace` with the overtaken checks of `create_workspace_until`; the branch
+/// existed before, so an undo keeps it.
+pub fn open_branch_workspace_until(git: &Git, place: &Place, project: &Project, branch: &str, folder: Option<&str>, overtaken: &dyn Fn() -> bool) -> Result<Created, String> {
     let branch = branch.trim();
     let repo = Path::new(&project.path);
     if branch.is_empty() || !git.branch_taken(repo, branch) {
@@ -602,6 +877,9 @@ pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch
     let base = safe_name(folder.map(str::trim).filter(|f| !f.is_empty()).unwrap_or(branch)).ok_or("that folder name leaves nothing usable; use some letters or digits")?;
     let turn = repo_turn(repo);
     let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    if overtaken() {
+        return Err(OVERTAKEN.to_string());
+    }
     let dest = (1..)
         .map(|n| workspace_path(place, project, &if n == 1 { base.clone() } else { format!("{base}-{n}") }))
         .find(|d| !d.exists())
@@ -609,8 +887,11 @@ pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo))?;
+    add_retrying(repo, &dest, None, overtaken, || crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo)).map(drop))?;
     let warnings = crate::include::bring_along(repo, &dest);
+    if overtaken() {
+        return Err(undo_create(git, repo, &dest, None));
+    }
     let worktree = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), &dest)).ok_or_else(|| "the worktree was created but Git does not list it".to_string())?;
     Ok(Created { worktree, base: branch.to_string(), note: None, warnings })
 }
@@ -628,19 +909,128 @@ pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<V
     branches(Path::new(&project.path))
 }
 
-#[tauri::command]
-pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>) -> Result<Created, String> {
+// PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
+#[tauri::command(async)]
+pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
     let (project, place) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let project = find_project(&store, &project_id)?;
         let place = place_for(&store, &project);
         (project, place)
     };
-    let mut made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
+    let made = open_branch_workspace_until(&git, &place, &project, &branch, folder.as_deref(), &|| dropped(ticket));
+    if let Some(t) = ticket {
+        settle_create(t);
+    }
+    let mut made = made?;
     let store = store.lock().map_err(|e| e.to_string())?;
     set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
     note_seen(&store, &project, &made.worktree.path)?;
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
+    Ok(made)
+}
+
+/// PROJ-030: the open pull requests of the project's repository, for the composer to pick from.
+#[tauri::command(async)]
+pub fn workspace_prs(store: StoreState<'_>, project_id: String) -> Result<Vec<crate::pr_checkout::PrHead>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    crate::pr_checkout::list(&crate::scm::gh_program()?, Path::new(&project.path))
+}
+
+/// PROJ-030: opens pull request `number` as a workspace, linked to it. A pull request from a
+/// fork is fetched through a remote for the fork, at the same kind of address as origin.
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, project_id: String, number: u64, folder: Option<String>, name: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+    let (project, place) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let project = find_project(&store, &project_id)?;
+        let place = place_for(&store, &project);
+        (project, place)
+    };
+    let repo = Path::new(&project.path);
+    let pr = crate::pr_checkout::view(&crate::scm::gh_program()?, repo, number)?;
+    let fork = if pr.is_cross_repository {
+        let origin = crate::git::run(&["remote", "get-url", "origin"], Some(repo)).map_err(|_| "this project has no origin remote to find the fork from".to_string())?;
+        let owner = pr.head_repository_owner.as_ref().map(|o| o.login.clone()).ok_or("gh did not say whose fork the pull request comes from")?;
+        let repo_name = pr.head_repository.as_ref().map(|r| r.name.clone()).ok_or("gh did not say which fork the pull request comes from")?;
+        Some(crate::pr_checkout::fork_url(&origin, &owner, &repo_name).ok_or("origin is not a GitHub address, so the fork's address is not known")?)
+    } else {
+        None
+    };
+    let opened = crate::pr_checkout::open(&git, &place, &project, &pr, fork.as_deref(), folder.as_deref(), &|| dropped(ticket));
+    if let Some(t) = ticket {
+        settle_create(t);
+    }
+    let (mut made, reused) = opened?;
+    let store = store.lock().map_err(|e| e.to_string())?;
+    set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": reused, "pr": pr.url })))?;
+    if crate::scm::link_printed(&store, &made.worktree.path, &pr.url) {
+        let _ = tauri::Emitter::emit(&app, "settings-saved", ()); // the window's copy of the links is stale otherwise
+    }
+    note_seen(&store, &project, &made.worktree.path)?;
+    let shown = name.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&pr.title).to_string();
+    set_name(&store, &made.worktree.path, Some(&shown))?;
+    made.worktree.name = Some(shown);
+    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
+    Ok(made)
+}
+/// PROJ-037: an issue or pull request named by its address, as the palette read it.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct WorkItem {
+    pub host: String,
+    pub owner: String,
+    pub repo: String,
+    pub kind: String,
+    pub number: u64,
+}
+
+/// SESS-036: the open issues and pull requests of the project's own repository that match the
+/// text typed in the composer's name field.
+#[tauri::command(async)]
+pub fn workspace_items(store: StoreState<'_>, project_id: String, query: String) -> Result<Vec<crate::pr_checkout::Linkable>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    crate::pr_checkout::find(&crate::scm::gh_program()?, Path::new(&project.path), &query)
+}
+
+/// SESS-036: the issue or pull request a link pasted in the composer names, when it belongs to
+/// the chosen project's own repository (never another one, so no repository is asked for).
+#[tauri::command(async)]
+pub fn workspace_item(store: StoreState<'_>, project_id: String, item: WorkItem) -> Result<crate::pr_checkout::Linkable, String> {
+    use crate::pr_checkout::Linkable;
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    let repo = Path::new(&project.path);
+    if !crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(repo), &item.host, &item.owner, &item.repo) {
+        return Err(format!("That link is to {}/{}/{}, which is not a remote of {}; links here come from the chosen project's own repository.", item.host, item.owner, item.repo, project.name));
+    }
+    let gh = crate::scm::gh_program()?;
+    Ok(if item.kind == "pull" {
+        let pr = crate::pr_checkout::view(&gh, repo, item.number)?;
+        Linkable { kind: "pull".into(), number: pr.number, title: pr.title, url: pr.url }
+    } else {
+        let i = crate::pr_checkout::issue(&gh, repo, item.number)?;
+        Linkable { kind: "issue".into(), number: i.number, title: i.title, url: i.url }
+    })
+}
+
+/// PROJ-037: a workspace straight from an issue or pull request address, in the project that has
+/// a remote at its repository: a pull request is checked out as `workspace_open_pr` does; an
+/// issue gets a new branch named after its title, linked to it (the `issue:` selector finds it).
+#[tauri::command(async)]
+pub fn workspace_from_item(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, item: WorkItem) -> Result<Created, String> {
+    let projects = load_projects(&*store.lock().map_err(|e| e.to_string())?);
+    let project = projects
+        .into_iter()
+        .find(|p| crate::pr_checkout::has_repo(&crate::pr_checkout::remotes(Path::new(&p.path)), &item.host, &item.owner, &item.repo))
+        .ok_or_else(|| format!("No project here has {}/{}/{} as a remote; add that repository as a project first.", item.host, item.owner, item.repo))?;
+    if item.kind == "pull" {
+        return workspace_open_pr(app, git, store, project.id, item.number, None, None, None, None);
+    }
+    let issue = crate::pr_checkout::issue(&crate::scm::gh_program()?, Path::new(&project.path), item.number)?;
+    let made = create_named(&git, &store, &project.id, &issue.title, None, None)?;
+    set_origin(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "issue": issue.number, "issueUrl": issue.url })))?;
     Ok(made)
 }
 
@@ -718,17 +1108,26 @@ pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> 
 
 /// PROJ-041: the new worktrees made outside Kolux, for the sidebar's count line.
 #[tauri::command]
-pub fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    unseen(&git, &store, &project)
+pub async fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    unseen_of(&*store.lock().map_err(|e| e.to_string())?, &project, all)
 }
 
 #[tauri::command]
-pub fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<(), String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    mark_all_seen(&git, &store, &project)
+pub async fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<(), String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    let keys: Vec<String> = all.iter().map(|w| name_key(&w.path)).collect();
+    save_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &keys)
+}
+
+/// T-442 (TERM-115): a project's worktrees as Git lists them, with the store let go while git runs,
+/// so a terminal printing a pull request link never waits on it. The commands that call this are
+/// async, so they run off the window's thread and typing never queues behind a slow git.
+/// ponytail: git still blocks one async worker while it runs; spawn_blocking if workers ever starve.
+fn scan(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<(Project, Vec<Worktree>), String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, project_id)?;
+    let all = git.worktrees(Path::new(&project.path))?;
+    Ok((project, all))
 }
 
 /// SET-032 / PROJ-042: the visibility sources, with the global choice and `project_id`'s own.
@@ -761,11 +1160,33 @@ pub fn workspace_hide(store: StoreState<'_>, path: String, hidden: bool) -> Resu
     set_hidden(&*store.lock().map_err(|e| e.to_string())?, &path, hidden)
 }
 
+/// PROJ-059: the inline rename. The sidebar trims the name and turns shortcodes into emoji first;
+/// a blank name is refused here too, so no caller can wipe a name by accident.
+pub fn rename(store: &Store, path: &str, name: &str) -> Result<String, String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("A workspace name cannot be blank".into());
+    }
+    set_name(store, path, Some(n))?;
+    Ok(n.to_string())
+}
+
 #[tauri::command]
-pub fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    list_workspaces(&git, &store, &project)
+pub fn workspace_rename(store: StoreState<'_>, path: String, name: String) -> Result<String, String> {
+    rename(&*store.lock().map_err(|e| e.to_string())?, &path, &name)
+}
+
+/// PROJ-053: putting workspaces to sleep ends their terminals; the folders and branches stay, and
+/// the sidebar keeps the list of who sleeps. Returns how many terminals were ended.
+#[tauri::command]
+pub fn workspace_sleep(terminals: State<'_, crate::terminal::Terminals>, paths: Vec<String>) -> usize {
+    paths.iter().map(|p| terminals.kill_under(Path::new(p)).ended).sum()
+}
+
+#[tauri::command]
+pub async fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    decorate(&*store.lock().map_err(|e| e.to_string())?, &project, all)
 }
 
 /// What a typed name becomes (PROJ-021 / PROJ-025): the branch, and the folder it would get in
@@ -797,13 +1218,18 @@ pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option
 /// `kolux-dev worktree create` both come through here). `branch` (the composer's Advanced) names
 /// the branch in place of the name (SESS-037).
 pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>, branch: Option<&str>) -> Result<Created, String> {
+    create_named_until(git, store, project_id, name, base, branch, &|| false)
+}
+
+/// `create_named` with the overtaken checks of `create_workspace_until` (PROJ-020).
+pub fn create_named_until(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>, branch: Option<&str>, overtaken: &dyn Fn() -> bool) -> Result<Created, String> {
     let (project, place) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let project = find_project(&store, project_id)?;
         let place = place_for(&store, &project);
         (project, place)
     };
-    let mut made = create_workspace(git, &place, &project, non_blank(branch).unwrap_or(name), base)?;
+    let mut made = create_workspace_until(git, &place, &project, non_blank(branch).unwrap_or(name), base, overtaken)?;
     note_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &made.worktree.path)?;
     let typed = name.trim();
     if typed != made.worktree.branch.as_deref().unwrap_or_default() {
@@ -814,13 +1240,24 @@ pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &st
     Ok(made)
 }
 
-#[tauri::command]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>) -> Result<Created, String> {
-    let mut made = create_named(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref())?;
+// PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>, issue: Option<crate::pr_checkout::Linkable>) -> Result<Created, String> {
+    let made = create_named_until(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref(), &|| dropped(ticket));
+    if let Some(t) = ticket {
+        settle_create(t);
+    }
+    let mut made = made?;
     // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
     let store = store.lock().map_err(|e| e.to_string())?;
+    if let Some(i) = issue {
+        // SESS-036: linked to the issue the composer named it from (the `issue:` selector finds it)
+        set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "issue": i.number, "issueUrl": i.url })))?;
+    }
     let project = find_project(&store, &project_id)?;
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
     Ok(made)
 }
 
@@ -988,6 +1425,14 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn view038_a_workspace_carries_the_number_of_the_issue_or_pull_request_it_is_linked_to() {
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "app", "issue": 34, "issueUrl": "https://github.com/o/r/issues/34" })), Some(34));
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "app", "pr": "https://github.com/o/r/pull/12" })), Some(12));
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "cli", "issue": null })), None);
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "app" })), None);
+    }
+
+    #[test]
     fn sess025_handoff_note_is_made_once_and_never_overwritten() {
         let repo = temp("handoff");
         let path = prepare_handoff(&repo, "gentle-squid").unwrap();
@@ -1038,7 +1483,128 @@ mod tests {
     }
 
     fn nested(root: &Path) -> Place {
-        Place { root: root.to_path_buf(), flat: false, prefix: String::new(), prefix_warning: None }
+        Place { root: root.to_path_buf(), flat: false, prefix: String::new(), prefix_warning: None, refresh: false }
+    }
+
+    #[test]
+    fn a_new_workspace_can_start_from_a_refreshed_base() {
+        let git = Git::detect().unwrap();
+        let profile = temp("refresh");
+        let store = Store::open(&profile).unwrap();
+        let remote = temp("refresh-remote");
+        git_in(&remote, &["init", "-q", "--bare", "-b", "main"]);
+        let repo = temp_repo("refresh-r");
+        let remote_url = remote.to_string_lossy().to_string();
+        git_in(&repo, &["remote", "add", "origin", &remote_url]);
+        git_in(&repo, &["push", "-q", "-u", "origin", "main"]);
+        // Someone else moves origin/main on.
+        let other = temp("refresh-other");
+        git_in(&other, &["clone", "-q", &remote_url, "."]);
+        let push_one = |file: &str| {
+            git_in(&other, &["-c", "user.name=o", "-c", "user.email=o@o", "commit", "-q", "--allow-empty", "-m", file]);
+            git_in(&other, &["push", "-q"]);
+            rev(&other, "HEAD")
+        };
+        let ahead = push_one("b");
+        let root = temp("refresh-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let head = |c: &Created| rev(Path::new(&c.worktree.path), "HEAD");
+        let on = Place { refresh: true, ..nested(&root) };
+
+        // Off: the workspace starts from the local base, and Kolux says it is behind.
+        let made = create_workspace(&git, &nested(&root), &project, "off", None).unwrap();
+        assert_ne!(head(&made), ahead);
+        assert!(made.warnings.iter().any(|w| w.contains("main is 1 commit behind origin/main")), "{:?}", made.warnings);
+
+        // On, but main's own worktree has uncommitted changes: left alone, with a note.
+        fs::write(repo.join("a.txt"), "dirty").unwrap();
+        let made = create_workspace(&git, &on, &project, "dirty", None).unwrap();
+        assert_ne!(head(&made), ahead);
+        assert!(made.warnings.iter().any(|w| w.contains("uncommitted changes")), "{:?}", made.warnings);
+        // Off with that worktree dirty: no suggestion to update it.
+        assert!(create_workspace(&git, &nested(&root), &project, "quiet", None).unwrap().warnings.is_empty());
+
+        // On and clean: main fast-forwards and the workspace starts from it.
+        git_in(&repo, &["checkout", "--", "a.txt"]);
+        let made = create_workspace(&git, &on, &project, "on", None).unwrap();
+        assert_eq!((head(&made), rev(&repo, "main")), (ahead.clone(), ahead.clone()));
+        assert!(made.warnings.is_empty(), "{:?}", made.warnings);
+
+        // Not checked out anywhere: the branch itself is moved on.
+        git_in(&repo, &["checkout", "-q", "-b", "side"]);
+        let ahead = push_one("c");
+        let made = create_workspace(&git, &on, &project, "moved", Some("main")).unwrap();
+        assert_eq!((head(&made), rev(&repo, "main")), (ahead.clone(), ahead.clone()));
+
+        // A base with commits of its own is never rewound or merged.
+        git_in(&repo, &["checkout", "-q", "main"]);
+        git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        let mine = rev(&repo, "main");
+        push_one("d");
+        let made = create_workspace(&git, &on, &project, "kept", None).unwrap();
+        assert_eq!((head(&made), rev(&repo, "main")), (mine.clone(), mine));
+        assert!(made.warnings.iter().any(|w| w.contains("commits of its own")), "{:?}", made.warnings);
+
+        drop(store);
+        for d in [profile, remote, repo, other, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn secret_looking_names_are_spotted_and_templates_are_not() {
+        for s in [".env", ".env.local", "config/.env.production", "prod.env", "id_rsa", "server.key", "cert.PEM", "store.p12", ".npmrc", "credentials.json", "api-token.txt", "secrets.yaml", ".git-credentials"] {
+            assert!(looks_secret(s), "{s}");
+        }
+        for s in [".env.example", ".env.sample", "README.md", "src/tokens.ts", "id_rsa.pub", "package.json", "secret-santa.md"] {
+            assert!(!looks_secret(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn a_plain_folder_gets_git_and_a_first_commit_without_its_secrets() {
+        let git = Git::detect().unwrap();
+        let profile = temp("first-profile");
+        let store = Store::open(&profile).unwrap();
+        let dir = temp("first");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("README.md"), "hi").unwrap();
+        fs::write(dir.join("src").join("main.rs"), "fn main() {}").unwrap();
+        fs::write(dir.join(".env"), "API_KEY=not-real").unwrap();
+        fs::write(dir.join(".gitignore"), "build/\n").unwrap();
+        fs::create_dir_all(dir.join("build")).unwrap();
+        fs::write(dir.join("build").join("out.bin"), "x").unwrap();
+        let preview = first_commit_preview(&dir).unwrap();
+        let shown: Vec<(&str, bool)> = preview.iter().map(|f| (f.path.as_str(), f.secret)).collect();
+        assert_eq!(shown, [(".env", true), (".gitignore", false), ("README.md", false), ("src/main.rs", false)]);
+        assert!(!dir.join(".git").exists(), "the preview leaves the folder as it is");
+        let chosen: Vec<String> = preview.iter().filter(|f| !f.secret).map(|f| f.path.clone()).collect();
+        start_git(&dir, &chosen, &["-c", "user.name=t", "-c", "user.email=t@t"]).unwrap();
+        let count = crate::git::run(&["rev-list", "--count", "HEAD"], Some(&dir)).unwrap();
+        assert_eq!(count, "1");
+        let tracked = crate::git::run(&["ls-files"], Some(&dir)).unwrap();
+        assert_eq!(tracked.lines().collect::<Vec<_>>(), [".gitignore", "README.md", "src/main.rs"]);
+        let p = add_project(&git, &store, &dir).unwrap();
+        assert_eq!(load_projects(&store), [p]);
+        // Once Git is there, neither step runs again.
+        assert!(first_commit_preview(&dir).unwrap_err().contains("already a Git repository"));
+        assert!(start_git(&dir, &chosen, &[]).unwrap_err().contains("already a Git repository"));
+        drop(store);
+        for d in [profile, dir] {
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn starting_git_refuses_a_relative_or_missing_path_and_a_failed_commit_leaves_no_git() {
+        assert!(first_commit_preview(Path::new("some/where")).unwrap_err().contains("not a full path"));
+        let gone = std::env::temp_dir().join("kolux-rs-proj-no-such-folder-61");
+        assert!(start_git(&gone, &[], &[]).unwrap_err().contains("not an existing folder"));
+        let dir = temp("first-fail");
+        fs::write(dir.join("a.txt"), "a").unwrap();
+        assert!(start_git(&dir, &["missing.txt".into()], &["-c", "user.name=t", "-c", "user.email=t@t"]).is_err());
+        assert!(!dir.join(".git").exists(), "a failed first commit removes the Git it started");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1095,6 +1661,15 @@ mod tests {
         assert_eq!(branch_prefix(Some("custom"), Some("tx"), user, &ok).0, "tx/");
         assert_eq!(branch_prefix(Some("custom"), Some("///"), user, &ok), (String::new(), None), "only slashes: none");
         assert_eq!(branch_prefix(Some("none"), Some("tx"), user, &ok), (String::new(), None));
+        // GIT-066: an overly long user name gives no prefix, with a warning.
+        let long = || Some("a".repeat(MAX_USER_PREFIX + 1));
+        let (p, warn) = branch_prefix(None, None, long, &ok);
+        assert!(p.is_empty() && warn.unwrap().contains("too long"), "a long user name is refused");
+        assert_eq!(branch_prefix(None, None, || Some("a".repeat(MAX_USER_PREFIX)), &ok).0.len(), MAX_USER_PREFIX + 1);
+        // The git user name first, then the gh login.
+        assert_eq!(prefix_user(|| Some("Git Name".into()), || Some("ghlogin".into())).as_deref(), Some("Git Name"));
+        assert_eq!(prefix_user(|| None, || Some("ghlogin".into())).as_deref(), Some("ghlogin"));
+        assert_eq!(prefix_user(|| Some(" ".into()), || None), None);
         let (p, warn) = branch_prefix(Some("custom"), Some("a b"), user, &ok);
         assert!(p.is_empty() && warn.unwrap().contains("not a name Git accepts"), "Git refuses spaces");
         // The prefix goes on the branch only; the folder keeps the bare name.
@@ -1110,6 +1685,95 @@ mod tests {
         assert!(same_folder(Path::new(&made.worktree.path), &workspace_path(&place, &project, "fix-login")));
         let bad = Place { prefix_warning: Some("w".into()), ..nested(&root) };
         assert_eq!(create_workspace(&git, &bad, &project, "two", None).unwrap().warnings, vec!["w".to_string()]);
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn sess038_a_create_git_finds_locked_is_retried_and_a_failed_one_leaves_nothing() {
+        use std::time::{Duration, Instant};
+        assert!(lock_held("fatal: cannot lock ref 'refs/heads/x': Unable to create 'C:/r/.git/refs/heads/x.lock': File exists."));
+        assert!(lock_held("Another git process seems to be running in this repository"));
+        assert!(!lock_held("fatal: invalid reference: nope"));
+        let git = Git::detect().unwrap();
+        let profile = temp("locked");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("locked-r");
+        let root = temp("locked-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        // Another Git process holds the new branch's lock the whole time: three tries, then the
+        // error, and nothing half-made is left.
+        let lock = repo.join(".git").join("refs").join("heads").join("held.lock");
+        fs::write(&lock, "").unwrap();
+        let started = Instant::now();
+        let err = create_workspace_until(&git, &place, &project, "held", None, &|| false).unwrap_err();
+        assert!(lock_held(&err), "{err}");
+        assert!(started.elapsed() >= Duration::from_millis(900), "it waited between three tries");
+        assert!(!workspace_path(&place, &project, "held").exists(), "no half-made folder");
+        assert!(!git.branch_taken(&repo, "held"), "no half-made branch");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 1, "only the main checkout");
+        // The lock goes while Kolux waits: a later try makes the workspace.
+        let gone = lock.clone();
+        let other = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            fs::remove_file(gone).unwrap();
+        });
+        let made = create_workspace_until(&git, &place, &project, "held", None, &|| false).unwrap();
+        other.join().unwrap();
+        assert_eq!(made.worktree.branch.as_deref(), Some("held"));
+        // Cancelled while it waits: no further try.
+        fs::write(repo.join(".git").join("refs").join("heads").join("again.lock"), "").unwrap();
+        let tries = std::cell::Cell::new(0);
+        let cancel_after_first = || {
+            tries.set(tries.get() + 1);
+            tries.get() > 1
+        };
+        assert_eq!(create_workspace_until(&git, &place, &project, "again", None, &cancel_after_first).unwrap_err(), OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "again").exists());
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj020_an_overtaken_create_is_cancelled_and_its_half_made_checkout_removed() {
+        let git = Git::detect().unwrap();
+        let profile = temp("overtaken");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("overtaken-r");
+        let root = temp("overtaken-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        // Overtaken while Git was making the worktree: the folder and the new branch both go.
+        let asked = std::cell::Cell::new(0);
+        let late = || {
+            asked.set(asked.get() + 1);
+            asked.get() > 1
+        };
+        let err = create_workspace_until(&git, &place, &project, "first", None, &late).unwrap_err();
+        assert_eq!(err, OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "first").exists(), "the half-made folder is removed");
+        assert!(!git.branch_taken(&repo, "first"), "the half-made branch is removed");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 1, "only the main checkout is left");
+        // Overtaken before it began: nothing is made at all.
+        assert_eq!(create_workspace_until(&git, &place, &project, "second", None, &|| true).unwrap_err(), OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "second").exists());
+        // An existing branch opened as a workspace keeps its branch when overtaken.
+        git_in(&repo, &["branch", "kept"]);
+        asked.set(0);
+        assert_eq!(open_branch_workspace_until(&git, &place, &project, "kept", None, &late).unwrap_err(), OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "kept").exists());
+        assert!(git.branch_taken(&repo, "kept"), "a branch that existed before stays");
+        // A create nobody overtook is untouched by the tickets of others.
+        drop_create(41);
+        assert!(dropped(Some(41)) && !dropped(Some(42)) && !dropped(None));
+        assert!(create_workspace_until(&git, &place, &project, "third", None, &|| dropped(Some(42))).is_ok());
+        settle_create(41);
+        assert!(!dropped(Some(41)));
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
@@ -1229,6 +1893,40 @@ mod tests {
             let _ = git.worktree_remove(&repo, d, None);
         }
         for d in [profile, profile2, repo, root, side] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj044_a_worktree_gsd_marked_counts_as_made_by_gsd() {
+        let git = Git::detect().unwrap();
+        let profile = temp("gsd");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("gsd-r");
+        let p = |d: &Path| d.to_string_lossy().to_string();
+        let project = add_project(&git, &store, &repo).unwrap();
+        let cc = repo.join(".claude").join("worktrees");
+        let (gsd, plain) = (cc.join("agent-a1"), cc.join("agent-b2"));
+        git_in(&repo, &["worktree", "add", "-q", "-b", "worktree-agent-a1", &p(&gsd)]);
+        git_in(&repo, &["worktree", "add", "-q", "-b", "worktree-agent-b2", &p(&plain)]);
+        // GSD's executor leaves `gsd-spawn-toplevel` in the worktree's own Git folder.
+        let link = fs::read_to_string(gsd.join(".git")).unwrap();
+        let admin = PathBuf::from(link.trim().strip_prefix("gitdir:").unwrap().trim());
+        fs::write(admin.join("gsd-spawn-toplevel"), p(&gsd)).unwrap();
+        let rows: Vec<_> = list_workspaces(&git, &store, &project).unwrap().into_iter().map(|w| (w.branch.unwrap_or_default(), w.source, w.hidden)).collect();
+        assert!(rows.contains(&("worktree-agent-a1".into(), Some("gsd".into()), true)), "{rows:?}");
+        assert!(rows.contains(&("worktree-agent-b2".into(), Some("claude".into()), true)), "{rows:?}");
+        let src = crate::visibility::sources(&store, Some(&project));
+        assert_eq!(src.iter().map(|s| s.label.as_str()).take(3).collect::<Vec<_>>(), ["Made by Claude Code", "Made by GSD", "Elsewhere on disk"]);
+        crate::visibility::set_choice(&store, None, "gsd", Some(true)).unwrap();
+        let shown = list_workspaces(&git, &store, &project).unwrap();
+        assert!(!shown.iter().find(|w| w.branch.as_deref() == Some("worktree-agent-a1")).unwrap().hidden, "its own choice shows it");
+        assert!(shown.iter().find(|w| w.branch.as_deref() == Some("worktree-agent-b2")).unwrap().hidden, "Claude Code's stay hidden");
+        drop(store);
+        for d in [&gsd, &plain] {
+            let _ = git.worktree_remove(&repo, d, None);
+        }
+        for d in [profile, repo] {
             let _ = fs::remove_dir_all(d);
         }
     }
@@ -1440,7 +2138,7 @@ mod tests {
         fs::write(repo.join(".env"), "SECRET=1\n").unwrap();
         fs::write(repo.join("tracked.txt"), "edited in main\n").unwrap();
         let project = add_project(&git, &store, &repo).unwrap();
-        let place = Place { root: temp("ws8"), flat: true, prefix: String::new(), prefix_warning: None };
+        let place = Place { root: temp("ws8"), flat: true, prefix: String::new(), prefix_warning: None, refresh: false };
 
         let made = create_workspace(&git, &place, &project, "feat", None).unwrap();
         let dest = PathBuf::from(&made.worktree.path);
@@ -1662,6 +2360,20 @@ mod tests {
         for d in [profile, repo, place.root] {
             let _ = fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn proj059_rename_trims_refuses_blank_and_lasts() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(rename(&s, "C:/r/wt", "  Login fix  ").unwrap(), "Login fix");
+        assert!(rename(&s, "C:/r/wt", "   ").is_err(), "blank is refused");
+        drop(s);
+        let names = load_names(&Store::open(&dir).unwrap());
+        assert_eq!(names.get(&name_key("C:/r/wt")).and_then(|v| v.as_str()), Some("Login fix"), "the old name survives the blank try and a restart");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

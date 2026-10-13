@@ -23,10 +23,10 @@ export const screens: Array<{ id: Screen; label: string }> = [
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
 /** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
-export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[] };
+export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void };
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
-export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [] }: TopBarProps) {
+export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward }: TopBarProps) {
   const [maximized, setMaximized] = useState(false);
   // USAGE-008 / VIEW-008: a pill per provider, only with a weekly figure (or Codex's refused
   // sign-in) and an installed CLI; with neither, nothing is drawn. It is read-only: Settings
@@ -66,10 +66,10 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
         <button className="ib panel" title={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-pressed={sidebarOpen} onClick={onToggleSidebar}>
           <PanelLeft />
         </button>
-        <button className="ib back" title="Back" disabled>
+        <button className="ib back" title="Back to the last workspace or page shown" disabled={!onBack} onClick={onBack}>
           <ArrowLeft size={12} />
         </button>
-        <button className="ib fwd" title="Forward" disabled>
+        <button className="ib fwd" title="Forward" disabled={!onForward} onClick={onForward}>
           <ArrowRight size={12} />
         </button>
       </div>
@@ -93,7 +93,7 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
         <button className="ib panel" title={rightOpen ? "Hide the right panel" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
           <PanelRight />
         </button>
-        <button className="searchbox" title="Search (not built yet)">
+        <button className="searchbox" title="Jump to a worktree, tab, project or setting" onClick={onSearch}>
           <Search />
           <span className="ph">Search</span>
           <Kbd id="worktree.palette" />

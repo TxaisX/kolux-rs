@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, saveShape, renameShape, restoreShape, SHAPE_LIMITS, type SavedShape, type Seat } from "./seats";
+import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, saveShape, renameShape, restoreShape, SHAPE_LIMITS, type SavedShape, type Seat, applyLineup, FAST_SETTINGS, lineupAgents, lineupOf, offeredLineup, seatArgs, removeTarget } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
 const term: Seat = { agent: TERMINAL, model: null };
@@ -138,4 +138,44 @@ test("SESS-020: a saved lineup keeps every seat, numbers a clashing name and kee
   // restoring never swaps an AI: a seat whose agent is gone comes back blank
   expect(restoreShape(list[0], ["claude", "codex"])).toEqual(pair);
   expect(restoreShape(list[0], ["claude"])).toEqual([pair[0], emptySeat()]);
+});
+
+test("SESS-008: remove closes the newest chooser silently, then the focused session (asking), never the last chooser", () => {
+  const running = { key: 1 };
+  const chooser = { key: 2, seats: [emptySeat()] };
+  expect(removeTarget([running, chooser], 1)).toEqual({ key: 2, chooser: true });
+  expect(removeTarget([running], 1)).toEqual({ key: 1, chooser: false });
+  expect(removeTarget([running, { key: 3 }], 9)).toEqual({ key: 3, chooser: false });
+  expect(removeTarget([chooser], 2)).toBeNull();
+  expect(removeTarget([], 1)).toBeNull();
+});
+
+test("SESS-002: a seat whose agent is gone or switched off is emptied, not swapped", () => {
+  const seats: Seat[] = [{ agent: "claude", model: "opus" }, { agent: "codex", model: "default" }, { agent: TERMINAL, model: null }];
+  const after = clearMissing(seats, ["claude"]);
+  expect(after[0]).toBe(seats[0]);
+  expect(after[1]).toEqual(emptySeat());
+  expect(after[2]).toBe(seats[2]);
+  expect(allReady(after)).toBe(false);
+});
+
+test("SESS-016: a seat's effort and fast mode reach its start line only when its model offers them", () => {
+  expect(seatArgs({ agent: "claude", model: "opus", effort: "xhigh", fast: true })).toEqual(["--model", "opus", "--effort", "xhigh", "--settings", FAST_SETTINGS]);
+  expect(seatArgs({ agent: "claude", model: "haiku", effort: "high", fast: true })).toEqual(["--model", "haiku"]);
+  expect(seatArgs({ agent: "claude", model: "opus" })).toEqual(["--model", "opus"]);
+  expect(seatArgs({ agent: "claude", model: "default", effort: "high" })).toEqual([]);
+});
+
+test("SESS-021: a lineup keeps shape, folders and each seat's agent and model, never options or prompts", () => {
+  const seats: Seat[] = [{ agent: "codex", model: "gpt-5", prompt: "x", role: "builder" }, { agent: "claude", model: "opus", effort: "max", title: "T", role: "reviewer" }];
+  const l = lineupOf("pair", "separate", seats);
+  expect(l).toEqual({ shape: "pair", copies: "separate", seats: [{ agent: "codex", model: "gpt-5" }, { agent: "claude", model: "opus" }] });
+  expect(lineupAgents(l)).toEqual(["codex", "claude"]);
+  expect(offeredLineup(l, ["claude"])).toBe(l);
+  expect(offeredLineup(l, ["gemini"])).toBeNull();
+  expect(offeredLineup(undefined, ["claude"])).toBeNull();
+  expect(offeredLineup({ shape: "odd", seats: [] }, ["claude"])).toBeNull();
+  const back = applyLineup(l, ["claude"]);
+  expect(back.shape).toBe("pair");
+  expect(back.seats).toEqual([{ agent: null, model: null, role: "builder" }, { agent: "claude", model: "opus", role: "reviewer" }]);
 });

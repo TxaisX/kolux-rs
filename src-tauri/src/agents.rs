@@ -28,6 +28,8 @@ pub struct AgentInfo {
     pub installed: bool,
     /// Where the program was found, when it was.
     pub path: Option<String>,
+    /// SESS-017: Kolux knows the agent's own documentation page (`install_page`).
+    pub docs: bool,
 }
 
 /// id, name, program names (the first is the main one, the rest also count), fixed arguments.
@@ -94,6 +96,7 @@ pub fn catalogue() -> Vec<AgentInfo> {
                 args: args.iter().map(|a| a.to_string()).collect(),
                 installed: found.is_some(),
                 path: found.map(|(_, f)| f.display().to_string()),
+                docs: install_page(id).is_some(),
             }
         })
         .collect()
@@ -427,14 +430,28 @@ pub fn parse_env(typed: &str) -> Vec<(String, String)> {
     typed.lines().filter_map(|l| l.trim().split_once('=')).filter(|(k, _)| !k.trim().is_empty()).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).collect()
 }
 
+/// SESS-029: what Claude Code starts with when nothing was picked for it: its top model at high effort.
+const CLAUDE_UNPICKED: [&str; 4] = ["--model", "opus", "--effort", "high"];
+
+/// Whether a list of arguments already names a model or an effort.
+fn names_model(args: &[String]) -> bool {
+    args.iter().any(|a| ["--model", "--effort"].iter().any(|f| a == f || a.starts_with(&format!("{f}="))))
+}
+
 /// The start line with the saved Agents page options applied: the permission mode (anything but
-/// `manual` is Yolo), and this agent's command, default arguments and environment.
-pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prompt: &str) -> Result<StartLine, String> {
+/// `manual` is Yolo), and this agent's command, default arguments and environment. `picked` says
+/// the user chose the model in the lineup (even "Program default"); otherwise Claude Code gets
+/// its top model at high effort unless its own or the extra arguments already name one.
+pub fn start_line(settings: &serde_json::Value, id: &str, extra: &[String], prompt: &str, picked: bool) -> Result<StartLine, String> {
     let yolo = settings.get(PERMISSIONS_FIELD).and_then(|v| v.as_str()) != Some("manual");
     let mine = settings.get(OPTIONS_FIELD).and_then(|o| o.get(id));
     let field = |k: &str| mine.and_then(|m| m.get(k)).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty());
     let own = field("args").map(split_args);
-    let mut line = line_for(id, own.as_deref(), yolo, extra, prompt)?;
+    let mut extra = extra.to_vec();
+    if !picked && id == "claude" && !names_model(own.as_deref().unwrap_or(&[])) && !names_model(&extra) {
+        extra.splice(0..0, CLAUDE_UNPICKED.iter().map(|a| a.to_string()));
+    }
+    let mut line = line_for(id, own.as_deref(), yolo, &extra, prompt)?;
     line.program = field("command").map(str::to_string);
     line.env = field("env").map(parse_env).unwrap_or_default();
     Ok(line)
@@ -496,17 +513,50 @@ fn credited_name(stem: &str, packages: bool) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, id: String, extra: Vec<String>, prompt: String) -> Result<StartLine, String> {
+pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, id: String, extra: Vec<String>, prompt: String, picked: Option<bool>) -> Result<StartLine, String> {
     let settings = store.lock().map_err(|e| e.to_string())?.settings();
-    start_line(&settings, &id, &extra, &prompt)
+    start_line(&settings, &id, &extra, &prompt, picked.unwrap_or(false))
 }
 
 /// ACCT-013 "Open install page": the agent's own install page in the default browser. Only these
 /// fixed addresses are ever opened.
 pub fn install_page(agent: &str) -> Option<&'static str> {
+    // SESS-017 (T-201-c): each address checked against the agent's own site or repository on
+    // 2026-10-13. Trae has none yet: no official TRAE CLI page could be found (T-201-d).
     match agent {
         "claude" => Some("https://code.claude.com/docs/en/setup"),
         "codex" => Some("https://developers.openai.com/codex/cli"),
+        "grok" => Some("https://x.ai/cli"),
+        "openclaude" => Some("https://github.com/Twigpine/openclaude"),
+        "autohand" => Some("https://docs.autohand.ai/guides/cli-quick-start"),
+        "ante" => Some("https://docs.antigma.ai/"),
+        "mimo-code" => Some("https://mimo.xiaomi.com/mimocode/install"),
+        "pi" => Some("https://github.com/earendil-works/pi"),
+        "omp" => Some("https://github.com/can1357/oh-my-pi"),
+        "prime-agent" => Some("https://github.com/PrimeIntellect-ai/prime-agent"),
+        "gemini" => Some("https://geminicli.com/docs/"),
+        "antigravity" => Some("https://antigravity.google/docs/getting-started?tab=cli"),
+        "aider" => Some("https://aider.chat/docs/install.html"),
+        "goose" => Some("https://goose-docs.ai/docs/getting-started/installation"),
+        "amp" => Some("https://ampcode.com/docs"),
+        "kilo" => Some("https://kilo.ai/docs/code-with-ai/platforms/cli"),
+        "kiro" => Some("https://kiro.dev/docs/cli/"),
+        "crush" => Some("https://github.com/charmbracelet/crush"),
+        "aug" => Some("https://docs.augmentcode.com/cli/overview"),
+        "cline" => Some("https://docs.cline.bot/usage/cli-overview"),
+        "codebuff" => Some("https://www.codebuff.com/docs/help/quick-start"),
+        "command-code" => Some("https://commandcode.ai/docs"),
+        "continue" => Some("https://docs.continue.dev/cli/overview"),
+        "cursor" => Some("https://cursor.com/docs/cli/overview"),
+        "droid" => Some("https://docs.factory.com/droid-cli/quickstart"),
+        "kimi" => Some("https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started"),
+        "mistral-vibe" => Some("https://github.com/mistralai/mistral-vibe"),
+        "qwen-code" => Some("https://github.com/QwenLM/qwen-code"),
+        "rovo" => Some("https://support.atlassian.com/rovo/docs/install-and-run-rovo-dev-cli-on-your-device/"),
+        "hermes" => Some("https://github.com/NousResearch/hermes-agent"),
+        "openclaw" => Some("https://docs.openclaw.ai/"),
+        "copilot" => Some("https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"),
+        "devin" => Some("https://docs.devin.ai/cli"),
         _ => None,
     }
 }
@@ -549,27 +599,51 @@ mod tests {
     }
 
     #[test]
+    fn sess_017_every_catalogue_agent_but_trae_links_to_its_own_page() {
+        for (id, ..) in CATALOGUE {
+            let page = install_page(id);
+            assert_eq!(page.is_some(), id != "trae", "{id}");
+            assert!(page.is_none_or(|p| p.starts_with("https://") && !p.contains(' ')), "{id}: {page:?}");
+        }
+        assert!(catalogue().iter().all(|a| a.docs == install_page(&a.id).is_some()));
+    }
+
+    #[test]
     fn set027_options_and_permission_mode_shape_the_start_line() {
         let none = serde_json::json!({});
-        let yolo = start_line(&none, "claude", &[], "go").unwrap();
+        let yolo = start_line(&none, "claude", &[], "go", true).unwrap();
         assert_eq!(yolo.args, s(&["--permission-mode", "auto", "go"]));
         assert_eq!((yolo.program, yolo.env.len()), (None, 0));
         // Manual drops the prompt-skipping arguments and keeps the rest
         let manual = serde_json::json!({ "agentPermissions": "manual" });
-        assert_eq!(start_line(&manual, "claude", &[], "go").unwrap().args, s(&["go"]));
-        assert_eq!(start_line(&manual, "codex", &[], "").unwrap().args, Vec::<String>::new());
-        assert_eq!(start_line(&manual, "kiro", &[], "").unwrap().args, s(&["chat", "--tui"]));
+        assert_eq!(start_line(&manual, "claude", &[], "go", true).unwrap().args, s(&["go"]));
+        assert_eq!(start_line(&manual, "codex", &[], "", false).unwrap().args, Vec::<String>::new());
+        assert_eq!(start_line(&manual, "kiro", &[], "", false).unwrap().args, s(&["chat", "--tui"]));
         // the user's own arguments replace the built-in ones, whatever the mode
         let own = serde_json::json!({ "agentPermissions": "manual", "agentOptions": { "claude": { "args": "--model opus --append-system-prompt \"be brief\"", "command": " C:/tools/claude.exe ", "env": "A=1\n\n=x\nB = two words\nnot a pair" } } });
-        let line = start_line(&own, "claude", &s(&["--x"]), "go").unwrap();
+        let line = start_line(&own, "claude", &s(&["--x"]), "go", false).unwrap();
         assert_eq!(line.args, s(&["--model", "opus", "--append-system-prompt", "be brief", "--x", "go"]));
         assert_eq!(line.program.as_deref(), Some("C:/tools/claude.exe"));
         assert_eq!(line.env, vec![("A".to_string(), "1".to_string()), ("B".to_string(), "two words".to_string())]);
         // a blank override counts as none
         let blank = serde_json::json!({ "agentOptions": { "codex": { "args": "  ", "command": "" } } });
-        let codex = start_line(&blank, "codex", &[], "").unwrap();
+        let codex = start_line(&blank, "codex", &[], "", false).unwrap();
         assert_eq!((codex.args, codex.program), (s(&["--dangerously-bypass-approvals-and-sandbox"]), None));
         assert_eq!(split_args(r#"a "" b"#), s(&["a", "", "b"]));
+    }
+
+    #[test]
+    fn sess029_unpicked_claude_gets_its_top_model_at_high_effort() {
+        let none = serde_json::json!({});
+        let line = start_line(&none, "claude", &[], "go", false).unwrap();
+        assert_eq!(line.args, s(&["--permission-mode", "auto", "--model", "opus", "--effort", "high", "go"]));
+        // an effort or a model already named, in the user's own arguments or the extra ones, wins
+        let own = serde_json::json!({ "agentOptions": { "claude": { "args": "--effort=low" } } });
+        assert_eq!(start_line(&own, "claude", &[], "", false).unwrap().args, s(&["--effort=low"]));
+        assert_eq!(start_line(&none, "claude", &s(&["--model", "haiku"]), "", false).unwrap().args, s(&["--permission-mode", "auto", "--model", "haiku"]));
+        // a pick in the lineup, even the program's own default, adds nothing; other agents get no model flag
+        assert_eq!(start_line(&none, "claude", &[], "", true).unwrap().args, s(&["--permission-mode", "auto"]));
+        assert_eq!(start_line(&none, "gemini", &[], "", false).unwrap().args.iter().filter(|a| a.as_str() == "--model").count(), 0);
     }
 
     #[test]

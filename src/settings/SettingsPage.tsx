@@ -1,16 +1,23 @@
 // Settings, laid over the window body (the panes underneath stay mounted and untouched). Its first
 // page is AI connections (ACCT-004): the Claude card connects on the 1-year key by default. The
-// other Connect cards and their install steps come with T-092 (ACCT-001..003); the Claude account
-// route and the Codex sign-ins with T-043-b / T-043-c (both in).
+// Connect grid with install steps is ConnectGrid (ACCT-001, ACCT-003); the Claude account route and
+// the Codex sign-ins came with T-043-b / T-043-c.
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
+import CodexAccounts from "./CodexAccounts";
 import CodexCard from "./CodexCard";
-import { AttentionNote, openInstallPage, type Fix } from "./Attention";
+import { ConnectGrid, liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
+import { settleWithin } from "./pending";
+import Ask from "../chrome/Ask";
+import GrokCard from "./GrokCard";
+import { AttentionNote, fixDoes, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
+import RepoPage from "./RepoPage";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
 
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
@@ -23,11 +30,13 @@ const ShortcutsPage = lazy(() => import("./ShortcutsPage"));
 const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
 const AgentsPage = lazy(() => import("./AgentsPage"));
+const TokenAnalytics = lazy(() => import("../usage/TokenAnalytics"));
+const Activity = lazy(() => import("../usage/Activity"));
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
   const ownLine = card.state === "disconnected" || card.state === "attention" ? ownSignInLine(own) : null;
-  const fix = (f: Fix) => (f === "Open install page" ? void openInstallPage("claude").catch(() => {}) : onAction("connect"));
+  const fix = (f: Fix) => (fixDoes(f) === "install-page" ? void openInstallPage("claude").catch(() => {}) : onAction(fixDoes(f) === "check" ? "cancel" : "connect"));
   const chip = card.state === "connected" || card.state === "warning" ? "Connected" : card.state === "expired" ? "Ran out" : card.state === "connecting" ? "Connecting" : card.state === "attention" ? "Needs attention" : card.state === "reading" ? "" : "Not connected";
   return (
     <section className="conn-card" data-state={card.state} aria-label="Claude">
@@ -36,6 +45,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
         <span className="conn-name">Claude</span>
         {chip && <span className={`conn-chip ${card.state}`}>{chip}</span>}
       </header>
+      <p className="conn-detail conn-tagline">{taglineOf("claude")}</p>
       <div className="conn-headline">{card.headline}</div>
       {card.detail && <p className={card.state === "warning" || card.state === "expired" || card.state === "attention" ? "conn-detail warn" : "conn-detail"}>{card.detail}</p>}
       {ownLine && <p className={ownLine.warn ? "conn-detail warn own-sign-in" : "conn-detail own-sign-in"}>{ownLine.text}</p>}
@@ -51,11 +61,7 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
             {actionLabel[a]}
           </button>
         ))}
-        {onUseAccount && (card.state === "disconnected" || card.state === "attention") && (
-          <button className="btn link" disabled={busy} onClick={onUseAccount}>
-            Use my Claude account instead
-          </button>
-        )}
+        {onUseAccount && (card.state === "disconnected" || card.state === "attention") && <OtherWays ways={[{ label: "Use my Claude account instead", onPick: onUseAccount, disabled: busy }]} />}
       </div>
       {onResume && (
         <label className="conn-switch">
@@ -70,12 +76,23 @@ export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, ow
   );
 }
 
-function ClaudeCard() {
+/** ACCT-015: the one question before the 1-year key is erased. */
+export const claudeDisconnect = {
+  title: "Disconnect Claude?",
+  body: "Kolux erases the 1-year key it saved for Claude. A Claude sign-in you made yourself, and any managed Claude accounts, stay as they are.",
+  confirm: "Disconnect",
+};
+
+/** `onConnected`: told whether Claude counts as connected each time that changes (ONB-003). */
+export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: boolean) => void } = {}) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
+  const on = ["connected", "warning"].includes(keyCard(status).state);
+  useEffect(() => onConnected(on), [onConnected, on]);
   const [own, setOwn] = useState<OwnSignIn | null>(null);
   const [resume, setResume] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
   const read = useCallback(() => {
     invoke<KeyStatus>("claude_key_status")
       .then(setStatus)
@@ -90,12 +107,13 @@ function ClaudeCard() {
       .then((s) => setResume(resumeOn(s)))
       .catch(() => {});
     const offs = [listen("claude-key", read), listen("claude-accounts", read)];
-    return () => offs.forEach((o) => void o.then((u) => u()).catch(() => {}));
+    const stop = liveCheck(read, window, document, 0);
+    return () => (stop(), offs.forEach((o) => void o.then((u) => u()).catch(() => {})));
   }, [read]);
   const saveResume = (on: boolean) => {
     setResume(on);
     invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [RESUME_FIELD]: on } }))
+      .then((s) => saveChanged(s, { ...s, [RESUME_FIELD]: on }))
       .catch((e) => {
         setResume(!on);
         setError(String(e));
@@ -107,36 +125,41 @@ function ClaudeCard() {
     const t = window.setInterval(read, 1000);
     return () => window.clearInterval(t);
   }, [status?.settingUp, read]);
-  const act = (a: KeyAction) => {
+  const act = (a: KeyAction, sure = false) => {
     setError(null);
+    if (a === "disconnect" && !sure) return setAsking(true);
     const command = a === "cancel" ? "claude_key_cancel" : a === "disconnect" ? "claude_key_disconnect" : "claude_key_connect";
     setBusy(a !== "cancel");
-    invoke(command)
-      .catch((e) => setError(String(e)))
-      .finally(() => {
-        setBusy(false);
-        read();
-      });
+    const call = invoke(command);
+    call.catch((e) => setError(String(e)));
+    // ACCT-002: the buttons come back after 30 seconds even if no answer arrives.
+    void settleWithin(call).then(() => {
+      setBusy(false);
+      read();
+    });
   };
   const useAccount = () => {
     setError(null);
     addClaudeAccount().catch((e) => setError(String(e)));
   };
-  return <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />;
+  return (
+    <>
+      <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />
+      {asking && (
+        <Ask
+          {...claudeDisconnect}
+          onCancel={() => setAsking(false)}
+          onConfirm={() => {
+            setAsking(false);
+            act("disconnect", true);
+          }}
+        />
+      )}
+    </>
+  );
 }
 
 const later = <p className="conn-detail">Nothing to set here yet.</p>;
-
-function RepoPage({ project }: { project: Project }) {
-  return (
-    <section className="conn-card" data-section="repo">
-      <h2 className="conn-name">{project.name}</h2>
-      <p className="conn-detail">Folder: {project.path}</p>
-      <p className="conn-detail">Workspaces folder: {project.workspacesDir || "the global one (Git & worktrees)"}</p>
-      <p className="conn-detail">New workspaces start from: {project.base || "the default branch"}</p>
-    </section>
-  );
-}
 
 /** Scrolls a section of the open page into view once it is drawn (pages load lazily). */
 function useScrollTo(section: string | undefined, page: Page, n: number) {
@@ -219,10 +242,13 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           )}
           {page === "accounts" && (
             <>
-              <p className="settings-sub">Link Kolux to the AI services you already pay for. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
-              <ClaudeCard />
-              <ClaudeAccounts />
-              <CodexCard />
+              <p className="settings-sub">Link Kolux to the AI services you already pay for. Kolux charges nothing and ships no models or keys of its own: each agent runs on your plan or key and talks straight to its provider, and Kolux neither relays nor records that traffic. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
+              <ConnectGrid cards={{ claude: <ClaudeCard />, codex: <CodexCard />, grok: <GrokCard /> }} />
+              <div className="conn-advanced" data-section="accounts-advanced">
+                <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
+                <ClaudeAccounts />
+                <CodexAccounts />
+              </div>
             </>
           )}
           {page === "shortcuts" && <ShortcutsPage />}
@@ -235,8 +261,15 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
               <Notifications />
             </>
           )}
-          {(page === "safety" || page === "usage") && later}
-          {repo && <RepoPage project={repo} />}
+          {page === "usage" && (
+            <>
+              <Activity />
+              <p className="settings-sub">What your agents used, read from the logs they keep on this computer.</p>
+              <TokenAnalytics />
+            </>
+          )}
+          {page === "safety" && later}
+          {repo && <RepoPage project={repo} onSaved={(u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x)))} />}
         </Suspense>
       </main>
     </div>

@@ -47,6 +47,31 @@ pub struct Account {
     /// ACCT-012: Codex answered with a sign-in error for this account; Sign in again clears it.
     #[serde(default)]
     pub sign_in_error: bool,
+    /// ACCT-019 (T-138-b): the user's own name for the account, so a personal and a business
+    /// workspace on one email can be told apart. Kolux does not guess the kind: OpenAI does not
+    /// document where a sign-in says it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+pub const LABEL_MAX: usize = 40;
+
+/// Names an account (trimmed, at most LABEL_MAX characters); a blank name clears it.
+pub fn set_label(store: &Store, id: &str, label: &str) -> Result<(), String> {
+    let mut list = load(store);
+    let Some(a) = list.iter_mut().find(|a| a.id == id) else {
+        return Err("That Codex account is no longer listed.".into());
+    };
+    let name: String = label.trim().chars().take(LABEL_MAX).collect();
+    a.label = Some(name.trim_end().to_string()).filter(|n| !n.is_empty());
+    store.set(LIST_KEY, &serde_json::to_string(&list).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn codex_account_label(app: AppHandle, store: tauri::State<'_, Mutex<Store>>, id: String, label: String) -> Result<(), String> {
+    set_label(&*store.lock().map_err(|e| e.to_string())?, &id, &label)?;
+    let _ = app.emit(EVENT, ());
+    Ok(())
 }
 
 pub fn load(store: &Store) -> Vec<Account> {
@@ -70,9 +95,41 @@ pub fn mark_sign_in_error(store: &Store, id: &str, error: bool) -> Result<bool, 
     Ok(true)
 }
 
+/// ACCT-025: each listed account's live sign-in file and its sealed copy in the vault.
+pub fn sign_in_files(store: &Store, profile: &Path) -> Vec<(PathBuf, PathBuf)> {
+    load(store).into_iter().map(|a| (Path::new(&a.home).join("auth.json"), profile.join(secrets::VAULT).join(format!("codex-{}.json", a.id)))).collect()
+}
+
 /// The active account's home, if it is still listed and on disk.
 pub fn active_home(store: &Store) -> Option<String> {
     active_account(store).map(|a| a.home)
+}
+
+/// ACCT-024: how long a new Codex pane waits for the chosen account's sign-in to be in place.
+pub const SIGN_IN_WAIT: Duration = Duration::from_secs(2);
+
+/// ACCT-024: the Codex home a new pane runs in. `active` reads the chosen account's home and is
+/// asked again every `step`, so an account changed while the pane waits wins. No sign-in after
+/// `wait`: the system-default login (`None`), or, when the choice changed and the new one has no
+/// sign-in either, an error asking the user to open the pane again.
+pub fn ready_home(mut active: impl FnMut() -> Option<String>, signed_in: impl Fn(&str) -> bool, wait: Duration, step: Duration) -> Result<Option<String>, String> {
+    let started = std::time::Instant::now();
+    let first = active();
+    let mut home = first.clone();
+    loop {
+        match home.as_deref() {
+            None => return Ok(None),
+            Some(h) if signed_in(h) => return Ok(home),
+            _ if started.elapsed() >= wait => break,
+            _ => std::thread::sleep(step),
+        }
+        home = active();
+    }
+    if home == first {
+        Ok(None)
+    } else {
+        Err("The Codex account changed while this pane was starting, and the new one is not signed in yet. Open it again.".into())
+    }
 }
 
 /// ACCT-023: the home a resumed pane runs on. `None` when its account is no longer listed (the
@@ -231,11 +288,11 @@ pub fn sign_in(store: &Mutex<Store>, profile: &Path, id: &str, now: i64, login: 
     if let Err(e) = secrets::write_file(&profile.join(secrets::VAULT).join(format!("codex-{id}.json")), &text) {
         return Err(format!("The sign-in could not be stored: {e}").into());
     }
-    let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now, sign_in_error: false };
+    let account = Account { id: id.into(), email: email(&text), home: home.to_string_lossy().into_owned(), last_sign_in: now, sign_in_error: false, label: None };
     let store = store.lock().map_err(|e| e.to_string())?;
     let mut list = load(&store);
     match list.iter_mut().find(|a| a.id == id) {
-        Some(a) => *a = account.clone(),
+        Some(a) => *a = Account { label: a.label.take(), ..account.clone() },
         None => {
             list.push(account.clone());
             store.set(ACTIVE_KEY, id).map_err(|e| e.to_string())?;
@@ -273,6 +330,8 @@ pub struct CodexView {
     pub drifted: Vec<String>,
     /// ACCT-019: accounts whose sign-in file has been gone for longer than the grace period.
     pub missing: Vec<String>,
+    /// ACCT-021: why the user's Codex settings cannot be copied into the accounts, if they cannot.
+    pub settings_warning: Option<String>,
 }
 
 #[tauri::command]
@@ -288,7 +347,9 @@ pub fn codex_accounts(store: tauri::State<'_, Mutex<Store>>, sign_ins: tauri::St
         Ok(mut seen) => accounts.iter().filter(|a| missing_now(&mut seen, &a.id, Path::new(&a.home).join("auth.json").exists(), std::time::Instant::now())).map(|a| a.id.clone()).collect(),
         Err(_) => Vec::new(),
     };
+    let settings_warning = user_dir(env.as_deref(), user.as_deref()).and_then(|u| user_settings(&u).err());
     Ok(CodexView {
+        settings_warning,
         drifted,
         missing,
         accounts,
@@ -398,9 +459,17 @@ pub fn codex_account_sign_in(app: AppHandle, sign_ins: tauri::State<'_, SignIns>
 }
 
 #[tauri::command]
-pub fn codex_account_cancel(sign_ins: tauri::State<'_, SignIns>) {
-    if let Some(flag) = sign_ins.cancel.lock().ok().and_then(|c| c.clone()) {
-        flag.store(true, Ordering::SeqCst);
+pub fn codex_account_cancel(app: AppHandle, sign_ins: tauri::State<'_, SignIns>) {
+    // ACCT-002: with nothing running, Cancel wipes a leftover needs-attention state.
+    let running = sign_ins.running.lock().map(|r| r.is_some()).unwrap_or(false);
+    match sign_ins.cancel.lock().ok().and_then(|c| c.clone()) {
+        Some(flag) if running => flag.store(true, Ordering::SeqCst),
+        _ => {
+            if let Ok(mut g) = sign_ins.attention.lock() {
+                *g = None;
+            }
+            let _ = app.emit(EVENT, ());
+        }
     }
 }
 
@@ -421,6 +490,61 @@ pub const CUSTOM_PROVIDER_REFUSAL: &str = "Your Codex settings send Codex to a c
 pub fn user_custom_provider(codex_home_env: Option<&str>, user_home: Option<&Path>) -> bool {
     let home = codex_home_env.map(str::trim).filter(|h| !h.is_empty()).map(PathBuf::from).or_else(|| user_home.map(|u| u.join(".codex")));
     home.is_some_and(|h| custom_provider(&fs::read_to_string(h.join("config.toml")).unwrap_or_default()))
+}
+
+/// ACCT-021: the user's own Codex settings folder: CODEX_HOME, else .codex in the user's home.
+pub fn user_dir(codex_home_env: Option<&str>, user_home: Option<&Path>) -> Option<PathBuf> {
+    codex_home_env.map(str::trim).filter(|h| !h.is_empty()).map(PathBuf::from).or_else(|| user_home.map(|u| u.join(".codex")))
+}
+
+/// ACCT-021: the user's Codex settings, or the plain reason they cannot be copied.
+fn user_settings(user: &Path) -> Result<toml_edit::DocumentMut, String> {
+    let text = match fs::read_to_string(user.join("config.toml")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err("Codex has no settings file (config.toml) yet, so the accounts run on Codex's defaults.".into()),
+        Err(e) => return Err(format!("Codex's settings file could not be read (antivirus or another program may have it locked), so the accounts keep the settings they had: {e}")),
+    };
+    if text.trim().is_empty() {
+        return Err("Codex's settings file is empty, so the accounts run on Codex's defaults.".into());
+    }
+    text.parse().map_err(|_| "Codex's settings file is not valid TOML, so the accounts keep the settings they had.".to_string())
+}
+
+/// ACCT-021: before a launch, the user's Codex settings are copied into an account's home. The
+/// home keeps Kolux's sign-in line, the project trust Codex wrote there and Kolux's hook trust
+/// (the home's entry wins). True when the home's file changed; an error is the warning to show,
+/// and the home is then left as it was.
+/// ponytail: a trust entry Codex writes between the last read and the rename is lost; the file is
+/// read again just before writing and the copy redone up to three times, a file lock if that shows.
+pub fn sync_settings(user: &Path, home: &Path) -> Result<bool, String> {
+    let mut doc = user_settings(user)?;
+    doc["cli_auth_credentials_store"] = toml_edit::value("file");
+    let file = home.join("config.toml");
+    for _ in 0..3 {
+        let old = fs::read_to_string(&file).unwrap_or_default();
+        let mine: toml_edit::DocumentMut = old.parse().unwrap_or_default();
+        let mut out = doc.clone();
+        for key in ["projects", "hooks"] {
+            let Some(kept) = mine.get(key).and_then(toml_edit::Item::as_table) else { continue };
+            if !out.get(key).is_some_and(toml_edit::Item::is_table) {
+                out[key] = toml_edit::table();
+            }
+            let into = out[key].as_table_mut().expect("a table was just put here");
+            for (k, v) in kept.iter() {
+                into.insert(k, v.clone());
+            }
+        }
+        let text = out.to_string();
+        if text == old {
+            return Ok(false);
+        }
+        if fs::read_to_string(&file).unwrap_or_default() != old {
+            continue;
+        }
+        crate::trust::write_whole(&file, &text)?;
+        return Ok(true);
+    }
+    Err("Codex kept changing this account's settings file, so the copy was skipped this time.".into())
 }
 
 /// Deletes a folder, retrying for about two seconds while Windows still holds a file in it.
@@ -494,19 +618,65 @@ mod tests {
     #[test]
     fn a_resumed_pane_gets_its_own_home_or_none() {
         let on_disk = temp("resume");
-        let acct = |id: &str, home: &Path| Account { id: id.into(), email: None, home: home.to_string_lossy().into_owned(), last_sign_in: 0, sign_in_error: false };
+        let acct = |id: &str, home: &Path| Account { id: id.into(), email: None, home: home.to_string_lossy().into_owned(), last_sign_in: 0, sign_in_error: false, label: None };
         let accounts = [acct("a", &on_disk), acct("b", &on_disk.join("missing"))];
         assert_eq!(resume_home(&accounts, "a"), Some(Some(on_disk.to_string_lossy().into_owned())));
         assert_eq!(resume_home(&accounts, "b"), Some(None));
         assert_eq!(resume_home(&accounts, "gone"), None);
-        let _ = fs::remove_dir_all(&on_disk);
+        let _ = fs::remove_dir_all(&*on_disk);
     }
 
-    fn temp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("kolux-codex-acct-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    // ACCT-021: the user's settings reach the account's home; the sign-in line, the trust Codex
+    // wrote for a project and Kolux's hook trust stay; a later edit is picked up next time.
+    #[test]
+    fn the_users_codex_settings_are_copied_without_touching_trust() {
+        let dir = crate::test_dir::temp("codex-sync");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        fs::create_dir_all(&user).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        fs::write(user.join("config.toml"), "model = \"o3\"\n[projects.'C:\\work']\ntrust_level = \"untrusted\"\n[tui]\nnotifications = true\n").unwrap();
+        fs::write(home.join("config.toml"), format!("{HOME_CONFIG}[projects.'C:\\work']\ntrust_level = \"trusted\"\n[projects.'D:\\x']\ntrust_level = \"trusted\"\n[hooks.state]\nk = 1\n")).unwrap();
+        assert_eq!(sync_settings(&user, &home), Ok(true));
+        let doc: toml_edit::DocumentMut = fs::read_to_string(home.join("config.toml")).unwrap().parse().unwrap();
+        assert_eq!(doc["model"].as_str(), Some("o3"));
+        assert_eq!(doc["cli_auth_credentials_store"].as_str(), Some("file"));
+        assert_eq!(doc["projects"]["C:\\work"]["trust_level"].as_str(), Some("trusted"), "the home's trust entry wins");
+        assert_eq!(doc["projects"]["D:\\x"]["trust_level"].as_str(), Some("trusted"));
+        assert_eq!(doc["hooks"]["state"]["k"].as_integer(), Some(1));
+        assert_eq!(doc["tui"]["notifications"].as_bool(), Some(true));
+        assert!(!config_drift(&home));
+        assert_eq!(sync_settings(&user, &home), Ok(false), "nothing new: the file is left as it is");
+        fs::write(user.join("config.toml"), "model = \"o4\"\n").unwrap();
+        assert_eq!(sync_settings(&user, &home), Ok(true));
+        let doc: toml_edit::DocumentMut = fs::read_to_string(home.join("config.toml")).unwrap().parse().unwrap();
+        assert_eq!((doc["model"].as_str(), doc["projects"]["D:\\x"]["trust_level"].as_str()), (Some("o4"), Some("trusted")));
+    }
+
+    // ACCT-021: a missing, empty, unreadable or broken settings file is a plain warning and the
+    // home is left alone, so the launch goes on.
+    #[test]
+    fn a_settings_file_that_cannot_be_copied_is_a_warning_and_the_home_is_kept() {
+        let dir = crate::test_dir::temp("codex-sync-bad");
+        let (user, home) = (dir.join("user"), dir.join("home"));
+        fs::create_dir_all(&user).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        fs::write(home.join("config.toml"), HOME_CONFIG).unwrap();
+        let warn = |w: &str| sync_settings(&user, &home).unwrap_err().contains(w);
+        assert!(warn("no settings file"));
+        fs::write(user.join("config.toml"), " \n").unwrap();
+        assert!(warn("is empty"));
+        fs::write(user.join("config.toml"), "model = \n").unwrap();
+        assert!(warn("not valid TOML"));
+        fs::remove_file(user.join("config.toml")).unwrap();
+        fs::create_dir_all(user.join("config.toml")).unwrap();
+        assert!(warn("could not be read"));
+        assert_eq!(fs::read_to_string(home.join("config.toml")).unwrap(), HOME_CONFIG);
+        assert_eq!(user_dir(Some(" "), Some(&dir)), Some(dir.join(".codex")));
+        assert_eq!(user_dir(Some("E:\\c"), Some(&dir)), Some(PathBuf::from("E:\\c")));
+    }
+
+    fn temp(name: &str) -> crate::test_dir::TempDir {
+        crate::test_dir::temp(&format!("codex-acct-{name}"))
     }
 
     fn token(email: &str) -> String {
@@ -592,6 +762,32 @@ mod tests {
     }
 
     #[test]
+    fn two_sign_ins_on_one_email_can_be_named_apart_and_keep_their_names() {
+        let profile = temp("label");
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        let ok = |email: &'static str| move |home: &Path| {
+            fs::write(home.join("auth.json"), token(email)).unwrap();
+            (String::new(), Ended::Exited(Some(0)), None)
+        };
+        sign_in(&store, &profile, "c1", 1, ok("kim@example.com")).unwrap();
+        sign_in(&store, &profile, "c2", 2, ok("kim@example.com")).unwrap();
+        {
+            let s = store.lock().unwrap();
+            set_label(&s, "c1", "  Personal  ").unwrap();
+            set_label(&s, "c2", &"W".repeat(80)).unwrap();
+            let list = load(&s);
+            assert_eq!(list[0].label.as_deref(), Some("Personal"), "trimmed");
+            assert_eq!(list[1].label.as_ref().map(|l| l.chars().count()), Some(LABEL_MAX), "capped");
+            assert!(set_label(&s, "gone", "x").is_err());
+        }
+        sign_in(&store, &profile, "c1", 3, ok("kim.new@example.com")).unwrap();
+        let s = store.lock().unwrap();
+        assert_eq!(load(&s)[0].label.as_deref(), Some("Personal"), "signing in again keeps the name");
+        set_label(&s, "c1", "   ").unwrap();
+        assert_eq!(load(&s)[0].label, None, "a blank name clears it");
+    }
+
+    #[test]
     fn a_missing_sign_in_file_warns_only_after_the_grace_period() {
         let mut seen = std::collections::HashMap::new();
         let t0 = std::time::Instant::now();
@@ -612,6 +808,39 @@ mod tests {
         let before = fs::read(user.join(".codex").join("config.toml")).unwrap();
         assert!(!user_custom_provider(Some(&user.join("elsewhere").to_string_lossy()), Some(&user)), "CODEX_HOME wins");
         assert_eq!(fs::read(user.join(".codex").join("config.toml")).unwrap(), before, "read only");
+    }
+
+    #[test]
+    fn disconnect_deletes_only_what_kolux_made_for_the_account() {
+        let profile = temp("disconnect");
+        let own_user = temp("remove-own");
+        let own = own_user.join(".codex");
+        fs::create_dir_all(&own).unwrap();
+        fs::write(own.join("auth.json"), token("me@example.com")).unwrap();
+        let before = fs::read(own.join("auth.json")).unwrap();
+        let store = Mutex::new(Store::open(&profile).unwrap());
+        for (id, who) in [("c1", "kim@example.com"), ("c2", "lee@example.com")] {
+            sign_in(&store, &profile, id, 7, |home| {
+                fs::write(home.join("auth.json"), token(who)).unwrap();
+                ("Successfully logged in".into(), Ended::Exited(Some(0)), None)
+            })
+            .unwrap();
+        }
+        let s = store.lock().unwrap();
+        // An entry that points at the user's own folder is unlisted, never deleted.
+        let mut list = load(&s);
+        list.push(Account { id: "mine".into(), email: None, home: own.parent().unwrap().to_string_lossy().into_owned(), last_sign_in: 1, sign_in_error: false, label: None });
+        s.set(LIST_KEY, &serde_json::to_string(&list).unwrap()).unwrap();
+        assert_eq!(active_account(&s).map(|a| a.id), Some("c2".into()));
+        remove(&s, &profile, "c2").unwrap();
+        assert!(!profile.join(FOLDER).join("c2").exists() && !profile.join("vault").join("codex-c2.json").exists());
+        assert_eq!(active_account(&s), None, "the removed account is no longer active");
+        assert!(profile.join(FOLDER).join("c1").is_dir() && profile.join("vault").join("codex-c1.json").is_file());
+        remove(&s, &profile, "mine").unwrap();
+        assert_eq!(load(&s).iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["c1"]);
+        assert_eq!(fs::read(own.join("auth.json")).unwrap(), before, "the user's own Codex login is untouched");
+        assert_eq!(system_default(None, own.parent()), "chatgpt");
+        assert!(remove(&s, &profile, "c2").is_err());
     }
 
     #[test]
@@ -677,5 +906,30 @@ mod tests {
         assert_eq!(e, "Sign-in cancelled.");
         assert!(profile.join(FOLDER).join("c3").join("auth.json").exists(), "a home with a working sign-in stays");
         assert!(load(&store.lock().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn acct_024_a_codex_pane_waits_for_the_chosen_sign_in() {
+        use std::cell::RefCell;
+        let quick = (Duration::from_millis(40), Duration::from_millis(5));
+        // already signed in: no wait
+        assert_eq!(ready_home(|| Some("a".into()), |h| h == "a", quick.0, quick.1), Ok(Some("a".into())));
+        // no managed account: the system default, at once
+        assert_eq!(ready_home(|| None, |_| false, quick.0, quick.1), Ok(None));
+        // the sign-in lands while waiting
+        let n = RefCell::new(0);
+        assert_eq!(ready_home(|| Some("a".into()), |_| { *n.borrow_mut() += 1; *n.borrow() > 3 }, quick.0, quick.1), Ok(Some("a".into())));
+        // never lands: the pane starts on the system-default login instead of hanging
+        let asked = std::time::Instant::now();
+        assert_eq!(ready_home(|| Some("a".into()), |_| false, quick.0, quick.1), Ok(None));
+        assert!(asked.elapsed() < Duration::from_secs(1));
+        // the account is changed while waiting: the new one wins
+        let calls = RefCell::new(0);
+        let switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
+        assert_eq!(ready_home(switching, |h| h == "b", quick.0, quick.1), Ok(Some("b".into())));
+        // one choice after another without a sign-in: not started, asked to open it again
+        let calls = RefCell::new(0);
+        let switching = || { *calls.borrow_mut() += 1; Some(if *calls.borrow() > 2 { "b" } else { "a" }.to_string()) };
+        assert!(ready_home(switching, |_| false, quick.0, quick.1).unwrap_err().contains("Open it again"));
     }
 }
