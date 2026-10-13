@@ -1170,6 +1170,32 @@ mod tests {
         v["messages"].as_array().unwrap().iter().map(|m| m["id"].as_str().unwrap().to_string()).collect()
     }
 
+    /// ORCH-034: the store (state.db and the companion files SQLite adds beside it) opens to the
+    /// current user alone, the way the app folder is set at every launch.
+    #[cfg(windows)]
+    #[test]
+    fn the_orchestration_store_opens_to_the_current_user_only() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-orch-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::state::Store::open(&dir).unwrap();
+        crate::secrets::restrict_to_user(&dir, &dir);
+        let mut m = Mail::default();
+        m.begin("orchestration.worker-start||r1", 1).unwrap();
+        m.save(&store).unwrap();
+        let user = std::env::var("USERNAME").unwrap().to_lowercase();
+        let files: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains("state.db")).collect();
+        assert!(!files.is_empty());
+        for path in std::iter::once(dir.clone()).chain(files) {
+            let out = std::process::Command::new("icacls").arg(&path).output().unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).replace(&path.to_string_lossy().to_string(), "").to_lowercase();
+            let aces: Vec<&str> = text.lines().map(str::trim).filter(|l| l.contains(":(")).collect();
+            assert!(!aces.is_empty() && aces.iter().all(|a| a.contains(&format!("\\{user}:"))), "{} is open to more than {user}: {aces:?}", path.display());
+        }
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_pane_is_tied_only_when_the_runtime_knows_it() {
         let by_key = |k: &str| (k == "s3cret").then(|| "term-1".to_string());
