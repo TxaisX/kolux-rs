@@ -1659,6 +1659,15 @@ recorded default until told otherwise; nothing here blocks a pass.
   record the observed shape with a date in PROVENANCE.md section 5, and parse defensively (unknown fields
   ignored, format changes degrade to "unknown", never crash). T-136-b, T-137 and T-140 are unblocked.
 
+- [accounts] 2026-10-13 · Interface languages (T-210-b, SET-017's rest): the language choice and its
+  dates, weekday names and sort order are built (T-210-a), but every menu and screen is still English.
+  DT-A5 ties translation to language packs, and SKILL-040 cut those with the plugin runtime. Bundled
+  packs would mean pulling every screen's text into lookup tables and writing five translations
+  (Simplified Chinese, Korean, Japanese, Spanish, French) with nobody to check them. Pick one:
+  (a) build bundled packs, machine-translated and marked as such; (b) build only the lookup and the
+  English fallback now, packs later; (c) cut the rest of SET-017 and show the choice as dates-only.
+  Until you pick, T-210-b stays unbuilt.
+
 | ID | The call, in one line | Default the loop builds |
 |---|---|---|
 | OD-01 | Does Kolux call the AI provider's sign-in and usage services itself? | No: browser sign-in only, Claude renewal switched off, usage read from running sessions |
@@ -2861,6 +2870,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-154-c · ACCT-055: every Explorer file command takes each path through the fence (exact=false: projects and worktrees; a picked-file grant opens that file to read and save, not to rename, trash or move). A refusal fails the whole call (trash, restore, move), except a copy, where each outside source is refused on its own line so the rest still land. A copy source from outside is allowed only when it is one of the paths of the latest drop, which the Rust side notes from the window's own drop event (WindowEvent::DragDrop), so the page cannot name an outside file and copy it in; a new drop replaces the list, shares never count. scm_stage/scm_discard take the worktree through the fence; kit_check goes through the same kit-folder guard as the other kit commands (projects and the samples folder), giving no result elsewhere. Grants are saved as one kv row (file_grants, a JSON list) on each pick; on load every entry is resolved again and a share, drive root, folder or missing file is dropped, a damaged row grants nothing, and the cap of 100 holds. ponytail: the list is rewritten on each pick; it is at most 100 lines.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-13 · [accounts] T-210-b · not started, left open: the packs have no source of translations; DT-A5 ties them to SKILL-040's plugin runtime, which is cut; asked under Needs Txais (bundled machine-translated packs, the lookup only, or cut)
 - 2026-10-13 · [accounts] T-209-b · done: plainWords.test.ts scans Wizard.tsx, StartGit.tsx and CodexAccounts.tsx (18 files); StartGit.tsx says Git project with GLOSSARY.repository.hover · evidence/T-209-b.txt, T-209-b-1-start-git-dialog-plain-words.png
 - 2026-10-13 · [accounts] T-208-b · not started, left open: every part waits on unbuilt work: the grid tour on T-245 (tour overlay), Skip marking the checklist dismissed on T-333, the star prompt on T-322, the older wizards mapping on their version numbers (importer), open-as-chat on the native chat area; build it after T-245
 - 2026-10-13 · [accounts] T-207-b · done: catalog.ts readyVendors, App.tsx kitAIs = readyVendors(switched-on agents); T-207-c split (milestone with T-298, grid tour with T-208-b) · evidence/T-207-b.txt, T-207-b-1-kits-with-codex-switched-off.png, T-207-b-2-kits-with-codex-switched-on.png
