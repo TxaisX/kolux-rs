@@ -29,11 +29,62 @@ export const editors = new Map<number, () => Promise<void>>();
 /** EDIT-007: Copy Context for each open editor pane; false when this tab cannot copy that way. */
 export const copiers = new Map<number, () => boolean>();
 
+/** EDIT-003 (T-073-a, T-073-c): Mod+S for an editor tab or an unstaged diff tab. The write carries
+ *  the hash of the disk copy the tab loaded; a refusal because the file moved on calls
+ *  `onStale(true)` (the pane shows StaleNotice), any other failure is a toast. */
+export async function saveFile(path: string, onStale: (stale: boolean) => void, onToast?: (text: string) => void): Promise<void> {
+  try {
+    await save(path, (text, loadedHash) => invoke("file_write", { path, text, loadedHash }));
+    onStale(false);
+  } catch (err) {
+    if (isStale(err)) return onStale(true);
+    onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
+  }
+}
+
+/** The choice after a stale refusal: Reload takes the disk copy, Keep mine writes over it. */
+export function StaleNotice({ path, onDone, onToast }: { path: string; onDone: () => void; onToast?: (text: string) => void }) {
+  const name = baseName(path);
+  return (
+    <div className="notice save-stale" role="alert">
+      {name} changed on disk since you opened it, so it was not saved.
+      <button
+        className="btn"
+        title="Show the disk copy; your unsaved edits are dropped"
+        onClick={() =>
+          void invoke<string>("file_read", { path }).then(
+            (text) => {
+              replaceAll(path, text);
+              onDone();
+            },
+            (err) => onToast?.(name + " did not reload: " + String(err)),
+          )
+        }
+      >
+        Reload
+      </button>
+      <button
+        className="btn"
+        title="Save your text over the disk copy"
+        onClick={() =>
+          void save(path, (text) => invoke("file_write", { path, text }), true).then(
+            () => onDone(),
+            (err) => onToast?.(name + " was not saved: " + String(err)),
+          )
+        }
+      >
+        Keep mine
+      </button>
+    </div>
+  );
+}
+
 const lang = new Compartment();
 export const look = EditorView.theme(
   {
     "&": { height: "100%", background: "var(--pane-bg)", color: "var(--fg)", fontSize: "13px" },
-    ".cm-scroller": { fontFamily: "var(--mono-font)", lineHeight: "1.5" },
+    // TERM-097 / SET-018: the editor font, which is the terminal font unless set on its own.
+    ".cm-scroller": { fontFamily: "var(--editor-font, var(--mono-font))", lineHeight: "1.5" },
     ".cm-gutters": { background: "var(--pane-bg)", color: "var(--fg-faint)", border: "none" },
     // See-through, so the selection drawn under the text still shows on the caret's line.
     ".cm-activeLine, .cm-activeLineGutter": { background: "color-mix(in srgb, var(--row-selected) 45%, transparent)" },
@@ -110,15 +161,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
       },
       (err) => alive && setError(String(err)),
     );
-    editors.set(id, async () => {
-      try {
-        await save(path, (text, loadedHash) => invoke("file_write", { path, text, loadedHash }));
-        setStale(false);
-      } catch (err) {
-        if (isStale(err)) return setStale(true);
-        report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
-      }
-    });
+    editors.set(id, () => saveFile(path, setStale, report.current.onToast));
     return () => {
       alive = false;
       editors.delete(id);
@@ -266,38 +309,7 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
           )}
         </div>
       )}
-      {stale && (
-        <div className="notice save-stale" role="alert">
-          {name} changed on disk since you opened it, so it was not saved.
-          <button
-            className="btn"
-            title="Show the disk copy; your unsaved edits are dropped"
-            onClick={() =>
-              void invoke<string>("file_read", { path }).then(
-                (text) => {
-                  replaceAll(path, text);
-                  setStale(false);
-                },
-                (err) => report.current.onToast?.(name + " did not reload: " + String(err)),
-              )
-            }
-          >
-            Reload
-          </button>
-          <button
-            className="btn"
-            title="Save your text over the disk copy"
-            onClick={() =>
-              void save(path, (text) => invoke("file_write", { path, text }), true).then(
-                () => setStale(false),
-                (err) => report.current.onToast?.(name + " was not saved: " + String(err)),
-              )
-            }
-          >
-            Keep mine
-          </button>
-        </div>
-      )}
+      {stale && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
       {banner && (
         <div className="notice md-banner" role="status">
           {banner.text}

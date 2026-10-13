@@ -32,14 +32,79 @@ type Grants<'a> = tauri::State<'a, crate::links::Grants>;
 
 /// SAFE-021 / EDIT-045: a path on another machine, outside the projects, or leading out through a
 /// link is refused before the file is touched.
-#[tauri::command]
+// T-442-c: async, because fence.allow can ask git for every project's worktrees (a path outside
+// the project roots, such as a Kolux worktree, on a cold 3 s cache) and that must never hold up typing.
+#[tauri::command(async)]
 pub fn file_read(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
     read_text(&fence.allow(&path, &store, &git, true)?)
 }
 
-#[tauri::command]
-pub fn file_write(path: String, text: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
-    write_text(&fence.allow(&path, &store, &git, true)?, &text)
+/// T-073-a (EDIT-003): the SHA-256 of a file's bytes as lowercase hex. The editor hashes the UTF-8
+/// bytes of the text it loaded the same way (file_read hands the bytes back unchanged).
+pub fn text_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Why file_write did not save. `Failed` goes to the window as the plain message it always was;
+/// `ChangedOnDisk` goes as `{ kind: "stale", message, path, diskHash }` (diskHash null
+/// when the file is gone), so the editor can offer to reload or overwrite.
+#[derive(Debug, PartialEq)]
+pub enum WriteError {
+    ChangedOnDisk { path: String, disk_hash: Option<String> },
+    Failed(String),
+}
+
+impl From<String> for WriteError {
+    fn from(message: String) -> Self {
+        WriteError::Failed(message)
+    }
+}
+
+impl serde::Serialize for WriteError {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            WriteError::Failed(message) => s.serialize_str(message),
+            WriteError::ChangedOnDisk { path, disk_hash } => serde_json::json!({
+                "kind": "stale", // the kind the editor's isStale (src/editor/buffers.ts) looks for
+                "message": format!("{path} changed on disk since it was opened, so it was not saved"),
+                "path": path,
+                "diskHash": disk_hash,
+            })
+            .serialize(s),
+        }
+    }
+}
+
+/// Saves `text` over `path`. With `loaded_hash` (the `text_hash` of the text the editor loaded)
+/// the save is refused when the file on disk no longer has that hash, so an agent's edit is never
+/// overwritten unseen. Without it the save goes ahead as before.
+/// ponytail: the check and the rename are not one atomic step; a write landing in between is lost.
+pub fn write_checked(path: &Path, text: &str, loaded_hash: Option<&str>) -> Result<(), WriteError> {
+    if let Some(want) = loaded_hash {
+        let disk_hash = match fs::read(path) {
+            Ok(bytes) => Some(text_hash(&bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(WriteError::Failed(format!("could not check {} before saving: {e}", path.display()))),
+        };
+        if disk_hash.as_deref() != Some(want.trim()) {
+            return Err(WriteError::ChangedOnDisk { path: path.display().to_string(), disk_hash });
+        }
+    }
+    Ok(write_text(path, text)?)
+}
+
+/// Saves run one at a time (T-442-c): the disk-hash check and the write happen under one lock,
+/// so two saves that now run on worker threads can never both pass the check and land out of
+/// order; the later one is refused as changed on disk instead.
+// ponytail: one lock for every path; saves are milliseconds, a per-path map if that ever shows.
+static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[tauri::command(async)]
+pub fn file_write(path: String, text: String, loaded_hash: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), WriteError> {
+    let path = fence.allow(&path, &store, &git, true)?;
+    let _one = WRITES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_checked(&path, &text, loaded_hash.as_deref())
 }
 
 /// ACCT-055: Open a file shows the system picker here, so only the file the user chose is
@@ -64,7 +129,8 @@ pub struct Notes {
     capped: bool,
 }
 
-#[tauri::command]
+// TERM-115: async, so listing a big worktree through git never holds typing in another pane.
+#[tauri::command(async)]
 pub fn md_list(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Notes, String> {
     let (files, capped) = git.markdown_files(&fence.allow(&root, &store, &git, false)?, 2000)?;
     Ok(Notes { files, capped })
@@ -204,7 +270,7 @@ pub async fn diff_sides(path: String, staged: bool, fence: tauri::State<'_, crat
 }
 
 /// The changed files the diff picker lists (EDIT-027).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_changes(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Change>, String> {
     git.changes(&fence.allow(&root, &store, &git, false)?)
 }
@@ -217,7 +283,7 @@ pub async fn change_entries(root: String, fence: tauri::State<'_, crate::fence::
 
 /// One side of a changed image, as bytes (EDIT-029: images load on their own); empty when the
 /// file is not on that side.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<tauri::ipc::Response, String> {
     let (old, now) = git.diff_bytes(&fence.allow(&path, &store, &git, false)?, staged)?;
     Ok(tauri::ipc::Response::new(if new { now } else { old }))
@@ -226,7 +292,7 @@ pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_,
 /// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
 /// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
 /// first save is EDIT-054 (T-237).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn md_new(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
     new_note(&fence.allow(&root, &store, &git, false)?)
 }
@@ -272,7 +338,7 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dir_list(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<DirEntry>, String> {
     list_dir(&fence.allow(&path, &store, &git, false)?)
 }
@@ -321,6 +387,40 @@ mod tests {
         assert_eq!(got, [("Alpha".to_string(), "dir"), ("zeta".to_string(), "dir"), ("A.txt".to_string(), "file"), ("b.txt".to_string(), "file")]);
         assert_eq!(kind_of(&d.join("zeta")), "dir");
         assert_eq!(kind_of(&d.join("nope")), "missing");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn t073a_a_save_with_the_loaded_hash_is_refused_once_the_file_changed_on_disk() {
+        let d = temp_dir("t073a");
+        let f = d.join("notes.md");
+        fs::write(&f, "first\n").unwrap();
+        let loaded = text_hash(read_text(&f).unwrap().as_bytes());
+        // SHA-256, lowercase hex: the standard test vector, so the editor's crypto.subtle digest matches.
+        assert_eq!(text_hash(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+        // Unchanged on disk: the save goes through, and the new text's hash is the next one to send.
+        write_checked(&f, "second\n", Some(&loaded)).unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "second\n");
+        let loaded = text_hash(b"second\n");
+
+        // An agent edits the file: the save with the old hash is refused and the agent's text stays.
+        fs::write(&f, "agent\n").unwrap();
+        let err = write_checked(&f, "mine\n", Some(&loaded)).unwrap_err();
+        assert_eq!(err, WriteError::ChangedOnDisk { path: f.display().to_string(), disk_hash: Some(text_hash(b"agent\n")) });
+        assert_eq!(fs::read_to_string(&f).unwrap(), "agent\n");
+        let sent = serde_json::to_value(&err).unwrap();
+        assert_eq!((sent["kind"].as_str(), sent["diskHash"].as_str()), (Some("stale"), Some(text_hash(b"agent\n").as_str())));
+
+        // Deleted on disk: refused with no disk hash. No hash given: saves as before.
+        fs::remove_file(&f).unwrap();
+        let gone = serde_json::to_value(write_checked(&f, "mine\n", Some(&loaded)).unwrap_err()).unwrap();
+        assert!(gone["diskHash"].is_null() && !f.exists());
+        write_checked(&f, "mine\n", None).unwrap();
+        assert_eq!(fs::read_to_string(&f).unwrap(), "mine\n");
+
+        // Any other failure reaches the window as the plain message it always was.
+        assert_eq!(serde_json::to_value(WriteError::Failed("could not save x".into())).unwrap(), serde_json::json!("could not save x"));
         let _ = fs::remove_dir_all(&d);
     }
 

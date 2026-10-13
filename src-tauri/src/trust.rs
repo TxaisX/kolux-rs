@@ -49,12 +49,76 @@ fn checked_keys(paths: &[PathBuf], key: fn(&Path) -> Result<String, String>) -> 
 }
 
 /// Whole file at once, then a rename: a crash mid-write can never leave an agent half a file.
+/// The target's bytes are read first and read again just before the rename; when the program
+/// that owns the file (Claude Code rewrites .claude.json often) changed it in between, nothing is
+/// replaced and the error says so. The bytes being replaced are kept once as `<name>.bak-kolux`.
 pub(crate) fn write_whole(file: &Path, text: &str) -> Result<(), String> {
+    let now = read_bytes(file)?;
+    write_checked(file, text, now.as_deref(), || {})
+}
+
+/// `write_whole` for a caller that parsed the file first: `parsed` is the text it read (None when
+/// the file was missing). The write goes ahead only while the file still holds exactly those
+/// bytes, checked before the temporary file is made and again just before the rename, so a write
+/// by another program that lands between the parse and the save is never overwritten.
+pub(crate) fn write_parsed(file: &Path, text: &str, parsed: Option<&str>) -> Result<(), String> {
+    write_checked(file, text, parsed.map(str::as_bytes), || {})
+}
+
+fn read_bytes(f: &Path) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::read(f) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", f.display())),
+    }
+}
+
+/// The save behind both: `base` is what the file must still hold. `between` runs after the
+/// temporary file and the backup are on disk, before the re-read, so a test can change the target
+/// at the worst moment.
+fn write_checked(file: &Path, text: &str, base: Option<&[u8]>, between: impl FnOnce()) -> Result<(), String> {
+    let changed = || format!("{} was changed by another program since Kolux read it; nothing written, try again", file.display());
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
+    if read_bytes(file)?.as_deref() != base {
+        return Err(changed());
+    }
     let tmp = file.with_extension("kolux-tmp");
-    std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    let written = (|| {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", tmp.display()));
+    }
+    // The backup goes down before the re-read, so the gap between that check and the rename is
+    // as short as it can be. When the save is then abandoned, the earlier backup is put back.
+    let mut name = file.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak-kolux");
+    let backup = file.with_file_name(name);
+    let old_backup = std::fs::read(&backup).ok();
+    if let Some(bytes) = base {
+        if let Err(e) = std::fs::write(&backup, bytes) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("could not keep a backup at {}: {e}", backup.display()));
+        }
+    }
+    between();
+    let again = read_bytes(file);
+    if !matches!(&again, Ok(now) if now.as_deref() == base) {
+        let _ = std::fs::remove_file(&tmp);
+        if base.is_some() {
+            let _ = match &old_backup {
+                Some(b) => std::fs::write(&backup, b),
+                None => std::fs::remove_file(&backup),
+            };
+        }
+        return Err(again.err().unwrap_or_else(changed));
+    }
     std::fs::rename(&tmp, file).map_err(|e| format!("{}: {e}", file.display()))
 }
 
@@ -63,10 +127,14 @@ pub(crate) fn write_whole(file: &Path, text: &str) -> Result<(), String> {
 pub fn trust_claude(file: &Path, paths: &[PathBuf]) -> Result<usize, String> {
     let keys = checked_keys(paths, claude_key)?;
     let _guard = WRITE.lock().map_err(|e| e.to_string())?;
-    let mut doc: Value = match std::fs::read_to_string(file) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{} is not valid JSON ({e}); left untouched", file.display()))?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+    let raw = match std::fs::read_to_string(file) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("{}: {e}", file.display())),
+    };
+    let mut doc: Value = match &raw {
+        Some(text) => serde_json::from_str(text).map_err(|e| format!("{} is not valid JSON ({e}); left untouched", file.display()))?,
+        None => json!({}),
     };
     if !doc.is_object() {
         return Err(format!("{} does not hold a JSON object; left untouched", file.display()));
@@ -87,7 +155,7 @@ pub fn trust_claude(file: &Path, paths: &[PathBuf]) -> Result<usize, String> {
         added += 1;
     }
     if added > 0 {
-        write_whole(file, &serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?)?;
+        write_parsed(file, &serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?, raw.as_deref())?;
     }
     Ok(added)
 }
@@ -115,12 +183,12 @@ pub fn codex_key(path: &Path) -> Result<String, String> {
 pub fn trust_codex(file: &Path, paths: &[PathBuf]) -> Result<usize, String> {
     let keys = checked_keys(paths, codex_key)?;
     let _guard = WRITE.lock().map_err(|e| e.to_string())?;
-    let text = match std::fs::read_to_string(file) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+    let raw = match std::fs::read_to_string(file) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("{}: {e}", file.display())),
     };
-    let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{} is not valid TOML ({e}); left untouched", file.display()))?;
+    let mut doc: toml_edit::DocumentMut = raw.as_deref().unwrap_or("").parse().map_err(|e| format!("{} is not valid TOML ({e}); left untouched", file.display()))?;
     let fresh = !doc.contains_key("projects");
     let projects = doc.as_table_mut().entry("projects").or_insert(toml_edit::table());
     let projects = projects.as_table_mut().ok_or_else(|| format!("{}: projects is not a table; left untouched", file.display()))?;
@@ -139,7 +207,7 @@ pub fn trust_codex(file: &Path, paths: &[PathBuf]) -> Result<usize, String> {
         added += 1;
     }
     if added > 0 {
-        write_whole(file, &doc.to_string())?;
+        write_parsed(file, &doc.to_string(), raw.as_deref())?;
     }
     Ok(added)
 }
@@ -173,6 +241,61 @@ pub fn trust_folders_cmd(store: tauri::State<'_, std::sync::Mutex<crate::state::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn write_whole_leaves_the_file_alone_when_another_program_changed_it_meanwhile() {
+        let d = temp("race");
+        let file = d.join(".claude.json");
+        std::fs::write(&file, r#"{"before":1}"#).unwrap();
+        let err = write_checked(&file, r#"{"kolux":1}"#, Some(br#"{"before":1}"#), || std::fs::write(&file, r#"{"claude":2}"#).unwrap()).unwrap_err();
+        assert!(err.contains("changed by another program"), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"{"claude":2}"#, "the other program's write is kept");
+        assert!(!file.with_extension("kolux-tmp").exists(), "no temporary file is left behind");
+        assert!(!d.join(".claude.json.bak-kolux").exists(), "nothing was replaced, so no backup");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn t441c_a_write_landing_between_the_parse_and_the_save_is_kept() {
+        let d = temp("parsed");
+        let file = d.join(".claude.json");
+        std::fs::write(&file, r#"{"projects":{}}"#).unwrap();
+        std::fs::write(d.join(".claude.json.bak-kolux"), "older backup").unwrap();
+        let parsed = std::fs::read_to_string(&file).unwrap();
+        // Claude Code saves after Kolux parsed the file and before Kolux takes its baseline.
+        std::fs::write(&file, r#"{"projects":{},"claude":"new"}"#).unwrap();
+        let err = write_parsed(&file, r#"{"projects":{"x":{}}}"#, Some(&parsed)).unwrap_err();
+        assert!(err.contains("nothing written"), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), r#"{"projects":{},"claude":"new"}"#, "the other program's bytes survive");
+        assert_eq!(std::fs::read_to_string(d.join(".claude.json.bak-kolux")).unwrap(), "older backup", "the backup is untouched");
+        assert!(!file.with_extension("kolux-tmp").exists());
+        // The same change made after the backup, just before the rename, is refused as well and the
+        // earlier backup is put back.
+        let parsed = std::fs::read_to_string(&file).unwrap();
+        let err = write_checked(&file, "kolux", Some(parsed.as_bytes()), || std::fs::write(&file, "claude again").unwrap()).unwrap_err();
+        assert!(err.contains("nothing written"), "{err}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "claude again");
+        assert_eq!(std::fs::read_to_string(d.join(".claude.json.bak-kolux")).unwrap(), "older backup");
+        // A file that was missing when parsed but exists at save time is not overwritten either.
+        let gone = d.join("config.toml");
+        std::fs::write(&gone, "codex = 1").unwrap();
+        assert!(write_parsed(&gone, "kolux = 1", None).is_err());
+        assert_eq!(std::fs::read_to_string(&gone).unwrap(), "codex = 1");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn write_whole_keeps_one_backup_of_the_bytes_it_replaced() {
+        let d = temp("backup");
+        let file = d.join(".claude.json");
+        write_whole(&file, "first").unwrap();
+        assert!(!d.join(".claude.json.bak-kolux").exists(), "a new file has nothing to back up");
+        write_whole(&file, "second").unwrap();
+        write_whole(&file, "third").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "third");
+        assert_eq!(std::fs::read_to_string(d.join(".claude.json.bak-kolux")).unwrap(), "second", "one generation: the bytes just replaced");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn temp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kolux-rs-trust-{tag}-{}", std::process::id()));

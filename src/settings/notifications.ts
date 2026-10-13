@@ -29,7 +29,8 @@ export const SOUNDS: Array<{ id: Sound; label: string }> = [
 export function readNotifications(s: Record<string, unknown>) {
   const kinds = Object.fromEntries(KINDS.map((k) => [k.key, typeof s[k.key] === "boolean" ? (s[k.key] as boolean) : k.on])) as Record<KindKey, boolean>;
   const v = s[VOLUME_FIELD];
-  const volume = typeof v === "number" && v >= 0 && v <= 100 ? Math.round(v) : 100;
+  // SAFE-028: a saved volume out of range is held to 0..100; one that is not a number is the default.
+  const volume = typeof v === "number" && Number.isFinite(v) ? Math.min(100, Math.max(0, Math.round(v))) : 100;
   const sound = SOUNDS.some((o) => o.id === s[SOUND_FIELD]) ? (s[SOUND_FIELD] as Sound) : "system";
   return { kinds, suppressFocused: s[SUPPRESS_FOCUSED_FIELD] !== false, sound, volume };
 }
