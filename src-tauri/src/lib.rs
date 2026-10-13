@@ -168,11 +168,14 @@ pub fn run() {
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
             automations::start_clock(app.handle().clone());
-            // Agents report their status through hooks (STAT-001): the listener, the script and
-            // Claude Code's settings entries. ponytail: always on; the switch is STAT-002 (T-120).
+            // Agents report their status through hooks (STAT-001): the listener, then the scripts
+            // and each found, switched-on agent's entries (STAT-004), off the launch path.
             let hooks = hooks::serve(app.handle().clone(), &dir)?;
             app.manage(hooks);
-            hooks::install_all();
+            let settings = app.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default();
+            std::thread::spawn(move || {
+                hooks::agent_hooks::sync(&settings);
+            });
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.
             let handle = app.handle().clone();
@@ -225,6 +228,7 @@ pub fn run() {
             get_settings,
             save_settings,
             settings_patch,
+            hooks::agent_hooks::agent_hooks_sync,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,

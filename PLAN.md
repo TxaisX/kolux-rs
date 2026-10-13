@@ -319,7 +319,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-149 · PROJ-034 [compat] kolux.yaml shares setup, issue command and tabs with the whole team · PROJ-082 Bulk remove from cleanup runs in the background
 - [ ] T-150 · SESS-026 [compat] Setup scripts and hook trust are settled before any agent starts
 - [ ] T-151 · TERM-003 Confirm before removing a started session · TERM-031 Answer an agent permission prompt from Kolux · TERM-046 Pin tabs; pinned tabs ask before closing · TERM-069 Safe multi-line paste
-- [ ] T-152 · STAT-004 Hooks go only to agents that are installed and switched on · STAT-005 [compat] Installing hooks never damages the user's own settings
+- [x] T-152 · STAT-004 Hooks go only to agents that are installed and switched on · STAT-005 [compat] Installing hooks never damages the user's own settings
 - [x] T-153-a · VIEW-067 Discard changes with confirmation · VIEW-116 Confirmation prompts: Enter, Escape and don't ask again (one dialog for Source Control discards, automation delete and closing a busy tab)
 - [x] T-153-b · VIEW-089 Delete, reveal or open a past session's files (needs the past-sessions list of T-146-b's Agents tab) · VIEW-099 Kill a terminal session from the Resource Manager, rest: Manage Sessions, sessions the daemon holds that no window owns, no prompt for a session already ended, agent-owned sessions never offered (the in-row End session with its prompt is built) (the already-ended rule is built; VIEW 089 is T-153-d, Manage Sessions is T-153-e)
 - [ ] T-153-d · VIEW 089 rest: delete, reveal or open a past session's files (with T-146-b's Agents tab and its past-sessions list)

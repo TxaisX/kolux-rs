@@ -161,11 +161,15 @@ fn shell_path_dirs() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
-        return [(HKEY_LOCAL_MACHINE, MACHINE_ENVIRONMENT), (HKEY_CURRENT_USER, "Environment")]
+        let found: Vec<String> = [(HKEY_LOCAL_MACHINE, MACHINE_ENVIRONMENT), (HKEY_CURRENT_USER, "Environment")]
             .into_iter()
             .filter_map(|(root, key)| registry_string(root, key, "Path"))
-            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
             .collect();
+        // STAT-004: an unreadable shell environment falls back to the inherited PATH, with a warning.
+        if found.is_empty() {
+            eprintln!("kolux-rs: the shell's search path could not be read; using the inherited PATH");
+        }
+        return found.iter().flat_map(|p| std::env::split_paths(p).collect::<Vec<_>>()).collect();
     }
     #[allow(unreachable_code)]
     Vec::new()

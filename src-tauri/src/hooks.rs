@@ -16,6 +16,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+// STAT-004 / STAT-005: which agents get hooks, removal, the shared install lock (T-152).
+#[path = "agent_hooks/mod.rs"]
+pub mod agent_hooks;
+
 pub const EVENT: &str = "agent-status";
 pub const TOKEN_HEADER: &str = "x-kolux-token";
 pub const IDENTITY_HEADER: &str = "x-kolux-pane";
@@ -523,15 +527,24 @@ fn write_script(home: &Path, name: &str, script: &str) -> Result<String, String>
     let dir = home.join(SCRIPT_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join(name);
-    if std::fs::read_to_string(&file).ok().as_deref() != Some(script) {
+    let old = std::fs::read_to_string(&file).ok();
+    if old.as_deref() != Some(script) {
+        // STAT-005: a file of the user's under Kolux's name is never overwritten.
+        if old.is_some_and(|o| !o.contains("Written by Kolux RS")) {
+            return Err(format!("{} is not Kolux's own script; left alone", file.display()));
+        }
         std::fs::write(&file, script).map_err(|e| e.to_string())?;
     }
     Ok(file.to_string_lossy().replace('\\', "/"))
 }
 
-/// Claude Code's user settings: `settings.json` beside `.claude.json` (COMPAT 3.4).
+/// Claude Code's user settings: `~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`
+/// (COMPAT 3.4); without the override it is not beside `~/.claude.json`.
 pub fn claude_settings_file() -> PathBuf {
-    crate::trust::claude_config_file().with_file_name("settings.json")
+    match std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|d| !d.trim().is_empty()) {
+        Some(_) => crate::trust::claude_config_file().with_file_name("settings.json"),
+        None => home_dir().join(".claude").join("settings.json"),
+    }
 }
 
 fn is_my_command(command: &str) -> bool {
@@ -540,7 +553,7 @@ fn is_my_command(command: &str) -> bool {
 
 fn is_mine(group: &Value) -> bool {
     group.get("hooks").and_then(Value::as_array).is_some_and(|hs| {
-        hs.iter().any(|h| h.get("command").and_then(Value::as_str).is_some_and(is_my_command))
+        hs.iter().any(agent_hooks::names_mine)
     })
 }
 
@@ -597,12 +610,14 @@ fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: 
         let mine = if matched.contains(event) { json!({ "matcher": "*", "hooks": hook }) } else { json!({ "hooks": hook }) };
         match groups.iter().position(is_mine) {
             Some(i) => {
-                groups.retain(|g| !is_mine(g));
+                // STAT-005: only Kolux's own hooks go; a user hook sharing their group stays.
+                agent_hooks::strip(groups);
                 groups.insert(i.min(groups.len()), mine);
             }
             None => groups.push(mine),
         }
     }
+    agent_hooks::clear_unused(hooks.as_object_mut().unwrap(), events);
     *root != before
 }
 
@@ -640,6 +655,10 @@ fn write_json(file: &Path, value: &Value, indent: usize) -> Result<(), String> {
     }
     let tmp = file.with_extension("json.kolux-rs-tmp");
     std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    // STAT-005: the rewritten file keeps the permissions the user's had.
+    if let Ok(meta) = std::fs::metadata(file) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
     std::fs::rename(&tmp, file).map_err(|e| e.to_string())
 }
 
@@ -801,32 +820,6 @@ pub fn install_codex_home(home: &Path) {
 
 fn home_dir() -> PathBuf {
     std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir())
-}
-
-/// At start: the scripts, Claude's settings entries and the user's Codex home. Never stops the
-/// launch; problems go to stderr.
-pub fn install_all() {
-    let home = home_dir();
-    match write_claude_script(&home).and_then(|path| write_status_script(&home).map(|status| (path, status))) {
-        Ok((path, status)) => {
-            let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
-            let status = status_command(&status, &prev.to_string_lossy().replace('\\', "/"));
-            match install_claude(&claude_settings_file(), &format!("\"{path}\" || exit 0"), &status) {
-                // The status line the user had keeps running from this file (STAT-040).
-                Ok((_, Some(displaced))) => {
-                    if let Err(e) = std::fs::write(&prev, format!("{displaced}\n")) {
-                        eprintln!("kolux-rs: claude status line: {e}");
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => eprintln!("kolux-rs: claude hooks: {e}"),
-            }
-        }
-        Err(e) => eprintln!("kolux-rs: claude hook script: {e}"),
-    }
-    if let Some(codex_home) = crate::trust::codex_config_file().parent() {
-        install_codex_home(codex_home);
-    }
 }
 
 #[cfg(test)]

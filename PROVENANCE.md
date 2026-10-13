@@ -504,3 +504,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-137-b / T-139-c · source check only: docs.x.ai/build/cli/reference and docs.x.ai/build/features/status-line read; neither documents Grok credit figures or a session-file format; nothing built or copied
 
 > 2026-10-12 · T-339 · rules from SET-020, VIEW-011, VIEW-116, USAGE-010, ORCH-031 and ACCT-001 cards and DT-A6; no outside source used; no old Kolux source read
+
+> 2026-10-13 · T-152 · rules from the STAT-004 and STAT-005 cards, COMPAT.md 3.4 (the Claude settings path) and DT-C1; public doc: https://docs.claude.com/en/docs/claude-code/settings (user settings live in ~/.claude/settings.json, or the CLAUDE_CONFIG_DIR folder) and https://docs.claude.com/en/docs/claude-code/hooks (hook entry shape, already used by STAT-001); Codex hook shape as already in this tree's hooks.rs; no old Kolux source or hook script read

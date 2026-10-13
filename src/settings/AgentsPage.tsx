@@ -134,7 +134,7 @@ export default function AgentsPage() {
           return (
             <div key={a.id} className="agent-row" data-agent={a.id}>
               <label className="agent-on">
-                <input type="checkbox" role="switch" checked={on} onChange={(e) => save(switchAgent(settings, a.id, e.target.checked))} />
+                <input type="checkbox" role="switch" checked={on} onChange={(e) => void save(switchAgent(settings, a.id, e.target.checked)).then(() => invoke("agent_hooks_sync")).catch(() => {})} />
                 <span className="agent-name">{a.name}</span>
                 {a.id === def && on && <span className="conn-chip">default</span>}
               </label>
