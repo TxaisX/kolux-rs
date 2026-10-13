@@ -229,6 +229,7 @@ pub fn run() {
             projects::handoff_note_prepare,
             projects::workspace_remove,
             projects::workspace_remove_check,
+            projects::workspace_branch_delete,
             projects::project_set,
             agents::agent_list,
             models::agent_models,

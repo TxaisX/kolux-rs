@@ -1,0 +1,24 @@
+T-162-a live proof (PROJ-073 Branches stay when a workspace was opened on an existing branch), lane release dev
+app (port 1422), window moved to the second screen by pid; lane profile backed up and restored (cmp: settings.json,
+state.db, -wal, -shm all same). Test repo G:/Temp/release-T-162a/kb: main at 6d66593 (two), feat/x at 9e4f21b (one).
+
+1. Delete such a workspace: the branch stays and the note offers to delete it
+   - workspace_open_branch feat/x -> C:/Users/XiongT/kolux-rs/workspaces/kb/feat-x
+   - selected it (a shell opened there), Ctrl+Shift+Backspace, Remove -> "Terminal 2 is still running ..." -> Force delete
+   - note: "removed the workspace and its folder; branch feat/x stays"  [Delete branch]   (T-162-a-kept.png)
+   - git branch -v: feat/x 9e4f21b one; git worktree list: main only
+   - 6 s later (a 5 s refresh in between) the note and its button are still there
+
+2. Move the branch, then use the old note's delete: refused
+   - git branch -f feat/x main  -> feat/x 6d66593 two
+   - Delete branch -> note warn: "feat/x has moved or is checked out again since its workspace was deleted, so it
+     was left alone"   (T-162-a-refused.png)
+   - git branch -v: feat/x 6d66593 two (still there)
+
+3. Open feat/x again (now at 6d66593), delete the workspace the same way, then Delete branch from the new note
+   - before: feat/x 6d66593 two; after: only main
+   - the "deleted branch feat/x" note was replaced within 3 s by the sidebar's scan warning for this lane profile's
+     stale "repo" project (a plain note without a button gives way to it), so git's own list is the evidence here.
+
+The batch review list in the card applies to a batch delete, which arrives with the PROJ-080 cleanup dialog
+(T-162-c); workspace_branch_delete already takes a list and works through it one branch at a time per repository.

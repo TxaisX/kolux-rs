@@ -17,7 +17,7 @@
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { blocker, deleteTarget, runningSentence, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { blocker, branchOutcomeText, deleteTarget, runningSentence, type BranchOutcome, type KeptBranch, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
@@ -167,7 +167,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string; running?: boolean; endTerminals?: boolean } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
-  const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string; detail?: string | null } | null>(null);
+  // PROJ-073: a note can carry one action, such as deleting the branch a removal kept.
+  const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string; detail?: string | null; action?: { label: string; run: () => void } } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
   const indexed = useRef(""); // the last project list and owner map handed to the window
   const [filterOpen, setFilterOpen] = useState(false);
@@ -230,7 +231,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         next[p.id] = afterScan(scanned.current[p.id], null);
         // PROJ-031: the 5 s refresh never covers an error the user has not read yet.
         const text = `Could not list the worktrees of ${p.name}, so the last known list stays: ${String(err)}`;
-        setMessage((m) => (m?.kind === "error" ? m : { kind: "warn", text }));
+        setMessage((m) => (m?.kind === "error" || m?.action ? m : { kind: "warn", text }));
       }
     }
     // PROJ-068: a scan that finished after a newer one started would put back what it saw.
@@ -607,9 +608,16 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     }
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, endTerminals: c.endTerminals ?? false });
+      const kept = await invoke<KeptBranch | null>("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, endTerminals: c.endTerminals ?? false });
       onRemoved(c.path);
-      say("ok", `removed ${c.branch} and its folder`);
+      if (kept) {
+        // PROJ-073: the workspace was opened on a branch that already existed, so the branch stays.
+        const run = async () => {
+          const out = await invoke<BranchOutcome[]>("workspace_branch_delete", { projectId: c.projectId, branches: [kept] }).catch((err) => [{ branch: kept.branch, deleted: false, why: String(err) }]);
+          setMessage(branchOutcomeText(out));
+        };
+        setMessage({ kind: "ok", text: `removed the workspace and its folder; branch ${kept.branch} stays`, action: { label: "Delete branch", run } });
+      } else say("ok", `removed ${c.branch} and its folder`);
       setConfirm(null);
       await reload();
     } catch (err) {
@@ -1216,6 +1224,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           {message && (
             <div className={`note ${message.kind}`}>
               {message.text}
+              {message.action && (
+                <button className="btn danger note-action" onClick={message.action.run}>
+                  {message.action.label}
+                </button>
+              )}
               {message.detail && (
                 <details className="git-output">
                   <summary>Git's output</summary>

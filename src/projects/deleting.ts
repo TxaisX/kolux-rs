@@ -4,6 +4,18 @@
 /** What `workspace_remove_check` returns. */
 export type RemoveCheck = { changes: string[]; locked: string | null; nested: string[]; stamp: string; gone?: boolean };
 
+/** PROJ-073: a branch kept when its workspace was deleted, with the commit it pointed at then. */
+export type KeptBranch = { branch: string; commit: string };
+export type BranchOutcome = { branch: string; deleted: boolean; why: string | null };
+
+/** PROJ-073: what the note says after kept branches were deleted (or refused). */
+export function branchOutcomeText(outcomes: BranchOutcome[]): { kind: "ok" | "warn"; text: string } {
+  const gone = outcomes.filter((o) => o.deleted).map((o) => o.branch);
+  const refused = outcomes.filter((o) => !o.deleted).map((o) => o.why ?? `${o.branch} was left alone`);
+  const said = [gone.length ? `deleted branch${gone.length === 1 ? "" : "es"} ${gone.join(", ")}` : "", ...refused].filter(Boolean).join("; ");
+  return { kind: refused.length ? "warn" : "ok", text: said };
+}
+
 /** PROJ-072: the toast when terminals still run in the folder, naming them. */
 export function runningSentence(names: string[]): string | null {
   if (names.length === 0) return null;

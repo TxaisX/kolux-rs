@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { asksBeforeDelete, blocker, deleteTarget, isClean, runningSentence, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, branchOutcomeText, deleteTarget, isClean, runningSentence, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+
+test("PROJ-073: the note after deleting kept branches says what went and what was refused", () => {
+  expect(branchOutcomeText([{ branch: "feat/x", deleted: true, why: null }])).toEqual({ kind: "ok", text: "deleted branch feat/x" });
+  const moved = "feat/y has moved or is checked out again since its workspace was deleted, so it was left alone";
+  expect(branchOutcomeText([{ branch: "feat/x", deleted: true, why: null }, { branch: "feat/y", deleted: false, why: moved }])).toEqual({ kind: "warn", text: `deleted branch feat/x; ${moved}` });
+});
 
 test("PROJ-072: the delete toast names the terminals still running and offers force", () => {
   expect(runningSentence([])).toBeNull();

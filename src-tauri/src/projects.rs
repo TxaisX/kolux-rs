@@ -807,7 +807,7 @@ pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects:
 /// branch goes with the folder unless another worktree still has it checked out.
 #[cfg(test)]
 pub fn remove_workspace(git: &Git, project: &Project, worktree_path: &str, force: bool) -> Result<(), String> {
-    remove_worktree(git, project, worktree_path, force, false)
+    remove_worktree(git, project, worktree_path, force, false).map(|_| ())
 }
 
 /// PROJ-030: a workspace opened on a branch that already existed keeps that branch when it goes.
@@ -815,8 +815,49 @@ pub fn keeps_branch(store: &Store, path: &str) -> bool {
     origin(store, path).is_some_and(|o| o["existingBranch"] == true)
 }
 
-/// `remove_workspace`, keeping the branch when `keep_branch`.
-pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<(), String> {
+/// PROJ-073: a branch kept when its workspace was deleted, and the commit it pointed at then.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct KeptBranch {
+    pub branch: String,
+    pub commit: String,
+}
+
+/// PROJ-073: what became of one kept branch the user chose to delete.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub struct BranchOutcome {
+    pub branch: String,
+    pub deleted: bool,
+    pub why: Option<String>,
+}
+
+/// PROJ-073: deletes the kept branches the user chose, one at a time per repository (the same turn
+/// a create takes). One that moved, or is checked out again, since its workspace was deleted is
+/// refused and left alone.
+pub fn delete_kept_branches(git: &Git, project: &Project, kept: &[KeptBranch]) -> Vec<BranchOutcome> {
+    let repo = Path::new(&project.path);
+    let turn = repo_turn(repo);
+    let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    kept.iter()
+        .map(|k| {
+            let why = match git.delete_branch_if_at(repo, &k.branch, &k.commit) {
+                Ok(true) => None,
+                Ok(false) => Some(format!("{} has moved or is checked out again since its workspace was deleted, so it was left alone", k.branch)),
+                Err(_) if !git.rev_exists(repo, &format!("refs/heads/{}", k.branch)) => Some(format!("{} is already gone", k.branch)),
+                Err(e) => Some(e),
+            };
+            BranchOutcome { branch: k.branch.clone(), deleted: why.is_none(), why }
+        })
+        .collect()
+}
+
+#[tauri::command(async)]
+pub fn workspace_branch_delete(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branches: Vec<KeptBranch>) -> Result<Vec<BranchOutcome>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    Ok(delete_kept_branches(&git, &project, &branches))
+}
+
+/// `remove_workspace`, keeping the branch when `keep_branch`; the kept branch comes back (PROJ-073).
+pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force: bool, keep_branch: bool) -> Result<Option<KeptBranch>, String> {
     let repo = Path::new(&project.path);
     let target = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), Path::new(worktree_path))).ok_or_else(|| format!("{worktree_path} is not a worktree of {}", project.name))?;
     if target.is_main {
@@ -826,7 +867,9 @@ pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force:
         return Err(format!("{} has uncommitted changes", target.branch.as_deref().unwrap_or(worktree_path)));
     }
     crate::include::unlink_shared(repo, Path::new(&target.path));
-    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch)).map(|_| ())
+    let kept = target.branch.clone().filter(|_| keep_branch).map(|branch| KeptBranch { branch, commit: target.head.clone() });
+    git.worktree_remove(repo, Path::new(&target.path), target.branch.as_deref().filter(|_| !keep_branch))?;
+    Ok(kept)
 }
 
 /// PROJ-030: a workspace on a branch that exists already, locally or only on a remote (Git then
@@ -1148,7 +1191,7 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 /// the question showed) and nothing refuses it; `force` loses uncommitted changes.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String, end_terminals: Option<bool>) -> Result<(), String> {
+pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String, end_terminals: Option<bool>) -> Result<Option<KeptBranch>, String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
@@ -1164,9 +1207,10 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     }
     terminals.kill_under(Path::new(&path));
     let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
-    remove_worktree(&git, &project, &path, force, keep)?;
+    let kept = remove_worktree(&git, &project, &path, force, keep)?;
     let store = store.lock().map_err(|e| e.to_string())?;
-    forget_workspace(&store, &path)
+    forget_workspace(&store, &path)?;
+    Ok(kept)
 }
 
 /// The global workspaces settings as the sidebar shows them (PROJ-025).
@@ -1461,8 +1505,24 @@ mod tests {
         assert!(made.worktree.path.replace(std::path::MAIN_SEPARATOR, "/").ends_with("/review-x"), "{}", made.worktree.path);
         set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "existingBranch": true }))).unwrap();
         assert!(keeps_branch(&store, &made.worktree.path));
-        remove_worktree(&git, &project, &made.worktree.path, false, keeps_branch(&store, &made.worktree.path)).unwrap();
+        let kept = remove_worktree(&git, &project, &made.worktree.path, false, keeps_branch(&store, &made.worktree.path)).unwrap();
         assert_eq!(rev(&repo, "feat/x"), tip, "the branch stays when the workspace goes");
+        // PROJ-073: the removal hands back the kept branch and where it pointed, for the toast's delete
+        let kept = kept.expect("an existing branch is reported as kept");
+        assert_eq!(kept, KeptBranch { branch: "feat/x".into(), commit: tip.clone() });
+        // the branch moved since: the old toast's delete is refused and the branch stays
+        git_in(&repo, &["branch", "-f", "feat/x", "main"]);
+        let moved = delete_kept_branches(&git, &project, std::slice::from_ref(&kept));
+        assert!(!moved[0].deleted && moved[0].why.as_deref().unwrap().contains("has moved"), "{moved:?}");
+        assert!(git.rev_exists(&repo, "refs/heads/feat/x"));
+        // pointing where it did when the workspace went: deleted; asking again says it is gone
+        git_in(&repo, &["branch", "-f", "feat/x", &tip]);
+        assert_eq!(delete_kept_branches(&git, &project, std::slice::from_ref(&kept)), vec![BranchOutcome { branch: "feat/x".into(), deleted: true, why: None }]);
+        assert!(!git.rev_exists(&repo, "refs/heads/feat/x"));
+        assert!(delete_kept_branches(&git, &project, &[kept])[0].why.as_deref().unwrap().contains("already gone"));
+        // a workspace on a branch it made keeps nothing to offer
+        let own = create_workspace(&git, &nested(&root), &project, "own", None).unwrap().worktree.path;
+        assert_eq!(remove_worktree(&git, &project, &own, false, false).unwrap(), None);
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
