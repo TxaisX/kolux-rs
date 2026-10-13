@@ -99,7 +99,23 @@ pub fn recover(app_dir: &Path) {
 }
 
 fn finish(app_dir: &Path, journal: &Journal) -> Outcome {
-    let left: Vec<PathBuf> = journal.moves.iter().map(|(_, aside)| aside).filter(|a| remove(a).is_err()).cloned().collect();
+    // T-441-c: only a path Kolux set aside itself is ever removed. The journal is read back at every
+    // launch, so an entry naming anything else (a damaged or hand-edited file) is refused, logged and
+    // left on disk; the journal stays so the refusal can be looked into.
+    let ours = |a: &Path| a.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(ASIDE));
+    let left: Vec<PathBuf> = journal
+        .moves
+        .iter()
+        .map(|(_, aside)| aside)
+        .filter(|a| {
+            if !ours(a) {
+                crate::diag::write(app_dir, &format!("skill delete: refused to remove {}, its name does not start with {ASIDE}", a.display()));
+                return true;
+            }
+            remove(a).is_err()
+        })
+        .cloned()
+        .collect();
     if left.is_empty() {
         let _ = std::fs::remove_file(app_dir.join(JOURNAL));
         Outcome::Deleted
@@ -228,6 +244,20 @@ mod tests {
         recover(&app);
         assert!(names(&root).is_empty());
         assert!(!app.join(JOURNAL).exists());
+    }
+
+    #[test]
+    fn t441c_a_journal_naming_a_plain_folder_never_deletes_it() {
+        let t = temp("t441c-plain");
+        let (app, root) = (t.join("app"), t.join("skills"));
+        let plain = skill(&root, "alpha");
+        let aside = skill(&root, ".kolux-deleting-1-2-beta");
+        write(&app, &Journal { done: true, moves: vec![(root.join("x"), plain.clone()), (root.join("beta"), aside)] }).unwrap();
+        recover(&app);
+        assert_eq!(names(&root), vec!["alpha".to_string()], "the plain folder is kept, the set-aside one goes");
+        assert!(plain.join("SKILL.md").exists());
+        assert!(app.join(JOURNAL).exists(), "the journal is kept for a look");
+        assert!(std::fs::read_to_string(app.join("logs").join("kolux.log")).unwrap_or_default().contains("refused to remove"));
     }
 
     #[test]
