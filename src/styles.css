@@ -289,7 +289,7 @@ input { font: inherit; }
 .scm-commit-files .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scm-ask-title { font-weight: 600; }
 .menu-title.hash { text-transform: none; font-family: ui-monospace, Consolas, monospace; }
-.scm-prrow { display: flex; align-items: center; gap: 6px; margin: 6px 8px 0; font-size: 12px; min-width: 0; }
+.scm-prrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 8px 0; font-size: 12px; min-width: 0; }
 .scm-prrow .btn { padding: 2px 8px; font-size: 12px; }
 .scm-prtitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scm-prtitle.muted { color: var(--fg-muted); white-space: normal; }

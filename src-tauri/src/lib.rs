@@ -167,6 +167,8 @@ pub fn run() {
             trust::trust_folders_cmd,
             scm::scm_status,
             scm::scm_pushed, scm::scm_summary, scm::scm_abort,
+            scm::scm_merge_info,
+            scm::scm_merge,
             scm::scm_stage,
             scm::scm_commit, scm::scm_remote,
             scm::scm_pr, scm::scm_pr_create, scm::scm_open_pr,

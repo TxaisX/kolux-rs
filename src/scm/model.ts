@@ -326,3 +326,48 @@ export const SCM_AGENT_KEY = "scmAgent";
 /** VIEW-069: the agent saved for Source Control's agent actions, while it is still installed. */
 export const savedFixAgent = <A extends { id: string; installed: boolean }>(agents: A[], saved: unknown): A | null =>
   typeof saved === "string" ? (agents.find((a) => a.id === saved && a.installed) ?? null) : null;
+
+/** GIT-033: what the merge box reads, in one GraphQL call when it is opened (`scm_merge_info`). */
+export type MergeInfo = { state: string; draft: boolean; mergeable: string; mergeState: string; review: string | null; checks: string | null; inQueue: boolean; queueEnabled: boolean; autoMerge: string | null; methods: string[]; autoAllowed: boolean };
+export type MergeAction = { action: "merge" | "auto" | "disable-auto" | "queue" | "ready" | "close" | "reopen"; method: string | null; label: string };
+
+const METHOD_WORDS: Record<string, string> = { merge: "Create a merge commit", squash: "Squash and merge", rebase: "Rebase and merge" };
+
+/** What holds an open pull request back, or "Ready to merge". */
+function mergeHold(m: MergeInfo): string {
+  if (m.mergeable === "CONFLICTING" || m.mergeState === "DIRTY") return "Conflicts";
+  if (m.review === "CHANGES_REQUESTED") return "Changes requested";
+  if (m.checks === "FAILURE" || m.checks === "ERROR") return "Checks failed";
+  if (m.checks === "PENDING" || m.checks === "EXPECTED") return "Checks pending";
+  if (m.review === "REVIEW_REQUIRED") return "Approval required";
+  if (m.mergeState === "BEHIND") return "Behind the base branch";
+  if (m.mergeState === "BLOCKED") return "Blocked";
+  if (m.mergeable === "UNKNOWN" || m.mergeState === "UNKNOWN") return "Checking";
+  return "Ready to merge";
+}
+
+export function mergeLabel(m: MergeInfo): string {
+  if (m.state === "MERGED") return "Merged";
+  if (m.state === "CLOSED") return "Closed";
+  if (m.inQueue) return "In merge queue";
+  if (m.draft) return "Draft";
+  const hold = mergeHold(m);
+  return m.autoMerge ? `Auto-merge on (${m.autoMerge}) · ${hold}` : hold;
+}
+
+/** Only the actions possible right now; merge methods are the repository's own. */
+export function mergeActions(m: MergeInfo): MergeAction[] {
+  if (m.state === "MERGED") return [];
+  if (m.state === "CLOSED") return [{ action: "reopen", method: null, label: "Reopen" }];
+  const close: MergeAction = { action: "close", method: null, label: "Close pull request" };
+  if (m.draft) return [{ action: "ready", method: null, label: "Mark ready for review" }, close];
+  const hold = mergeHold(m);
+  if (m.inQueue || hold === "Conflicts") return [close];
+  if (m.queueEnabled) return [{ action: "queue", method: null, label: "Add to merge queue" }, close];
+  if (m.autoMerge) return [{ action: "disable-auto", method: null, label: "Turn off auto-merge" }, close];
+  const methods = m.methods.filter((x) => x in METHOD_WORDS);
+  if (hold === "Ready to merge") return [...methods.map((x): MergeAction => ({ action: "merge", method: x, label: METHOD_WORDS[x] })), close];
+  const unstable = m.mergeState === "UNSTABLE" || hold === "Checks failed";
+  if (m.autoAllowed && !unstable) return [...methods.map((x): MergeAction => ({ action: "auto", method: x, label: `${METHOD_WORDS[x]} when ready` })), close];
+  return [close];
+}

@@ -514,7 +514,7 @@ fn gh_run_for(program: &Path, worktree: &Path, args: &[&str], input: Option<&str
     let mut cmd = std::process::Command::new(program);
     cmd.args(args);
     // A pull request link names its own repository; everything else is pointed at origin's.
-    if !args.iter().any(|a| a.starts_with("https://")) {
+    if args.first() != Some(&"api") && !args.iter().any(|a| a.starts_with("https://")) {
         if let Some(repo) = gh_repo_arg(worktree, &ssh_config()) {
             cmd.args(["--repo", &repo]);
         }
@@ -643,7 +643,6 @@ pub fn pr_create(gh: &Path, worktree: &Path, title: &str, body: &str, base: &str
     Ok(Pr { number, url: url.to_string(), state: "OPEN".into(), title: Some(title.trim().to_string()), head: Some(branch.clone()), draft })
 }
 
-/// Only an https link to a pull request, with nothing a shell could read as an option.
 /// GIT-026: finds pull-request links in a terminal's output. The unfinished end of a chunk is
 /// carried into the next, so a link split across chunks is found once it is whole; each link
 /// is reported once per terminal.
@@ -706,6 +705,97 @@ pub fn link_printed(store: &crate::state::Store, dir: &str, url: &str) -> bool {
     store.save_settings(&settings).is_ok()
 }
 
+/// GIT-033: what the merge box needs, read in one GraphQL call when the box is opened.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeInfo {
+    pub state: String,
+    pub draft: bool,
+    /// MERGEABLE, CONFLICTING or UNKNOWN (GitHub is still working it out).
+    pub mergeable: String,
+    /// GitHub's mergeStateStatus: CLEAN, BLOCKED, BEHIND, DIRTY, DRAFT, UNSTABLE, HAS_HOOKS or UNKNOWN.
+    pub merge_state: String,
+    pub review: Option<String>,
+    /// The last commit's combined check state: SUCCESS, PENDING, EXPECTED, FAILURE or ERROR.
+    pub checks: Option<String>,
+    pub in_queue: bool,
+    pub queue_enabled: bool,
+    /// The method auto-merge will use, when it is on.
+    pub auto_merge: Option<String>,
+    /// The merge methods the repository permits, of merge, squash and rebase.
+    pub methods: Vec<String>,
+    pub auto_allowed: bool,
+}
+
+const MERGE_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed autoMergeAllowed pullRequest(number:$number){state isDraft mergeable mergeStateStatus reviewDecision isInMergeQueue isMergeQueueEnabled autoMergeRequest{mergeMethod} commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}}";
+
+/// `host`, `owner`, `repo` and the number of a pull request link.
+fn pr_parts(url: &str) -> Option<(String, String, String, u64)> {
+    let clean = pr_url_in(url.trim())?;
+    let parts: Vec<&str> = clean.strip_prefix("https://")?.split('/').collect();
+    Some((parts[0].into(), parts[1].into(), parts[2].into(), parts[4].parse().ok()?))
+}
+
+pub fn merge_info(gh: &Path, worktree: &Path, url: &str) -> Result<MergeInfo, String> {
+    let (host, owner, name, number) = pr_parts(url).ok_or("That is not a pull request link")?;
+    let (q, o, n, k) = (format!("query={MERGE_QUERY}"), format!("owner={owner}"), format!("name={name}"), format!("number={number}"));
+    let text = gh_run(gh, worktree, &["api", "graphql", "--hostname", &host, "-f", &q, "-F", &o, "-F", &n, "-F", &k], None).map_err(|e| gh_words(&e))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    let repo = &v["data"]["repository"];
+    let pr = &repo["pullRequest"];
+    if !pr.is_object() {
+        return Err(format!("GitHub has no pull request #{number} in {owner}/{name}"));
+    }
+    let word = |x: &serde_json::Value| x.as_str().map(str::to_string);
+    let methods = [("mergeCommitAllowed", "merge"), ("squashMergeAllowed", "squash"), ("rebaseMergeAllowed", "rebase")];
+    Ok(MergeInfo {
+        state: word(&pr["state"]).unwrap_or_default(),
+        draft: pr["isDraft"].as_bool().unwrap_or(false),
+        mergeable: word(&pr["mergeable"]).unwrap_or_else(|| "UNKNOWN".into()),
+        merge_state: word(&pr["mergeStateStatus"]).unwrap_or_else(|| "UNKNOWN".into()),
+        review: word(&pr["reviewDecision"]),
+        checks: word(&pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"]),
+        in_queue: pr["isInMergeQueue"].as_bool().unwrap_or(false),
+        queue_enabled: pr["isMergeQueueEnabled"].as_bool().unwrap_or(false),
+        auto_merge: word(&pr["autoMergeRequest"]["mergeMethod"]).map(|m| if m == "MERGE" { "merge".into() } else { m.to_lowercase() }),
+        methods: methods.iter().filter(|(f, _)| repo[*f].as_bool().unwrap_or(false)).map(|(_, m)| m.to_string()).collect(),
+        auto_allowed: repo["autoMergeAllowed"].as_bool().unwrap_or(false),
+    })
+}
+
+/// GIT-033: one merge-box action through gh. `queue` merges with no method, which gh turns
+/// into joining the base branch's merge queue.
+pub fn merge_act(gh: &Path, worktree: &Path, url: &str, action: &str, method: Option<&str>) -> Result<String, String> {
+    pr_parts(url).ok_or("That is not a pull request link")?;
+    let url = url.trim();
+    let flag = match method {
+        None => None,
+        Some(m @ ("merge" | "squash" | "rebase")) => Some(format!("--{m}")),
+        Some(m) => return Err(format!("{m} is not a merge method")),
+    };
+    let need = || flag.as_deref().ok_or("Pick a merge method first");
+    let args: Vec<&str> = match action {
+        "merge" => vec!["pr", "merge", url, need()?],
+        "auto" => vec!["pr", "merge", url, "--auto", need()?],
+        "disable-auto" => vec!["pr", "merge", url, "--disable-auto"],
+        "queue" => vec!["pr", "merge", url],
+        "ready" | "close" | "reopen" => vec!["pr", action, url],
+        other => return Err(format!("{other} is not a pull request action")),
+    };
+    gh_run(gh, worktree, &args, None).map_err(|e| gh_words(&e))
+}
+
+#[tauri::command]
+pub async fn scm_merge_info(worktree: String, url: String) -> Result<MergeInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || merge_info(&gh_program()?, Path::new(&worktree), &url)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_merge(worktree: String, url: String, action: String, method: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || merge_act(&gh_program()?, Path::new(&worktree), &url, &action, method.as_deref())).await.map_err(|e| e.to_string())?
+}
+
+/// Only an https link to a pull request, with nothing a shell could read as an option.
 fn safe_pr_url(url: &str) -> bool {
     url.starts_with("https://") && url.contains("/pull/") && !url.chars().any(|c| c.is_whitespace() || c == '"')
 }
@@ -1664,6 +1754,54 @@ mod tests {
         assert_eq!(s["uiLook"], "classic");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git033_merge_state_and_actions_go_through_gh_for_the_pull_requests_own_repository() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git033-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let answer = r#"{"data":{"repository":{"mergeCommitAllowed":false,"squashMergeAllowed":true,"rebaseMergeAllowed":false,"autoMergeAllowed":true,"pullRequest":{"state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":null,"isInMergeQueue":false,"isMergeQueueEnabled":false,"autoMergeRequest":{"mergeMethod":"SQUASH"},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"PENDING"}}}]}}}}}"#;
+        fs::write(tools.join("answer.json"), answer).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"api\" type \"%~dp0answer.json\"\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\n[ \"$1\" = api ] && cat \"$(dirname \"$0\")/answer.json\"\nexit 0\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let url = "https://git.example.com/o/r/pull/42";
+        let m = merge_info(&gh, &tools, url).unwrap();
+        assert_eq!((m.state.as_str(), m.draft, m.mergeable.as_str(), m.merge_state.as_str()), ("OPEN", false, "MERGEABLE", "BLOCKED"));
+        assert_eq!((m.review.clone(), m.checks.as_deref(), m.in_queue, m.queue_enabled), (None, Some("PENDING"), false, false));
+        assert_eq!((m.auto_merge.as_deref(), m.methods.clone(), m.auto_allowed), (Some("squash"), vec!["squash".to_string()], true));
+        for (action, method) in [("auto", Some("squash")), ("merge", Some("rebase")), ("disable-auto", None), ("queue", None), ("ready", None), ("close", None), ("reopen", None)] {
+            merge_act(&gh, &tools, url, action, method).unwrap();
+        }
+        assert!(merge_act(&gh, &tools, url, "merge", None).unwrap_err().contains("merge method"));
+        assert!(merge_act(&gh, &tools, url, "delete", None).is_err());
+        assert!(merge_act(&gh, &tools, "https://x/o/r/issues/1", "close", None).is_err());
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        let calls: Vec<&str> = calls.lines().map(str::trim).collect();
+        assert!(calls[0].starts_with("api graphql --hostname git.example.com "), "{}", calls[0]);
+        assert!(calls[0].contains("owner=o") && calls[0].contains("name=r") && calls[0].contains("number=42") && !calls[0].contains("--repo"), "{}", calls[0]);
+        let rest: Vec<String> = calls[1..].iter().map(|c| c.to_string()).collect();
+        assert_eq!(
+            rest,
+            [
+                format!("pr merge {url} --auto --squash"),
+                format!("pr merge {url} --rebase"),
+                format!("pr merge {url} --disable-auto"),
+                format!("pr merge {url}"),
+                format!("pr ready {url}"),
+                format!("pr close {url}"),
+                format!("pr reopen {url}"),
+            ]
+        );
+        let _ = fs::remove_dir_all(&tools);
     }
 
     #[test]

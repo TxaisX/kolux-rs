@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
+import { mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -322,6 +322,31 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     void load();
   };
   const prItemReason = look.pr?.state === "OPEN" ? null : prReason(status, look);
+  // GIT-033: the merge box reads the merge state when it is opened and again after each action.
+  const [merge, setMerge] = useState<{ info: MergeInfo | null; error: string | null; busy: boolean; armed: string | null } | null>(null);
+  useEffect(() => setMerge(null), [lookKey]);
+  const loadMerge = (url: string) => {
+    if (dir === null) return;
+    setMerge((m) => ({ info: m?.info ?? null, error: null, busy: true, armed: null }));
+    invoke<MergeInfo>("scm_merge_info", { worktree: dir, url })
+      .then((info) => setMerge({ info, error: null, busy: false, armed: null }))
+      .catch((err) => setMerge((m) => ({ info: m?.info ?? null, error: String(err), busy: false, armed: null })));
+  };
+  const actKey = (a: MergeAction) => `${a.action}:${a.method ?? ""}`;
+  // A merge cannot be undone, so it asks once more in place.
+  const runMerge = async (a: MergeAction) => {
+    if (!look.pr || dir === null || !merge || merge.busy) return;
+    if (a.action === "merge" && merge.armed !== actKey(a)) return setMerge({ ...merge, armed: actKey(a) });
+    const url = look.pr.url;
+    setMerge({ ...merge, busy: true, error: null });
+    try {
+      await invoke("scm_merge", { worktree: dir, url, action: a.action, method: a.method });
+    } catch (err) {
+      return setMerge((m) => m && { ...m, busy: false, armed: null, error: String(err) });
+    }
+    loadMerge(url);
+    lookUp();
+  };
 
   const step = withPr(nextStep(status, draft), status, look);
 
@@ -603,6 +628,11 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                     Refresh
                   </button>
                 )}
+                {look.pr && (
+                  <button className="btn" data-merge-open title="Merge, auto-merge, ready for review, close or reopen" onClick={() => look.pr && loadMerge(look.pr.url)}>
+                    Merge{"…"}
+                  </button>
+                )}
                 <button className="btn" title="Link another pull request by its link" onClick={() => setLinking({ url: "", error: null })}>
                   Link{"\u2026"}
                 </button>
@@ -619,6 +649,31 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               </div>
             )}
             {mismatch && <div className="note warn">{mismatch}</div>}
+            {merge && look.pr && (
+              <div className="scm-ask" data-merge>
+                <div className="scm-ask-title" data-merge-label>
+                  {merge.info ? mergeLabel(merge.info) : "Checking the merge state…"}
+                </div>
+                {merge.info && (
+                  <div className="btn-row">
+                    {mergeActions(merge.info).map((a) => (
+                      <button key={actKey(a)} className={["merge", "auto", "queue"].includes(a.action) ? "btn primary" : "btn"} data-merge-action={actKey(a)} disabled={merge.busy} onClick={() => void runMerge(a)}>
+                        {merge.armed === actKey(a) ? `Confirm: ${a.label}` : a.label}
+                      </button>
+                    ))}
+                    <button className="btn" onClick={() => setMerge(null)}>
+                      Hide
+                    </button>
+                  </div>
+                )}
+                {merge.info?.state === "MERGED" && <div className="note">Merged. When you are done here, delete this workspace from its row in the sidebar.</div>}
+                {merge.error && (
+                  <div className="note error" role="alert">
+                    {merge.error}
+                  </div>
+                )}
+              </div>
+            )}
             {linking && (
               <form
                 className="scm-ask"

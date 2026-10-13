@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -253,4 +253,45 @@ test("GIT-015: conflict cards name the clash and the abort matches the operation
 test("GIT-011: the branch row reads the files changed against its base", () => {
   expect(filesWord(1)).toBe("1 file changed");
   expect(filesWord(5)).toBe("5 files changed");
+});
+
+test("GIT-033: the merge label names what holds the pull request back and only possible actions are offered", () => {
+  const m: MergeInfo = { state: "OPEN", draft: false, mergeable: "MERGEABLE", mergeState: "CLEAN", review: null, checks: "SUCCESS", inQueue: false, queueEnabled: false, autoMerge: null, methods: ["merge", "squash", "rebase"], autoAllowed: true };
+  const acts = (x: MergeInfo) => mergeActions(x).map((a) => `${a.action}:${a.method ?? ""}`);
+  expect(mergeLabel(m)).toBe("Ready to merge");
+  expect(acts(m)).toEqual(["merge:merge", "merge:squash", "merge:rebase", "close:"]);
+  expect(mergeActions(m)[1].label).toBe("Squash and merge");
+  // A repository that allows squash only offers squash only.
+  expect(acts({ ...m, methods: ["squash"] })).toEqual(["merge:squash", "close:"]);
+  // Pending checks: merge when ready, and the label says so once auto-merge is on.
+  const pending = { ...m, mergeState: "BLOCKED", checks: "PENDING" };
+  expect(mergeLabel(pending)).toBe("Checks pending");
+  expect(acts({ ...pending, methods: ["squash"] })).toEqual(["auto:squash", "close:"]);
+  expect(mergeActions({ ...pending, methods: ["squash"] })[0].label).toBe("Squash and merge when ready");
+  const on = { ...pending, autoMerge: "squash" };
+  expect(mergeLabel(on)).toBe("Auto-merge on (squash) · Checks pending");
+  expect(acts(on)).toEqual(["disable-auto:", "close:"]);
+  // No auto-merge where the repository does not allow it, or on unstable, conflicting or draft ones.
+  expect(acts({ ...pending, autoAllowed: false })).toEqual(["close:"]);
+  expect(mergeLabel({ ...pending, checks: "FAILURE", mergeState: "UNSTABLE" })).toBe("Checks failed");
+  expect(acts({ ...pending, checks: "FAILURE", mergeState: "UNSTABLE" })).toEqual(["close:"]);
+  expect(mergeLabel({ ...m, mergeable: "CONFLICTING", mergeState: "DIRTY" })).toBe("Conflicts");
+  expect(acts({ ...m, mergeable: "CONFLICTING", mergeState: "DIRTY" })).toEqual(["close:"]);
+  expect(mergeLabel({ ...m, draft: true, mergeState: "DRAFT" })).toBe("Draft");
+  expect(acts({ ...m, draft: true, mergeState: "DRAFT" })).toEqual(["ready:", "close:"]);
+  // The other holds.
+  expect(mergeLabel({ ...m, mergeState: "BLOCKED", review: "CHANGES_REQUESTED" })).toBe("Changes requested");
+  expect(mergeLabel({ ...m, mergeState: "BLOCKED", review: "REVIEW_REQUIRED" })).toBe("Approval required");
+  expect(mergeLabel({ ...m, mergeState: "BEHIND" })).toBe("Behind the base branch");
+  expect(mergeLabel({ ...m, mergeState: "BLOCKED" })).toBe("Blocked");
+  expect(mergeLabel({ ...m, mergeable: "UNKNOWN", mergeState: "UNKNOWN" })).toBe("Checking");
+  // Merge queue.
+  expect(acts({ ...m, queueEnabled: true })).toEqual(["queue:", "close:"]);
+  expect(mergeLabel({ ...m, queueEnabled: true, inQueue: true })).toBe("In merge queue");
+  expect(acts({ ...m, queueEnabled: true, inQueue: true })).toEqual(["close:"]);
+  // Closed and merged.
+  expect(mergeLabel({ ...m, state: "CLOSED" })).toBe("Closed");
+  expect(acts({ ...m, state: "CLOSED" })).toEqual(["reopen:"]);
+  expect(mergeLabel({ ...m, state: "MERGED" })).toBe("Merged");
+  expect(acts({ ...m, state: "MERGED" })).toEqual([]);
 });
