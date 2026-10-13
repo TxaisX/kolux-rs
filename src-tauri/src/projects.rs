@@ -1491,6 +1491,10 @@ fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
     let common = crate::git::run(&["rev-parse", "--git-common-dir"], Some(repo))?;
     let admin = repo.join(common.trim()).join("worktrees");
     for entry in std::fs::read_dir(&admin).map_err(|e| e.to_string())?.flatten() {
+        // git worktree lock (a worktree on removable storage, say) means: never prune this record.
+        if entry.path().join("locked").exists() {
+            continue;
+        }
         let Ok(gitdir) = std::fs::read_to_string(entry.path().join("gitdir")) else { continue };
         if Path::new(gitdir.trim()).parent().is_some_and(|p| name_key(&p.to_string_lossy()) == name_key(path)) {
             return std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string());
@@ -1554,6 +1558,25 @@ mod tests {
         assert!(!left.iter().any(|p| p.ends_with("gone")), "{left:?}");
         assert!(base.join("here").join("a.txt").exists());
         git_in(&repo, &["rev-parse", "--verify", "refs/heads/gone"]);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn app051_a_locked_worktree_record_survives_forget_gone_at_start() {
+        // forget_gone is the sweep forget_gone_at_start runs for every project at launch.
+        let base = temp("app051-locked");
+        let repo = base.join("r");
+        init_repo(&repo);
+        let wt = base.join("locked");
+        git_in(&repo, &["worktree", "add", "-q", &wt.to_string_lossy(), "-b", "locked"]);
+        git_in(&repo, &["worktree", "lock", &wt.to_string_lossy()]);
+        fs::remove_dir_all(&wt).unwrap();
+        let git = Git::detect().unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        assert_eq!(forget_gone(&repo, &all, &[]), Vec::<String>::new());
+        let admin = repo.join(".git").join("worktrees");
+        let kept: Vec<_> = fs::read_dir(&admin).unwrap().flatten().filter(|e| e.path().join("locked").exists()).collect();
+        assert_eq!(kept.len(), 1, "the locked record under {} is still there", admin.display());
         let _ = fs::remove_dir_all(&base);
     }
 
