@@ -17,8 +17,8 @@ import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
 import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
-import { attach, baseName, detach, isDirty, relay, replaceAll, save, subscribe, textOf } from "./buffers";
-import { editors, look } from "./EditorPane";
+import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
+import { editors, look, saveFile, StaleNotice } from "./EditorPane";
 import { editedText, type LineNote } from "./diffNotes";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
@@ -138,6 +138,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   const [menu, setMenu] = useState(false);
   const [changes, setChanges] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [stale, setStale] = useState(false); // EDIT-003 (T-073-c): the last save was refused, the file moved on
   const views = useRef<{ a: EditorView | null; b: EditorView } | null>(null);
   const shown = useRef<Sides | null>(null); // the sides the views were last given
   const report = useRef({ onDirty, onToast });
@@ -240,7 +241,8 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     }
   }, [sides, path, staged]);
 
-  // Unsaved marker and Mod+S, for an unstaged diff.
+  // Unsaved marker and Mod+S, for an unstaged diff. The save carries the loaded hash like an editor
+  // tab's (EDIT-003, T-073-c), so an agent's edit made behind the diff is never overwritten unseen.
   useEffect(() => {
     if (staged) return;
     const off = subscribe(path, () => {
@@ -248,13 +250,8 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
       setDirty(d);
       report.current.onDirty?.(d);
     });
-    editors.set(id, async () => {
-      try {
-        await save(path, (text) => invoke("file_write", { path, text }));
-      } catch (err) {
-        report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
-      }
-    });
+    setStale(false);
+    editors.set(id, () => saveFile(path, setStale, report.current.onToast));
     return () => {
       off();
       editors.delete(id);
@@ -353,6 +350,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
           </button>
         </div>
       )}
+      {stale && !staged && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
       {ready && !changes && <div className="notice md-banner" role="status">No {staged ? "staged" : "unstaged"} changes in this file right now.</div>}
       <div ref={host} className="pane-body diff-body" />
       {pop && (
