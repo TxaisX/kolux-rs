@@ -30,7 +30,11 @@ import { matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
+import { handlesIn } from "./tabs";
 import { Kbd, useLabel } from "../keys/KeymapContext";
+
+// TERM-036: the pane menu's copy items; Copy Session ID shows only once the session is known.
+const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID"], ["pane", "Copy Pane ID"]] as const;
 
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
@@ -75,6 +79,12 @@ type Props = {
   onRename?: (name: string | undefined) => void;
   /** TERM-027: bumped by the Set Title shortcut to open the name field. */
   renameAsk?: number;
+  /** TERM-036: the agent's session id is known, so Copy Session ID is offered. */
+  sessionKnown?: boolean;
+  /** TERM-036: copies one of the pane's ids; the window says whether it worked. */
+  onCopyId?: (what: "session" | "terminal" | "pane") => void;
+  /** TERM-096: the opener for a printed handle of an open terminal; undefined for anything else. */
+  findHandle?: (handle: string) => (() => void) | undefined;
   /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
   typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
@@ -108,8 +118,11 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
+  // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
+  const handleRef = useRef(findHandle);
+  handleRef.current = findHandle;
   const termRef = useRef<Terminal | null>(null);
   const box = useRef<HTMLElement>(null);
   // TERM-012: the pane Kolux focuses (a shortcut, a new session) takes the keyboard too, unless
@@ -181,6 +194,17 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     term.loadAddon(fit);
     term.open(el);
     termRef.current = term;
+    // TERM-096: a printed handle of an open terminal (term-N) is a link that opens its pane.
+    term.registerLinkProvider({
+      provideLinks(y, done) {
+        const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? "";
+        const links = handlesIn(text).flatMap(({ start, end, handle }) => {
+          const go = handleRef.current?.(handle);
+          return go ? [{ range: { start: { x: start + 1, y }, end: { x: end, y } }, text: handle, activate: go }] : [];
+        });
+        done(links.length > 0 ? links : undefined);
+      },
+    });
     const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon());
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
@@ -390,7 +414,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             title="Pane menu"
             aria-haspopup="menu"
             aria-expanded={menuAt !== null}
-            disabled={!onRename}
+            disabled={!onRename && !onCopyId}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               setMenuAt({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
@@ -428,22 +452,24 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           </button>
         </span>
       </header>
-      {menuAt && onRename && (
+      {menuAt && (onRename || onCopyId) && (
         <>
           <div className="menu-backdrop" onClick={() => setMenuAt(null)} aria-hidden="true" />
           <div className="menu" role="menu" aria-label="Pane" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
-            <button
-              role="menuitem"
-              className="menu-item"
-              onClick={() => {
-                setMenuAt(null);
-                setNaming(true);
-              }}
-            >
-              <span className="name">Set Title…</span>
-              {setKey && <Kbd id="terminal.setTitle" />}
-            </button>
-            {custom && (
+            {onRename && (
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenuAt(null);
+                  setNaming(true);
+                }}
+              >
+                <span className="name">Set Title…</span>
+                {setKey && <Kbd id="terminal.setTitle" />}
+              </button>
+            )}
+            {onRename && custom && (
               <button
                 role="menuitem"
                 className="menu-item"
@@ -456,6 +482,20 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
                 {clearKey && <Kbd id="terminal.clearPaneTitle" />}
               </button>
             )}
+            {onCopyId &&
+              COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => (
+                <button
+                  key={what}
+                  role="menuitem"
+                  className="menu-item"
+                  onClick={() => {
+                    setMenuAt(null);
+                    onCopyId(what);
+                  }}
+                >
+                  <span className="name">{label}</span>
+                </button>
+              ))}
           </div>
         </>
       )}

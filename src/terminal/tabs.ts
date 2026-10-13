@@ -45,3 +45,8 @@ export const newName = (text: string): string | undefined => text.trim() || unde
 /** TERM-029: the sessions in this grid (keys in grid order) waiting on a permission or a question. */
 export const waitingInGrid = (keys: number[], hook: Partial<Record<number, AgentState>>): number[] =>
   keys.filter((k) => hook[k] === "permission" || hook[k] === "waiting");
+
+/** TERM-096: the terminal handles printed in a line (term-N as a whole word), with where each sits.
+ * ponytail: string offsets, so a line with wide characters before a handle puts the link a little off. */
+export const handlesIn = (text: string): { start: number; end: number; handle: string }[] =>
+  [...text.matchAll(/(?<![\w-])term-\d+(?![\w-])/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, handle: m[0] }));

@@ -84,6 +84,15 @@ pub struct Change {
     /// SAFE-006: the plan was trimmed to fit its status update; the whole plan is in the terminal.
     #[serde(rename = "planCut", skip_serializing_if = "std::ops::Not::not")]
     pub plan_cut: bool,
+    /// TERM-036: the agent's own session id, which every hook event carries (Copy Session ID).
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+/// TERM-036: stamps a change with the event's session id, when it names one.
+fn with_session(change: Option<Change>, event: &Value) -> Option<Change> {
+    let id = event.get("session_id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    change.map(|c| Change { session: id.map(|s| trim(s, 100)), ..c })
 }
 
 /// STAT-022's three causes for Claude Code's failure kinds (the StopFailure `error` values): a
@@ -124,6 +133,10 @@ fn plan_of(tool: Option<&str>, input: Option<&Value>) -> Option<String> {
 
 /// Claude Code's event mapping (COMPAT 3.5). `None` means the pane's state does not change.
 pub fn claude_change(event: &Value) -> Option<Change> {
+    with_session(claude_state(event), event)
+}
+
+fn claude_state(event: &Value) -> Option<Change> {
     let name = event.get("hook_event_name")?.as_str()?;
     // A sub-agent's events belong to the roster (STAT-026, status.rs), never to the lead's own state.
     if event.get("agent_id").and_then(Value::as_str).is_some_and(|a| !a.is_empty()) {
@@ -170,6 +183,10 @@ pub fn claude_change(event: &Value) -> Option<Change> {
 
 /// Codex's event mapping (COMPAT 3.5, STAT-008). `None` means the pane's state does not change.
 pub fn codex_change(event: &Value) -> Option<Change> {
+    with_session(codex_state(event), event)
+}
+
+fn codex_state(event: &Value) -> Option<Change> {
     let name = event.get("hook_event_name")?.as_str()?;
     if event.get("agent_id").and_then(Value::as_str).is_some_and(|a| !a.is_empty()) {
         return None;
@@ -847,6 +864,18 @@ mod tests {
 
     fn ev(json: &str) -> Value {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn every_change_names_its_session_when_the_event_does() {
+        // TERM-036: Copy Session ID needs the agent's own session id, which every hook event carries.
+        let stop = claude_change(&ev(r#"{"hook_event_name":"Stop","session_id":"0b3c-9f"}"#)).unwrap();
+        assert_eq!(stop.session.as_deref(), Some("0b3c-9f"));
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop"}"#)).unwrap().session, None);
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop","session_id":"  "}"#)).unwrap().session, None);
+        let codex = codex_change(&ev(r#"{"hook_event_name":"SessionStart","session_id":"019a-c"}"#)).unwrap();
+        assert_eq!(codex.session.as_deref(), Some("019a-c"));
+        assert!(serde_json::to_string(&stop).unwrap().contains(r#""sessionId":"0b3c-9f""#));
     }
 
     #[test]

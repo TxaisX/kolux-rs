@@ -191,6 +191,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // STAT-050: when each pane's state last moved, and whether that turn was interrupted; the Inbox's clock.
   const [stamp, setStamp] = useState<Record<number, { at: number; interrupted: boolean }>>({});
   // VIEW-023: what each pane's last event said it was doing, and the newest file it wrote this session.
+  // TERM-036: the agent's own session id per pane, from its hooks.
+  const [sessionIds, setSessionIds] = useState<Record<number, string>>({});
   const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean }>>({});
   // SAFE-002..004: the pane whose plan is open for review, and each plan's unsent comments.
   // SAFE-007: the sheet holds the plan it opened with, so it can tell when the pane moved on.
@@ -1510,6 +1512,24 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // EDIT-041: Open in Code goes to the Code view, the pane's workspace (its sidebar row scrolled
   // into sight by ProjectsPanel) and the pane itself, its tab brought to the top.
   const [reveal, setReveal] = useState(0);
+  // TERM-036: a copied id says so; a clipboard that refuses says that instead, never both.
+  const copyId = (p: Pane, what: "session" | "terminal" | "pane") => {
+    const label = { session: "session ID", terminal: "terminal ID", pane: "pane ID" }[what];
+    const pty = ptys.current[p.key];
+    const text = what === "session" ? sessionIds[p.key] : what === "pane" ? String(p.key) : pty === undefined ? undefined : `term-${pty}`;
+    if (!text) return setToast(`Could not copy the ${label}: this pane has none yet.`);
+    Promise.resolve()
+      .then(() => navigator.clipboard.writeText(text))
+      .then(
+        () => setToast(`Copied the ${label}: ${text}`),
+        () => setToast(`Could not copy the ${label}: the clipboard is not available.`),
+      );
+  };
+  // TERM-096: a printed handle opens its pane when it names an open terminal.
+  const findHandle = (h: string) => {
+    const k = keyOfHandle(h);
+    return Number.isNaN(k) ? undefined : () => openPane(k);
+  };
   const openPane = (key: number) => {
     const p = panes.find((x) => x.key === key);
     if (!p) return;
@@ -1676,8 +1696,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   panesRef.current = panes;
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
-    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string; plan?: string; planCut?: boolean } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, plan, planCut } = e.payload;
+    const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string; plan?: string; planCut?: boolean; sessionId?: string } & Turn>("agent-status", (e) => {
+      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, plan, planCut, sessionId } = e.payload;
+      if (sessionId) setSessionIds((m) => (m[paneKey] === sessionId ? m : { ...m, [paneKey]: sessionId }));
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
       setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, plan, planCut, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
       setStale((m) => (m[paneKey] ? { ...m, [paneKey]: false } : m));
@@ -2139,6 +2160,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     custom={!!p.title}
                     onRename={(name) => renamePane(p.key, name)}
                     renameAsk={askName[p.key]}
+                    sessionKnown={!!sessionIds[p.key]}
+                    onCopyId={(what) => copyId(p, what)}
+                    findHandle={findHandle}
                     typed={p.typed}
                     shellName={p.word}
                     number={p.key}

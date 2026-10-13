@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { marksUnread, nameKey, newName, waitingInGrid, tabBadge } from "./tabs";
+import { handlesIn, marksUnread, nameKey, newName, waitingInGrid, tabBadge } from "./tabs";
 import { NEEDS_STRIP_FIELD, stripOn } from "../settings/general";
 
 test("a tab shows one badge: spinner, question mark, bell or check; an idle shell shows none (TERM-055)", () => {
@@ -51,4 +51,14 @@ test("the needs-you strip lists this grid's sessions waiting on a permission or 
   // The strip is on unless turned off.
   expect(stripOn({})).toBe(true);
   expect(stripOn({ [NEEDS_STRIP_FIELD]: false })).toBe(false);
+});
+
+test("only a whole-word term-N handle is a link, with its place in the line (TERM-096)", () => {
+  expect(handlesIn("sent to term-3, then term-12.")).toEqual([
+    { start: 8, end: 14, handle: "term-3" },
+    { start: 21, end: 28, handle: "term-12" },
+  ]);
+  // Text that only looks like a handle is not one.
+  expect(handlesIn("TERM=xterm-256color term-x term3 term-3a my-term-4 term-5-b")).toEqual([]);
+  expect(handlesIn("(term-7)")).toEqual([{ start: 1, end: 7, handle: "term-7" }]);
 });
