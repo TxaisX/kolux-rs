@@ -349,7 +349,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-176 · GIT-027 PR status stays current without flooding GitHub · GIT-028 GitHub rate limits and outages are visible · GIT-039 Very large diffs are held back instead of freezing the app · GIT-063 Agents never stall on an unseen Git password prompt · GIT-065 Workspaces warn about unpushed commits
 - [x] T-177-a · EDIT-002 Autosave, off by default, writes edits after a short pause (T-177 split)
 - [x] T-177-b · EDIT-004 [compat] Open tabs and unsaved drafts come back after a quit or crash (T-177 split)
-- [ ] T-177-c · EDIT-019 [compat] Rich editing leaves the untouched parts of a note byte-for-byte (T-177 split)
+- [x] T-177-c · EDIT-019 [compat] Rich editing leaves the untouched parts of a note byte-for-byte (T-177 split)
 - [ ] T-177-d · EDIT-028 Very large diffs ask before they draw (T-177 split)
 - [ ] T-177-e · EDIT-032 Renaming or moving a file keeps its tab and unsaved edits (T-177 split)
 - [ ] T-178 · EDIT-046 Saves are all-or-nothing, and big or binary files are handled safely

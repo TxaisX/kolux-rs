@@ -19,7 +19,7 @@ import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, diskNews, isDirty, keepMine, loadText, relay, replaceAll, save, subscribe } from "./buffers";
-import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
+import { changeBetween, isMarkdown, mountRich, planRich, rewrite, RICH_LIMIT, splitFront, unsupported } from "./markdown";
 import { resumeAutosave, stopAutosave, watchAutosave } from "./autosave";
 import { hashText, type Mode, type Start } from "./session";
 
@@ -234,11 +234,16 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     const why = unsupported(text);
     if (why) return fallBack({ text: `Showing source: the rich view cannot show this file because ${why}.` });
     let pushed = text;
+    // EDIT-019: the rich view shows the body without its front matter, and each edit is written
+    // back over the file's own bytes, so only the blocks it touched change.
+    let plan = planRich(text);
+    const lost = () => fallBack({ text: "Showing source: the rich view could not match its blocks to the file." });
+    if (!plan) return lost();
+    const bodyOf = (t: string) => splitFront(t).body.replace(/\r\n/g, "\n");
     try {
-      rich.current = mountRich(richHost.current, text, (out) => {
+      rich.current = mountRich(richHost.current, bodyOf(text), (out) => {
         const now = cm.state.doc.toString();
-        // The rich view drops the file's last line end; keep it.
-        const next = now.endsWith("\n") && !out.endsWith("\n") ? out + "\n" : out;
+        const next = plan ? rewrite(plan, out) : now;
         const change = changeBetween(now, next);
         pushed = next;
         if (change) cm.dispatch({ changes: change, userEvent: "input" });
@@ -253,7 +258,11 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     // Text changed elsewhere (a twin pane, a reload) is shown afresh.
     const off = subscribe(path, () => {
       const now = cm.state.doc.toString();
-      if (now !== pushed) r.show((pushed = now));
+      if (now === pushed) return;
+      pushed = now;
+      plan = planRich(now);
+      if (plan) r.show(bodyOf(now));
+      else lost();
     });
     return () => {
       off();

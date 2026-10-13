@@ -831,6 +831,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .md-rich .md-nested { list-style: none; }
 .md-rich code, .md-preview code { font: 0.9em var(--mono-font); padding: 1px 4px; border-radius: 4px; background: var(--chip-bg); }
 .md-rich .md-code, .md-preview pre { display: block; margin: 0 0 0.7em; padding: 8px 12px; border-radius: 6px; background: var(--chip-bg); font: 12.5px/1.5 var(--mono-font); white-space: pre; overflow-x: auto; }
+.md-preview pre.md-front { margin-bottom: 1em; border: 1px solid var(--line-subtle); color: var(--fg-muted); white-space: pre-wrap; }
 .md-preview pre code { padding: 0; background: none; }
 .md-rich a, .md-preview a { color: var(--link); text-decoration: underline; }
 .md-rich .md-strike { text-decoration: line-through; }
