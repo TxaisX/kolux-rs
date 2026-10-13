@@ -158,7 +158,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P0 · theme 9 · Reliability and no lost work (20 cards)
 
-- [ ] T-065 · PROJ-067 Workspace tabs and layout are saved and restored
+- [x] T-065 · PROJ-067 Workspace tabs and layout are saved and restored  (DONE 2026-10-12: `src/terminal/layout.ts` writes the started tabs, the active tab per cell, the focus, the active workspace and the stacked cells to the `savedLayout` setting as they change and reads them back at start; an entry that cannot be read is dropped and the rest kept; tabs whose folder is gone are dropped; the active workspace and tab come back while they exist. Live: one entry damaged in settings.json, relaunch, the other tabs back and workspace B active. Agent tabs return at their prompt in their folder (the session itself is the session-resume card, T-066); browser tabs return as fresh tabs.)
 - [ ] T-066 · SESS-030 Agent sessions resume after a quit or a crash
 - [ ] T-067 · TERM-017 Panes keep their identity across layout changes · TERM-065 [compat] Copy terminal selection, never silently · TERM-103 GPU rendering with safe fallback · TERM-105 Terminals survive quitting and reopening Kolux
 - [ ] T-068 · TERM-106 Restore after the background host or computer died

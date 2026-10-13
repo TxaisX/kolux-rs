@@ -78,6 +78,7 @@ import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
+import { LAYOUT_FIELD, layoutOf, type SavedLayout } from "./terminal/layout";
 import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
@@ -118,10 +119,10 @@ type StartLine = { args: string[]; typed: string | null; program: string | null;
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
 /** `initial`: the settings read before the first frame (main.tsx), so the first screen is right at once. */
-export default function App({ initial = {} }: { initial?: Record<string, unknown> }) {
+export default function App({ initial = {}, layout = null }: { initial?: Record<string, unknown>; layout?: SavedLayout | null }) {
   return (
     <KeymapProvider>
-      <Window initial={initial} />
+      <Window initial={initial} layout={layout} />
     </KeymapProvider>
   );
 }
@@ -131,7 +132,7 @@ export function nextScreen(s: Screen): Screen {
   return screens[(screens.findIndex((x) => x.id === s) + 1) % screens.length].id;
 }
 
-function Window({ initial }: { initial: Record<string, unknown> }) {
+function Window({ initial, layout }: { initial: Record<string, unknown>; layout: SavedLayout | null }) {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>(() => startScreen(initial)); // SET-037
@@ -155,11 +156,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setExplorerOpen(true);
     setExplorerFocus((n) => n + 1);
   };
-  const [panes, setPanes] = useState<Pane[]>([{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
-  const [focused, setFocused] = useState(1);
+  // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
+  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? [{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
+  const [focused, setFocused] = useState(layout?.focused ?? 1);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
   // whose active tab was closed falls back to its last tab.
-  const [activeTab, setActiveTab] = useState<Record<number, number>>({});
+  const [activeTab, setActiveTab] = useState<Record<number, number>>(layout?.activeTab ?? {});
   // VIEW-015: the session picked on the Agents screen, kept across screen switches.
   const [agentSel, setAgentSel] = useState<number | null>(null);
   useEffect(() => {
@@ -170,7 +172,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     recentTabs.current = [focused, ...recentTabs.current.filter((k) => k !== focused)].slice(0, 50);
   }, [focused]);
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
-  const [activeDir, setActiveDir] = useState<string | null>(null);
+  const [activeDir, setActiveDir] = useState<string | null>(layout?.activeDir ?? null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
   // ACCT-064: the managed Codex accounts and the active one, so panes left on another are asked.
   const [codex, setCodex] = useState<{ active: string | null; accounts: CodexAccount[] }>({ active: null, accounts: [] });
@@ -243,7 +245,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
-  const [stacked, setStacked] = useState<Record<string, boolean>>({}); // TERM-006: a single pane split down makes a stacked pair
+  const [stacked, setStacked] = useState<Record<string, boolean>>(layout?.stacked ?? {}); // TERM-006: a single pane split down makes a stacked pair
   const [weights, setWeights] = useState<Record<string, number[]>>({}); // TERM-010: dragged column / row weights, per folder and pane count
   const dragRef = useRef<{ gap: Gap; at: number; start: number[]; px: number } | null>(null);
   const [launching, setLaunching] = useState(false);
@@ -256,7 +258,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     toastTimer.current = window.setTimeout(() => setToastText(null), 4000);
   };
-  const nextKey = useRef(2);
+  const nextKey = useRef(layout ? Math.max(1, ...layout.panes.map((p) => p.key)) + 1 : 2);
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
@@ -715,6 +717,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   useEffect(() => {
     if ((settings[OPEN_PAGE_FIELD] ?? null) !== page) saveSetting(OPEN_PAGE_FIELD, page);
   }, [page]);
+  // PROJ-067: the tabs and layout are written down as they change, so they come back after a restart.
+  useEffect(() => {
+    const l = layoutOf(panes, activeTab, focused, activeDir, stacked);
+    if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) !== JSON.stringify(l)) saveSetting(LAYOUT_FIELD, l);
+  }, [panes, activeTab, focused, activeDir, stacked]);
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were
   // kept while hidden, so they come back as they were; a workspace with no pane yet gets a shell.

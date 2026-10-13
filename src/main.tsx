@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } from "./theme";
 import { stampLook } from "./settings/general";
+import { LAYOUT_FIELD, restoreLayout, stillThere } from "./terminal/layout";
 import "./styles.css";
 
 // SET-004: the window starts hidden (tauri.conf.json). The saved look goes on the root first, read
@@ -21,9 +22,16 @@ async function start() {
   // SET-037: the look is written down on the first start, so a fresh profile stays New.
   const stamped = saved && stampLook(saved);
   if (stamped) void invoke("save_settings", { value: stamped }).catch(() => {});
+  // PROJ-067: the saved tabs come back, less those whose folder is gone.
+  let layout = restoreLayout((stamped || saved || {})[LAYOUT_FIELD]);
+  if (layout) {
+    const dirs = [...new Set([...layout.panes.map((p) => p.cwd), layout.activeDir].filter((d): d is string => d !== null))];
+    const kinds = await Promise.all(dirs.map((d) => invoke<string>("path_kind", { path: d }).catch(() => "missing")));
+    layout = stillThere(layout, (d) => kinds[dirs.indexOf(d)] !== "missing");
+  }
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App initial={stamped || saved || {}} />
+      <App initial={stamped || saved || {}} layout={layout} />
     </React.StrictMode>,
   );
   requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));
