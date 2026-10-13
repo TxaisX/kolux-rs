@@ -402,9 +402,16 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
+    let (mut program, mut args) = (program, args);
     let (env, cap): (Vec<(String, String)>, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
+        // SET-026: a plain new terminal opens in the chosen default shell.
+        if program.is_none() {
+            if let Some((p, a)) = crate::pty::default_shell(&settings) {
+                (program, args) = (Some(p), Some(a));
+            }
+        }
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
         let key_mode = settings.get(crate::claude_key::MODE_FIELD).and_then(serde_json::Value::as_str) == Some(crate::claude_key::KEY_MODE);
         let env: Vec<(String, String)> = crate::claude_key::pane_env(program.as_deref(), &settings, token)

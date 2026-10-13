@@ -11,6 +11,7 @@ export type Entry = { page: PageId; section: string; title: string; words: strin
 
 export const INDEX: Entry[] = [
   { page: "general", section: "views", title: "Look and first screen", words: "start open launch home new classic look startup" },
+  { page: "general", section: "confirmations", title: "Confirmations", words: "confirm confirmation ask again dont skipped prompt delete automation warning" },
   { page: "appearance", section: "language", title: "Language", words: "locale translate " + LANGUAGES.map((l) => l.name).join(" "), fold: "interface" },
   { page: "appearance", section: "interface", title: "Mode", words: "dark light system night day theme", fold: "interface" },
   { page: "appearance", section: "zoom", title: "Zoom", words: "size bigger smaller scale text larger magnify", fold: "interface" },
@@ -26,7 +27,11 @@ export const INDEX: Entry[] = [
   { page: "agents", section: "permissions", title: "Agent Permissions", words: "permission allow approve yolo skip ask safety" },
   { page: "agents", section: "agents", title: "Installed agents", words: "installed install cli programs " + agents.map(([id, name]) => `${id} ${name}`).join(" ") },
   { page: "terminal", section: "panes", title: "New workspaces start with", words: "panes grid workspace start count layout" },
-  { page: "terminal", section: "closing", title: "Closing tabs", words: "close quit ask confirm running busy" },
+  { page: "terminal", section: "text", title: "Terminal text and cursor", words: "terminal font size family typeface weight bold line height spacing cursor caret blink block bar underline contrast readable sample" },
+  { page: "terminal", section: "scrolling", title: "History and scrolling", words: "scrollback history rows lines buffer scroll sensitivity speed fast wheel" },
+  { page: "terminal", section: "clipboard", title: "Clipboard", words: "copy paste select selection right click clipboard mouse" },
+  { page: "terminal", section: "shell", title: "Default shell", words: "shell powershell pwsh cmd command prompt git bash wsl default" },
+  { page: "terminal", section: "closing", title: "Ask Before Closing Running Terminals", words: "close closing quit ask confirm confirmation running busy agent program" },
   { page: "git", section: "branches", title: "Branch names", words: "branch prefix name worktree" },
   { page: "git", section: "base", title: "Base branch", words: "base main master default branch" },
   { page: "git", section: "scm-groups", title: "Source Control", words: "source control scm changes staged groups order" },

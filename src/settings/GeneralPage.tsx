@@ -3,6 +3,8 @@ import { screens } from "../chrome/TopBar";
 import { useSettings } from "./useSettings";
 import { FIRST_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
 import { REVIEW_FIELD, reviewOn } from "../editor/notes";
+import { CONFIRM_DELETE_KEY, confirmDelete } from "../automations/model";
+import { CONFIRM_CLOSE_FIELD } from "../terminal/closing";
 
 /** A row of buttons that behaves as one radio group. */
 export function Segmented<T extends string>({ label, options, value, onPick, off = [] }: { label: string; options: Array<{ id: T; label: string }>; value: T; onPick: (v: T) => void; off?: T[] }) {
@@ -41,12 +43,36 @@ export function GeneralView({ settings, onSave }: { settings: Record<string, unk
   );
 }
 
+/** SET-043: each confirmation skipped with don't ask again is kept on its own and can come back. */
+const SKIPPABLE = [
+  { field: CONFIRM_DELETE_KEY, label: "deleting an automation" },
+  { field: CONFIRM_CLOSE_FIELD, label: "closing a terminal that is running a program" },
+];
+
+function Confirmations({ settings, onSave }: { settings: Record<string, unknown>; onSave: (patch: Record<string, unknown>) => void }) {
+  const skipped = SKIPPABLE.filter((c) => settings[c.field] === false);
+  return (
+    <section className="conn-card" data-section="confirmations">
+      <h2 className="conn-name">Confirmations</h2>
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={confirmDelete(settings)} onChange={(e) => onSave({ [CONFIRM_DELETE_KEY]: e.target.checked })} />
+        Ask before deleting an automation
+      </label>
+      <p className="conn-detail">{skipped.length ? `Not asking before ${skipped.map((c) => c.label).join(" or ")}.` : "Every confirmation is asked."}</p>
+      <button type="button" className="btn" disabled={skipped.length === 0} onClick={() => onSave(Object.fromEntries(skipped.map((c) => [c.field, true])))}>
+        Ask again for all
+      </button>
+    </section>
+  );
+}
+
 export default function GeneralPage() {
   const { settings, error, save } = useSettings();
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
       {settings && <GeneralView settings={settings} onSave={save} />}
+      {settings && <Confirmations settings={settings} onSave={save} />}
     </>
   );
 }

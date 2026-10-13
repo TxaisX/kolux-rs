@@ -1014,6 +1014,14 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .font-list { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; max-height: 240px; overflow-y: auto; margin-top: 2px; padding: 4px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3); }
 .font-list button { display: block; width: 100%; padding: 4px 6px; border: 0; border-radius: 4px; background: none; color: var(--fg); font-size: 13px; text-align: left; cursor: pointer; }
 .font-list button:hover, .font-list button[aria-selected="true"] { background: var(--row-selected); }
+/* SET-022 / SET-025: Terminal & sessions fields and the live sample. */
+.term-sample { margin: 10px 0 4px; padding: 8px 10px; max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--pane-bg); }
+.term-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 16px; align-items: end; margin: 10px 0; }
+.term-fields .font-field { margin-top: 0; }
+.num-field { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--fg-row); }
+.num-field > span { flex-basis: 100%; color: var(--fg-muted); font-size: 12px; }
+.num-field input, .num-field select { height: 28px; min-width: 0; padding: 0 8px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.num-field input { width: 6em; font-variant-numeric: tabular-nums; }
 .status-ticks { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 0 30px; }
 .status-tick { display: flex; align-items: center; gap: 6px; color: var(--fg); font-size: 12px; cursor: pointer; }
 .status-tick input { accent-color: var(--done); }

@@ -8,6 +8,7 @@ import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
+import { currentText } from "../terminal/text";
 import { schemeOptions, SchemeList } from "./SchemePicker";
 import { useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
@@ -92,7 +93,7 @@ function ZoomControl() {
 
 /** SET-018: a font family field; suggestions come from the installed fonts, the whole list when the
  *  field is entered and the best matches once the user types. Applies on pick, Enter or leaving. */
-function FontField({ label, value, placeholder, onPick }: { label: string; value: string; placeholder: string; onPick: (family: string) => void }) {
+export function FontField({ label, value, placeholder, onPick }: { label: string; value: string; placeholder: string; onPick: (family: string) => void }) {
   const [text, setText] = useState(value);
   const [fonts, setFonts] = useState<string[] | null>(null);
   const [open, setOpen] = useState(false);
@@ -226,7 +227,7 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "",
         <p className="conn-detail">Leave a field empty for the default. A font that is not installed falls back to the default, so text always shows.</p>
       </section>
       </Fold>
-      <Fold id="terminal" title="Terminal" summary={[firstFamily(monoFont), look.lightTerminal ? `${name(look.terminal)} / ${name(look.lightScheme)}` : name(look.terminal)].join(" · ")} {...fold("terminal")}>
+      <Fold id="terminal" title="Terminal" summary={[currentText().family || firstFamily(monoFont), look.lightTerminal ? `${name(look.terminal)} / ${name(look.lightScheme)}` : name(look.terminal)].join(" · ")} {...fold("terminal")}>
       <section className="conn-card" data-section="terminal-colours">
         <h2 className="conn-name">Terminal colours</h2>
         <TerminalColours look={look} onChange={onChange} />

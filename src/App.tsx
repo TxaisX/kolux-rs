@@ -281,7 +281,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         })
         .catch(() => setSettings({}));
     readSettings();
-    const off = listen("settings-saved", readSettings);
+    const off = listen("settings-saved", () => (readSettings(), invoke<ShellInfo[]>("shell_list").then(setShells, () => {}))); // SET-026: the chosen default shell leads the list
     return () => {
       void off.then((u) => u()).catch(() => {});
       void offAgents.then((u) => u()).catch(() => {});

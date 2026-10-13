@@ -20,10 +20,16 @@ describe("search all settings (SET-007)", () => {
   it("indexes only sections that are still drawn on their page", () => {
     for (const e of INDEX) expect(SOURCES[e.page].map(read).join("\n"), `${e.page}/${e.section}`).toContain(`data-section="${e.section}"`);
   });
-  it("finds font in Appearance, inside the fold that holds it, and opens only that fold", () => {
+  it("finds font in Appearance, inside the fold that holds it, and the terminal font (SET 022)", () => {
     const h = searchSettings("font")!;
-    expect(h.pages).toEqual([{ page: "appearance", sections: ["fonts"] }]);
+    expect(h.pages).toEqual([
+      { page: "appearance", sections: ["fonts"] },
+      { page: "terminal", sections: ["text"] },
+    ]);
     expect([...h.folds]).toEqual(["interface"]);
+  });
+  it("finds Ask Before Closing Running Terminals by confirm, close or agent (SET 043)", () => {
+    for (const q of ["confirm", "close", "agent"]) expect(searchSettings(q)!.pages.find((p) => p.page === "terminal")?.sections, q).toContain("closing");
   });
   it("ranks the page whose title matches first, then the rest in page order", () => {
     const h = searchSettings("shortcuts")!;

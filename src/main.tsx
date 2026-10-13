@@ -8,6 +8,7 @@ import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } f
 import { stampLook } from "./settings/general";
 import { applyLanguage, LANGUAGE_FIELD } from "./language";
 import { applyZoom, ZOOM_FIELD } from "./settings/zoom";
+import { followText } from "./terminal/text";
 import "./styles.css";
 
 // SET-004: the window starts hidden (tauri.conf.json). The saved look goes on the root first, read
@@ -25,6 +26,8 @@ async function start() {
   applyLanguage(saved?.[LANGUAGE_FIELD]);
   // SET-019: and so is the saved interface zoom.
   applyZoom(saved?.[ZOOM_FIELD]);
+  // SET-022 / SET-025: terminals open with the saved text settings and follow every save.
+  followText(saved);
   // SET-037: the look is written down on the first start, so a fresh profile stays New.
   const stamped = saved && stampLook(saved);
   if (stamped) void saveChanged(saved, stamped).catch(() => {});

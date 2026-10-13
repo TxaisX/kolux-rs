@@ -14,7 +14,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./codec";
-import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
+import { currentDark, currentTerminal, TERMINAL_EVENT } from "../theme";
+import { currentText, optionsOf, TEXT_EVENT } from "./text";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
@@ -152,9 +153,7 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     const el = host.current;
     if (!el) return;
     const term = new Terminal({
-      cursorBlink: true,
-      fontFamily: monoFont,
-      fontSize: 13,
+      ...optionsOf(currentText()),
       theme: currentTerminal(),
       allowProposedApi: true,
     });
@@ -262,10 +261,32 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
+    // SET-022 / SET-025: open terminals follow the text, cursor and history settings.
+    const retext = () => {
+      Object.assign(term.options, optionsOf(currentText()));
+      resize();
+    };
+    window.addEventListener(TEXT_EVENT, retext);
+    // SET-025: copy on select, and right-click paste (the menu stays away while it is on).
+    const selected = term.onSelectionChange(() => {
+      if (currentText().copyOnSelect && term.hasSelection()) void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+    });
+    const rightClick = (e: MouseEvent) => {
+      if (!currentText().rightClickPaste) return;
+      e.preventDefault();
+      if (term.hasSelection()) {
+        void navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        term.clearSelection();
+      } else void navigator.clipboard?.readText().then((t) => t && term.paste(t), () => {});
+    };
+    el.addEventListener("contextmenu", rightClick);
 
     return () => {
       alive = false;
       window.removeEventListener(TERMINAL_EVENT, recolour);
+      window.removeEventListener(TEXT_EVENT, retext);
+      el.removeEventListener("contextmenu", rightClick);
+      selected.dispose();
       mode.dispose();
       clearTimeout(quiet);
       observer.disconnect();
