@@ -4,6 +4,7 @@
 // ponytail: today the only live states are working / done / idle, read from whether an agent
 // pane's program is up; permission, blocked, waiting and interrupted arrive with the status hooks
 // (STAT-001, T-025), and the pull-request state with GIT-025 (T-229). The rules here take them already.
+import { shortcodes } from "./model";
 
 export type AgentState = "permission" | "blocked" | "waiting" | "interrupted" | "working" | "queued" | "done" | "idle";
 export type PrState = "open" | "draft" | "merged" | "closed" | "suppressed" | null;
@@ -98,4 +99,24 @@ export function pinnedSet(pins: string[], ws: { path: string; parent?: string | 
     }
   }
   return out;
+}
+
+/** PROJ-053: the sleeping workspaces' path keys, and VIEW-053: whether sleeping rows show. */
+export const SLEEP_SETTING = "sleepingWorkspaces";
+export const SHOW_SLEEPING_SETTING = "showSleeping";
+
+/** VIEW-053: shown on a fresh profile; an explicit "hide" is kept. */
+export const showSleepingFrom = (v: unknown) => v !== false;
+
+/** PROJ-053: sleeping takes the workspaces made from this one along; waking wakes only this one. */
+export function asleepAfter(asleep: string[], ws: { path: string; parent?: string | null }[], path: string, sleep: boolean): string[] {
+  const k = pathKey(path);
+  if (!sleep) return asleep.filter((x) => x !== k);
+  return [...new Set([...asleep, ...pinnedSet([path], ws)])];
+}
+
+/** PROJ-059: the name Enter saves (trimmed, shortcodes turned into emoji), or null to cancel. */
+export function renameTo(typed: string, current: string): string | null {
+  const n = shortcodes(typed).trim();
+  return n === "" || n === current ? null : n;
 }

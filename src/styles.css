@@ -157,9 +157,11 @@ input { font: inherit; }
 .sb-group .chev { display: inline-flex; margin-left: auto; transition: transform 0.15s; }
 .sb-group[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 .sess .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sess .ib { opacity: 0; width: 22px; height: 22px; }
+.sess input.rename { flex: 1; min-width: 0; height: 22px; padding: 0 6px; border-radius: 5px; border: 1px solid var(--line-focus); background: var(--input-bg); color: var(--fg); font: inherit; }
+/* The row actions take no room until the row is hovered or focused, so names show in full at rest. */
+.sess .ib { display: none; width: 22px; height: 22px; }
 .sess:hover { background: #1f1f1f; }
-.sess:hover .ib { opacity: 1; }
+.sess:hover .ib, .sess:focus-within .ib { display: inline-flex; }
 .sess.sel { background: var(--row-selected); color: var(--fg); }
 .sess.pending { opacity: 0.6; }
 /* PROJ-020: the stand-in tabs above the panes while Git makes a workspace. */

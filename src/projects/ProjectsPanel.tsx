@@ -20,10 +20,10 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { GROUP_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SORT_SETTING, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
+import { GROUP_SETTING, PIN_COPIES_SETTING, PIN_SETTING, SHOW_SLEEPING_SETTING, SLEEP_SETTING, asleepAfter, renameTo, showSleepingFrom, SORT_SETTING, groupFromSetting, groupRows, pathKey, pinnedSet, recentOrder, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
-import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin } from "../chrome/icons";
+import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
@@ -61,6 +61,8 @@ type Props = {
   onSelect: (dir: string, branch: string | null, fresh?: boolean) => void;
   /** After a workspace and its folder are gone, so the window drops its panes. */
   onRemoved: (path: string) => void;
+  /** PROJ-053: these workspaces went to sleep; close their panes. */
+  onSleep: (paths: string[]) => void;
   /** The plus menu behind "New session" (T-004): agents found on the PATH, and the launch. */
   agents: AgentInfo[];
   launching: boolean;
@@ -121,7 +123,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -202,6 +204,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
   const [groups, setGroups] = useState<Groups>(NO_GROUPS); // PROJ-014: project groups
   const [activity, setActivity] = useState<Record<string, number>>({}); // PROJ-051: path key -> last activity
+  const [renaming, setRenaming] = useState<string | null>(null); // PROJ-059: the row being renamed
+  const [renameText, setRenameText] = useState("");
   const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
   const [groupName, setGroupName] = useState("");
   const [groupParent, setGroupParent] = useState("");
@@ -1001,6 +1005,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const show = (w: Worktree) => {
     setRead(w, true);
     stamp(w.path);
+    wake(w);
     onSelect(w.path, w.branch);
   };
   type Entry = { p: Project; w: Worktree };
@@ -1017,6 +1022,38 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const pinned = pinnedSet(pins, everyEntry.map((x) => x.w));
   const isPinned = (w: Worktree) => pins.some((x) => pathKey(x) === pathKey(w.path));
   const elsewhere = (w: Worktree) => copies || !pinned.has(pathKey(w.path));
+  // PROJ-053, VIEW-053: who sleeps (never the main checkout), and whether sleeping rows show.
+  const asleep: string[] = Array.isArray(settings[SLEEP_SETTING]) ? (settings[SLEEP_SETTING] as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  const isAsleep = (w: Worktree) => !w.isMain && asleep.includes(pathKey(w.path));
+  const showSleeping = showSleepingFrom(settings[SHOW_SLEEPING_SETTING]);
+  const hidden = (w: Worktree) => !showSleeping && isAsleep(w);
+  const listed = (w: Worktree) => elsewhere(w) && !hidden(w);
+  function sleep(w: Worktree) {
+    const next = asleepAfter(asleep, everyEntry.map((x) => x.w).filter((x) => !x.isMain), w.path, true);
+    const paths = everyEntry.map((x) => x.w.path).filter((d) => next.includes(pathKey(d)) && !asleep.includes(pathKey(d)));
+    onSetting(SLEEP_SETTING, next);
+    onSleep(paths);
+    invoke("workspace_sleep", { paths }).catch((err) => say("warn", `Some terminals did not close: ${String(err)}`));
+  }
+  function wake(w: Worktree) {
+    if (isAsleep(w)) onSetting(SLEEP_SETTING, asleepAfter(asleep, [], w.path, false));
+  }
+  // PROJ-059: Enter saves; blank or unchanged cancels, and so does Escape or clicking away.
+  function startRename(w: Worktree) {
+    setRenaming(w.path);
+    setRenameText(worktreeLabel(w));
+  }
+  async function saveRename(w: Worktree) {
+    const n = renameTo(renameText, worktreeLabel(w));
+    setRenaming(null);
+    if (n === null) return;
+    try {
+      await invoke("workspace_rename", { path: w.path, name: n });
+      await reload();
+    } catch (err) {
+      say("error", `${worktreeLabel(w)} was not renamed: ${String(err)}`);
+    }
+  }
   const togglePin = (w: Worktree) => onSetting(PIN_SETTING, isPinned(w) ? pins.filter((x) => pathKey(x) !== pathKey(w.path)) : [...pins, w.path]);
   const toggleFold = (title: string) => setFolded((f) => new Set(f.has(title) ? [...f].filter((t) => t !== title) : [...f, title]));
 
@@ -1030,7 +1067,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const up = w.parent ? (worktrees[p.id] ?? []).find((x) => !x.isMain && same(x.path, w.parent as string)) : undefined;
     return (
       <div key={w.path} data-worktree={worktreeLabel(w)} data-depth={depth} data-path={w.path}>
-        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => e.key === "Enter" && show(w)} title={`Show ${w.path}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
+        <div className={`sess${isSelected(w) ? " sel" : ""}${un ? " unread" : ""}`} role="button" tabIndex={0} onClick={() => show(w)} onKeyDown={(e) => (e.key === "Enter" ? show(w) : e.key === "F2" && startRename(w))} title={`Show ${w.path}${isAsleep(w) ? " (asleep: showing it wakes it)" : ""}`} data-state={info.state} style={depth || kids ? { paddingLeft: 26 + depth * 14 - (kids ? 24 : 0) } : undefined}>
           {kids && (
             <button
               className={`fold${shut ? " shut" : ""}`}
@@ -1045,7 +1082,38 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </button>
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
-          <span className="name">{worktreeLabel(w)}</span>
+          {renaming === w.path ? (
+            <input
+              className="rename"
+              autoFocus
+              aria-label="Workspace name"
+              value={renameText}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => setRenameText(e.target.value)}
+              onBlur={() => setRenaming(null)}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") void saveRename(w);
+                if (e.key === "Escape") setRenaming(null);
+              }}
+            />
+          ) : (
+            <span
+              className="name"
+              title="Double-click (or F2) to rename"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                startRename(w);
+              }}
+            >
+              {worktreeLabel(w)}
+            </span>
+          )}
+          {isAsleep(w) && (
+            <span className="hint" title="Asleep: its tabs and terminals were closed; show it to wake it">
+              sleeping
+            </span>
+          )}
           {w.kind === "external" && (
             <span className="hint" title="Made outside Kolux (plain Git or another tool); Kolux has no record of making it">
               external
@@ -1089,6 +1157,18 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               }}
             >
               <ArrowRight size={11} />
+            </button>
+          )}
+          {!asking && !w.isMain && !isAsleep(w) && (
+            <button
+              className="ib"
+              title="Sleep: close its tabs and terminals, and those of the workspaces made from it; show it again to wake it"
+              onClick={(e) => {
+                e.stopPropagation();
+                sleep(w);
+              }}
+            >
+              <Moon size={11} />
             </button>
           )}
           {!asking && !w.isMain && (
@@ -1184,7 +1264,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const projectBlock = (p: Project) => {
       const list = worktrees[p.id] ?? [];
       const main = list.find((w) => w.isMain);
-      const others = order(list.filter((w) => !w.isMain && elsewhere(w)).map((w) => ({ p, w })));
+      const others = order(list.filter((w) => !w.isMain && listed(w)).map((w) => ({ p, w })));
       const opening = creating === p.id;
       return (
         <div key={p.id}>
@@ -1462,22 +1542,26 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                 <input type="checkbox" aria-label="pinned rows also in their group" checked={copies} onChange={(e) => onSetting(PIN_COPIES_SETTING, e.target.checked)} />
                 Pinned rows also show in their usual place
               </label>
+              <label className="check">
+                <input type="checkbox" aria-label="show sleeping workspaces" checked={showSleeping} onChange={(e) => onSetting(SHOW_SLEEPING_SETTING, e.target.checked)} />
+                Show sleeping workspaces
+              </label>
             </div>
           )}
           {creating === "" && nameField(null)}
           {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a project folder; one without Git can start it here.</div>}
 
-          {everyEntry.some((x) => pinned.has(pathKey(x.w.path))) && (
+          {everyEntry.some((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w)) && (
             <div data-group="Pinned" className="pinned">
               <button className="sb-group" aria-expanded={!folded.has("pinned-section")} onClick={() => toggleFold("pinned-section")}>
                 Pinned
-                <span className="count">{everyEntry.filter((x) => pinned.has(pathKey(x.w.path))).length}</span>
+                <span className="count">{everyEntry.filter((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w)).length}</span>
                 <span className="chev">
                   <ChevronDown size={12} />
                 </span>
               </button>
               {!folded.has("pinned-section") &&
-                nestRows(order(everyEntry.filter((x) => pinned.has(pathKey(x.w.path)))).map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p: everyEntry.find((x) => x.w === r.w)?.p as Project, w: r.w }, r.depth, r.kids))}
+                nestRows(order(everyEntry.filter((x) => pinned.has(pathKey(x.w.path)) && !hidden(x.w))).map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p: everyEntry.find((x) => x.w === r.w)?.p as Project, w: r.w }, r.depth, r.kids))}
             </div>
           )}
           {groupBy === "project" && groupTree(groups, projectOrder).map(drawNode)}
@@ -1487,7 +1571,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           {groupBy !== "project" && projects.map(standIn)}
           {groupBy !== "project" &&
             groupRows(
-              order(everyEntry.filter((x) => elsewhere(x.w))),
+              order(everyEntry.filter((x) => listed(x.w))),
               groupBy,
               (x) => infoOf(x.w),
               (x) => x.p.name,

@@ -233,6 +233,8 @@ pub fn run() {
             projects::workspace_unseen,
             projects::workspace_seen,
             projects::workspace_hide,
+            projects::workspace_rename,
+            projects::workspace_sleep,
             projects::visibility_get,
             projects::visibility_set,
             projects::visibility_root_add,

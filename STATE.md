@@ -1464,6 +1464,10 @@ T-216-a: a pin on each workspace row puts it (with the workspaces made from it) 
 section at the top, optionally also in its usual place; Sort > Recent lists by latest activity,
 with a newly added project or workspace on top; both last across restarts.
 
+T-217-a: a moon on each workspace row puts it (and the workspaces made from it) to sleep: its
+tabs and terminals close and the sidebar marks it sleeping; showing it wakes it. Group and sort can
+hide sleeping rows (kept across restarts). Double-click a name (or F2) to rename it in place.
+
 T-100-a adds per-seat options to the launch screen. A Claude Opus or Sonnet seat gets an effort
 picker, and Opus a fast-mode box (fast mode bills usage credits). After a launch, the launch screen
 in that project offers "Use last lineup", which puts back the shape, the folders choice and each

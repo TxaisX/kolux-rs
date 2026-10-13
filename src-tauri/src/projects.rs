@@ -1143,6 +1143,29 @@ pub fn workspace_hide(store: StoreState<'_>, path: String, hidden: bool) -> Resu
     set_hidden(&*store.lock().map_err(|e| e.to_string())?, &path, hidden)
 }
 
+/// PROJ-059: the inline rename. The sidebar trims the name and turns shortcodes into emoji first;
+/// a blank name is refused here too, so no caller can wipe a name by accident.
+pub fn rename(store: &Store, path: &str, name: &str) -> Result<String, String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Err("A workspace name cannot be blank".into());
+    }
+    set_name(store, path, Some(n))?;
+    Ok(n.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_rename(store: StoreState<'_>, path: String, name: String) -> Result<String, String> {
+    rename(&*store.lock().map_err(|e| e.to_string())?, &path, &name)
+}
+
+/// PROJ-053: putting workspaces to sleep ends their terminals; the folders and branches stay, and
+/// the sidebar keeps the list of who sleeps. Returns how many terminals were ended.
+#[tauri::command]
+pub fn workspace_sleep(terminals: State<'_, crate::terminal::Terminals>, paths: Vec<String>) -> usize {
+    paths.iter().map(|p| terminals.kill_under(Path::new(p))).sum()
+}
+
 #[tauri::command]
 pub fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
@@ -2316,6 +2339,20 @@ mod tests {
         for d in [profile, repo, place.root] {
             let _ = fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn proj059_rename_trims_refuses_blank_and_lasts() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(rename(&s, "C:/r/wt", "  Login fix  ").unwrap(), "Login fix");
+        assert!(rename(&s, "C:/r/wt", "   ").is_err(), "blank is refused");
+        drop(s);
+        let names = load_names(&Store::open(&dir).unwrap());
+        assert_eq!(names.get(&name_key("C:/r/wt")).and_then(|v| v.as_str()), Some("Login fix"), "the old name survives the blank try and a restart");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

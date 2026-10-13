@@ -67,7 +67,7 @@ import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
 import { allSwitchedOff, DEFAULT_AGENT_KEY, defaultAgentId, FIRST_PASS, menuAgents, offeredAgents, type AgentPass } from "./launch/agents";
-import { paneState, strongest, type AgentState, type RowInfo } from "./projects/rows";
+import { SHOW_SLEEPING_SETTING, paneState, showSleepingFrom, strongest, type AgentState, type RowInfo } from "./projects/rows";
 import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
 import { FINISH_FIELD, STOPPED_FIELD } from "./settings/NotificationSwitches";
@@ -511,6 +511,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           break;
         case "view.cycleWorkspaceView":
           if (!classic) setScreen((s) => nextScreen(s));
+          break;
+        case "sidebar.sleeping.toggle":
+          saveSetting(SHOW_SLEEPING_SETTING, !showSleepingFrom(settings[SHOW_SLEEPING_SETTING]));
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
@@ -1041,15 +1044,20 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // unless it was the one removed, then it falls back to the home group.
   // PROJ-070: the removed one gives way to the sibling used last that still has panes; the shown
   // workspace is read when the delete finishes, so a user who went elsewhere meanwhile stays there.
-  const removed = (path: string) => {
-    const left = withoutDir(panes, path);
-    const pid = projectOf(path);
-    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !sameDir(d, path) && panesIn(left, d).length > 0).map(([d]) => d);
-    const next = activeAfterRemove(activeRef.current, path, recentDirs.current, siblings);
+  // PROJ-053: putting workspaces to sleep closes their panes the same way, all at once.
+  const removedAll = (paths: string[]) => {
+    if (paths.length === 0) return;
+    const left = paths.reduce((ps, d) => withoutDir(ps, d), panes);
+    const gone = (d: string) => paths.some((x) => sameDir(d, x));
+    const pid = projectOf(paths[0]);
+    const siblings = Object.entries(owner).filter(([d, p]) => p === pid && !gone(d) && panesIn(left, d).length > 0).map(([d]) => d);
+    const hit = paths.find((x) => activeRef.current !== null && activeAfterRemove(activeRef.current, x) !== activeRef.current);
+    const next = hit === undefined ? activeRef.current : activeAfterRemove(activeRef.current, hit, recentDirs.current.filter((d) => !gone(d)), siblings);
     setPanes(left);
     setActiveDir(next);
     setFocused((f) => focusIn(left, next, f));
   };
+  const removed = (path: string) => removedAll([path]);
 
   // PROJ-077: a workspace made or removed from the command line shows up like one made here;
   // the handlers are read through a ref so the one listener never goes stale.
@@ -1546,6 +1554,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             activeDir={activeDir}
             onSelect={select}
             onRemoved={removed}
+            onSleep={removedAll}
             nest={settings[NESTING_KEY] !== false}
             onNest={(on) => {
               const next = { ...settings, [NESTING_KEY]: on };
