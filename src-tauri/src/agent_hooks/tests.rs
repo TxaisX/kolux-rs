@@ -1,4 +1,4 @@
-use super::super::{install_claude, install_claude_hooks, install_codex_hooks, is_mine, write_script, CLAUDE_EVENTS};
+use super::super::{install_claude, install_claude_hooks, install_codex_hooks, is_mine, write_codex_groups, write_script, CLAUDE_EVENTS, CODEX_EVENTS};
 use super::*;
 use serde_json::json;
 
@@ -520,7 +520,7 @@ fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
     // Stripped of Kolux's entries both ways, the two files say the same thing.
     let strip_all = |v: &Value| {
         let mut v = v.clone();
-        remove_groups(&mut v);
+        remove_groups(&mut v, true);
         v.as_object_mut().unwrap().remove("statusLine");
         v
     };
@@ -659,15 +659,50 @@ fn t_152_6_a_codex_hooks_file_with_empty_hooks_comes_back_byte_for_byte() {
     let dir = temp("t152-codex-empty");
     let (home, profile) = (dir.join("home"), dir.join("profile"));
     let managed = profile.join(crate::codex_accounts::FOLDER).join("c1");
-    fs::create_dir_all(&managed).unwrap();
-    for text in ["{\"hooks\":{}}", "{\n  \"hooks\": {}\n}\n"] {
-        fs::write(managed.join("hooks.json"), text).unwrap();
-        assert_eq!(apply(&home, &profile, "codex", Plan::Install).unwrap(), "not written (Codex hooks wait for T-025-e)");
+    let file = managed.join("hooks.json");
+    let command = "\"C:\\Users\\me\\.kolux-rs\\agent-hooks\\codex.cmd\"";
+    // T-152-b (4): the real managed-home path. A pane start installs into the managed home through
+    // install_codex_home -> install_codex, whose file write is write_codex_groups (the Codex trust
+    // step that follows needs the codex program and writes only config.toml, so it is left out
+    // here); then the switch going off clears every managed home (apply Remove, what clear() runs).
+    for text in ["{\"hooks\":{}}", "{\n  \"hooks\": {}\n}\n", "{}", "{\"model\":\"o3\"}\n"] {
+        let _ = fs::remove_dir_all(&managed);
+        fs::create_dir_all(&managed).unwrap();
+        fs::write(&file, text).unwrap();
+        let mut v: Value = serde_json::from_str(text).unwrap();
+        assert!(write_codex_groups(&file, Some(text), &mut v, command).unwrap(), "{text}: Kolux's groups written");
+        assert_eq!(switch::inspect(&file, &CODEX_EVENTS).0, "installed", "{text}");
+        assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), text, "a copy from before the first write");
         apply(&home, &profile, "codex", Plan::Remove).unwrap();
-        assert_eq!(fs::read_to_string(managed.join("hooks.json")).unwrap(), text, "on then off leaves {text:?}");
-        assert!(!remove_codex(&managed).unwrap(), "nothing of Kolux's: nothing written");
-        assert_eq!(fs::read_to_string(managed.join("hooks.json")).unwrap(), text);
+        let back = fs::read_to_string(&file).unwrap();
+        println!("{text:?} -> on -> off -> {back:?}");
+        assert_eq!(back, text, "on then off gives back {text:?} byte for byte (an empty hooks object is kept, not turned into {{}})");
+        assert!(!remove_codex(&managed).unwrap(), "nothing of Kolux's left: nothing written");
     }
+    // With no copy to go by, a "hooks" object left empty stays: only the copy can say Kolux made it.
+    let mut v = json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": command }] }] } });
+    assert!(remove_groups(&mut v, false));
+    assert_eq!(v, json!({ "hooks": {} }));
+    let mut v = json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": command }] }] } });
+    assert!(remove_groups(&mut v, true));
+    assert_eq!(v, json!({}), "a hooks object Kolux created goes");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_4_a_claude_file_with_an_empty_hooks_object_installs_and_comes_back_byte_for_byte() {
+    let dir = temp("t152b-claude-empty");
+    let home = dir.join("home");
+    for (i, text) in ["{\"hooks\":{}}", "{\n  \"model\": \"opus\",\n  \"hooks\": {}\n}\n"].into_iter().enumerate() {
+        let file = dir.join(format!("c{i}")).join("settings.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, text).unwrap();
+        install_claude_at(&home, &file).unwrap();
+        assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed");
+        remove_claude(&file, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), text, "on then off gives back {text:?}");
+    }
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -108,13 +108,13 @@ pub fn clear_unused(hooks: &mut Map<String, Value>, keep: &[&str]) -> bool {
     changed
 }
 
-/// Takes every Kolux entry out of a `{"hooks": {...}}` file; a `hooks` object only Kolux filled
-/// goes too, so the file reads as it did before the install.
-pub fn remove_groups(root: &mut Value) -> bool {
+/// Takes every Kolux entry out of a `{"hooks": {...}}` file. A `hooks` object left empty goes
+/// too only when `drop_empty` (Kolux created it); T-152-b (4): one the user had, even `{}`, stays.
+pub fn remove_groups(root: &mut Value, drop_empty: bool) -> bool {
     let Some(obj) = root.as_object_mut() else { return false };
     let Some(hooks) = obj.get_mut("hooks").and_then(Value::as_object_mut) else { return false };
     let changed = clear_unused(hooks, &[]);
-    if changed && hooks.is_empty() {
+    if changed && drop_empty && hooks.is_empty() {
         obj.remove("hooks");
     }
     changed
@@ -137,7 +137,8 @@ fn read_opt(file: &Path) -> Result<Option<String>, String> {
 pub fn remove_claude(file: &Path, prev: &Path) -> Result<bool, String> {
     let Some(text) = read_opt(file)? else { return Ok(false) };
     let mut s: Value = serde_json::from_str(&text).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
-    let mut changed = remove_groups(&mut s);
+    let copy = kept(file);
+    let mut changed = remove_groups(&mut s, copy.as_ref().is_none_or(|(_, v)| v.get("hooks").is_none()));
     let slot = prev.with_extension("json");
     if s.get("statusLine").and_then(|l| l.get("command")).and_then(Value::as_str).is_some_and(is_my_command) {
         let exact = fs::read_to_string(&slot).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
@@ -151,9 +152,8 @@ pub fn remove_claude(file: &Path, prev: &Path) -> Result<bool, String> {
         changed = true;
     }
     if changed {
-        let copy = fs::read(backup_of(file)).ok().filter(|b| serde_json::from_slice::<Value>(b).is_ok_and(|v| v == s));
-        match copy {
-            Some(bytes) => write_atomic(file, &bytes, Some(&text))?,
+        match copy.filter(|(_, v)| *v == s) {
+            Some((bytes, _)) => write_atomic(file, &bytes, Some(&text))?,
             None => write_json(file, &s, Some(&text))?,
         }
         let _ = fs::remove_file(prev);
@@ -168,11 +168,23 @@ pub fn remove_codex(home: &Path) -> Result<bool, String> {
     let file = home.join("hooks.json");
     let Some(text) = read_opt(&file)? else { return Ok(false) };
     let mut v: Value = serde_json::from_str(&text).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
-    let changed = remove_groups(&mut v);
+    // With no copy (an install before T-152-b), the empty `{"hooks":{}}` shape Codex itself uses stays.
+    let copy = kept(&file);
+    let changed = remove_groups(&mut v, copy.as_ref().is_some_and(|(_, c)| c.get("hooks").is_none()));
     if changed {
-        write_json(&file, &v, Some(&text))?;
+        match copy.filter(|(_, c)| *c == v) {
+            Some((bytes, _)) => write_atomic(&file, &bytes, Some(&text))?,
+            None => write_json(&file, &v, Some(&text))?,
+        }
     }
     Ok(changed)
+}
+
+/// The `.bak-kolux` copy of `file`, as bytes and parsed, when it is there and reads as JSON.
+fn kept(file: &Path) -> Option<(Vec<u8>, Value)> {
+    let bytes = fs::read(backup_of(file)).ok()?;
+    let v = serde_json::from_slice(&bytes).ok()?;
+    Some((bytes, v))
 }
 
 /// `<file>.bak-kolux`.

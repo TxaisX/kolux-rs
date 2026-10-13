@@ -766,7 +766,8 @@ pub fn install_claude_from(file: &Path, text: Option<String>, command: &str, sta
     // file must say exactly what the old one did; anything else is a bug and nothing is written.
     let rest = |v: &Value| {
         let mut v = v.clone();
-        agent_hooks::remove_groups(&mut v);
+        // T-152-b (4): a "hooks" object the user had, even an empty one, is part of his file.
+        agent_hooks::remove_groups(&mut v, original.get("hooks").is_none());
         v.as_object_mut().map(|o| o.remove("statusLine"));
         v
     };
@@ -924,6 +925,20 @@ pub fn apply_trust(doc: &mut toml_edit::DocumentMut, listing: &[Value], hooks_fi
     n
 }
 
+/// The write half of `install_codex`: Kolux's groups into one Codex home's `hooks.json`, read as
+/// `text`. T-152-b (4): before Kolux's first write a copy of the file is kept (and on every write
+/// checked against its record), so removal gives back its exact bytes. True when written.
+pub(crate) fn write_codex_groups(file: &Path, text: Option<&str>, hooks: &mut Value, command: &str) -> Result<bool, String> {
+    let changed = install_codex_hooks(hooks, command);
+    if changed {
+        let mut record = agent_hooks::backup_of(file).into_os_string();
+        record.push(".sha256");
+        agent_hooks::back_up(file, Path::new(&record))?;
+        write_json(file, hooks, text)?;
+    }
+    Ok(changed)
+}
+
 /// Installs Kolux's hooks into `home/hooks.json` (after the user's own entries) and marks them
 /// trusted in `home/config.toml` with Codex's own fingerprints (STAT-008). An unreadable or
 /// unparsable file is left alone. When trust cannot be set, `hooks.json` goes back exactly as it
@@ -940,10 +955,7 @@ pub fn install_codex(home: &Path, command: &str) -> Result<bool, String> {
     let text = read(&file)?;
     let mut hooks: Value = serde_json::from_str(text.as_deref().unwrap_or("{}")).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
     let mut doc: toml_edit::DocumentMut = read(&config)?.unwrap_or_default().parse().map_err(|e| format!("{} is not valid TOML ({e}); left alone", config.display()))?;
-    let changed = install_codex_hooks(&mut hooks, command);
-    if changed {
-        write_json(&file, &hooks, text.as_deref())?;
-    }
+    let changed = write_codex_groups(&file, text.as_deref(), &mut hooks, command)?;
     let real = crate::trust::real_path(&file)?;
     // Several launches write trust once: an unchanged file whose entries are all in the table is done.
     let state = doc.get("hooks").and_then(|h| h.get("state")).and_then(toml_edit::Item::as_table);

@@ -137,3 +137,30 @@ Runtime on the real-shape copy (kolux-dev, scratch env, proof.sh run 3 then by h
     kolux-rs: claude hooks: installed
     kolux-rs: codex hooks: not written (Codex hooks wait for T-025-e)
     after off: settings.json 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+
+== Item 4 (AFTER 4): t_152_6 runs the real managed-home path; an empty "hooks" the user had is kept ==
+Rule: remove_groups(root, drop_empty) drops a "hooks" object left empty only when drop_empty; remove_claude
+and remove_codex pass drop_empty only when the .bak-kolux copy from before the install has no "hooks" key
+(claude with no copy: drop, as before; codex with no copy: keep the {"hooks":{}} shape). When the result
+parses equal to the copy, the copy's bytes are written. Codex installs now keep a .bak-kolux copy plus
+hooks.json.bak-kolux.sha256 record through back_up (write_codex_groups, the write half of install_codex).
+
+cargo test agent_hooks -- --nocapture (CLAUDE_CONFIG_DIR/CODEX_HOME scratch), t_152_6 lines:
+  "{\"hooks\":{}}" -> on -> off -> "{\"hooks\":{}}"
+  "{\n  \"hooks\": {}\n}\n" -> on -> off -> "{\n  \"hooks\": {}\n}\n"
+  "{}" -> on -> off -> "{}"
+  "{\"model\":\"o3\"}\n" -> on -> off -> "{\"model\":\"o3\"}\n"
+  test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 1.38s
+
+One trial run of the same test through the full install_codex (codex program present on this PC, scratch
+managed home under G:\Temp): seeds {"hooks":{}}, pretty {"hooks":{}} and {} came back byte for byte;
+{"model":"o3"} was refused by the Codex listing ("Codex listed 0 of 8 Kolux hooks ...; the file is back as
+it was"). The unit test keeps the write half only, so it does not need the codex program.
+
+proof.sh re-run on the rebuilt kolux-dev.exe (run4):
+  input sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+  input bytes 10077
+  codex/hooks.json before: 373f2641a0d8fe47c1802afbf8e88e7f2da218e9befd552a7cf52822754b1d45 bytes 12
+  cmp: post-off file byte-identical to the copy
+  off-state sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e bytes 10077
+  codex/hooks.json after: 373f2641a0d8fe47c1802afbf8e88e7f2da218e9befd552a7cf52822754b1d45 bytes 12 text {"hooks":{}}
