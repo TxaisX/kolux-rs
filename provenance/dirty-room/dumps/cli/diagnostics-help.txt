@@ -1,9 +1,0 @@
-﻿kolux diagnostics
-
-Usage: kolux diagnostics <command> [options]
-
-Commands:
-  memory             Collect a memory snapshot for Kolux and managed terminals
-
-Run `kolux diagnostics <command> --help` for command-specific usage.
-

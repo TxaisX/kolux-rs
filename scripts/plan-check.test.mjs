@@ -103,11 +103,11 @@ describe("cutline and merge gate (T-540)", () => {
 
 describe("STATE.md head (T-540 --write-state)", () => {
   it("rewrites only the Done line, keeping CRLF line ends", () => {
-    const state = "# STATE\r\nStatus: RUNNING\r\nDone: 1 / 2 tasks  ·  P0 parity: 0/228 cards\r\n\r\nWhat works today\r\n";
+    const state = "# STATE\r\nStatus: RUNNING\r\nDone: 1 / 2 tasks  ·  P0 cards passing: 0/228 cards\r\n\r\nWhat works today\r\n";
     const counts = { done: 212, tasks: 480, p0: 6, p0Total: 228, cutLeft: 8, cutTotal: 10, waiting: 91 };
     const out = rewriteStateHead(state, counts);
     expect(out.split("\r\n")).toEqual(["# STATE", "Status: RUNNING", doneLine(counts), "", "What works today", ""]);
-    expect(doneLine(counts)).toMatch(/^Done: 212 \/ 480 tasks {2}· {2}P0 parity: 6 \/ 228 cards {2}· {2}cutline 8 \/ 10 left {2}· {2}merge gate 91 waiting/);
+    expect(doneLine(counts)).toMatch(/^Done: 212 \/ 480 tasks {2}· {2}P0 cards passing: 6 \/ 228 cards {2}· {2}cutline 8 \/ 10 left {2}· {2}merge gate 91 waiting/);
     expect(() => rewriteStateHead("# STATE\n", counts)).toThrow(/Done:/);
   });
 });

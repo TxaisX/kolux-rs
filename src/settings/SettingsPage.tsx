@@ -159,7 +159,6 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
   );
 }
 
-const later = <p className="conn-detail">Nothing to set here yet.</p>;
 
 /** Scrolls a section of the open page into view once it is drawn (pages load lazily). */
 function useScrollTo(section: string | undefined, page: Page, n: number) {
@@ -268,7 +267,14 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
               <TokenAnalytics />
             </>
           )}
-          {page === "safety" && later}
+          {page === "safety" && (
+            <p className="conn-detail">
+              Protected commands are advisory and cover Claude only: Claude asks before a command that trips a built-in rule
+              (force-push to main, throwing away uncommitted work, deleting database objects, Stripe changes, infrastructure
+              changes, production deploys). This is not a safety control: a command can be written around it, and Codex is not
+              covered.
+            </p>
+          )}
           {repo && <RepoPage project={repo} onSaved={(u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x)))} />}
         </Suspense>
       </main>

@@ -729,7 +729,7 @@ Source: D-03-078
 Tier: P1 · Pushed: 7 · State at 0.15.0: live-unverified
 User does: changes the terminal font, size, weight or line height.
 User sees: text re-renders with the new font.
-Rules: defaults: size 14, line height 1, normal and bold weights; the editor follows the terminal
+Rules: defaults: size 13 (amended 2026-10-13 at the freeze, DT-C38: 13 is what the pane showed before the font settings reached it), line height 1, normal and bold weights; the editor follows the terminal
   font unless set separately; the saved font paints at startup with no flash.
 Acceptance:
   - [ ] Changing size to 16 enlarges every pane.

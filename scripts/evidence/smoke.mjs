@@ -155,8 +155,19 @@ const focusField = async (sel) => {
   if (r !== "focused") throw new Error(`could not focus ${sel}: ${r}`);
 };
 // The n-th shown pane takes the focus the way a click would (App.tsx listens for mousedown), then its text field.
+// T-545 (council flow-1 verdict 2026-10-13, harness-only): a pane makes its input field in its mount effect, so a pane
+// shown this instant may not have the field yet. Poll for the field up to 10 s; the pane itself is never waited for.
 const focusPane = async (paneSel, index, fieldSel) => {
-  const r = await evalJs(`(() => { const p = [...document.querySelectorAll(${JSON.stringify(paneSel)})].filter(e => e.offsetParent !== null)[${index}]; if (!p) return "missing pane"; p.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); const f = p.querySelector(${JSON.stringify(fieldSel)}); if (!f) return "missing field"; f.focus(); return document.activeElement === f ? "focused" : "not-focused"; })()`);
+  const started = Date.now();
+  let r, polls = 0;
+  for (;;) {
+    r = await evalJs(`(() => { const p = [...document.querySelectorAll(${JSON.stringify(paneSel)})].filter(e => e.offsetParent !== null)[${index}]; if (!p) return "missing pane"; p.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); const f = p.querySelector(${JSON.stringify(fieldSel)}); if (!f) return "missing field"; f.focus(); return document.activeElement === f ? "focused" : "not-focused"; })()`);
+    if (r !== "missing field") break;
+    if (Date.now() - started > 10000) throw new Error(`${paneSel} #${index}: missing field after ${Date.now() - started} ms`);
+    polls++;
+    await sleep(100);
+  }
+  if (polls > 0) console.log(`focusPane ${paneSel} #${index}: field after ${Date.now() - started} ms`);
   if (r !== "focused") throw new Error(`${paneSel} #${index}: ${r}`);
 };
 const TERM = "section.pane[data-agent]";
@@ -400,6 +411,7 @@ async function setup() {
   await focusField('input[aria-label="project folder"]');
   await cdp("insert", repo, "enter");
   await waitFor("the first shell pane", async () => (await shown(TERM)) >= 1, 30000);
+  await waitFor("the first shell pane's input field", () => exists(`${TERM} .xterm-helper-textarea`), 30000);
   log(`setup: ${repo} added as a project; ${await shown(TERM)} shell pane shown`);
 }
 

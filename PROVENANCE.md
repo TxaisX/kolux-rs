@@ -206,6 +206,13 @@ status-line field names; no old-app identifier is known among them, but the chec
 apart). Since T-541 those 53 are the recorded baseline in `scripts/firewall-baseline.txt`, and
 `scripts/firewall-check.ps1 -Baseline` (CI and the merge gate) fails on any hit beyond it.
 
+**Freeze (2026-10-13).** `scripts/firewall-allowlist.txt` and `scripts/firewall-baseline.txt` are frozen at the
+freeze commit: the merge gate runs `-Baseline` only, and a change to either file is a coordinator commit with a
+DECISIONS.md row, never a lane commit. The same commit removed `provenance/dirty-room` from the tree
+(`git rm -r`; its last tracked content is git tree 452b1163bf3145a81420688ea0f4f0d74a6652e2, listed by
+`git ls-tree <freeze parent> provenance/`). It stays in history for the legal record and nothing else: the clean-room
+rule in LOOP.md section 0 forbids reading it from history as much as from disk.
+
 The cards by tier:
 
 | P0 | P1 | P2 | H | X | D |

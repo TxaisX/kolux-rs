@@ -133,7 +133,7 @@ export function readLanes(root = ROOT) {
 }
 
 export function doneLine(c) {
-  return `Done: ${c.done} / ${c.tasks} tasks  ·  P0 parity: ${c.p0} / ${c.p0Total} cards  ·  ` +
+  return `Done: ${c.done} / ${c.tasks} tasks  ·  P0 cards passing: ${c.p0} / ${c.p0Total} cards  ·  ` +
     `cutline ${c.cutLeft} / ${c.cutTotal} left  ·  merge gate ${c.waiting} waiting  (node scripts/plan-check.mjs --write-state)`;
 }
 
@@ -199,6 +199,8 @@ export function headCounts(root = ROOT, lanes = readLanes(root)) {
 function main() {
   const r = headCounts();
   const { errors, expected, planned } = coverageErrors(r.cards, r.decisions, r.plan);
+  // T-540-b: a Cutline id with no PLAN.md line is an error, not a note.
+  for (const id of r.missing) errors.push(`cutline id without a PLAN.md line: ${id}`);
   const c = r.counts;
   console.log(`cards in spec: ${r.cards.size} · expected in plan: ${expected} · planned ids: ${planned} · tasks: ${c.tasks}`);
   console.log(`head: cutline left ${c.cutLeft}/${c.cutTotal} · merge gate ${c.waiting} waiting · P0 cards passing ${c.p0}/${c.p0Total} · done ${c.done}/${c.tasks} tasks`);
