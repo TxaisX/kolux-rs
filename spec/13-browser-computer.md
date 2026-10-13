@@ -118,6 +118,11 @@ Rules: the endpoint responds only under a secret path, and the bare host and por
   request that names any host other than this computer is refused, which defeats DNS rebinding; a
   request carrying a web origin (anything sent by a web page) is refused even when it knows the
   secret path; the endpoint's self-description is likewise hidden behind that secret path.
+  (Kolux RS, T-063: agents reach page control through the `kolux` CLI, so the endpoints fenced are
+  the CLI line port and the hooks HTTP endpoint, both loopback-only; the per-start random token in
+  a header or the request line stands in for the secret path (DT-C24); a request with a web page's
+  headers, a foreign Host or no token gets 404 and an empty body, an HTTP line on the CLI port gets
+  nothing back.)
 Acceptance:
   - [ ] From a page in any browser, try to reach the endpoint → refused.
   - [ ] Connect to the bare port → refused; connect with the address Kolux handed the agent →

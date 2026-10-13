@@ -2522,6 +2522,10 @@ pub fn serve_loop(listener: TcpListener, token: &str, runtime: &str, handle: imp
         if BufReader::new(&stream).read_line(&mut line).is_err() {
             continue;
         }
+        // BROW-051: a web page can only ever send HTTP here; its request line is dropped unanswered.
+        if line.split_whitespace().nth(2).is_some_and(|w| w.starts_with("HTTP/")) {
+            continue;
+        }
         let (id, out) = match serde_json::from_str::<Request>(&line) {
             Ok(req) if req.token != token => (req.id, Err(Fail::new("unauthorized", "the token does not match this app; is cli.json stale?"))),
             Ok(req) => (req.id.clone(), handle(&req)),
@@ -2893,6 +2897,31 @@ mod tests {
         // Another failure is reported as it is, without starting anything.
         let e = open(&|| Err(Fail::new("unauthorized", "stale")), &launch, Duration::ZERO).unwrap_err();
         assert_eq!((e.code, launches.get()), ("unauthorized", 2));
+    }
+
+    #[test]
+    fn brow051_an_http_shaped_request_gets_no_reply_and_runs_nothing() {
+        use std::io::Read;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        assert!(listener.local_addr().unwrap().ip().is_loopback());
+        let port = listener.local_addr().unwrap().port();
+        let ran = Arc::new(AtomicBool::new(false));
+        let seen = ran.clone();
+        std::thread::spawn(move || serve_loop(listener, "secret", "rt-1", move |_| { seen.store(true, Ordering::SeqCst); Ok(json!({})) }));
+        // What a web page's fetch or form post looks like on the wire: dropped without a byte back.
+        let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.write_all(b"POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nContent-Length: 2\r\n\r\n{}").unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let mut reply = String::new();
+        let _ = s.read_to_string(&mut reply);
+        assert_eq!(reply, "", "no reply, not even an error envelope");
+        assert!(!ran.load(Ordering::SeqCst), "nothing ran");
+        // The real client on the same listener still works afterwards.
+        let req = Request { id: "r2".into(), token: "secret".into(), command: "x".into(), cwd: String::new(), args: json!({}), pane: None };
+        assert_eq!(call(port, &req).unwrap()["success"], true);
+        assert!(ran.load(Ordering::SeqCst));
     }
 
     #[test]

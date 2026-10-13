@@ -225,6 +225,24 @@ pub fn identity(header: &str) -> Option<(u32, Option<u32>)> {
 }
 
 /// Answers one hook: `(status code, the status to raise)`.
+/// BROW-051: the local endpoint answers only Kolux's own tools. A request from a web page (one
+/// carrying an Origin, Referer or Sec-Fetch header, which every browser adds and no tool does),
+/// one whose Host names anything but this computer (DNS rebinding aims a name at 127.0.0.1) and
+/// one without the token all get 404 with an empty body, so nothing about the endpoint is told.
+pub fn gate(req: &Request, token: &str) -> Option<u16> {
+    let h = &req.headers;
+    if ["origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"].iter().any(|k| h.contains_key(*k)) {
+        return Some(404);
+    }
+    if let Some(host) = h.get("host") {
+        let name = host.rsplit_once(':').filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())).map_or(host.as_str(), |(n, _)| n);
+        if !matches!(name, "127.0.0.1" | "localhost" | "[::1]") {
+            return Some(404);
+        }
+    }
+    (h.get(TOKEN_HEADER).map(String::as_str) != Some(token)).then_some(404)
+}
+
 pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>) {
     if req.headers.get(TOKEN_HEADER).map(String::as_str) != Some(token) {
         return (403, None);
@@ -426,6 +444,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     let mut reader = BufReader::new(&stream);
     let mut body = String::from("{}");
     let code = match parse_request(&mut reader) {
+        Some(req) if gate(&req, token).is_some() => 404,
         Some(req) if req.path == "/claude-status" => match usage(&req, token) {
             // USAGE-021: a report from another config folder than the active account's is dropped.
             Ok(u) if same_folder(active_config_dir(app).as_deref(), u.config_dir.as_deref()) => {
@@ -450,6 +469,9 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
         }
         None => 400,
     };
+    if code == 404 {
+        body.clear();
+    }
     let _ = write!(stream, "HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = stream.flush();
 }
@@ -997,6 +1019,37 @@ mod tests {
         let state = &again["hooks"]["state"];
         assert_eq!(state[format!("{file}:stop:1:0").as_str()]["trusted_hash"].as_str(), Some("sha256:aa"));
         assert_eq!(state[format!("{file}:session_start:0:0").as_str()]["trusted_hash"].as_str(), Some("sha256:dd"));
+    }
+
+    #[test]
+    fn brow051_the_endpoint_answers_only_kolux_tools_never_a_web_page_or_another_host() {
+        let id = base64::engine::general_purpose::STANDARD.encode(r#"{"paneKey":7,"terminal":3,"hookVersion":1}"#);
+        let req = |extra: &str| {
+            let raw = format!("POST /claude HTTP/1.1\r\nHost: 127.0.0.1:4321\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\n{extra}Content-Length: 2\r\n\r\n{{}}");
+            parse_request(&mut raw.as_bytes()).unwrap()
+        };
+        // Kolux's own hook script: curl with the token, no web headers.
+        assert_eq!(gate(&req(""), "tok"), None);
+        // Anything a web page sends carries an Origin or a Sec-Fetch header; a page's GET through
+        // an <img> or <script> tag carries no Origin but still the Sec-Fetch ones.
+        assert_eq!(gate(&req("Origin: http://127.0.0.1:1424\r\n"), "tok"), Some(404));
+        assert_eq!(gate(&req("Sec-Fetch-Mode: no-cors\r\nSec-Fetch-Site: cross-site\r\n"), "tok"), Some(404));
+        assert_eq!(gate(&req("Referer: http://127.0.0.1:1424/\r\n"), "tok"), Some(404));
+        // A Host naming anything but this computer: DNS rebinding points a name at 127.0.0.1.
+        let mut rebound = req("");
+        rebound.headers.insert("host".into(), "evil.example:4321".into());
+        assert_eq!(gate(&rebound, "tok"), Some(404));
+        for ok in ["localhost", "localhost:4321", "127.0.0.1", "[::1]:4321", "[::1]"] {
+            rebound.headers.insert("host".into(), ok.into());
+            assert_eq!(gate(&rebound, "tok"), None, "{ok}");
+        }
+        // The bare endpoint, a wrong token or no token: refused the same way, nothing described.
+        let mut bare = req("");
+        bare.headers.remove(TOKEN_HEADER);
+        assert_eq!(gate(&bare, "tok"), Some(404));
+        assert_eq!(gate(&req(""), "other"), Some(404));
+        let plain = parse_request(&mut "GET / HTTP/1.1\r\nHost: 127.0.0.1:4321\r\n\r\n".as_bytes()).unwrap();
+        assert_eq!(gate(&plain, "tok"), Some(404));
     }
 
     #[test]
