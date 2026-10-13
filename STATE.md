@@ -192,8 +192,8 @@ T-010 gives every grid cell tabs (TERM-040, TERM-041, TERM-068). The strip's "Ne
 Ctrl+T) opens a shell as a tab beside the focused pane, started in the workspace folder and ready
 to type; the menu also lists every installed agent, each with its own `tab.newAgent.<id>` command
 (unbound unless the shortcuts file says otherwise) that opens a tab with that agent starting in the
-workspace folder; outside any workspace an agent still gets a fresh worktree. A cell with one tab
-shows no tab strip (the clean look); with two or more, the strip sits above the pane and each tab
+workspace folder; outside any workspace an agent still gets a fresh worktree. On the New look a cell with one tab
+shows no tab strip and sessions are 14 px rounded windows with gaps (T-048); Classic keeps square panes edge to edge and always shows the strip; with two or more, the strip sits above the pane and each tab
 closes from its own x, the next tab taking over. A requested start folder for a new terminal may
 be relative to the workspace or absolute, and a missing one falls back to the workspace folder.
 Paste (Ctrl+V, Ctrl+Shift+V, Shift+Insert) goes through the focused pane's own text area, so it

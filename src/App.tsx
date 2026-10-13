@@ -1914,7 +1914,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             </div>
           )}
           <div
-            className={board ? "board" : `grid${zoomed === null ? "" : " zoomed"}`}
+            className={board ? "board" : `grid${zoomed === null ? "" : " zoomed"}${classic ? " classic" : ""}`}
             hidden={(!terminals && !board) || (terminals && page !== null)}
             style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(gridCount, stacked[activeDir ?? ""])}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(gridCount, stacked[activeDir ?? ""])}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
           >
@@ -1942,7 +1942,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                 const active = activeOf(c);
                 return (
                   <div key={c.group} className="cell" hidden={!board && (!sameDir(c.panes[0].cwd, activeDir) || (zoomed !== null && c.group !== zoomed))}>
-                    {c.panes.length > 1 && (
+                    {(c.panes.length > 1 || classic) && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
                           <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>

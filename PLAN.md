@@ -130,7 +130,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 - [x] T-046 · SESS-018 The New session page takes over the workspace instead of a dialog · built 2026-10-13 [look] (on the New look every New session opens the full-page sheet over the workspace area; Classic keeps its chooser pane; evidence/T-046-*.png)
 - [x] T-047 · TERM-013 [compat] Expand one pane to fill, then restore · TERM-019 Every pane shows a header with title and usage · TERM-022 Branch chip in the pane header · TERM-025 Pane header buttons · built 2026-10-13 [look] (expand, the pane menu and Ctrl+Shift+Enter fill the workspace and restore; the chip reads git for the pane folder; evidence/T-047-*)
-- [ ] T-048 · TERM-028 Clean look for the terminal grid
+- [x] T-048 · TERM-028 Clean look for the terminal grid
 - [ ] T-049 · VIEW-001 Three workspace screens: Agents, Board and Terminals · VIEW-002 [compat] Cycle the workspace screen from the keyboard · VIEW-003 Full-width top bar with search hint and inbox bell · VIEW-004 No worktree sidebar on Agents and Board
 - [ ] T-050 · VIEW-015 Agents screen lists sessions by saved agent · VIEW-019 Chat, terminal and composer for the selected session · VIEW-021 Add a session from the Agents screen · VIEW-024 Board shows every terminal session in order
 - [ ] T-051 · VIEW-050 [compat] Left sidebar: show, hide, resize and focus · VIEW-051 Sidebar card lists projects and their sessions

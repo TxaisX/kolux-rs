@@ -320,21 +320,23 @@ input { font: inherit; }
 .layouts button:hover:not([aria-pressed="true"]):not(:disabled) { background: var(--row-selected); }
 
 /* ---- 7. pane grid and pane cards ---- */
-.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: var(--divider-width, 6px); grid-template-columns: 1fr; background: var(--divider, transparent); border-radius: 12px; }
+.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: var(--divider-width, 6px); grid-template-columns: 1fr; background: var(--divider, transparent); border-radius: 14px; }
 /* SET-023: panes not in focus fade to the chosen opacity (100% = no dim, the default). The content fades
    over the pane's own ground, so a divider colour behind the grid never shows through. */
 .grid .pane > * { transition: opacity 140ms ease; }
 .grid .pane:not(.focused) > * { opacity: var(--pane-dim, 1); }
 .strip .newtab { margin-left: auto; margin-right: 12px; height: 28px; }
-/* a cell holds tabs (TERM-040); the tab strip shows only for two tabs or more (TERM-028 clean look) */
+/* a cell holds tabs (TERM-040); on the New (clean) look the tab strip shows only for two tabs or more,
+   on Classic always (TERM-028) */
 .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 4px; }
 .cell[hidden] { display: none; }
 /* VIEW-026: the Board is the same cells as cards, one per pane; the panes never move in the DOM,
    so an expanded card shows the live terminal and a collapsed one only its header. */
 .grid[hidden], .board[hidden], .board .tabs { display: none; }
-/* TERM-013: an expanded pane fills the whole workspace area, edge to edge. */
-.grid.zoomed { margin: 0; border-radius: 0; }
-.grid.zoomed .pane { border-radius: 0; }
+/* TERM-013: an expanded pane fills the whole workspace area, edge to edge. TERM-028: Classic keeps the
+   older flat chrome, square panes edge to edge with only the dividers between them. */
+.grid.zoomed, .grid.classic { margin: 0; border-radius: 0; }
+.grid.zoomed .pane, .grid.classic .pane { border-radius: 0; }
 /* VIEW-023: the Board is one column per status lane; cards stack in their lane in session order. */
 .board { flex: 1; min-height: 0; margin: 8px; overflow-y: auto; display: grid; grid-auto-flow: row dense; grid-auto-rows: max-content; align-items: start; gap: 8px; }
 .board .lane { grid-row: 1; margin: 0; padding: 2px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
@@ -395,7 +397,7 @@ input { font: inherit; }
 .tab .tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .tab .tab-x { width: 18px; height: 18px; border-radius: 4px; color: var(--fg-muted); line-height: 1; }
 .tab .tab-x:hover { background: var(--row-selected); color: var(--fg); }
-.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 14px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
 .pane.focused { border-color: var(--line-focus); }
 /* TERM-023: a soft, static green glow on a pane whose agent finished while it was not focused. */
 .pane.glow { border-color: var(--done); box-shadow: inset 0 0 0 1px var(--line-inner), 0 0 18px rgba(1, 200, 143, 0.3); }
