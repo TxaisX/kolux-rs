@@ -1,0 +1,176 @@
+// Native chat, the agent's work inside a turn (CHAT-012..CHAT-016; T-326). The transcript reader
+// hands over one item per message, thought, plan and tool call; this module folds a run of tool
+// calls into one steps row, gives each edit its own diff card, gathers a turn's subagents into one
+// roster row, and adds the working, worked-for and responding lines.
+import type { ChatItem, Row } from "./model";
+
+export type DiffLine = { sign: "+" | "-" | " " | "@"; old?: number; new?: number; text: string };
+export type FileDiff = { path: string; change: "added" | "deleted" | "renamed" | "edited"; from?: string; lines: DiffLine[]; hidden: number };
+export type Tool = {
+  call: string;
+  name: string;
+  group: "read" | "edit" | "shell" | "mcp" | "web" | "agent" | "other";
+  server?: string;
+  preview: string;
+  output?: string;
+  done: boolean;
+  failed: boolean;
+  background: boolean;
+  diffs?: FileDiff[];
+  endedAt?: number;
+};
+
+/** CHAT-015: a subagent's state; later in this list is worse, and the worst decides the row. */
+export const CHILD_STATES = ["completed", "idle", "working", "stopped", "unverifiable", "failed"] as const;
+export type ChildState = (typeof CHILD_STATES)[number];
+export type Child = { id: string; name: string; label: string; state: ChildState; at?: number; endedAt?: number };
+
+export type View =
+  | Row
+  | { row: "steps"; id: string; steps: ChatItem[]; live: boolean }
+  | { row: "diff"; id: string; item: ChatItem }
+  | { row: "roster"; id: string; children: Child[]; verdict: ChildState }
+  | { row: "working"; id: string; since?: number; label: string }
+  | { row: "worked"; id: string; ms: number }
+  | { row: "responding"; id: string };
+
+type Turn = { user: ChatItem | null; interrupted: boolean; replied: boolean; last?: number; end?: number; tools: ChatItem[] };
+
+const worst = (states: ChildState[]): ChildState => states.reduce<ChildState>((w, s) => (CHILD_STATES.indexOf(s) > CHILD_STATES.indexOf(w) ? s : w), "completed");
+
+/** Folds the conversation's rows into what is drawn. `open` says a turn is under way and the
+ * agent's process is alive (a working state restored from an earlier run is never live). */
+export function fold(rows: Row[], open: boolean): View[] {
+  const out: View[] = [];
+  const tail: View[] = [];
+  const rosters: { view: Extract<View, { row: "roster" }>; items: ChatItem[]; turn: Turn }[] = [];
+  let turn: Turn = { user: null, interrupted: false, replied: false, tools: [] };
+  const turns = [turn];
+  let steps: Extract<View, { row: "steps" }> | null = null;
+  let lastSteps: { view: Extract<View, { row: "steps" }>; turn: Turn } | null = null;
+  let roster: (typeof rosters)[number] | null = null;
+  const settle = (t: Turn) => {
+    // CHAT-016: how long a settled turn took, at its end.
+    if (t.user?.at === undefined || t.interrupted || !t.replied || t.last === undefined) return;
+    const ms = t.last - t.user.at;
+    // It sits under the turn's last reply, above any status line (a compaction) that followed.
+    if (ms >= 1000) out.splice(t.end ?? out.length, 0, { row: "worked", id: `worked-${t.user.id}`, ms });
+  };
+  for (const r of rows) {
+    if (r.row !== "message") {
+      tail.push(r);
+      continue;
+    }
+    if (r.role === "user") {
+      settle(turn);
+      turn = { user: r, interrupted: false, replied: false, last: r.at, tools: [] };
+      turns.push(turn);
+      steps = null;
+      roster = null;
+      out.push(r);
+      continue;
+    }
+    const put = (v: View) => {
+      out.push(v);
+      if (r.role === "assistant") turn.end = out.length;
+    };
+    const end = Math.max(r.at ?? 0, r.tool?.endedAt ?? 0);
+    if (end && r.role === "assistant") turn.last = Math.max(turn.last ?? 0, end);
+    if (r.kind === "interrupted") {
+      turn.interrupted = true;
+      steps = null;
+      put(r);
+      continue;
+    }
+    if (r.role === "assistant") turn.replied = true;
+    const tool = r.kind === "tool" ? r.tool : undefined;
+    if (!tool) {
+      steps = null;
+      put(r);
+      continue;
+    }
+    turn.tools.push(r);
+    if (tool.group === "agent") {
+      if (!roster) {
+        roster = { view: { row: "roster", id: `roster-${r.id}`, children: [], verdict: "completed" }, items: [], turn };
+        rosters.push(roster);
+        put(roster.view);
+      }
+      roster.items.push(r);
+      continue;
+    }
+    if (tool.diffs) {
+      steps = null;
+      put({ row: "diff", id: r.id, item: r });
+      continue;
+    }
+    if (!steps) {
+      steps = { row: "steps", id: `steps-${r.id}`, steps: [], live: false };
+      lastSteps = { view: steps, turn };
+      put(steps);
+    }
+    steps.steps.push(r);
+  }
+  const live = open && !turn.interrupted && turn.user !== null;
+  if (!live) settle(turn);
+  for (const { view, items, turn: t } of rosters) {
+    view.children = items.map((r) => {
+      const tool = r.tool!;
+      const state: ChildState = tool.done ? (tool.failed ? "failed" : "completed") : t.interrupted ? "stopped" : live && t === turn ? "working" : "unverifiable";
+      return { id: r.id, name: tool.name, label: tool.preview, state, at: r.at, endedAt: tool.endedAt };
+    });
+    view.verdict = worst(view.children.map((c) => c.state));
+  }
+  if (live) {
+    if (lastSteps && lastSteps.turn === turn) lastSteps.view.live = true;
+    const latest = turn.tools[turn.tools.length - 1]?.tool;
+    out.push({ row: "working", id: `working-${turn.user!.id}`, since: turn.user!.at, label: latest?.background ? "Monitoring background work" : "Working" });
+  }
+  out.push(...tail);
+  if (tail.some((t) => t.row === "pending")) out.push({ row: "responding", id: "responding" });
+  return out;
+}
+
+/** "42s", "1m 05s", "1h 02m". */
+export function duration(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (s < 3600) return `${Math.floor(s / 60)}m ${pad(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${pad(Math.floor((s % 3600) / 60))}m`;
+}
+
+/** CHAT-014: a card's diff as copied: every changed line starts with a plus or a minus. */
+export function diffText(d: FileDiff): string {
+  return d.lines
+    .filter((l) => l.sign !== "@")
+    .map((l) => l.sign + l.text)
+    .join("\n");
+}
+
+/** CHAT-014: text is coloured as a diff only when it has hunk headers. */
+export const looksLikeDiff = (text: string) => /^@@ .*@@/m.test(text);
+
+/** How one line of diff-looking output is drawn; a row of dashes is a divider, not a removal. */
+export function diffLineKind(line: string): "add" | "del" | "hunk" | "head" | "rule" | "" {
+  if (/^-{3,}\s*$/.test(line)) return "rule";
+  if (line.startsWith("+++") || line.startsWith("---")) return "head";
+  if (line.startsWith("@@")) return "hunk";
+  if (line.startsWith("+")) return "add";
+  if (line.startsWith("-")) return "del";
+  return "";
+}
+
+/** CHAT-013: the only links in results that can be clicked are web links. */
+export function linkParts(text: string): { text: string; url?: string }[] {
+  const out: { text: string; url?: string }[] = [];
+  let last = 0;
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"'`)\]]+/g)) {
+    const url = m[0].replace(/[.,;:!?]+$/, "");
+    if (m.index > last) out.push({ text: text.slice(last, m.index) });
+    out.push({ text: url, url });
+    last = m.index + url.length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last) });
+  return out;
+}

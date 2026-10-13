@@ -3,17 +3,22 @@
 // messages; this module decides whether a pane may show chat at all, folds each read into the
 // conversation, merges in what the hooks and the terminal said, and decides when the live preview
 // of a reply being written is worth showing.
+import type { Tool } from "./steps";
 
 /** One message as the transcript reader hands it over. */
 export type ChatItem = {
   id: string;
   role: "user" | "assistant" | "status";
-  /** `text`, `command` (a slash command or skill the user typed) or `interrupted`. */
+  /** `text`, `command` (a slash command or skill the user typed), `interrupted`, `thought`, `tool`,
+   * `plan` (Markdown), `compact` or `notice` (T-326). */
   kind: string;
   text: string;
   /** Milliseconds since 1970. */
   at?: number;
   images?: string[];
+  tool?: Tool;
+  /** A notice's full text, behind Details. */
+  details?: string;
 };
 
 /** One look at the transcript (Rust `ChatRead`). */
@@ -120,7 +125,7 @@ export function previewToShow(preview: Preview | null, turnOpen: boolean, lastRe
 export function lastReply(items: ChatItem[]): string | undefined {
   for (let i = items.length - 1; i >= 0; i--) {
     if (items[i].role === "user") return undefined;
-    if (items[i].role === "assistant") return items[i].text;
+    if (items[i].role === "assistant" && items[i].kind === "text") return items[i].text;
   }
   return undefined;
 }

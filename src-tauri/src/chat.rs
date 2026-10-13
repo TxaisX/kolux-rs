@@ -23,6 +23,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::Value;
 
+use crate::chat_tools::{cap, claude_step, codex_output, codex_step, Step, MAX_OUTPUT};
+
 /// CHAT-002: the agents whose sessions can be shown as chat. Grok and omp are offered once their
 /// readers exist (T-420); until then they stay terminals.
 pub const SUPPORTED: [&str; 3] = ["claude", "openclaude", "codex"];
@@ -59,7 +61,9 @@ pub struct Item {
     pub id: String,
     /// `user`, `assistant` or `status` (a single row such as an interrupted turn).
     pub role: &'static str,
-    /// `text`, `command` (a slash command or skill the user typed) or `interrupted`.
+    /// `text`, `command` (a slash command or skill the user typed), `interrupted`, `thought`
+    /// (reasoning), `tool` (a call and its result), `plan` (Markdown), `compact` (the context was
+    /// compacted) or `notice` (something the provider reported).
     pub kind: &'static str,
     pub text: String,
     /// Milliseconds since 1970, when the transcript says.
@@ -68,6 +72,17 @@ pub struct Item {
     /// Pasted images that belong to this message, as data URLs.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<crate::chat_tools::Tool>,
+    /// A notice's full text, shown behind Details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+}
+
+impl Item {
+    fn of(id: String, role: &'static str, kind: &'static str, text: String, at: Option<u64>) -> Self {
+        Item { id, role, kind, text, at, images: Vec::new(), tool: None, details: None }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,6 +100,11 @@ pub struct Parser {
     index: HashMap<String, usize>,
     /// A turn has started and not ended, as far as the transcript says.
     pub open: bool,
+    /// Counts the user's turns, so a turn's to-do list is one item that updates.
+    turn: u32,
+    /// Claude reply id → (part number, the last block was prose): prose and tool steps from the
+    /// same message stay apart (CHAT-013).
+    parts: HashMap<String, (u32, bool)>,
 }
 
 /// Envelopes an agent or Kolux injects into a user turn: never shown (CHAT-010).
@@ -214,7 +234,7 @@ fn is_interrupt(text: &str) -> bool {
 
 impl Parser {
     fn new(format: Format) -> Self {
-        Parser { format, line_no: 0, items: Vec::new(), index: HashMap::new(), open: false }
+        Parser { format, line_no: 0, items: Vec::new(), index: HashMap::new(), open: false, turn: 0, parts: HashMap::new() }
     }
 
     pub fn items(&self) -> &[Item] {
@@ -254,13 +274,69 @@ impl Parser {
         }
     }
 
+    /// A tool block: a step row, or a plan.
+    fn step(&mut self, step: Step, at: Option<u64>) -> String {
+        match step {
+            Step::Tool(t) => {
+                let id = format!("tool-{}", t.call);
+                self.put(Item { tool: Some(t), ..Item::of(id, "assistant", "tool", String::new(), at) }, false)
+            }
+            Step::Plan { text, per_turn } => {
+                let id = if per_turn { format!("plan-turn-{}", self.turn) } else { format!("plan-{}", self.line_no) };
+                // A to-do list keeps its first place in the turn and shows its latest version.
+                let at = self.index.get(&id).and_then(|&i| self.items[i].at).or(at);
+                self.put(Item::of(id, "assistant", "plan", text, at), false)
+            }
+        }
+    }
+
+    /// Pairs a result with its call (CHAT-013); a result for a call not shown is dropped.
+    fn result(&mut self, call: &str, output: String, failed: bool, at: Option<u64>) -> Option<String> {
+        let id = format!("tool-{call}");
+        let item = &mut self.items[*self.index.get(&id)?];
+        let tool = item.tool.as_mut()?;
+        // Claude's Write says whether it made the file or replaced it.
+        if let Some(d) = tool.diffs.as_mut().and_then(|d| d.first_mut()).filter(|d| d.change == "added" && tool.name == "Write") {
+            if output.contains("updated") {
+                d.change = "edited";
+            }
+        }
+        tool.output = Some(cap(clean(&output).trim().to_string(), MAX_OUTPUT));
+        tool.failed = failed;
+        tool.done = true;
+        tool.ended_at = at;
+        Some(id)
+    }
+
+    fn notice(&mut self, text: &str, at: Option<u64>) -> Vec<String> {
+        let text = clean(text).trim().to_string();
+        let Some(first) = text.lines().next().filter(|l| !l.trim().is_empty()) else { return Vec::new() };
+        let head: String = first.chars().take(200).collect();
+        let details = (head != text).then(|| text.clone());
+        vec![self.put(Item { details, ..Item::of(format!("notice-{}", self.line_no), "status", "notice", head, at) }, false)]
+    }
+
+    fn compacted(&mut self, at: Option<u64>) -> Vec<String> {
+        vec![self.put(Item::of(format!("compact-{}", self.line_no), "status", "compact", "Context compacted".into(), at), false)]
+    }
+
     fn claude(&mut self, v: &Value) -> Vec<String> {
         let kind = str_at(v, "type").unwrap_or("");
-        // Subagent lines are their own roster (CHAT-015, T-326); meta lines are Claude's own notes.
+        let at = str_at(v, "timestamp").and_then(crate::capture::parse_time);
+        if kind == "system" {
+            // CHAT-012: a compaction is a divider; warnings and errors are notices.
+            if str_at(v, "subtype") == Some("compact_boundary") {
+                return self.compacted(at);
+            }
+            if matches!(str_at(v, "level"), Some("warning" | "error")) {
+                return self.notice(str_at(v, "content").unwrap_or(""), at);
+            }
+            return Vec::new();
+        }
+        // Subagent lines are summed up by their Task call's row (CHAT-015); meta lines are Claude's own notes.
         if !matches!(kind, "user" | "assistant") || v.get("isSidechain").and_then(Value::as_bool) == Some(true) || v.get("isMeta").and_then(Value::as_bool) == Some(true) {
             return Vec::new();
         }
-        let at = str_at(v, "timestamp").and_then(crate::capture::parse_time);
         let msg = v.get("message").cloned().unwrap_or(Value::Null);
         let blocks: Vec<Value> = match msg.get("content") {
             Some(Value::String(s)) => vec![serde_json::json!({ "type": "text", "text": s })],
@@ -271,34 +347,81 @@ impl Parser {
         let images: Vec<String> = blocks.iter().filter_map(image_url).collect();
         if kind == "user" {
             let id = str_at(v, "uuid").map(str::to_string).unwrap_or_else(|| format!("line-{}", self.line_no));
-            // A tool's result rides in a user line; it belongs to the agent's turn (CHAT-013, T-326).
+            // A tool's result rides in a user line; it belongs to the agent's turn (CHAT-013).
+            let mut changed: Vec<String> = Vec::new();
+            for b in blocks.iter().filter(|b| str_at(b, "type") == Some("tool_result")) {
+                let out = match b.get("content") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Array(a)) => a.iter().filter_map(|x| str_at(x, "text")).collect::<Vec<_>>().join("\n"),
+                    _ => String::new(),
+                };
+                let out = tag_body(&out, "tool_use_error").map(str::to_string).unwrap_or(out);
+                let failed = b.get("is_error").and_then(Value::as_bool) == Some(true);
+                changed.extend(self.result(str_at(b, "tool_use_id").unwrap_or(""), out, failed, at));
+            }
             if texts.is_empty() && images.is_empty() {
-                return Vec::new();
+                return changed;
             }
             let joined = texts.join("\n");
             if is_interrupt(&joined) {
                 self.open = false;
-                return vec![self.put(Item { id, role: "status", kind: "interrupted", text: "Interrupted".into(), at, images: Vec::new() }, false)];
+                changed.push(self.put(Item::of(id, "status", "interrupted", "Interrupted".into(), at), false));
+                return changed;
             }
-            let Some((word_kind, words)) = user_words(&joined) else { return Vec::new() };
+            // The summary Claude writes after compacting is the agent's memory, not the user's words.
+            if joined.trim_start().starts_with("This session is being continued from a previous conversation") {
+                return changed;
+            }
+            let Some((word_kind, words)) = user_words(&joined) else { return changed };
             let words = if images.is_empty() { words } else { drop_image_markers(&words) };
             self.open = true;
-            return vec![self.put(Item { id, role: "user", kind: word_kind, text: words, at, images }, false)];
+            self.turn += 1;
+            changed.push(self.put(Item { images, ..Item::of(id, "user", word_kind, words, at) }, false));
+            return changed;
         }
         // Claude Code writes one line per content block, all under the reply's message id.
-        let id = str_at(&msg, "id").map(str::to_string).or_else(|| str_at(v, "uuid").map(str::to_string)).unwrap_or_else(|| format!("line-{}", self.line_no));
+        let msg_id = str_at(&msg, "id").map(str::to_string).or_else(|| str_at(v, "uuid").map(str::to_string)).unwrap_or_else(|| format!("line-{}", self.line_no));
         if matches!(str_at(&msg, "stop_reason"), Some("end_turn" | "stop_sequence" | "max_tokens" | "refusal")) {
             self.open = false;
         }
-        let text = clean(&texts.join("\n\n")).trim().to_string();
-        if text.is_empty() {
-            return Vec::new();
+        let mut changed = Vec::new();
+        for b in &blocks {
+            match str_at(b, "type").unwrap_or("") {
+                "text" => {
+                    let text = clean(str_at(b, "text").unwrap_or("")).trim().to_string();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let part = self.parts.entry(msg_id.clone()).or_insert((0, true));
+                    if !part.1 {
+                        *part = (part.0 + 1, true);
+                    }
+                    let id = if part.0 == 0 { msg_id.clone() } else { format!("{msg_id}#{}", part.0) };
+                    changed.push(self.put(Item::of(id, "assistant", "text", text, at), true));
+                }
+                "thinking" => {
+                    let text = clean(str_at(b, "thinking").unwrap_or("")).trim().to_string();
+                    self.parts.entry(msg_id.clone()).or_insert((0, false)).1 = false;
+                    if !text.is_empty() {
+                        changed.push(self.put(Item::of(format!("thought-{}", self.line_no), "assistant", "thought", text, at), false));
+                    }
+                }
+                "tool_use" => {
+                    self.parts.entry(msg_id.clone()).or_insert((0, false)).1 = false;
+                    let step = claude_step(str_at(b, "id").unwrap_or(""), str_at(b, "name").unwrap_or(""), b.get("input").unwrap_or(&Value::Null));
+                    changed.push(self.step(step, at));
+                }
+                _ => {}
+            }
         }
-        vec![self.put(Item { id, role: "assistant", kind: "text", text, at, images: Vec::new() }, true)]
+        changed
     }
 
     fn codex(&mut self, v: &Value) -> Vec<String> {
         let at = str_at(v, "timestamp").and_then(crate::capture::parse_time);
+        if str_at(v, "type") == Some("compacted") {
+            return self.compacted(at);
+        }
         let Some(p) = v.get("payload") else { return Vec::new() };
         let ptype = str_at(p, "type").unwrap_or("");
         match str_at(v, "type").unwrap_or("") {
@@ -309,37 +432,60 @@ impl Parser {
                     "turn_aborted" => {
                         self.open = false;
                         let id = format!("abort-{}", self.line_no);
-                        return vec![self.put(Item { id, role: "status", kind: "interrupted", text: "Interrupted".into(), at, images: Vec::new() }, false)];
+                        return vec![self.put(Item::of(id, "status", "interrupted", "Interrupted".into(), at), false)];
                     }
+                    "error" | "stream_error" => return self.notice(str_at(p, "message").unwrap_or(""), at),
                     _ => {}
                 }
                 Vec::new()
             }
-            "response_item" if ptype == "message" => {
-                let role = match str_at(p, "role") {
-                    Some("user") => "user",
-                    Some("assistant") => "assistant",
-                    _ => return Vec::new(), // developer and system prompts stay hidden
-                };
-                let blocks = p.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
-                let texts: Vec<&str> = blocks.iter().filter(|b| matches!(str_at(b, "type"), Some("input_text" | "output_text" | "text"))).filter_map(|b| str_at(b, "text")).collect();
-                let images: Vec<String> = blocks.iter().filter_map(image_url).collect();
-                let id = str_at(p, "id").map(str::to_string).unwrap_or_else(|| format!("line-{}", self.line_no));
-                let joined = texts.join("\n");
-                if role == "user" {
-                    let Some((kind, words)) = user_words(&joined) else { return Vec::new() };
-                    let words = if images.is_empty() { words } else { drop_image_markers(&words) };
-                    if words.is_empty() && images.is_empty() {
+            "response_item" => match ptype {
+                "message" => {
+                    let role = match str_at(p, "role") {
+                        Some("user") => "user",
+                        Some("assistant") => "assistant",
+                        _ => return Vec::new(), // developer and system prompts stay hidden
+                    };
+                    let blocks = p.get("content").and_then(Value::as_array).cloned().unwrap_or_default();
+                    let texts: Vec<&str> = blocks.iter().filter(|b| matches!(str_at(b, "type"), Some("input_text" | "output_text" | "text"))).filter_map(|b| str_at(b, "text")).collect();
+                    let images: Vec<String> = blocks.iter().filter_map(image_url).collect();
+                    let id = str_at(p, "id").map(str::to_string).unwrap_or_else(|| format!("line-{}", self.line_no));
+                    let joined = texts.join("\n");
+                    if role == "user" {
+                        let Some((kind, words)) = user_words(&joined) else { return Vec::new() };
+                        let words = if images.is_empty() { words } else { drop_image_markers(&words) };
+                        if words.is_empty() && images.is_empty() {
+                            return Vec::new();
+                        }
+                        self.turn += 1;
+                        return vec![self.put(Item { images, ..Item::of(id, role, kind, words, at) }, false)];
+                    }
+                    let text = clean(&joined).trim().to_string();
+                    if text.is_empty() {
                         return Vec::new();
                     }
-                    return vec![self.put(Item { id, role, kind, text: words, at, images }, false)];
+                    vec![self.put(Item::of(id, role, "text", text, at), false)]
                 }
-                let text = clean(&joined).trim().to_string();
-                if text.is_empty() {
-                    return Vec::new();
+                "reasoning" => {
+                    let parts: Vec<&str> = p.get("summary").and_then(Value::as_array).into_iter().flatten().filter_map(|s| str_at(s, "text")).collect();
+                    let text = clean(&parts.join("\n\n")).trim().to_string();
+                    if text.is_empty() {
+                        return Vec::new();
+                    }
+                    vec![self.put(Item::of(format!("thought-{}", self.line_no), "assistant", "thought", text, at), false)]
                 }
-                vec![self.put(Item { id, role, kind: "text", text, at, images: Vec::new() }, false)]
-            }
+                "function_call" | "custom_tool_call" => {
+                    let args = str_at(p, "arguments").or_else(|| str_at(p, "input")).unwrap_or("");
+                    let call = str_at(p, "call_id").map(str::to_string).unwrap_or_else(|| format!("line-{}", self.line_no));
+                    let step = codex_step(&call, str_at(p, "name").unwrap_or(""), args);
+                    vec![self.step(step, at)]
+                }
+                "function_call_output" | "custom_tool_call_output" => {
+                    let (out, failed) = codex_output(p.get("output").unwrap_or(&Value::Null));
+                    self.result(str_at(p, "call_id").unwrap_or(""), out, failed, at).into_iter().collect()
+                }
+                _ => Vec::new(),
+            },
             _ => Vec::new(),
         }
     }
@@ -725,11 +871,65 @@ mod tests {
         ]);
         assert_eq!(texts(&p), vec![
             ("user".into(), "Fix the login bug".into()),
+            ("assistant".into(), "hmm".into()),
             ("assistant".into(), "Looking now.\n\nDone.".into()),
             ("user".into(), "/review src".into()),
         ]);
-        assert_eq!(p.items()[2].kind, "command");
+        assert_eq!(p.items()[1].kind, "thought");
+        assert_eq!(p.items()[3].kind, "command");
         assert_eq!(p.items()[0].at, Some(1_772_359_200_000));
+    }
+
+    #[test]
+    fn claude_tool_calls_pair_with_their_results_and_stay_apart_from_prose() {
+        let mut p = Parser::new(Format::Claude);
+        let result = |uuid: &str, call: &str, text: &str, err: bool| user(uuid, json!([{ "type": "tool_result", "tool_use_id": call, "content": text, "is_error": err }]));
+        feed(&mut p, &[
+            user("u1", json!("tidy up")),
+            reply("m1", "a1", json!({ "type": "text", "text": "First a look." }), None),
+            reply("m1", "a2", json!({ "type": "tool_use", "id": "t1", "name": "Bash", "input": { "command": "ls" } }), Some("tool_use")),
+            reply("m1", "a3", json!({ "type": "tool_use", "id": "t2", "name": "Edit", "input": { "file_path": "/r/a.txt", "old_string": "x", "new_string": "y" } }), Some("tool_use")),
+        ]);
+        assert!(p.items()[2].tool.as_ref().is_some_and(|t| !t.done), "a call with no result yet stays in progress");
+        feed(&mut p, &[
+            result("r1", "t1", "a.txt", false),
+            result("r2", "t2", "<tool_use_error>String to replace not found</tool_use_error>", true),
+            reply("m1", "a4", json!({ "type": "text", "text": "All set." }), Some("end_turn")),
+            json!({ "type": "system", "subtype": "compact_boundary", "uuid": "s1" }),
+            user("u2", json!("This session is being continued from a previous conversation that ran out of context.")),
+            reply("m2", "a5", json!({ "type": "tool_use", "id": "t3", "name": "TodoWrite", "input": { "todos": [{ "content": "Test", "status": "pending" }] } }), None),
+        ]);
+        let kinds: Vec<(&str, &str)> = p.items().iter().map(|i| (i.kind, i.id.as_str())).collect();
+        assert_eq!(kinds, vec![("text", "u1"), ("text", "m1"), ("tool", "tool-t1"), ("tool", "tool-t2"), ("text", "m1#1"), ("compact", "compact-8"), ("plan", "plan-turn-1")]);
+        let bash = p.items()[2].tool.as_ref().unwrap();
+        assert_eq!((bash.group, bash.preview.as_str(), bash.output.as_deref(), bash.done, bash.failed), ("shell", "ls", Some("a.txt"), true, false));
+        let edit = p.items()[3].tool.as_ref().unwrap();
+        assert_eq!((edit.failed, edit.output.as_deref()), (true, Some("String to replace not found")), "a refused edit keeps the agent's error");
+        assert_eq!(p.items()[6].text, "- [ ] Test");
+    }
+
+    #[test]
+    fn codex_reasoning_tools_patches_and_errors_become_rows() {
+        let mut p = Parser::new(Format::Codex);
+        let line = |t: &str, payload: Value| json!({ "timestamp": "2026-03-01T10:00:00Z", "type": t, "payload": payload }).to_string();
+        let patch = "*** Begin Patch\n*** Update File: a.rs\n-x\n+y\n*** Add File: b.rs\n+z\n*** End Patch";
+        for l in [
+            line("event_msg", json!({ "type": "task_started" })),
+            line("response_item", json!({ "type": "reasoning", "summary": [{ "type": "summary_text", "text": "Plan the fix" }] })),
+            line("response_item", json!({ "type": "function_call", "name": "shell", "arguments": json!({ "command": ["bash", "-lc", "cargo test"] }).to_string(), "call_id": "c1" })),
+            line("response_item", json!({ "type": "function_call_output", "call_id": "c1", "output": json!({ "output": "1 failed", "metadata": { "exit_code": 101 } }).to_string() })),
+            line("response_item", json!({ "type": "custom_tool_call", "name": "apply_patch", "input": patch, "call_id": "c2" })),
+            line("event_msg", json!({ "type": "error", "message": "Rate limited\nretry in 20s" })),
+            json!({ "timestamp": "2026-03-01T10:00:09Z", "type": "compacted", "payload": { "message": "" } }).to_string(),
+        ] {
+            p.feed(&l);
+        }
+        let kinds: Vec<&str> = p.items().iter().map(|i| i.kind).collect();
+        assert_eq!(kinds, vec!["thought", "tool", "tool", "notice", "compact"]);
+        let sh = p.items()[1].tool.as_ref().unwrap();
+        assert_eq!((sh.preview.as_str(), sh.failed, sh.output.as_deref()), ("cargo test", true, Some("1 failed")));
+        assert_eq!(p.items()[2].tool.as_ref().unwrap().diffs.as_ref().unwrap().len(), 2, "a patch touching two files gives two cards");
+        assert_eq!((p.items()[3].text.as_str(), p.items()[3].details.as_deref()), ("Rate limited", Some("Rate limited\nretry in 20s")));
     }
 
     #[test]

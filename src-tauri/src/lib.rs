@@ -4,6 +4,7 @@ mod artifacts;
 mod automations;
 mod capture;
 mod chat;
+mod chat_tools;
 mod browser;
 mod cap;
 pub mod cli;

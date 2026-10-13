@@ -1,11 +1,14 @@
 // The chat view of one terminal-backed agent session (CHAT-006, CHAT-010; T-325): loading while
 // the transcript is not written yet, then the conversation so far, then each new turn as the
-// agent records it. Thin on purpose: the Agents screen (T-050) mounts it in its body.
+// agent records it, with the agent's work folded into steps, diff cards and a subagent roster
+// (T-326). Thin on purpose: the Agents screen (T-050) mounts it in its body.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { locale } from "../language";
 import "./chat.css";
+import { fold, type View } from "./steps";
+import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
 import { applyRead, chatOffer, combine, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 
 export type ChatPane = { key: number; cwd: string | null; title?: string };
@@ -56,16 +59,27 @@ export default function ChatView({ pane, preview = null, pending = [] }: { pane:
   }, [pane.key]);
 
   const rows = useMemo(() => combine(items, extras, previewToShow(preview, open, lastReply(items)), pending), [items, extras, preview, open, pending]);
+  const views = useMemo(() => fold(rows, open), [rows, open]);
   const [full, setFull] = useState<string | null>(null);
+  // STAT-053: Thought rows start folded; the toolbar opens or folds them all.
+  const [thoughts, setThoughts] = useState<Set<string>>(() => new Set());
+  const thoughtIds = items.filter((i) => i.kind === "thought").map((i) => i.id);
+  const toggle = (id: string) => setThoughts((t) => { const n = new Set(t); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   return (
     <div className="chat" aria-label="Chat">
       {state === "loading" && rows.length === 0 && <div className="chat-state" role="status">Loading the conversation…</div>}
       {state === "error" && <div className="chat-state chat-error" role="alert">{error}</div>}
       {state === "empty" && rows.length === 0 && <div className="chat-state">No messages yet. What you and the agent say shows up here.</div>}
+      {thoughtIds.length > 0 && (
+        <div className="chat-toolbar">
+          <button type="button" onClick={() => setThoughts(new Set(thoughtIds))}>Expand all</button>
+          <button type="button" onClick={() => setThoughts(new Set())}>Collapse all</button>
+        </div>
+      )}
       <div className="chat-list">
-        {rows.map((r) => (
-          <ChatRow key={`${r.row}-${r.id}`} row={r} onImage={setFull} />
+        {views.map((v) => (
+          <ViewRow key={`${v.row}-${v.id}`} view={v} onImage={setFull} thoughts={thoughts} onToggle={toggle} />
         ))}
       </div>
       {full && (
@@ -75,6 +89,15 @@ export default function ChatView({ pane, preview = null, pending = [] }: { pane:
       )}
     </div>
   );
+}
+
+function ViewRow({ view, onImage, thoughts, onToggle }: { view: View; onImage: (src: string) => void; thoughts: Set<string>; onToggle: (id: string) => void }) {
+  if (view.row !== "message") return view.row === "preview" || view.row === "pending" ? <ChatRow row={view} onImage={onImage} /> : <StepRow view={view} />;
+  if (view.kind === "thought") return <ThoughtRow item={view} open={thoughts.has(view.id)} onToggle={() => onToggle(view.id)} />;
+  if (view.kind === "plan") return <PlanRow item={view} />;
+  if (view.kind === "notice") return <NoticeRow item={view} />;
+  if (view.kind === "compact") return <div className="chat-divider" role="separator"><span>{view.text}</span></div>;
+  return <ChatRow row={view} onImage={onImage} />;
 }
 
 function ChatRow({ row, onImage }: { row: Row; onImage: (src: string) => void }) {
