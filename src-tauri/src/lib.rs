@@ -165,6 +165,9 @@ pub fn run() {
             }
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
+            if let Some(why) = &store.recovered {
+                secrets::log(&dir, &format!("state: {why}"));
+            }
             // APP-048: a damaged settings file keeps its good entries (the damaged copy is kept as .bad).
             if let Ok(true) = store.repair_settings() {
                 secrets::log(&dir, "settings: settings.json was damaged; the readable entries were kept, the damaged copy is settings.json.bad");

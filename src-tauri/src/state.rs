@@ -23,20 +23,93 @@ pub struct Store {
     settings_path: PathBuf,
     /// Set by the final save at quit; nothing is written after it.
     closed: Cell<bool>,
+    /// APP-049: what opening did about a damaged state file, for the log; None when it was sound.
+    pub recovered: Option<String>,
+}
+
+/// The damage errors a state file can show; anything else (busy, no access) is not damage.
+fn damaged(e: &rusqlite::Error) -> bool {
+    matches!(e.sqlite_error_code(), Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt))
+}
+
+/// Opens a state file and checks it; a failed check is reported as corruption.
+fn connect(db: &Path) -> rusqlite::Result<Connection> {
+    let conn = if db.as_os_str().is_empty() { Connection::open_in_memory()? } else { Connection::open(db)? };
+    // Another writer (the command line, a second window) holding the database briefly is waited on.
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )?;
+    let check: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+    if check != "ok" {
+        return Err(rusqlite::Error::SqliteFailure(ffi::Error::new(ffi::SQLITE_CORRUPT), Some(check)));
+    }
+    Ok(conn)
+}
+
+/// APP-049: a sound store with entries is copied to state.db.bak, the last good copy a damaged
+/// file comes back from. An empty store never replaces it. Failures only cost the backup.
+/// ponytail: taken at each launch, so changes since the last launch are not in it.
+fn back_up(conn: &Connection, dir: &Path) {
+    let has: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM kv)", [], |r| r.get(0)).unwrap_or(false);
+    if !has {
+        return;
+    }
+    let tmp = dir.join("state.db.bak.tmp");
+    let _ = fs::remove_file(&tmp);
+    if conn.execute("VACUUM INTO ?1", params![tmp.to_string_lossy()]).is_ok() {
+        let _ = fs::rename(&tmp, dir.join("state.db.bak"));
+    }
+}
+
+/// APP-049: the state file is damaged. It is copied aside (with its journal) before anything is
+/// restored; then the last good copy replaces it, or a fresh store starts when there is none.
+/// When it cannot be copied aside or replaced, the session runs on an in-memory copy of the backup
+/// and the damaged file is never written.
+fn recover(dir: &Path, why: &rusqlite::Error) -> rusqlite::Result<(Connection, String)> {
+    let db = dir.join("state.db");
+    let bak = dir.join("state.db.bak");
+    let side = |name: &str| dir.join(name);
+    let aside = fs::copy(&db, side("state.db.bad")).and_then(|_| {
+        if side("state.db-wal").exists() {
+            fs::copy(side("state.db-wal"), side("state.db.bad-wal"))?;
+        }
+        fs::remove_file(&db)
+    });
+    if let Err(e) = aside {
+        let conn = connect(Path::new(""))?;
+        if bak.exists() {
+            conn.execute("ATTACH DATABASE ?1 AS bak", params![bak.to_string_lossy()])?;
+            conn.execute_batch("INSERT OR REPLACE INTO kv SELECT key, value FROM bak.kv; DETACH DATABASE bak;")?;
+        }
+        return Ok((conn, format!("state.db is damaged ({why}) and could not be kept aside ({e}); this session runs on the last good copy and its changes are not saved, so the damaged file stays as it was")));
+    }
+    let _ = fs::remove_file(side("state.db-wal"));
+    let _ = fs::remove_file(side("state.db-shm"));
+    if bak.exists() && fs::copy(&bak, &db).is_ok() {
+        if let Ok(conn) = connect(&db) {
+            return Ok((conn, format!("state.db was damaged ({why}); it is kept as state.db.bad and the last good copy (state.db.bak) was restored")));
+        }
+        let _ = fs::remove_file(&db);
+    }
+    Ok((connect(&db)?, format!("state.db was damaged ({why}); it is kept as state.db.bad and no good copy existed, so a fresh store was started")))
 }
 
 impl Store {
     /// Opens (or creates) the store under `dir`. Creates the folder and the schema on first use.
     pub fn open(dir: &Path) -> rusqlite::Result<Store> {
         fs::create_dir_all(dir).map_err(|e| rusqlite::Error::InvalidPath(dir.join(e.to_string())))?;
-        let conn = Connection::open(dir.join("state.db"))?;
-        // Another writer (the command line, a second window) holding the database briefly is waited on.
-        conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-        )?;
-        Ok(Store { conn, settings_path: dir.join("settings.json"), closed: Cell::new(false) })
+        // A zero-byte file opens as an empty store: missing, not damaged (APP-049).
+        let (conn, recovered) = match connect(&dir.join("state.db")) {
+            Ok(conn) => {
+                back_up(&conn, dir);
+                (conn, None)
+            }
+            Err(e) if damaged(&e) => recover(dir, &e).map(|(c, why)| (c, Some(why)))?,
+            Err(e) => return Err(e),
+        };
+        Ok(Store { conn, settings_path: dir.join("settings.json"), closed: Cell::new(false), recovered })
     }
 
     /// The profile folder the store lives in.
@@ -203,6 +276,76 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("kolux-rs-test-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// A profile whose state.db holds "a" = "1" in its backup copy and "a" = "2" in the live file.
+    fn app049_profile(name: &str) -> PathBuf {
+        let dir = temp_dir(name);
+        Store::open(&dir).unwrap().set("a", "1").unwrap();
+        let s = Store::open(&dir).unwrap();
+        assert!(dir.join("state.db.bak").exists(), "a good store with entries is backed up at open");
+        s.set("a", "2").unwrap();
+        drop(s);
+        dir
+    }
+
+    fn app049_corrupt(dir: &Path) -> Vec<u8> {
+        let junk = vec![b'x'; 4096];
+        fs::write(dir.join("state.db"), &junk).unwrap();
+        let _ = fs::remove_file(dir.join("state.db-wal"));
+        let _ = fs::remove_file(dir.join("state.db-shm"));
+        junk
+    }
+
+    #[test]
+    fn app049_a_damaged_state_file_is_kept_aside_and_the_backup_comes_back() {
+        let dir = app049_profile("app049-restore");
+        let junk = app049_corrupt(&dir);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.get("a").unwrap().as_deref(), Some("1"), "the setup comes back from the backup copy");
+        assert!(s.recovered.as_deref().unwrap_or("").contains("state.db.bad"), "the recovery is reported: {:?}", s.recovered);
+        assert_eq!(fs::read(dir.join("state.db.bad")).unwrap(), junk, "the damaged file is kept aside as it was");
+        s.set("b", "3").unwrap();
+        drop(s);
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.get("b").unwrap().as_deref(), Some("3"), "the restored store saves as usual");
+        assert!(s.recovered.is_none());
+        drop(s);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn app049_a_damaged_file_that_cannot_be_kept_aside_is_never_overwritten() {
+        let dir = app049_profile("app049-frozen");
+        let junk = app049_corrupt(&dir);
+        // A folder where the aside copy would go makes the copy impossible.
+        fs::create_dir_all(dir.join("state.db.bad")).unwrap();
+        let s = Store::open(&dir).unwrap();
+        assert_eq!(s.get("a").unwrap().as_deref(), Some("1"), "the session still starts from the backup copy");
+        assert!(s.recovered.as_deref().unwrap_or("").contains("not saved"), "the frozen session is reported: {:?}", s.recovered);
+        s.set("b", "3").unwrap();
+        s.save_point().unwrap();
+        s.close();
+        drop(s);
+        assert_eq!(fs::read(dir.join("state.db")).unwrap(), junk, "the damaged file is left exactly as it was");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn app049_an_empty_state_file_counts_as_missing() {
+        let dir = app049_profile("app049-empty");
+        fs::write(dir.join("state.db"), b"").unwrap();
+        let _ = fs::remove_file(dir.join("state.db-wal"));
+        let s = Store::open(&dir).unwrap();
+        assert!(s.recovered.is_none(), "an empty file is not damage");
+        assert_eq!(s.get("a").unwrap(), None, "it starts fresh");
+        assert!(!dir.join("state.db.bad").exists());
+        drop(s);
+        let bak = Connection::open(dir.join("state.db.bak")).unwrap();
+        let a: String = bak.query_row("SELECT value FROM kv WHERE key = 'a'", [], |r| r.get(0)).unwrap();
+        assert_eq!(a, "1", "the backup copy is not replaced by an empty store");
+        drop(bak);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

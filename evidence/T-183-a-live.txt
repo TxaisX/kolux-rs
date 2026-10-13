@@ -1,0 +1,20 @@
+T-183-a live proof (APP-049), lane release, 2026-10-13. Lane profile backed up first and restored after (cmp same x4, kolux.log same).
+
+1. A normal launch takes the last good copy:
+backup: entries 13 start_count 36
+after corrupting state.db (4096 x bytes, journal removed) and relaunching:
+12288 state.db
+4096 state.db.bad
+12288 state.db.bak
+32768 state.db-shm
+12392 state.db-wal
+state.db.bad sha1: 0494dc592da04a1753223918ea73bcb86876372c (junk was 0494dc592da04a1753223918ea73bcb86876372c)
+log: 1791890739 state: state.db was damaged (file is not a database); it is kept as state.db.bad and the last good copy (state.db.bak) was restored
+live store: entries 14 start_count 37
+
+frozen case: state.db corrupted again and a folder put where state.db.bad goes, launched, then quit through the window's close:
+log: 1791890778 state: state.db is damaged (file is not a database) and could not be kept aside (Access is denied. (os error 5)); this session runs on the last good copy and its changes are not saved, so the damaged file stays as it was
+state.db sha1 after the session and quit: 0494dc592da04a1753223918ea73bcb86876372c (before launch 0494dc592da04a1753223918ea73bcb86876372c)
+
+The restored launch (evidence/T-183-a-restored.png) shows the same projects as before (T-183-a-before.png); start_count went on from the backup's 36 to 37.
+The frozen launch (T-183-a-frozen.png) ran with the setup from the backup and left the damaged file byte for byte as it was after a normal quit.
