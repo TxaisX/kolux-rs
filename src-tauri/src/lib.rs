@@ -15,6 +15,7 @@ mod files;
 mod fsops;
 mod fonts;
 mod git;
+mod groups;
 mod hooks;
 mod include;
 mod grok;
@@ -313,6 +314,12 @@ pub fn run() {
             codex_accounts::codex_account_remove,
             projects::git_first_commit_preview,
             projects::git_start,
+            groups::groups_get,
+            groups::group_create,
+            groups::group_rename,
+            groups::group_nest,
+            groups::group_put,
+            groups::group_delete,
             newproject::clone_suggest,
             newproject::project_clone,
             newproject::clone_cancel,

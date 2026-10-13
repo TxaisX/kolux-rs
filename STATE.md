@@ -1457,6 +1457,9 @@ T-117-b-a: `kolux-dev worktree set` gives a worktree a new display name, issue l
 T-214-a: Add project > Copy from a web address clones a Git project into a folder filled in for
 you, shows Git's progress and its own words on failure, can be cancelled, and opens the copy;
 New project makes an empty project with one first commit from a name, in the home folder unless changed.
+T-215-a: the Projects header has a New group button; groups fold, nest inside each other, hold
+projects (chosen in a project's settings), last across restarts even when empty, and delete with
+or without taking their projects out of Kolux (folders stay on disk).
 
 T-100-a adds per-seat options to the launch screen. A Claude Opus or Sonnet seat gets an effort
 picker, and Opus a fast-mode box (fast mode bills usage credits). After a launch, the launch screen

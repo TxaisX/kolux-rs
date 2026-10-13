@@ -1080,3 +1080,7 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .ta-model { min-width: 0; overflow-wrap: anywhere; }
 .ta-bar.none { min-height: 2px; background: var(--line-subtle); }
 .ta-list.sessions li { grid-template-columns: minmax(0, 1.2fr) minmax(0, 2.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr); }
+/* PROJ-014: project groups in the sidebar */
+.sb-group-row { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+.sb-group-row .sb-group { flex: 1; min-width: 0; }
+.proj-group-kids { padding-left: 8px; }

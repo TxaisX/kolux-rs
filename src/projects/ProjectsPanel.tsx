@@ -16,7 +16,7 @@
 // ponytail: which rows are folded lasts until the window closes; nothing saves it.
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -38,6 +38,7 @@ import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 import { GLOSSARY } from "../glossary";
 import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
+import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing";
@@ -199,6 +200,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const indexed = useRef(""); // the last project list and owner map handed to the window
   const [filterOpen, setFilterOpen] = useState(false);
   const [folded, setFolded] = useState<Set<string>>(new Set()); // group titles folded away
+  const [groups, setGroups] = useState<Groups>(NO_GROUPS); // PROJ-014: project groups
+  const [groupFor, setGroupFor] = useState<string | null>(null); // the group whose settings form is open
+  const [groupName, setGroupName] = useState("");
+  const [groupParent, setGroupParent] = useState("");
+  const [dropGroup, setDropGroup] = useState<{ remove: boolean } | null>(null); // PROJ-015: the delete question
   const seen = useRef<Record<string, AgentState>>({});
   const groupBy = groupFromSetting(settings[GROUP_SETTING]);
   const sortBy = sortFromSetting(settings[SORT_SETTING]);
@@ -266,6 +272,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const reload = useCallback(async () => {
     const list = await invoke<Project[]>("project_list");
     setProjects(list);
+    const g = await invoke<Groups>("groups_get");
+    setGroups((o) => keepNewer(o, g));
     await refreshWorktrees(list);
   }, [refreshWorktrees]);
 
@@ -435,6 +443,43 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setDirDraft(p.workspacesDir ?? "");
     setProjectBaseDraft(p.base ?? "");
   };
+  // PROJ-014 / PROJ-015: every group change answers with the whole set; the newer one is kept.
+  const takeGroups = (g: Groups) => {
+    setGroups((o) => keepNewer(o, g));
+    return g;
+  };
+  const openGroup = (g: Group) => {
+    setGroupFor(g.id);
+    setGroupName(g.name);
+    setGroupParent(g.parent ?? "");
+    setDropGroup(null);
+  };
+  const newGroup = () =>
+    invoke<Groups>("group_create", { name: "", parent: null })
+      .then((g) => openGroup(takeGroups(g).groups[g.groups.length - 1]))
+      .catch(fail);
+  const saveGroup = async (g: Group) => {
+    try {
+      if (groupName.trim() !== g.name) takeGroups(await invoke<Groups>("group_rename", { id: g.id, name: groupName }));
+      if (groupParent !== (g.parent ?? "")) takeGroups(await invoke<Groups>("group_nest", { id: g.id, parent: groupParent || null }));
+      setGroupFor(null);
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const deleteGroup = async (g: Group, remove: boolean) => {
+    try {
+      takeGroups(await invoke<Groups>("group_delete", { id: g.id, removeProjects: remove }));
+      setGroupFor(null);
+      setDropGroup(null);
+      say("ok", remove ? `Deleted the group ${g.name} and took its projects out of Kolux; their folders are still on disk` : `Deleted the group ${g.name}; its projects are at the top level now`);
+      if (remove) await reload();
+    } catch (err) {
+      fail(err);
+    }
+  };
+  const putInGroup = (p: Project, group: string) => invoke<Groups>("group_put", { projectId: p.id, group: group || null }).then(takeGroups).catch(fail);
+
   const saveProject = async (p: Project) => {
     try {
       const u = await invoke<Project>("project_set", { projectId: p.id, workspacesDir: dirDraft, base: projectBaseDraft });
@@ -1100,6 +1145,158 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         </div>
       ));
 
+  const projectBlock = (p: Project) => {
+      const list = worktrees[p.id] ?? [];
+      const main = list.find((w) => w.isMain);
+      const others = order(list.filter((w) => !w.isMain).map((w) => ({ p, w })));
+      const opening = creating === p.id;
+      return (
+        <div key={p.id}>
+          <div className="proj" title={p.path}>
+            <span className="name">{p.name}</span>
+            <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
+              <Gear />
+            </button>
+            <button className={`ib${opening ? " on" : ""}`} title="New workspace: a branch in its own folder" aria-pressed={opening} onClick={() => setCreating(opening ? null : p.id)}>
+              <Plus size={13} />
+            </button>
+          </div>
+          {main && (
+            <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
+              <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
+              <span className="name">{worktreeLabel(main)}</span>
+              {pushTag(main)}
+              {isActive(main) && <span className="count">{openCount(main)}</span>}
+              <span className="chev">
+                <ChevronDown size={12} />
+              </span>
+            </button>
+          )}
+          {settingsFor === p.id && (
+            <div className="sb-form" data-project-settings={p.id}>
+              <label>Workspaces folder for {p.name}</label>
+              <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+              {hiddenList(p)}
+              {ownVis(p)}
+              <label>Base ref</label>
+              <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
+              <label>Group</label>
+              <select aria-label="project group" className="field" value={groups.groups.some((g) => g.id === groups.members[p.id]) ? groups.members[p.id] : ""} onChange={(e) => putInGroup(p, e.target.value)}>
+                <option value="">None: top level</option>
+                {groups.groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+              <div className="btn-row">
+                <button className="btn" onClick={() => saveProject(p)}>
+                  Save
+                </button>
+                <button className="btn" onClick={() => setSettingsFor(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
+            <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
+              {fresh[p.id].length} new workspace{fresh[p.id].length === 1 ? "" : "s"}
+            </button>
+          )}
+          {review === p.id && (
+            <div className="sb-form" data-review={p.id}>
+              <label title={GLOSSARY.worktree.hover}>New workspaces in {p.name}</label>
+              {(fresh[p.id] ?? []).map((w) => (
+                <div className="vis-row" key={w.path}>
+                  <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
+                  <button className="btn" onClick={() => hide(w, !w.hidden)}>
+                    {w.hidden ? "Show" : "Hide"}
+                  </button>
+                </div>
+              ))}
+              <div className="btn-row">
+                <button className="btn" onClick={() => doneReview(p)}>
+                  Done
+                </button>
+              </div>
+            </div>
+          )}
+          {opening && nameField(p)}
+          {standIn(p)}
+          {nestRows(others.map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p, w: r.w }, r.depth, r.kids))}
+        </div>
+      );
+  };
+  const groupForm = (g: Group, count: number) => (
+    <div className="sb-form" data-group-settings={g.id}>
+      <label>Group name</label>
+      <input aria-label="group name" className="field" value={groupName} onChange={(e) => setGroupName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveGroup(g)} autoFocus />
+      <label>Inside</label>
+      <select aria-label="group inside" className="field" value={groupParent} onChange={(e) => setGroupParent(e.target.value)}>
+        <option value="">Nothing: top level</option>
+        {groupChoices(groups, g.id).map((x) => (
+          <option key={x.id} value={x.id}>
+            {x.name}
+          </option>
+        ))}
+      </select>
+      {dropGroup ? (
+        <>
+          <div className="sb-hint">
+            Delete {g.name}? {count === 0 ? "It holds no projects." : `It holds ${count} project${count === 1 ? "" : "s"}.`}
+          </div>
+          <label className="check">
+            <input type="checkbox" aria-label="also remove the projects" checked={dropGroup.remove} onChange={(e) => setDropGroup({ remove: e.target.checked })} />
+            Also remove its projects from Kolux (their folders stay on disk)
+          </label>
+          <div className="btn-row">
+            <button className="btn danger" onClick={() => deleteGroup(g, dropGroup.remove)}>
+              Delete group
+            </button>
+            <button className="btn" onClick={() => setDropGroup(null)}>
+              Keep it
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="btn-row">
+          <button className="btn" onClick={() => saveGroup(g)}>
+            Save
+          </button>
+          <button className="btn" onClick={() => setDropGroup({ remove: false })}>
+            Delete…
+          </button>
+          <button className="btn" onClick={() => setGroupFor(null)}>
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  );
+  // PROJ-014: groups fold like the other headers; sub-groups and their projects sit inside.
+  const drawNode = (n: Node): ReactNode =>
+    n.kind === "project" ? (
+      projectBlock(n.project)
+    ) : (
+      <div key={n.group.id} className="proj-group" data-project-group={n.group.id}>
+        <div className="sb-group-row">
+          <button className="sb-group" aria-expanded={!folded.has(n.group.id)} onClick={() => toggleFold(n.group.id)}>
+            {n.group.name}
+            <span className="count">{n.count}</span>
+            <span className="chev">
+              <ChevronDown size={12} />
+            </span>
+          </button>
+          <button className={`ib${groupFor === n.group.id ? " on" : ""}`} title="Group settings: its name, where it sits, delete it" aria-pressed={groupFor === n.group.id} onClick={() => (groupFor === n.group.id ? setGroupFor(null) : openGroup(n.group))}>
+            <Gear />
+          </button>
+        </div>
+        {groupFor === n.group.id && groupForm(n.group, n.count)}
+        {!folded.has(n.group.id) && <div className="proj-group-kids">{n.children.map(drawNode)}</div>}
+      </div>
+    );
+
   return (
     <div className="sidebar-wrap">
       <aside className="sidebar" aria-label="Sidebar">
@@ -1138,6 +1335,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </button>
             <button className="ib" title="Add project: clone, open a folder or start a new one" aria-pressed={adding} onClick={() => setAdding(true)} disabled={busy !== ""}>
               <FolderPlus size={13} />
+            </button>
+            <button className="ib" title="New group: sort projects into folders of their own" onClick={newGroup} disabled={groupBy !== "project"}>
+              <Box size={13} />
             </button>
             <button className="ib" title="New workspace: a branch in its own folder" aria-pressed={creating !== null} onClick={() => (creating === null ? openCreate() : setCreating(null))}>
               <Plus size={13} />
@@ -1226,81 +1426,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           {creating === "" && nameField(null)}
           {projects.length === 0 && !showAdd && <div className="sb-hint">No projects yet. Use the folder button above to add a project folder; one without Git can start it here.</div>}
 
-          {groupBy === "project" &&
-            projects.map((p) => {
-              const list = worktrees[p.id] ?? [];
-              const main = list.find((w) => w.isMain);
-              const others = order(list.filter((w) => !w.isMain).map((w) => ({ p, w })));
-              const opening = creating === p.id;
-              return (
-                <div key={p.id}>
-                  <div className="proj" title={p.path}>
-                    <span className="name">{p.name}</span>
-                    <button className={`ib${settingsFor === p.id ? " on" : ""}`} title="Project settings: its workspaces folder and base ref" aria-pressed={settingsFor === p.id} onClick={() => (settingsFor === p.id ? setSettingsFor(null) : openSettings(p))}>
-                      <Gear />
-                    </button>
-                    <button className={`ib${opening ? " on" : ""}`} title="New workspace: a branch in its own folder" aria-pressed={opening} onClick={() => setCreating(opening ? null : p.id)}>
-                      <Plus size={13} />
-                    </button>
-                  </div>
-                  {main && (
-                    <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
-                      <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
-                      <span className="name">{worktreeLabel(main)}</span>
-                      {pushTag(main)}
-                      {isActive(main) && <span className="count">{openCount(main)}</span>}
-                      <span className="chev">
-                        <ChevronDown size={12} />
-                      </span>
-                    </button>
-                  )}
-                  {settingsFor === p.id && (
-                    <div className="sb-form" data-project-settings={p.id}>
-                      <label>Workspaces folder for {p.name}</label>
-                      <input aria-label="project workspaces folder" className="field" list="used-dirs" placeholder={`global: ${place.dir}`} value={dirDraft} onChange={(e) => setDirDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
-                      {hiddenList(p)}
-                      {ownVis(p)}
-                      <label>Base ref</label>
-                      <input aria-label="project base ref" className="field" placeholder="the default branch Git reports" value={projectBaseDraft} onChange={(e) => setProjectBaseDraft(e.target.value)} onKeyDown={(e) => e.key === "Enter" && saveProject(p)} />
-                      <div className="btn-row">
-                        <button className="btn" onClick={() => saveProject(p)}>
-                          Save
-                        </button>
-                        <button className="btn" onClick={() => setSettingsFor(null)}>
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {(fresh[p.id] ?? []).length > 0 && review !== p.id && (
-                    <button className="sb-notice" onClick={() => setReview(p.id)} title="Worktrees made with plain Git or another tool since you last looked">
-                      {fresh[p.id].length} new workspace{fresh[p.id].length === 1 ? "" : "s"}
-                    </button>
-                  )}
-                  {review === p.id && (
-                    <div className="sb-form" data-review={p.id}>
-                      <label title={GLOSSARY.worktree.hover}>New workspaces in {p.name}</label>
-                      {(fresh[p.id] ?? []).map((w) => (
-                        <div className="vis-row" key={w.path}>
-                          <span className="path" title={w.path}>{relPath(p.path, w.path)}</span>
-                          <button className="btn" onClick={() => hide(w, !w.hidden)}>
-                            {w.hidden ? "Show" : "Hide"}
-                          </button>
-                        </div>
-                      ))}
-                      <div className="btn-row">
-                        <button className="btn" onClick={() => doneReview(p)}>
-                          Done
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {opening && nameField(p)}
-                  {standIn(p)}
-                  {nestRows(others.map((x) => x.w), nest, shutKids, (ws) => ws).map((r) => row({ p, w: r.w }, r.depth, r.kids))}
-                </div>
-              );
-            })}
+          {groupBy === "project" && groupTree(groups, projects).map(drawNode)}
 
           {/* PROJ-045: one list across projects, flat or under Status / Pull request headers that fold. */}
           {groupBy !== "project" && creating && nameField(projects.find((p) => p.id === creating) ?? null)}

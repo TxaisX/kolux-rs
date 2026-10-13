@@ -103,6 +103,17 @@ fn save_projects(store: &Store, projects: &[Project]) -> Result<(), String> {
     store.set(PROJECTS_KEY, &serde_json::to_string(projects).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
+/// PROJ-015: takes projects out of Kolux's list; their folders on disk are not touched. (The
+/// rest of removing a project, PROJ-008, comes with T-214-b.)
+pub(crate) fn forget_projects(store: &Store, ids: &[String]) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut projects = load_projects(store);
+    projects.retain(|p| !ids.contains(&p.id));
+    save_projects(store, &projects)
+}
+
 fn load_names(store: &Store) -> serde_json::Map<String, serde_json::Value> {
     store.get(NAMES_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
