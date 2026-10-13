@@ -129,6 +129,11 @@ export const saveAll = async () => (await Promise.all([...unsaved].map((save) =>
 
 /** Props for a text or number `<input>` whose value saves itself (SET-036). */
 export function useDraft(value: string, commit: (text: string) => unknown) {
+  return useDraftOf(value, commit)[1];
+}
+
+/** useDraft with the draft itself, for a field that also saves from elsewhere (a picked suggestion). */
+export function useDraftOf(value: string, commit: (text: string) => unknown) {
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   const ref = useRef<Draft | null>(null);
   const d = (ref.current ??= new Draft(value, commit));
@@ -144,13 +149,13 @@ export function useDraft(value: string, commit: (text: string) => unknown) {
       void d.flush();
     };
   }, [d]);
-  return {
+  return [d, {
     value: d.text,
     onChange: (e: ChangeEvent<Field>) => (d.type(e.target.value), redraw()),
     onBlur: () => void d.flush(),
     onCompositionStart: () => d.compose(true),
     onCompositionEnd: (e: CompositionEvent<Field>) => (d.type(e.currentTarget.value), d.compose(false), redraw()),
-  };
+  }] as const;
 }
 
 /** A clearable number field: empty (or not a number) is the default; otherwise rounded into range. */

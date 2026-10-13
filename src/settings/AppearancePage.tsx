@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
 import { schemeOptions, SchemeList } from "./SchemePicker";
-import { patchSettings, saveOnClose, useSettings } from "./useSettings";
+import { patchSettings, saveOnClose, useDraftOf, useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
@@ -55,18 +55,19 @@ function Fold({ id, title, summary, open, onToggle, children }: { id: string; ti
 }
 
 /** SET-018: a font family field; suggestions come from the installed fonts, the whole list when the
- *  field is entered and the best matches once the user types. Applies on pick, Enter or leaving. */
+ *  field is entered and the best matches once the user types. Applies on pick, Enter, leaving, and
+ *  (SET-036) after a pause in typing, never in the middle of an input-method composition. */
 function FontField({ label, value, placeholder, onPick }: { label: string; value: string; placeholder: string; onPick: (family: string) => void }) {
-  const [text, setText] = useState(value);
+  const [draft, field] = useDraftOf(value, fontSaver(onPick));
+  const text = field.value;
   const [fonts, setFonts] = useState<string[] | null>(null);
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState(false);
-  useEffect(() => setText(value), [value]);
   const shown = fonts ? rankFonts(fonts, typed ? text : "") : [];
   const commit = (f: string) => {
-    setText(f);
     setOpen(false);
-    if (f.trim() !== value) onPick(f.trim());
+    draft.type(f);
+    void draft.flush();
   };
   return (
     <label className="font-field">
@@ -86,19 +87,24 @@ function FontField({ label, value, placeholder, onPick }: { label: string; value
           setOpen(true);
           void loadFonts().then(setFonts);
         }}
+        onCompositionStart={field.onCompositionStart}
+        onCompositionEnd={field.onCompositionEnd}
         onChange={(e) => {
-          setText(e.target.value);
+          field.onChange(e);
           setTyped(true);
           setOpen(true);
         }}
         onKeyDown={(e) => {
-          if (e.key === "Enter") commit(text);
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) commit(text);
           if (e.key === "Escape" && open) {
             e.stopPropagation();
             setOpen(false);
           }
         }}
-        onBlur={() => commit(text)}
+        onBlur={() => {
+          setOpen(false);
+          field.onBlur();
+        }}
       />
       {open && shown.length > 0 && (
         <div className="font-list" role="listbox" aria-label={`${label} suggestions`}>
@@ -112,6 +118,9 @@ function FontField({ label, value, placeholder, onPick }: { label: string; value
     </label>
   );
 }
+
+/** What a font field saves: the family as typed, without surrounding spaces. */
+export const fontSaver = (onPick: (family: string) => void) => (text: string) => onPick(text.trim());
 
 const firstFamily = (stack: string) => stack.split(",")[0].replace(/"/g, "").trim();
 

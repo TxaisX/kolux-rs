@@ -1,0 +1,20 @@
+T-181-b live proof, lane dev app (port 1422), 2026-10-13. Settings > Appearance > Fonts.
+Values read back with the get_settings command over the debugging port; lane profile backed up
+first and restored afterwards (cmp same).
+
+SET-036 a font field saves after a pause in typing, with the field still focused (no Enter, no
+leaving the field). Timed inside the page (input events and a 25 ms poll of the stored settings):
+  {"keystrokes":13,"typingMs":503,"largestGapBetweenKeysMs":66,"savedMsAfterLastKey":933,"stillFocused":"App font"}
+  -> "Cascadia Mono" stored about 0.9 s after the last key (0.6 s pause plus the save under a
+     fully loaded PC), never during typing.
+
+SET-036 input-method composition is never saved half-way, and Enter during it commits nothing:
+  Editor font: composing こんに (CDP Input.imeSetComposition), 2 s later: "{\"appFont\":\"Consolas\",\"editorFont\":\"\"} focus=Editor font"
+  Enter pressed while composing, 1.2 s later: "{\"appFont\":\"Consolas\",\"editorFont\":\"\"} focus=Editor font"
+  composition committed as Courier New, 0.3 s later: "{\"appFont\":\"Consolas\",\"editorFont\":\"Courier New\"} focus=Editor font"
+  1.8 s after the commit: "{\"appFont\":\"Consolas\",\"editorFont\":\"Courier New\"} focus=Editor font"
+
+Screenshot: evidence/T-181-b-fonts.png (dark mode, maximised on the 1920 screen, a composition
+under way in Editor font: the composed text is underlined and not stored).
+Custom schemes were already tidied on load and on save (theme.ts readAppearance/writeAppearance
+round trip, covered by theme.test.ts). The card's other leftovers moved to T-181-c.
