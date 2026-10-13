@@ -408,6 +408,7 @@ fn shaped() -> String {
 #[test]
 fn t_152_1_a_debug_build_writes_agent_settings_only_inside_the_temp_folder() {
     let dir = temp("t152-target");
+    fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
     let scratch = std::env::temp_dir();
     assert!(scratch_only(&dir.join("settings.json"), &scratch).is_ok());
     let outside = std::env::current_dir().unwrap().join("settings.json");
@@ -416,8 +417,59 @@ fn t_152_1_a_debug_build_writes_agent_settings_only_inside_the_temp_folder() {
     assert!(scratch_only(&climbed, &scratch).is_err(), "`..` cannot climb out of the temp folder");
     // Whatever this test process inherited, the resolved file is written only when it is scratch.
     let resolved = claude_settings_file();
-    println!("resolved {} -> {:?}", resolved.display(), claude_target());
-    assert_eq!(claude_target().is_ok(), scratch_only(&resolved, &scratch).is_ok());
+    let profile = dir.join(PRODUCTION_ID);
+    println!("resolved {} -> {:?}", resolved.display(), claude_target(&profile));
+    assert_eq!(claude_target(&profile).is_ok(), scratch_only(&resolved, &scratch).is_ok());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_2_a_scratch_settings_folder_needs_the_marker_not_only_the_temp_folder() {
+    let scratch = std::env::temp_dir();
+    let dir = temp("t152b-marker");
+    let (bare, deep, other) = (dir.join("bare"), dir.join("marked").join("a").join("b"), dir.join("other"));
+    for d in [&bare, &deep, &other] {
+        fs::create_dir_all(d).unwrap();
+    }
+    // Under temp but no marker anywhere up to the temp folder: refused (TEMP=G:\ no longer admits all).
+    let err = scratch_only(&bare.join("settings.json"), &scratch).unwrap_err();
+    assert!(err.contains(SCRATCH_MARKER) && err.contains("left alone"), "{err}");
+    // The marker in the folder itself, or two folders up, admits it.
+    fs::write(bare.join(SCRATCH_MARKER), "").unwrap();
+    assert!(scratch_only(&bare.join("settings.json"), &scratch).is_ok());
+    fs::write(dir.join("marked").join(SCRATCH_MARKER), "").unwrap();
+    assert!(scratch_only(&deep.join("settings.json"), &scratch).is_ok(), "a marker two folders up counts");
+    // `..` from a marked folder into an unmarked one, and letter-case spellings, resolve first.
+    let climbed = bare.join("..").join("other").join("settings.json");
+    assert!(scratch_only(&climbed, &scratch).is_err(), "`..` out of a marked folder is refused");
+    let upper = |p: &Path| PathBuf::from(p.to_string_lossy().to_uppercase());
+    if cfg!(windows) {
+        assert!(scratch_only(&upper(&bare).join("settings.json"), &scratch).is_ok(), "case spelling of a marked folder");
+        assert!(scratch_only(&upper(&other).join("settings.json"), &scratch).is_err(), "case spelling of an unmarked folder");
+    }
+    // A marker above the scratch root does not count: with the root set lower, `dir`'s own
+    // marker is outside it.
+    fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
+    assert!(scratch_only(&other.join("settings.json"), &other).is_err(), "a marker above the scratch root is ignored");
+    // A missing folder fails closed.
+    assert!(scratch_only(&dir.join("missing").join("settings.json"), &scratch).is_err());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_b_2_test_dev_and_lane_runs_are_fenced_and_the_identifier_matches_the_app() {
+    // This is a test build: every profile is fenced, the production one included.
+    assert!(fenced(Path::new(r"C:\Users\me\AppData\Roaming\com.txaisxiong.kolux-rs")));
+    assert!(fenced(Path::new(r"C:\Users\me\AppData\Roaming\com.txaisxiong.kolux-rs.hooks")));
+    assert!(fenced(Path::new(r"G:\Temp\hooks-t152b\profile")));
+    // The production identifier is the one the app is built with.
+    let conf: Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+    assert_eq!(conf["identifier"], PRODUCTION_ID);
+    // With the fence on, the user's own file (as this process resolves it) is refused unless it is
+    // marked scratch; G:\Dev\claude-config holds no marker, so a run that inherited it stays out.
+    let resolved = claude_settings_file();
+    let scratch = std::env::temp_dir();
+    assert_eq!(claude_target(Path::new(PRODUCTION_ID)).is_ok(), scratch_only(&resolved, &scratch).is_ok());
 }
 
 #[test]

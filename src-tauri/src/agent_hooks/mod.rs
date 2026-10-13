@@ -261,33 +261,54 @@ impl Drop for Lock {
 /// The record of the copy kept before the first install: the sha256 of the file and of the copy.
 pub const BACKUP_RECORD: &str = "claude-settings.sha256";
 
+/// The production app's identifier (`tauri.conf.json`), which is also the name of its profile
+/// folder. A profile folder with any other name belongs to a lane, smoke or test run.
+pub const PRODUCTION_ID: &str = "com.txaisxiong.kolux-rs";
+
+/// A fenced run writes a Claude settings file only when this file sits in its folder or in a
+/// folder above it, inside the temp folder (T-152-b (2)).
+pub const SCRATCH_MARKER: &str = ".kolux-rs-scratch";
+
+/// T-152-b (2): the run is fenced when it is a test or debug build (`cargo test`, `tauri dev`,
+/// `cargo test --release`), or when the profile folder (`%APPDATA%\<identifier>`, or the
+/// `KOLUX_APP_DIR` a lane, smoke or evidence run sets) is not the production one. A production
+/// release build with the production identifier is NOT fenced: it is the product that writes the
+/// user's own file after his yes, and the status hooks switch, off by default, is the gate there.
+pub fn fenced(profile: &Path) -> bool {
+    let production = profile.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(PRODUCTION_ID));
+    cfg!(any(test, debug_assertions)) || !production
+}
+
 /// T-152 (1): the only Claude settings file Kolux writes is the one `CLAUDE_CONFIG_DIR` (or the
-/// home folder) resolves to. A debug build (tests, `tauri dev`, evidence runs) writes it only
-/// inside the temp folder, so a run that inherited the user's own variables can never reach his file.
-pub fn claude_target() -> Result<PathBuf, String> {
+/// home folder) resolves to. A fenced run (see `fenced`) writes it only inside the temp folder
+/// and below a scratch marker, so a run that inherited the user's own variables (or a TEMP set to
+/// a drive root) can never reach his file.
+pub fn claude_target(profile: &Path) -> Result<PathBuf, String> {
     let file = claude_settings_file();
-    if cfg!(debug_assertions) {
+    if fenced(profile) {
         scratch_only(&file, &std::env::temp_dir())?;
     }
     Ok(file)
 }
 
-/// `file`'s folder lies inside `scratch` (both resolved, so `..` and letter case cannot slip past).
+/// `file`'s folder lies inside `scratch` and it, or a folder above it that is still inside
+/// `scratch`, holds the scratch marker. Both sides are resolved, so `..`, links and letter case
+/// cannot slip past; anything that cannot be resolved is refused.
 pub fn scratch_only(file: &Path, scratch: &Path) -> Result<(), String> {
     let inside = match (file.parent().map(fs::canonicalize), fs::canonicalize(scratch)) {
-        (Some(Ok(dir)), Ok(scratch)) => dir.starts_with(&scratch),
+        (Some(Ok(dir)), Ok(scratch)) => dir.starts_with(&scratch) && dir.ancestors().take_while(|a| a.starts_with(&scratch)).any(|a| a.join(SCRATCH_MARKER).is_file()),
         _ => false,
     };
     if inside {
         Ok(())
     } else {
-        Err(format!("a debug build writes agent settings only under {}; {} left alone", scratch.display(), file.display()))
+        Err(format!("a test, dev or lane run writes agent settings only under {} below a {SCRATCH_MARKER} marker; {} left alone", scratch.display(), file.display()))
     }
 }
 
 /// Claude Code's scripts, hooks and status line, after its settings were copied once.
-fn install_claude_all(home: &Path) -> Result<(), String> {
-    install_claude_at(home, &claude_target()?)
+fn install_claude_all(home: &Path, profile: &Path) -> Result<(), String> {
+    install_claude_at(home, &claude_target(profile)?)
 }
 
 pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
@@ -335,8 +356,8 @@ fn managed_codex_homes(profile: &Path) -> Vec<PathBuf> {
 fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
     let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
     match (id, plan) {
-        ("claude", Plan::Install) => install_claude_all(home).map(|_| "installed"),
-        ("claude", Plan::Remove) => remove_claude(&claude_target()?, &prev).map(|_| "removed"),
+        ("claude", Plan::Install) => install_claude_all(home, profile).map(|_| "installed"),
+        ("claude", Plan::Remove) => remove_claude(&claude_target(profile)?, &prev).map(|_| "removed"),
         // T-152 (6): the user's own Codex home is neither written nor cleared while T-025-e is off
         // the cutline, so on and off leave its bytes exactly as they were; only the managed homes a
         // pane starts in (Kolux's own folders) are cleared.

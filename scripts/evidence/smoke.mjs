@@ -283,6 +283,8 @@ async function launch() {
   mkdirSync(profile, { recursive: true });
   writeFileSync(koluxSettings, JSON.stringify({ confirmCloseRunning: false, agentStatusHooks: true }, null, 2));
   mkdirSync(claudeConfig, { recursive: true });
+  // T-152-b (2): a dev run writes a Claude settings file only below this scratch marker.
+  writeFileSync(join(claudeConfig, ".kolux-rs-scratch"), "");
   mkdirSync(codexHome, { recursive: true });
   const cfg = join(TEMP, "tauri.smoke.json");
   writeFileSync(cfg, JSON.stringify({ identifier: IDENTIFIER, build: { devUrl: `http://localhost:${PORT}`, beforeDevCommand: `pnpm exec vite --port ${PORT} --strictPort` } }));
