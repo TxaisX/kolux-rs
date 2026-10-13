@@ -1,7 +1,7 @@
 // PROJ-067: tabs and layout are saved and restored; damaged entries are dropped on their own and
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
-import { layoutOf, restoreLayout, stillThere } from "./layout";
+import { layoutOf, restoreLayout, resumeArgs, stillThere } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
 
@@ -65,4 +65,22 @@ test("proj067: the active workspace and tab come back when they still exist, els
   expect(gone.activeDir).toBeNull();
   expect(gone.focused).toBe(1); // the home tab, since the active workspace is gone
   expect(gone.activeTab).toEqual({ 1: 1, 2: 2 });
+});
+
+test("sess030: an agent tab with a known session comes back resumed, one without comes back at its prompt, never in a picker", () => {
+  const claude = { key: 2, cwd: "C:\\w\\a", branch: "main", agent: "claude" as const, agentId: "claude", program: "claude", args: ["--dangerously-skip-permissions", "fix the build"], session: "11111111-aaaa" };
+  const codex = { key: 3, cwd: "C:\\w\\a", branch: "main", agent: "codex" as const, agentId: "codex", program: null, args: ["--full-auto"], session: "thr_22" };
+  const fresh = { key: 4, cwd: "C:\\w\\a", branch: "main", agent: "claude" as const, agentId: "claude", program: "claude", args: ["hello"] };
+  const l = layoutOf([shell(1, null), claude, codex, fresh], { 1: 1, 2: 4 }, 4, "C:\\w\\a", {});
+  // The session id is written down; the one-off opening arguments are not.
+  expect(l.panes.map((p) => [p.key, p.args, p.session])).toEqual([[1, [], undefined], [2, [], "11111111-aaaa"], [3, [], "thr_22"], [4, [], undefined]]);
+  const back = restoreLayout(JSON.parse(JSON.stringify(l)))!;
+  expect(back.panes.map((p) => [p.key, p.args])).toEqual([[1, []], [2, ["--resume", "11111111-aaaa"]], [3, ["resume", "thr_22"]], [4, []]]);
+  expect(back.panes[1].session).toBe("11111111-aaaa");
+  // A damaged session id is no session: the tab comes back at its prompt, not in the pick-a-session screen.
+  const odd = restoreLayout({ panes: [{ ...l.panes[1], session: 7 }], activeTab: {}, focused: 2, activeDir: null, stacked: {} })!;
+  expect(odd.panes[0].args).toEqual([]);
+  expect(resumeArgs("claude", undefined)).toEqual([]);
+  expect(resumeArgs("claude", "")).toEqual([]);
+  expect(resumeArgs("shell", "x")).toEqual([]);
 });

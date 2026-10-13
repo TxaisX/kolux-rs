@@ -128,6 +128,9 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
   const pty = useRef(onPty);
   pty.current = onPty;
   const failed = useRef(onFailed);
+  // SESS-030: a program that starts (a resumed session among them) takes the keyboard only in the focused pane.
+  const isFocused = useRef(focused);
+  isFocused.current = focused;
   failed.current = onFailed;
 
   useEffect(() => {
@@ -244,7 +247,7 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
         }
         idRef.current = id;
         setStatus({ kind: "running", id, account: used });
-        term.focus();
+        if (isFocused.current) term.focus();
       } catch (err) {
         setStatus({ kind: "failed", error: String(err) });
         failed.current?.(String(err));

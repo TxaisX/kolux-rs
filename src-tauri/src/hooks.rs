@@ -78,6 +78,9 @@ pub struct Change {
     /// Why a blocked state happened (STAT-022): `limit`, `signin` or `error`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<&'static str>,
+    /// SESS-030: the agent's own session id (`session_id`), what its resume command takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// STAT-022's three causes for Claude Code's failure kinds (the StopFailure `error` values): a
@@ -121,7 +124,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
     let str_of = |k: &str| event.get(k).and_then(Value::as_str);
     let tool = str_of("tool_name").map(|t| trim(t, 60));
     let plain = |state: &'static str| Some(Change { state, ..Change::default() });
-    match name {
+    let change = match name {
         "SessionStart" => matches!(str_of("source"), Some("startup" | "resume" | "clear")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
         "UserPromptSubmit" => Some(Change {
             state: "working",
@@ -153,7 +156,14 @@ pub fn claude_change(event: &Value) -> Option<Change> {
         "PostCompact" => (str_of("trigger") == Some("manual")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
         // SubagentStart, SubagentStop and TeammateIdle feed the roster (status.rs); PreCompact is refused.
         _ => None,
-    }
+    };
+    change.map(|c| with_session(c, event))
+}
+
+/// SESS-030: the event's `session_id`, if any, rides on the change.
+fn with_session(mut change: Change, event: &Value) -> Change {
+    change.session = event.get("session_id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+    change
 }
 
 /// Codex's event mapping (COMPAT 3.5, STAT-008). `None` means the pane's state does not change.
@@ -165,7 +175,7 @@ pub fn codex_change(event: &Value) -> Option<Change> {
     let str_of = |k: &str| event.get(k).and_then(Value::as_str);
     let tool = str_of("tool_name").map(|t| trim(t, 60));
     let plain = |state: &'static str| Some(Change { state, ..Change::default() });
-    match name {
+    let change = match name {
         // Codex is working from the moment a session opens; the roster and transcript start over.
         "SessionStart" => Some(Change { state: "working", boundary: true, ..Change::default() }),
         "UserPromptSubmit" => Some(Change { state: "working", prompt: str_of("prompt").map(|p| trim(&fold(p), 16000)), ..Change::default() }),
@@ -180,7 +190,8 @@ pub fn codex_change(event: &Value) -> Option<Change> {
         "PostToolUse" => plain("working"),
         "Stop" => plain("done"),
         _ => None,
-    }
+    };
+    change.map(|c| with_session(c, event))
 }
 
 /// One HTTP request as the hook scripts send it: a request line, headers, a body.
@@ -885,6 +896,17 @@ mod tests {
 
     fn ev(json: &str) -> Value {
         serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn the_session_id_rides_along_so_a_pane_can_be_resumed_later() {
+        // SESS-030: both agents name their session in every event; a pane remembers the newest.
+        let c = claude_change(&ev(r#"{"hook_event_name":"SessionStart","source":"resume","session_id":"11111111-aaaa"}"#)).unwrap();
+        assert_eq!(c.session.as_deref(), Some("11111111-aaaa"));
+        let x = codex_change(&ev(r#"{"hook_event_name":"Stop","session_id":"thr_22"}"#)).unwrap();
+        assert_eq!(x.session.as_deref(), Some("thr_22"));
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop"}"#)).unwrap().session, None);
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop","session_id":""}"#)).unwrap().session, None);
     }
 
     #[test]

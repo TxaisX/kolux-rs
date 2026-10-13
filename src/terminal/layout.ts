@@ -1,6 +1,6 @@
 // PROJ-067: the workspaces' tabs and layout are written to the settings as they change and read
 // back at start. Only what a fresh start can rebuild is kept: a terminal tab comes back as its
-// program in its folder (an agent at its prompt with no arguments; the session itself is SESS-030),
+// program in its folder (an agent with its last known session resumed, SESS-030, else at its prompt),
 // a browser or editor tab as the same kind on the same path. A saved entry that cannot be read is
 // dropped on its own; the rest comes back. A tab whose folder is gone is dropped, and the active
 // workspace and tab return only while they still exist.
@@ -22,6 +22,10 @@ export type SavedPane = {
   agentId?: string;
   program: string | null;
   args: string[];
+  /** SESS-030: the agent's own session id from its newest hook event; a restart resumes it. */
+  session?: string;
+  /** Never written down: main.tsx fills it from the agent's standing start line at restore. */
+  env?: [string, string][];
   account?: string | null;
   title?: string;
   group?: number;
@@ -32,7 +36,7 @@ export type SavedPane = {
 export type SavedLayout = { panes: SavedPane[]; activeTab: Record<number, number>; focused: number; activeDir: string | null; stacked: Record<string, boolean> };
 
 /** A live pane as App keeps it; the fields beyond SavedPane are what a restart cannot rebuild. */
-type LivePane = SavedPane & { seats?: unknown[]; env?: unknown; typed?: string; task?: string };
+type LivePane = Omit<SavedPane, "env"> & { seats?: unknown[]; env?: unknown; typed?: string; task?: string };
 
 /** What to write down: every started tab, stripped to what a restart can rebuild. A chooser that
  *  was never started is no tab yet; an agent comes back at its prompt (its arguments carried the
@@ -43,6 +47,7 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
     if (p.seats && p.program === null && !p.kind) continue;
     const s: SavedPane = { key: p.key, cwd: p.cwd, branch: p.branch, agent: p.agent, program: p.program, args: p.agent === "shell" ? p.args : [] };
     if (p.agentId !== undefined) s.agentId = p.agentId;
+    if (p.session) s.session = p.session;
     if (p.account !== undefined) s.account = p.account;
     if (p.title !== undefined) s.title = p.title;
     if (p.group !== undefined) s.group = p.group;
@@ -52,6 +57,16 @@ export function layoutOf(panes: LivePane[], activeTab: Record<number, number>, f
     kept.push(s);
   }
   return tidy(kept, activeTab, focused, activeDir, stacked);
+}
+
+/** SESS-030: how the agent is started again on its own session. Only a known id is ever passed:
+ *  Claude Code's bare `--resume` opens its pick-a-session screen, and Codex's bare `resume` its
+ *  picker, so without an id the agent starts fresh at its prompt. */
+export function resumeArgs(agent: Agent, session: string | undefined): string[] {
+  if (!session) return [];
+  if (agent === "claude") return ["--resume", session];
+  if (agent === "codex") return ["resume", session];
+  return [];
 }
 
 const str = (v: unknown): v is string => typeof v === "string";
@@ -71,6 +86,7 @@ function readPane(v: unknown): SavedPane | null {
     if (o.kind !== "browser" && o.kind !== "changes" && !str(o.path)) return null;
   }
   if (str(o.agentId)) p.agentId = o.agentId;
+  if (str(o.session) && o.session !== "") p.session = o.session;
   if (strOrNull(o.account) && o.account !== undefined) p.account = o.account;
   if (str(o.title)) p.title = o.title;
   if (num(o.group)) p.group = o.group;
@@ -90,6 +106,7 @@ export function restoreLayout(value: unknown): SavedLayout | null {
   for (const v of o.panes) {
     const p = readPane(v);
     if (p && !seen.has(p.key)) {
+      if (p.agent !== "shell") p.args = resumeArgs(p.agent, p.session);
       seen.add(p.key);
       panes.push(p);
     }
