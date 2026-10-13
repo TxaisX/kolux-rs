@@ -1098,6 +1098,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       if (p.kind === "terminal-switch") return c.termSwitch(p.handle);
       if (p.kind === "terminal-close") return p.handles.map(c.keyOfHandle).filter(Number.isFinite).forEach(c.dropPane);
       setRefresh((n) => n + 1);
+      if (p.kind === "repo" || p.kind === "changed") return;
       if (p.kind === "removed") {
         cli.current.removed(p.path);
         return;

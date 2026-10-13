@@ -258,7 +258,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-116-c-a · SET-033 Per-repository page: base branch, setup script, folder (this part: the base branch and the workspaces folder, edited in place)
 - [ ] T-116-c-b · The rest of the per-repository page on T-116-c-a: the setup script stored in Kolux and run in a new tab, whether the agent waits for it, local, shared or both (needs the prompt on T-156 before a shared script runs), the repository's own choice of showing worktrees made outside Kolux, and its display name and icon (the icon picker is area 01)
 - [x] T-117-a · CLI-009 [compat] Selectors for repos, worktrees and terminals, with the current folder as default · CLI-015 [compat] kolux repo: list, add, show, base ref and ref search · CLI-016 [compat] kolux project list · CLI-017 [compat] kolux worktree list, show, current and ps
-- [ ] T-117-b · CLI-019 [compat] kolux worktree set: rename, link, comment, board status and lineage (board status needs the core lane's Board, T-025..T-030), plus the WSL path rule and the folder: parent form of the selector card on T-117-a (folder workspaces are T-218)
+- [x] T-117-b-a · CLI-019 [compat] kolux worktree set: rename, link, comment, board status and lineage (this part: --display-name, --issue <number>|null, --comment and the parent flags, with active as the current folder's worktree)
+- [ ] T-117-b-b · The rest of T-117-b on T-117-b-a: `worktree set --workspace-status` (needs the core lane's Board, T-025..T-030; refused with a message until then), the WSL path rule, and the folder: parent form of the selector card on T-117-a (folder workspaces are T-218)
 - [x] T-118 · CLI-021 [compat] kolux worktree changes and overlap: what a worktree touched and who else touches it
 
 ### P1 · theme 3 · Knowing what each agent is doing (57 cards)

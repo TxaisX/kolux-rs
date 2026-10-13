@@ -158,6 +158,9 @@ export type CliWorkspace =
   | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean; setup?: "run" | "skip" | "inherit" }
   | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null }
   | { kind: "removed"; path: string }
+  // CLI-015 / CLI-019: a repo setting or a worktree's name, link, comment or parent changed; only a redraw.
+  | { kind: "repo"; projectId: string }
+  | { kind: "changed"; projectId: string; path: string }
   // CLI-026, CLI-027: the terminal commands; ask is the request the window answers through its layout.
   | { kind: "terminal-create"; path: string; branch: string | null; command: string | null; title: string | null; focus: boolean; ask: string }
   | { kind: "terminal-split"; handle: string; dir: "right" | "down"; command: string | null; ask: string }

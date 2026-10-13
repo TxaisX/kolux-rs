@@ -95,7 +95,7 @@ pub struct Parsed {
     pub args: Map<String, Value>,
 }
 
-const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>, the name defaulting to its title] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
+const HELP: &str = "kolux-dev: drive Kolux from a terminal\n\n  kolux-dev --version\n  kolux-dev worktree create --name <name> [--repo <selector>] [--agent <id>] [--prompt <text>]\n      [--setup run|skip|inherit] [--base-branch <ref>] [--issue <number>, the name defaulting to its title] [--comment <text>]\n      [--parent-worktree <selector>] [--no-parent] [--run-hooks] [--activate] [--json]\n  kolux-dev worktree rm --worktree <selector> [--force] [--run-hooks] [--json]\n      (also: remove, delete)\n  kolux-dev open [--json]\n      start Kolux, or bring its window to the front, and wait until it answers\n  kolux-dev repo list | repo add --path <folder> | repo show [--repo <selector>] [--json]\n  kolux-dev repo set-base-ref --ref <ref> [--repo <selector>] [--json]\n  kolux-dev repo search-refs [--repo <selector>] [--query <text>] [--limit <n>] [--json]\n  kolux-dev project list [--json]\n  kolux-dev worktree list | worktree ps [--repo <selector>] [--limit <n>] [--json]\n  kolux-dev worktree show [--worktree <selector>] | worktree current [--json]\n  kolux-dev worktree set [--worktree <selector>] [--display-name <d>] [--issue <number>|null] [--comment <text>]\n      [--parent-worktree <selector>|current] [--no-parent] [--json]\n  kolux-dev worktree changes | worktree overlap [--worktree <selector>] [--json]\n  kolux-dev orchestration worker-start (--task <id> | --spec <text>) (--agent <id> | --model <m> | --tier major|deep|build|light | --terminal <handle>)\n      [--worktree current|<selector>|new-child|new-top-level] [--model <m>] [--effort <e>] [--name <n>]\n      [--repo <selector>] [--base-branch <ref>] [--display-name <d>] [--comment <c>] [--setup run|skip|inherit]\n      [--task-title <t>] [--deps <json list>] [--parent <task>] [--timeout-ms <ms>] [--max-depth <n>] [--json]\n  kolux-dev orchestration run-create --objective <text> [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-use --id <run> [--from <handle>] [--takeover-legacy] [--retry-request <id>] [--json]\n  kolux-dev orchestration run-current [--from <handle>] [--json]\n  kolux-dev orchestration run-list [--limit <n>] [--cursor <c>] [--json]\n  kolux-dev orchestration run-show --id <run> [--json]\n  kolux-dev orchestration send --subject <s> [--to run:<id>|dispatch:<id>|<handle>] [--body <text>] [--type <kind>]\n      [--priority normal|high|urgent] [--thread-id <t>] [--payload <json>] [--task-id <id>] [--dispatch-id <id>]\n      [--outcome succeeded|failed] [--files-modified <a,b>] [--report-path <p>] [--phase <p>] [--run <run>] [--from <handle>]\n      [--retry-request <id>] [--json]\n  kolux-dev orchestration check [--terminal <handle>] [--run <run>] [--ack <delivery>] [--unread|--peek|--all]\n      [--types <kind,...>] [--format] [--wait] [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration reply --id <message> --body <text> [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration inbox [--limit <n>] [--terminal <handle>] [--full] [--json]\n  kolux-dev orchestration ask (--question <text> [--options <a,b>] [--to <who>] | --resume <message>) [--timeout-ms <ms>] [--json]\n  kolux-dev orchestration gate-create --task <id> --question <text> [--options <json list>] [--json]\n  kolux-dev orchestration gate-resolve --id <gate> --resolution <text> [--json]\n  kolux-dev orchestration gate-list [--task <id>] [--status pending|resolved|timeout] [--run <run>] [--json]\n  kolux-dev orchestration task-create --spec <text> [--task-title <t>] [--display-name <n>] [--deps <json list>]\n      [--parent <task>] [--run <run>] [--from <handle>] [--retry-request <id>] [--json]\n  kolux-dev orchestration task-list [--status <state>] [--ready] [--brief] [--run <run>] [--json]\n  kolux-dev orchestration task-update --id <task> --status pending|ready|dispatched|completed|failed|blocked\n      [--result <text>] [--run <run>] [--retry-request <id>] [--json]\n  kolux-dev orchestration dispatch --task <id> (--to <handle> [--inject] | --dry-run) [--return-preamble] [--run <run>]\n      [--max-depth <n>] [--json]\n  kolux-dev orchestration dispatch-show --task <id> [--preamble] [--json]\n  kolux-dev orchestration request-show --request <uuid> [--json]\n      what became of a change whose answer was lost (its --retry-request id)\n  kolux-dev account add [--agent claude|codex] [--json]\n      (runs the agent's own login in this terminal; Codex uses a device code)\n  kolux-dev account list [--json]\n  kolux-dev orchestration worker-abandon --dispatch <id> [--json]\n  kolux-dev orchestration worker-stop --dispatch <id> [--json]\n      (ends the worker's agent terminal; its worktree and other terminals stay)\n  kolux-dev orchestration reset (--all | --tasks | --messages) [--json]\n  kolux-dev terminal list [--worktree <selector>] [--limit <n>] [--include-visual-layouts] [--json]\n  kolux-dev terminal show --terminal <handle> [--json]\n  kolux-dev terminal create [--worktree active|<selector>] [--command <text>] [--title <t>] [--focus] [--json]\n  kolux-dev terminal split --terminal <handle> [--direction vertical|horizontal] [--command <text>] [--json]\n  kolux-dev terminal rename --terminal <handle> [--title <t>] [--json]\n      without --title the default name comes back\n  kolux-dev terminal switch --terminal <handle> [--json]   (also: focus)\n  kolux-dev terminal close (--terminal <handle> [--tab] | --worktree <selector> --all) [--json] (it replaces stop)\n  kolux-dev automations list [--json]\n  kolux-dev automations show <id> [--json]\n  kolux-dev automations runs <id> [--limit <n>] [--json]\n  kolux-dev automations create --name <n> --trigger hourly|daily|weekdays|weekly|<cron line or RRULE> --prompt <text>\n      [--provider claude|codex|gemini] [--time HH:MM] [--day 0-6, Sunday 0] [--timezone <IANA zone>]\n      [--repo <selector> | --workspace <selector>] [--workspace-mode existing|new-per-run]
       [--missed-run-grace-minutes 0|30|60|180|720|1440|2880]\n      [--precheck <command>] [--precheck-timeout 60|120|300|600] [--enabled | --disabled] [--json]\n      (--schedule is another name for --trigger)\n  kolux-dev automations edit <id> [the create flags; --time, --day and --timezone go with --trigger] [--json]\n  kolux-dev automations remove <id> [--json]\n  kolux-dev automations run <id> [--json]\n  kolux-dev agent-context [--json]   (every command, its flags and its usage; works with the app closed)\n  kolux-dev skills list [--json]\n  kolux-dev skills get <topic> [--full | --references | --reference <name>] [--topic <topic>] [--json]\n      (also: show; skills commands work with the app closed)\n  kolux-dev skills coverage [--json]\n      (which installed agents have the orchestration skill for the whole computer)\n  kolux-dev claude-teams [claude arguments]   (Claude Code with Agent Teams, in a Kolux terminal; not on Windows)\n\nSelectors: --repo id:|name:|path:   --worktree active|current|id:<repo-id>::<path>|identity:|name:|branch:|issue:|path:\n--json prints one envelope on stdout; without it, errors go to stderr; warnings about flags nothing
 acts on yet go to stderr and into the result's `warnings` list. Exit 0 worked, 1 any error.\n";
 
@@ -190,6 +190,10 @@ fn camel(k: &str) -> String {
     }
     out
 }
+/// CLI-019: what `worktree set` changes, and its flags.
+const SET: &str = "worktree.set";
+const SET_FIELDS: &[&str] = &["display-name", "issue", "comment", "parent-worktree", "no-parent"];
+const SET_FLAGS: &[&str] = &["worktree", "display-name", "issue", "comment", "workspace-status", "parent-worktree", "no-parent"];
 const CREATE_FLAGS: &[&str] = &["name", "repo", "agent", "prompt", "setup", "base-branch", "issue", "comment", "parent-worktree", "no-parent", "run-hooks", "activate"];
 const RM_FLAGS: &[&str] = &["worktree", "force", "run-hooks"];
 const WORKER_START: &str = "orchestration.worker-start";
@@ -207,6 +211,7 @@ type Command = (&'static str, &'static str, &'static [&'static str]);
 fn commands() -> Vec<Command> {
     let mut all: Vec<Command> = vec![
         ("worktree create", "worktree.create", CREATE_FLAGS),
+        ("worktree set", SET, SET_FLAGS),
         ("worktree rm", "worktree.rm", RM_FLAGS),
         ("worktree remove", "worktree.rm", RM_FLAGS),
         ("worktree delete", "worktree.rm", RM_FLAGS),
@@ -462,6 +467,28 @@ pub fn parse(words: &[String]) -> (bool, Result<Option<Parsed>, Fail>) {
             args.insert("setup".into(), Value::String(setup.into()));
             if flags.contains_key("run-hooks") {
                 args.insert("activate".into(), Value::Bool(true));
+            }
+        } else if command == SET {
+            // CLI-019: refused before any lookup.
+            if flags.contains_key("workspace-status") {
+                return Err(Fail::args("--workspace-status moves the worktree's card on the Board, which is not built yet; nothing was changed"));
+            }
+            if flags.contains_key("no-parent") && flags.contains_key("parent-worktree") {
+                return Err(Fail::args("--no-parent and --parent-worktree disagree; pass one of them"));
+            }
+            for k in ["worktree", "display-name", "parent-worktree"] {
+                if empty(k) {
+                    return Err(Fail::args(format!("--{k} cannot be empty")));
+                }
+            }
+            if text("issue").map(str::trim).is_some_and(|v| v != "null" && v.parse::<u64>().map_or(true, |n| n == 0)) {
+                return Err(Fail::args("--issue takes a GitHub issue number, or null to remove the link"));
+            }
+            if !SET_FIELDS.iter().any(|k| flags.contains_key(*k)) {
+                return Err(Fail::args("nothing to set; pass --display-name, --issue, --comment, --parent-worktree or --no-parent"));
+            }
+            for (k, v) in &flags {
+                args.insert(camel(k), v.clone());
             }
         } else if command == WORKER_START {
             check_worker_start(&flags)?;
@@ -1494,11 +1521,54 @@ fn pick_in(ctx: &Ctx, sel: &str, cwd: &str, parent: bool) -> Result<(Project, Wo
     }
 }
 
+/// CLI-019: a worktree's display name, linked issue, comment and parent, changed in one call. The
+/// parent is checked first, so a refused move writes nothing; an empty comment clears it.
+fn set_worktree(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
+    let a = &req.args;
+    let raw = |k: &str| a[k].as_str().map(str::trim);
+    let (p, w) = pick_worktree(ctx, raw("worktree").filter(|s| !s.is_empty()).unwrap_or("current"), &req.cwd)?;
+    let parent = if a["noParent"].as_bool().unwrap_or(false) {
+        Some(None)
+    } else if let Some(sel) = raw("parentWorktree") {
+        let (owner, to) = pick_in(ctx, sel, &req.cwd, true)?;
+        if owner.id != p.id {
+            return Err(Fail::args(format!("--parent-worktree {sel} is in project {}, not {}", owner.name, p.name)));
+        }
+        Some(Some(to.path))
+    } else {
+        None
+    };
+    let store = ctx.store.lock().map_err(|e| e.to_string())?;
+    if let Some(to) = &parent {
+        projects::reparent(ctx.git, &store, &p, &w.path, to.as_deref())?;
+    }
+    if let Some(n) = raw("displayName") {
+        projects::set_name(&store, &w.path, Some(n))?;
+    }
+    if raw("issue").is_some() || raw("comment").is_some() {
+        let mut o = projects::origin(&store, &w.path).filter(Value::is_object).unwrap_or_else(|| json!({}));
+        if let Some(i) = raw("issue") {
+            o["issue"] = i.parse::<u64>().map_or(Value::Null, |n| json!(n));
+            o["issueUrl"] = Value::Null;
+        }
+        if let Some(c) = raw("comment") {
+            o["comment"] = if c.is_empty() { Value::Null } else { json!(c) };
+        }
+        projects::set_origin(&store, &w.path, Some(&o))?;
+    }
+    let all = projects::list_workspaces(ctx.git, &store, &p)?;
+    drop(store);
+    let now = all.iter().find(|x| same_dir(&x.path, &w.path)).cloned().unwrap_or(w);
+    (ctx.notify)(json!({ "kind": "changed", "projectId": p.id, "path": now.path }));
+    Ok(worktree_row(&p, &now, &all))
+}
+
 /// Runs one request against the app and says what it did.
 pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
     let a = &req.args;
     let text = |k: &str| a[k].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     match req.command.as_str() {
+        SET => set_worktree(ctx, req),
         "worktree.create" => {
             // PROJ-038: a prompt with no agent named goes to the default agent, else the first
             // installed one in catalogue order; a worktree made with neither gets no agent tab.
@@ -1829,7 +1899,7 @@ fn repo_row(p: &Project) -> Value {
 fn worktree_row(p: &Project, w: &Worktree, all: &[Worktree]) -> Value {
     let id = format!("{}::{}", p.id, w.path);
     let children: Vec<&str> = all.iter().filter(|c| c.parent.as_deref().is_some_and(|x| same_dir(x, &w.path))).map(|c| c.path.as_str()).collect();
-    json!({ "id": id, "selector": format!("id:{id}"), "repoId": p.id, "repo": p.name, "path": w.path, "name": w.name, "branch": w.branch, "head": w.head, "isMain": w.is_main, "kind": w.kind, "parent": w.parent, "children": children })
+    json!({ "id": id, "selector": format!("id:{id}"), "repoId": p.id, "repo": p.name, "path": w.path, "name": w.name, "branch": w.branch, "head": w.head, "isMain": w.is_main, "kind": w.kind, "parent": w.parent, "children": children, "number": w.number, "comment": w.comment })
 }
 
 /// Which hosts a listing looked at, so an empty one is never read as the whole picture.
@@ -2178,6 +2248,15 @@ fn query_text(command: &str, r: &Value) -> Option<String> {
             } else if r["complete"] != true {
                 out.push("  the scan was incomplete; other overlaps may be missing".into());
             }
+            out.join("\n")
+        }
+        SET => {
+            let mut out = vec![format!("updated {}  [{}]  {}", label(r), r["branch"].as_str().unwrap_or("detached"), s(r, "path"))];
+            out.push(r["number"].as_u64().map_or("no linked issue".into(), |n| format!("linked #{n}")));
+            if let Some(c) = r["comment"].as_str() {
+                out.push(format!("comment {c}"));
+            }
+            out.push(r["parent"].as_str().map_or("no parent".into(), |p| format!("parent {p}")));
             out.join("\n")
         }
         "worktree.show" | "worktree.current" => {
@@ -3597,6 +3676,80 @@ mod tests {
         assert_eq!(twice.code, "ambiguous");
         // ps: no Kolux terminal is open in a test.
         assert_eq!(dispatch(&ctx, &req("worktree.ps", &dir, json!({}))).unwrap()["worktrees"], json!([]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cli019_worktree_set_renames_links_comments_and_moves_a_worktree() {
+        let refused = |s: &str| parse(&words(s)).1.unwrap_err().message;
+        assert!(refused("worktree set --worktree name:a --no-parent --parent-worktree name:b").contains("disagree"));
+        assert!(refused("worktree set --worktree name:a --parent-worktree").contains("needs a value"));
+        assert!(refused("worktree set --worktree name:a --issue seven").contains("null"));
+        assert!(refused("worktree set --worktree name:a --issue 0").contains("null"));
+        let blank = ["worktree", "set", "--worktree", "name:a", "--display-name", ""].map(String::from);
+        assert!(parse(&blank).1.unwrap_err().message.contains("cannot be empty"));
+        assert!(refused("worktree set --worktree name:a").contains("nothing to set"));
+        assert!(refused("worktree set --worktree name:a --workspace-status in-review").contains("Board"));
+        let (_, p) = parse(&words("worktree set --worktree active --issue null --display-name Login --no-parent"));
+        let p = p.unwrap().unwrap();
+        assert_eq!(p.command, "worktree.set");
+        assert_eq!((&p.args["issue"], &p.args["displayName"], &p.args["noParent"]), (&json!("null"), &json!("Login"), &json!(true)));
+
+        let dir = std::env::temp_dir().join(format!("kolux-rs-cli019-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&["init", "-q", "-b", "main"], &repo);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "one"], &repo);
+        let git_ = Git::detect().unwrap();
+        let store = Mutex::new(Store::open(&dir.join("data")).unwrap());
+        projects::add_project(&git_, &store.lock().unwrap(), &repo).unwrap();
+        {
+            let s = store.lock().unwrap();
+            let mut settings = s.settings();
+            settings["workspacesDir"] = json!(dir.join("ws").display().to_string());
+            settings["branchPrefix"] = json!("none");
+            s.save_settings(&settings).unwrap();
+        }
+        let seen = Mutex::new(Vec::<Value>::new());
+        let notify = |v: Value| seen.lock().unwrap().push(v);
+        let terminals = Terminals::default();
+        let ctx = Ctx { claude_config: dir.join(".claude.json"), git: &git_, store: &store, terminals: &terminals, notify: &notify, front: &|| Ok(()) };
+        let req = |command: &str, cwd: &Path, args: Value| Request { id: "r".into(), token: String::new(), command: command.into(), cwd: cwd.display().to_string(), args, pane: None, cli: String::new() };
+        let a = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "a", "issue": "7", "comment": "first" }))).unwrap();
+        let b = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "b" }))).unwrap();
+        let a_path = PathBuf::from(a["path"].as_str().unwrap());
+        seen.lock().unwrap().clear();
+
+        // active: the worktree around the folder; --issue null drops the link and keeps the rest
+        let set = dispatch(&ctx, &req("worktree.set", &a_path.join("."), json!({ "worktree": "active", "issue": "null" }))).unwrap();
+        assert_eq!((&set["path"], &set["number"], &set["comment"]), (&a["path"], &Value::Null, &json!("first")));
+        assert!(dispatch(&ctx, &req("worktree.show", &repo, json!({ "worktree": "issue:7" }))).is_err(), "the link is gone");
+        assert_eq!(seen.lock().unwrap().last().unwrap()["kind"], "changed", "the window is told to redraw");
+
+        // a new name, issue, comment and parent in one call
+        let set = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": "name:a", "displayName": "Login page", "issue": "12", "comment": "second", "parentWorktree": "name:b" }))).unwrap();
+        assert_eq!((&set["name"], &set["number"], &set["comment"], &set["parent"]), (&json!("Login page"), &json!(12), &json!("second"), &b["path"]));
+        let shown = dispatch(&ctx, &req("worktree.show", &repo, json!({ "worktree": "issue:12" }))).unwrap();
+        assert_eq!(shown["path"], a["path"]);
+        let text = text_of("worktree.set", &set);
+        assert!(text.contains("Login page") && text.contains("linked #12") && text.contains("second"), "{text}");
+
+        // a loop is refused and nothing else in the call is written
+        let e = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": "name:b", "parentWorktree": "name:Login page", "comment": "x" }))).unwrap_err();
+        assert!(e.message.contains("loop"), "{}", e.message);
+        assert_eq!(dispatch(&ctx, &req("worktree.show", &repo, json!({ "worktree": "name:b" }))).unwrap()["comment"], Value::Null);
+
+        // the parent taken from the current folder, then removed; an empty comment clears it
+        let set = dispatch(&ctx, &req("worktree.set", &a_path, json!({ "worktree": "name:b", "parentWorktree": "current" })));
+        assert!(set.unwrap_err().message.contains("loop"), "b cannot sit under a, which sits under b");
+        let set = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": "name:Login page", "noParent": true, "comment": "" }))).unwrap();
+        assert_eq!((&set["parent"], &set["comment"], &set["number"]), (&Value::Null, &Value::Null, &json!(12)));
+        let set = dispatch(&ctx, &req("worktree.set", &a_path, json!({ "worktree": "name:b", "parentWorktree": "current" }))).unwrap();
+        assert_eq!(set["parent"], a["path"]);
+        let main = dispatch(&ctx, &req("worktree.set", &repo, json!({ "worktree": format!("path:{}", repo.display()), "parentWorktree": "name:b" }))).unwrap_err();
+        assert!(main.message.contains("main checkout"), "{}", main.message);
+        drop(ctx);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
