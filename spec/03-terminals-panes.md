@@ -378,6 +378,10 @@ Rules: saved history is written safely so a crash leaves a usable copy; large hi
   and nothing is pruned when the list of live worktrees is empty; after a dead background host is
   replaced, the rest of a partly typed line is discarded rather than run; the hold ends after a
   short idle gap or a fixed cap, so typing never stays blocked.
+  (Kolux RS, T-068: there is no background host, so the partly typed line and the hold do not
+  apply; the saved output is a transcript of the terminal's own stream, replayed at the pane's
+  current size, so a pane reopened at a different size shows it approximately; large histories
+  are kept to one piece, 256 KB on disk and the newest 128 KB replayed.)
 Acceptance:
   - [ ] After killing the host, reopened panes show their earlier output above a new prompt.
   - [ ] A tab the user closed on purpose before the crash does not come back.

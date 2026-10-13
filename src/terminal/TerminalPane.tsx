@@ -16,6 +16,7 @@ import { attachRenderer, watchResume, type RendererMode } from "./renderer";
 import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
+import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
@@ -78,6 +79,8 @@ type Props = {
   account?: string | null;
   /** ACCT-064: a question shown over the terminal (the Codex account changed); null for none. */
   notice?: PaneNotice | null;
+  /** TERM-106: the pane came back from the saved layout; what it printed before is shown first. */
+  restored?: boolean;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
@@ -113,7 +116,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null, restored = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
   const [finishedAt, setFinishedAt] = useState<number | null>(null);
@@ -290,12 +293,43 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         return;
       }
       try {
+        // TERM-106: a pane back from a restart shows what it printed before, then a fresh shell. The
+        // saved file is a transcript of everything this pane's terminal processed, so replaying it
+        // draws the same screen; what the pane writes next (reset, note, screen pushed up, cursor at
+        // the top) goes into the file too, before the shell starts, so the next restart replays true.
+        // The view keeps the old output and the note above the new prompt until the user types: the
+        // pty's first frames come after the spawn and move the prompt row, so the view follows each
+        // of them (an idle shell writes nothing more) and lets go at the first key. A key, not
+        // onData: the terminal's own answers to the shell's start-up questions go through onData.
+        let keepInView = false;
+        if (restored) {
+          const saved = await invoke<string>("terminal_history", { paneKey: number }).catch(() => "");
+          if (!alive) return;
+          const text = replay(saved);
+          if (text) {
+            await new Promise<void>((done) => term.write(text, done));
+            if (!alive) return;
+            const tail = restoreTail(term.buffer.normal, term.rows);
+            await new Promise<void>((done) => term.write(tail, done));
+            if (!alive) return;
+            await invoke("terminal_history_append", { paneKey: number, data: encodeHistory(tail) }).catch(() => {});
+            if (!alive) return;
+            keepInView = true;
+          }
+        }
         const { id, account: used } = await invoke<{ id: number; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number, account: account ?? null });
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});
           return;
         }
         idRef.current = id;
+        if (keepInView) {
+          const follow = term.onWriteParsed(() => term.scrollToLine(viewTop(term.buffer.active, term.rows)));
+          const stop = term.onKey(() => {
+            follow.dispose();
+            stop.dispose();
+          });
+        }
         setStatus({ kind: "running", id, account: used });
         held.drain(write);
         if (held.dropped > 0) setFlash(`${held.dropped} characters typed before the shell started were dropped`);

@@ -260,6 +260,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     toastTimer.current = window.setTimeout(() => setToastText(null), 4000);
   };
   const nextKey = useRef(layout ? Math.max(1, ...layout.panes.map((p) => p.key)) + 1 : 2);
+  // TERM-106: the tabs that came back from the saved layout replay their saved output first.
+  const restoredKeys = useRef(new Set((layout?.panes ?? []).map((p) => p.key)));
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
@@ -876,6 +878,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const dropPanes = (keys: number[]) => {
     const gone = new Set(keys);
     keys.forEach((k) => delete ptys.current[k]);
+    // TERM-106: a tab closed on purpose is not brought back after a restart.
+    keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
     setRunning((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.has(Number(k)))));
     setDirty((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !gone.has(Number(k)))));
@@ -1472,6 +1476,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                   <TerminalPane
                     key={p.key}
                     hidden={!board && p.key !== active}
+                    restored={restoredKeys.current.has(p.key)}
                     gpu={gpuOn(settings)}
                     card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
                     cwd={p.cwd}

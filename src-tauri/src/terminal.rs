@@ -39,6 +39,84 @@ struct Inner {
     logs: HashMap<u32, OutputLog>,
     /// TERM-132: which sessions a program holds (alternate screen, mouse): `ALT | MOUSE` bits.
     owned: HashMap<u32, u8>,
+    /// TERM-106: each session's output file, by pane key, replayed when the pane comes back after a restart.
+    hist: HashMap<u32, History>,
+}
+
+/// TERM-106: past this many bytes a pane's saved output is rewritten down to `HISTORY_KEEP`.
+const HISTORY_CAP: u64 = 256 * 1024;
+/// TERM-106: what a rewrite keeps (the newest bytes, from a line boundary), and the most a restore replays.
+const HISTORY_KEEP: usize = 128 * 1024;
+
+/// TERM-106: what a pane printed, kept on disk by pane key (`<app data>/history/<key>.log`) so a
+/// reopened pane shows it above its new shell. Append-only, so a crash at any moment leaves a
+/// usable copy; the rewrite past the cap goes through a temp file and a rename for the same reason.
+/// ponytail: the file is opened per chunk; a kept handle only matters at thousands of chunks a second.
+struct History {
+    path: std::path::PathBuf,
+    size: u64,
+}
+
+impl History {
+    fn open(dir: &std::path::Path, key: u32) -> Option<History> {
+        std::fs::create_dir_all(dir.join("history")).ok()?;
+        let path = history_file(dir, key);
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        Some(History { path, size })
+    }
+
+    fn append(&mut self, chunk: &[u8]) {
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+            if f.write_all(chunk).is_ok() {
+                self.size += chunk.len() as u64;
+            }
+        }
+        if self.size > HISTORY_CAP {
+            self.compact();
+        }
+    }
+
+    fn compact(&mut self) {
+        let Ok(all) = std::fs::read(&self.path) else { return };
+        let kept = trim_history(&all, HISTORY_KEEP);
+        let tmp = self.path.with_extension("tmp");
+        if std::fs::write(&tmp, kept).is_ok() && std::fs::rename(&tmp, &self.path).is_ok() {
+            self.size = kept.len() as u64;
+        }
+    }
+}
+
+fn history_file(dir: &std::path::Path, key: u32) -> std::path::PathBuf {
+    dir.join("history").join(format!("{key}.log"))
+}
+
+/// The newest `keep` bytes of `all`, from the next line boundary so no escape sequence is cut in two.
+fn trim_history(all: &[u8], keep: usize) -> &[u8] {
+    if all.len() <= keep {
+        return all;
+    }
+    let from = all.len() - keep;
+    match all[from..].iter().position(|b| *b == b'\n') {
+        Some(i) => &all[from + i + 1..],
+        None => &all[from..],
+    }
+}
+
+/// TERM-106: removes the saved output of panes not in `keep`. A file not named by a pane key is
+/// left alone (its owner is uncertain) and an empty list prunes nothing (the layout could not be read).
+fn prune_history(dir: &std::path::Path, keep: &[u32]) {
+    if keep.is_empty() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir.join("history")) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(key) = name.to_str().and_then(|n| n.strip_suffix(".log")).and_then(|n| n.parse::<u32>().ok()) else { continue };
+        if !keep.contains(&key) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// TERM-132: the program in the pane took the alternate screen (vim, less, a full-screen agent view).
@@ -359,6 +437,7 @@ impl Terminals {
         // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
         let log_dir = app.path().app_data_dir().ok();
         let exit_dir = log_dir.clone();
+        let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
         let label = program.clone().unwrap_or_else(|| "shell".to_string());
         let exit_app = app;
         let registry = self.inner.clone();
@@ -415,6 +494,9 @@ impl Terminals {
                 let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data, pane: pane_key });
                 if let Ok(mut inner) = out_registry.lock() {
                     inner.logs.entry(id).or_default().push(chunk);
+                    if let Some(h) = inner.hist.get_mut(&id) {
+                        h.append(chunk);
+                    }
                     if chunk.contains(&0x1b) {
                         let prev = inner.owned.get(&id).copied().unwrap_or(0);
                         let now = screen_owner(prev, chunk);
@@ -438,6 +520,7 @@ impl Terminals {
                     inner.keys.remove(&id);
                     inner.logs.remove(&id);
                     inner.owned.remove(&id);
+                    inner.hist.remove(&id);
                 }
                 if let Some(d) = &exit_dir {
                     crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
@@ -450,6 +533,9 @@ impl Terminals {
             crate::diag::write(d, &format!("terminal {id} started ({label})"));
         }
         inner.keys.insert(id, key);
+        if let Some(h) = history {
+            inner.hist.insert(id, h);
+        }
         if is_program {
             let agent = program.as_deref().and_then(crate::agents::credited_agent);
             inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent });
@@ -545,6 +631,7 @@ impl Terminals {
         inner.dirs.remove(&id);
         inner.marks.remove(&id);
         inner.keys.remove(&id);
+        inner.hist.remove(&id);
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
@@ -643,6 +730,7 @@ impl Terminals {
         if let Ok(mut inner) = self.inner.lock() {
             inner.dirs.clear();
             inner.keys.clear();
+            inner.hist.clear();
             for (_, mut s) in inner.sessions.drain() {
                 s.kill();
             }
@@ -742,6 +830,37 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn term_106_saved_output_keeps_the_newest_lines_within_the_cap_and_prunes_only_known_keys() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t068-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut h = History::open(&dir, 7).expect("history folder");
+        let line = vec![b'x'; 1023];
+        for _ in 0..300 {
+            h.append(&line);
+            h.append(b"\n");
+        }
+        let bytes = std::fs::read(history_file(&dir, 7)).unwrap();
+        assert!(bytes.len() as u64 <= HISTORY_CAP, "capped: {}", bytes.len());
+        assert!(bytes.len() >= HISTORY_KEEP / 2, "kept the newest half: {}", bytes.len());
+        assert!(bytes.ends_with(b"xxx\n"));
+        // The cut lands on a line boundary, never inside an escape sequence.
+        assert_eq!(bytes[0], b'x');
+        assert_eq!(trim_history(b"ab\ncd\nef", 4), b"ef");
+        assert_eq!(trim_history(b"abc", 10), b"abc");
+        // Panes gone from the layout lose their saved output; a name that is not a pane key and an
+        // empty keep-list (the layout could not be read) prune nothing.
+        std::fs::write(history_file(&dir, 8), b"old").unwrap();
+        std::fs::write(dir.join("history").join("notes.log"), b"keep").unwrap();
+        prune_history(&dir, &[]);
+        assert!(history_file(&dir, 8).exists());
+        prune_history(&dir, &[7]);
+        assert!(!history_file(&dir, 8).exists());
+        assert!(history_file(&dir, 7).exists());
+        assert!(dir.join("history").join("notes.log").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn term_132_a_program_that_takes_the_screen_or_the_mouse_owns_the_pane_until_it_gives_it_back() {
@@ -883,4 +1002,40 @@ mod tests {
 #[tauri::command]
 pub fn terminal_kill(terminals: tauri::State<'_, Terminals>, id: u32) -> Result<(), String> {
     terminals.kill(id)
+}
+
+/// TERM-106: what pane `pane_key` printed before the last restart, base64 (empty when nothing was saved).
+#[tauri::command]
+pub fn terminal_history(app: AppHandle, pane_key: u32) -> Result<String, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(history_file(&dir, pane_key)).unwrap_or_default();
+    Ok(base64::engine::general_purpose::STANDARD.encode(trim_history(&bytes, HISTORY_KEEP)))
+}
+
+/// TERM-106: a tab closed on purpose is not brought back, so its saved output goes with it.
+#[tauri::command]
+pub fn terminal_forget_history(app: AppHandle, pane_key: u32) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(history_file(&dir, pane_key));
+    Ok(())
+}
+
+/// TERM-106: after a start, the saved output of panes no longer in the layout is removed in the background.
+#[tauri::command]
+pub fn terminal_prune_history(app: AppHandle, keep: Vec<u32>) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || prune_history(&dir, &keep));
+    Ok(())
+}
+
+/// TERM-106: what the pane itself wrote around the replay (the reset, the note, the push) goes into
+/// the file too, so the file stays a transcript of what the terminal processed and replays true.
+#[tauri::command]
+pub fn terminal_history_append(app: AppHandle, pane_key: u32, data: String) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
+    if let Some(mut h) = History::open(&dir, pane_key) {
+        h.append(&bytes);
+    }
+    Ok(())
 }
