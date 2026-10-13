@@ -23,7 +23,7 @@ export const screens: Array<{ id: Screen; label: string }> = [
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
 /** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
-export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void; fullPage?: boolean };
+export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void; fullPage?: boolean; codexAccount?: boolean };
 
 /** TERM-078: the overflow menu's View section; each item names its keybinding id. */
 export const VIEW_ITEMS = [
@@ -33,7 +33,7 @@ export const VIEW_ITEMS = [
 ] as const;
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
-export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom, fullPage = false }: TopBarProps) {
+export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom, fullPage = false, codexAccount = false }: TopBarProps) {
   const [maximized, setMaximized] = useState(false);
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   // USAGE-008 / VIEW-008: a pill per provider, only with a weekly figure (or Codex's refused
@@ -41,7 +41,8 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
   // opens with Ctrl+, (app.settings).
   const plan = usePlan();
   const claudeOn = installed.includes("claude");
-  const codexOn = installed.includes("codex");
+  // T-543-b: the Codex pill needs a Codex account, not only the CLI installed.
+  const codexOn = installed.includes("codex") && codexAccount;
   const anyPill = (claudeOn && !!weeklyOf(plan.claude)) || (codexOn && !!(plan.codex?.weekly || plan.codex?.state === "sign-in-again"));
   useEffect(() => {
     const win = getCurrentWindow();

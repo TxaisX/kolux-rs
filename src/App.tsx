@@ -112,6 +112,7 @@ import { useWorkspaceActions, useWorkspaces } from "./projects/useWorkspaces";
 import { useChrome } from "./chrome/useChrome";
 import { aiOf, useKitRun, useKits, type KitWait } from "./kits/useKits";
 import { useWizard } from "./onboarding/useWizard";
+import { hooksOn } from "./settings/AgentsPage";
 import ToolNotices from "./launch/ToolNotices";
 import PlanSheet from "./terminal/PlanSheet";
 import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
@@ -185,8 +186,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [dragWidth, setDragWidth] = useState<number | null>(null);
   const [dragLeft, setDragLeft] = useState<number | null>(null); // VIEW-050: the left sidebar mid-drag
   // PROJ-067: the saved tabs and layout (already checked against the disk by main.tsx) are the starting state.
-  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? [{ key: 1, cwd: null, branch: null, agent: "shell", program: null, args: [] }]);
-  const [focused, setFocused] = useState(layout?.focused ?? 1);
+  const [panes, setPanes] = useState<Pane[]>(() => layout?.panes ?? []); // T-543-b: no pane until a workspace is opened
+  const [focused, setFocused] = useState(layout?.focused ?? 0);
   // TERM-040: which tab each cell shows; the focused pane's tab comes to the front, and a cell
   // whose active tab was closed falls back to its last tab.
   const [activeTab, setActiveTab] = useState<Record<number, number>>(layout?.activeTab ?? {});
@@ -1784,7 +1785,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         }
         screen={screen}
         classic={classic}
-        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
+        onScreen={setScreen} installed={installedIds} codexAccount={codex.accounts.length > 0} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} fullPage={fullPage} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
         {palette && (
           <WorktreePalette
@@ -2473,6 +2474,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         agents={live.filter((p) => p.agent !== "shell").length}
         names={() => Object.fromEntries(panes.flatMap((p) => (ptys.current[p.key] === undefined ? [] : [[ptys.current[p.key], tabName(p, titles)]])))}
         workspaces={Object.keys(owner)}
+        hooks={settingsRead ? hooksOn(settings) : null}
       />
       )}
     </div>
