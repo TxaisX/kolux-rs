@@ -101,10 +101,12 @@ pub fn is_shell_program(program: &str) -> bool {
 
 /// ACCT-048: an inherited variable a pane should not see: Kolux's own runtime and build ones
 /// (Tauri, WebView2, a cargo or npm script run) or a conda activation that came along only in part.
+/// CLI-010: also another copy's data-folder override (KOLUX_USER_DATA_PATH), which a Kolux started
+/// from that copy's terminal inherits and which would send this pane's commands to the other app.
 // ponytail: the folders a dev run puts on PATH stay; strip them if a dev build's panes ever mislead.
 pub fn inherited_noise(name: &str) -> bool {
     const PREFIXES: [&str; 9] = ["TAURI_", "__TAURI", "WEBVIEW2_", "CARGO_PKG_", "CARGO_MANIFEST_", "CARGO_BIN_", "npm_", "PNPM_SCRIPT_", "CONDA_PREFIX"];
-    const NAMES: [&str; 6] = ["CARGO_CRATE_NAME", "CARGO_PRIMARY_PACKAGE", "INIT_CWD", "CONDA_DEFAULT_ENV", "CONDA_SHLVL", "CONDA_PROMPT_MODIFIER"];
+    const NAMES: [&str; 7] = ["CARGO_CRATE_NAME", "CARGO_PRIMARY_PACKAGE", "INIT_CWD", "CONDA_DEFAULT_ENV", "CONDA_SHLVL", "CONDA_PROMPT_MODIFIER", "KOLUX_USER_DATA_PATH"];
     PREFIXES.iter().any(|p| name.starts_with(p)) || NAMES.contains(&name)
 }
 
@@ -543,7 +545,7 @@ mod tests {
     /// dropped; the user's own settings stay.
     #[test]
     fn acct048_runtime_build_and_partial_conda_variables_are_not_passed_down() {
-        for n in ["TAURI_ENV_DEBUG", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "npm_lifecycle_event", "npm_config_user_agent", "INIT_CWD", "CONDA_PREFIX", "CONDA_PREFIX_1", "CONDA_SHLVL", "CONDA_DEFAULT_ENV"] {
+        for n in ["TAURI_ENV_DEBUG", "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "CARGO_PKG_NAME", "CARGO_MANIFEST_DIR", "npm_lifecycle_event", "npm_config_user_agent", "INIT_CWD", "CONDA_PREFIX", "CONDA_PREFIX_1", "CONDA_SHLVL", "CONDA_DEFAULT_ENV", "KOLUX_USER_DATA_PATH"] {
             assert!(inherited_noise(n), "{n}");
         }
         for n in ["PATH", "CARGO_HOME", "NPM_CONFIG_PREFIX", "CONDA_EXE", "HOME", "KOLUX_TERMINAL_HANDLE"] {

@@ -16,12 +16,13 @@
 // ponytail: which rows are folded lasts until the window closes; nothing saves it.
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { pushBadge, type Pushed } from "../scm/model";
+import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, SORT_SETTING, jumpUnhides, withoutAutomationMade, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
+import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
+import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
@@ -40,7 +41,7 @@ import { requestUpdateCheck } from "../update/UpdateCenter";
 import { GLOSSARY } from "../glossary";
 
 /** The pages that open over the content column from the sidebar footer. */
-export type Page = "automations" | "routing";
+export type Page = "automations" | "routing" | "tasks";
 
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
@@ -125,10 +126,21 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [plusOpen, setPlusOpen] = useState(false);
   const index = useRef(onIndex);
   index.current = onIndex;
-  const [worktrees, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones the sidebar shows
+  const [listed, setWorktrees] = useState<Record<string, Worktree[]>>({}); // the ones not hidden by hand
+  // AUTO-024: the switch that leaves out worktrees made by automation runs; moving to one turns it off.
+  const hideAuto = settings[HIDE_AUTOMATION_SETTING] === true;
+  const worktrees = useMemo(() => withoutAutomationMade(listed, hideAuto), [listed, hideAuto]); // the ones the sidebar shows
+  const wasActive = useRef(activeDir);
+  useEffect(() => {
+    if (jumpUnhides(wasActive.current, activeDir, listed, hideAuto, same)) onSetting(HIDE_AUTOMATION_SETTING, false);
+    wasActive.current = activeDir;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDir, listed]);
   const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
   const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
   const [pushedBy, setPushedBy] = useState<Record<string, Pushed>>({}); // GIT-065: by worktree path
+  const [prBy, setPrBy] = useState<Record<string, PrState>>({}); // GIT-027: the background poll, by worktree path
+  const polled = useRef({ failures: 0, at: 0, next: 0, limited: 0 });
   const pushTag = (w: Worktree) => {
     const b = pushBadge(pushedBy[w.path]);
     return b && <span className={`hint push ${b.tone}`}>{b.text}</span>;
@@ -236,6 +248,52 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     if (key !== indexed.current) index.current(list, owner, names);
     indexed.current = key;
   }, []);
+  // GIT-027 / GIT-028: every shown workspace's pull request, polled in the background: the visible
+  // workspace first, one gh call per GitHub project, a round every few minutes while the window is
+  // shown (backing off after failures, waiting out a rate limit), and again on focus when stale.
+  const pollPaths = Object.values(worktrees).flat().map((w) => w.path);
+  const norm = (d: string) => d.replace(/[\\/]+$/, "").toLowerCase();
+  const pollActive = activeDir === null ? null : (pollPaths.find((p) => norm(p) === norm(activeDir)) ?? null);
+  const pollLinks = linkedPrs(settings[SCM_LINKED_PR_KEY]);
+  const pollKey = JSON.stringify([pollPaths, pollActive, pollLinks]);
+  useEffect(() => {
+    if (pollPaths.length === 0) return;
+    const st = polled.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let dead = false;
+    const later = (ms: number) => {
+      clearTimeout(timer);
+      st.next = Date.now() + ms;
+      timer = setTimeout(round, ms);
+    };
+    const round = () => {
+      if (document.hidden) return later(60_000);
+      invoke<PrPoll>("scm_prs_poll", { items: pollItems(pollPaths, pollActive, pollLinks) })
+        .then((answer) => {
+          if (dead) return;
+          setPrBy((prev) => mergePoll(prev, answer));
+          st.failures = answer.prs.some((x) => x.error !== null) ? st.failures + 1 : 0;
+          st.at = Date.now();
+          st.limited = answer.limitedUntil ?? 0;
+          later(nextDelay(st.failures, answer.limitedUntil, Date.now()));
+        })
+        .catch(() => {
+          if (dead) return;
+          st.failures += 1;
+          later(nextDelay(st.failures, null, Date.now()));
+        });
+    };
+    later(Math.max(1500, st.next - Date.now()));
+    const focus = () => {
+      if (Date.now() - st.at > STALE_MS && st.limited * 1000 < Date.now()) later(0);
+    };
+    window.addEventListener("focus", focus);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+      window.removeEventListener("focus", focus);
+    };
+  }, [pollKey]);
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
   // PROJ-041: the same poll notices worktrees made outside Kolux, in both layouts (DT-O2).
   useEffect(() => {
@@ -796,7 +854,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
   const isSelected = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
-  const infoOf = (w: Worktree): RowInfo => Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
+  const infoOf = (w: Worktree): RowInfo => {
+    const info = Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
+    return w.path in prBy ? { ...info, pr: prBy[w.path] } : info;
+  };
   const isUnread = (w: Worktree) => [...unread].some((d) => same(d, w.path));
   const setRead = (w: Worktree, read: boolean) => onUnread(w.path, !read);
   const show = (w: Worktree) => {
@@ -953,7 +1014,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       <aside className="sidebar" aria-label="Sidebar">
         <nav className="sb-nav">
           {chromeShown(settings, "tasksButton") && (
-            <button className="row" title="Tasks (not built yet)">
+            <button className={`row${page === "tasks" ? " on" : ""}`} aria-current={page === "tasks" ? "page" : undefined} onClick={() => onPage("tasks")}>
               <span className="ic">
                 <List />
               </span>
@@ -1069,6 +1130,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                 <option value="smart">Smart: what needs you first</option>
                 <option value="name">Name</option>
               </select>
+              <label className="check">
+                <input type="checkbox" checked={hideAuto} onChange={(e) => onSetting(HIDE_AUTOMATION_SETTING, e.target.checked)} /> Hide workspaces made by automations
+              </label>
             </div>
           )}
           {creating === "" && nameField(null)}

@@ -545,13 +545,19 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
     let wt = if new_per_run {
         // AUTO-005: cut from the chosen base; empty means the project's default branch.
         let base = auto["baseBranch"].as_str().map(str::trim).filter(|b| !b.is_empty());
-        projects::create_fresh_from(l.git, l.store, &project.id, base).map_err(Stop::Failed)?
+        let wt = projects::create_fresh_from(l.git, l.store, &project.id, base).map_err(Stop::Failed)?;
+        // AUTO-024: marked as made by an automation, so the sidebar can hide or tag it. A failed
+        // record costs only the marker, never the run.
+        if let Ok(store) = l.store.lock() {
+            let _ = projects::set_origin(&store, &wt.path, Some(&json!({ "madeBy": "automation", "automationId": auto["id"] })));
+        }
+        wt
     } else {
         let path = auto["workspace"].as_str().filter(|s| !s.is_empty()).unwrap_or(&project.path).to_string();
         if !Path::new(&path).is_dir() {
             return Err(Stop::Skipped(format!("its worktree {path} is gone")));
         }
-        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None }
+        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None }
     };
     let _ = crate::trust::trust_folders(&l.claude_config, &agent, &[PathBuf::from(&wt.path), PathBuf::from(&project.path)]);
     if new_per_run {
@@ -671,6 +677,37 @@ mod tests {
         let out = list(&store).unwrap();
         assert_eq!((out["automations"].clone(), out["runs"].clone()), (json!([]), json!([])));
         assert!(out["runsError"].as_str().unwrap().contains("could not be read"));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto024_a_run_that_makes_its_own_worktree_marks_it_made_by_an_automation() {
+        let dir = temp("a024");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.email", "t@example.com"], &["config", "user.name", "t"], &["commit", "-q", "--allow-empty", "-m", "first"]] {
+            assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+        }
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        {
+            let s = store.lock().unwrap();
+            s.set("projects", &json!([{ "id": "p1", "name": "repo", "path": repo.to_string_lossy(), "workspacesDir": dir.join("wts").to_string_lossy() }]).to_string()).unwrap();
+            s.set(KEY, &json!([{ "id": "auto-9", "name": "Sweep", "prompt": "tidy", "provider": "claude", "projectId": "p1", "workspaceMode": "new-per-run", "enabled": false }]).to_string()).unwrap();
+        }
+        let git = Git::detect().unwrap();
+        let notify = |_: &str, _: Value| {};
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        assert_eq!(run(&l, "auto-9", "manual").unwrap()["status"], json!("dispatched"));
+        let s = store.lock().unwrap();
+        let project = projects::load_projects(&s)[0].clone();
+        let listed = projects::list_workspaces(&git, &s, &project).unwrap();
+        let made = listed.iter().find(|w| !w.is_main).expect("the run's worktree");
+        assert_eq!(made.made_by.as_deref(), Some("automation"));
+        // A worktree made by hand is not tagged.
+        assert_eq!(listed.iter().find(|w| w.is_main).unwrap().made_by.as_deref(), None);
+        drop(s);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

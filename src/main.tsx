@@ -1,4 +1,5 @@
 import React from "react";
+import { saveChanged } from "./settings/saveChanged";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -23,7 +24,7 @@ async function start() {
   applyLanguage(saved?.[LANGUAGE_FIELD]);
   // SET-037: the look is written down on the first start, so a fresh profile stays New.
   const stamped = saved && stampLook(saved);
-  if (stamped) void invoke("save_settings", { value: stamped }).catch(() => {});
+  if (stamped) void saveChanged(saved, stamped).catch(() => {});
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <App initial={stamped || saved || {}} />

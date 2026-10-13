@@ -494,6 +494,12 @@ pub fn gh_login() -> Option<String> {
 }
 
 fn gh_program() -> Result<std::path::PathBuf, String> {
+    // Development builds only: KOLUX_DEV_GH names a stand-in gh for live proofs, since the
+    // registry's search path (which finds the real gh) comes before the process PATH.
+    #[cfg(debug_assertions)]
+    if let Some(p) = std::env::var_os("KOLUX_DEV_GH") {
+        return Ok(p.into());
+    }
     crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
 }
 
@@ -595,6 +601,340 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
 
+/// GIT-017: the most diff text a commit-message prompt carries.
+pub const MESSAGE_BUDGET: usize = 24_000;
+
+/// GIT-017: `diff` cut to about `budget` bytes, shared fairly across its files (a small file keeps
+/// all of its share's worth, the rest goes to the big ones), each cut at a line end and marked.
+pub fn trim_diff(diff: &str, budget: usize) -> String {
+    if diff.len() <= budget {
+        return diff.to_string();
+    }
+    let mut files: Vec<&str> = Vec::new();
+    let mut rest = diff;
+    while let Some(i) = rest.get(1..).and_then(|r| r.find("\ndiff --git ")).map(|i| i + 2) {
+        files.push(&rest[..i]);
+        rest = &rest[i..];
+    }
+    files.push(rest);
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by_key(|&i| files[i].len());
+    let mut share = vec![0usize; files.len()];
+    let mut left = budget;
+    for (n, &i) in order.iter().enumerate() {
+        let give = files[i].len().min(left / (files.len() - n));
+        share[i] = give;
+        left -= give;
+    }
+    let mut out = String::new();
+    for (i, f) in files.iter().enumerate() {
+        if share[i] >= f.len() {
+            out.push_str(f);
+            continue;
+        }
+        let keep = f.as_bytes()[..share[i]].iter().rposition(|&b| b == b'\n').map_or(0, |e| e + 1);
+        out.push_str(&f[..keep]);
+        out.push_str(&format!("[{} more lines of this file left out]\n", f[keep..].lines().count()));
+    }
+    out
+}
+
+/// GIT-017: an agent's answer as a commit message: code fences, an opening line that announces the
+/// message, and list bullets are stripped.
+pub fn clean_message(text: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("```")).collect();
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    if let Some(first) = lines.first() {
+        let low = first.trim().to_lowercase();
+        if low.ends_with(':') && (low.starts_with("here") || low.contains("commit message")) {
+            lines.remove(0);
+        }
+    }
+    let bare = |l: &&str| {
+        let t = l.trim_start();
+        ["- ", "* ", "\u{2022} "].iter().find_map(|b| t.strip_prefix(b)).unwrap_or(l).to_string()
+    };
+    lines.iter().map(bare).collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+/// GIT-018: the most custom instructions a commit-message prompt carries.
+pub const INSTRUCTIONS_MAX: usize = 2_000;
+
+/// GIT-017 / GIT-018: what the agent is asked: the job, the user's own instructions in their own
+/// size-capped part (blank ones add nothing), and the (trimmed) staged diff at the end.
+pub fn message_prompt(diff: &str, instructions: &str) -> String {
+    let own = instructions.trim();
+    let own = match own.char_indices().nth(INSTRUCTIONS_MAX) {
+        Some((i, _)) => &own[..i],
+        None => own,
+    };
+    let part = if own.is_empty() { String::new() } else { format!("\n\nInstructions from the user for this message:\n{own}") };
+    format!("Write a git commit message for the staged changes below. Reply with the commit message only: a summary line under 72 characters, then, when it helps, a blank line and a few plain sentences on what changed and why. No code fences, no bullets, no preamble.{part}\n\n{diff}")
+}
+
+/// GIT-018: a custom command split into words: double quotes keep spaces inside one word, and
+/// backslashes stay exactly as typed (Windows paths).
+pub fn split_command(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut started) = (false, false);
+    for c in line.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                started = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            c => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// GIT-018: a custom command's arguments with the prompt wherever `{prompt}` appears; with no
+/// placeholder the prompt goes on standard input instead (the second value).
+pub fn writer_args(args: &[String], prompt: &str) -> (Vec<String>, Option<String>) {
+    if args.iter().any(|a| a.contains("{prompt}")) {
+        (args.iter().map(|a| a.replace("{prompt}", prompt)).collect(), None)
+    } else {
+        (args.to_vec(), Some(prompt.to_string()))
+    }
+}
+
+/// GIT-017: runs whose stop was asked for, by key (the worktree).
+static STOPS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// GIT-017: stops the message run for `key`, if one is going.
+pub fn stop_message(key: &str) {
+    STOPS.lock().unwrap_or_else(|e| e.into_inner()).push(key.to_string());
+}
+
+fn stop_asked(key: &str) -> bool {
+    let mut stops = STOPS.lock().unwrap_or_else(|e| e.into_inner());
+    let had = stops.iter().any(|k| k == key);
+    stops.retain(|k| k != key);
+    had
+}
+
+/// GIT-017: the end of an agent's output for an error notice, keys masked.
+fn excerpt(text: &str) -> String {
+    let t = text.trim();
+    let cut = t.char_indices().rev().nth(399).map_or(0, |(i, _)| i);
+    crate::secrets::mask(&t[cut..])
+}
+
+/// GIT-017: runs an agent CLI in `dir` with `prompt` on its standard input and returns its answer
+/// as a commit message. `stop_message(key)` ends the run early with the error "stopped".
+pub fn write_message(program: &Path, args: &[&str], dir: &Path, input: Option<&str>, key: &str, limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    stop_asked(key);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).current_dir(dir).env("NO_COLOR", "1").stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Could not start the agent: {e}"))?;
+    if let (Some(mut pipe), Some(text)) = (child.stdin.take(), input.map(str::to_string)) {
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut text);
+            }
+            let _ = tx.send(text);
+        });
+        rx
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let end = |child: &mut std::process::Child| {
+        // A .cmd shim runs the agent as its child, so the whole tree goes.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).creation_flags(0x0800_0000).output();
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    };
+    let code = loop {
+        if let Some(code) = child.try_wait().map_err(|e| format!("The agent did not finish: {e}"))? {
+            break code;
+        }
+        if stop_asked(key) {
+            end(&mut child);
+            return Err("stopped".into());
+        }
+        if std::time::Instant::now() >= deadline {
+            end(&mut child);
+            return Err(format!("The agent did not finish within {} seconds", limit.as_secs()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = stdout.recv().unwrap_or_default();
+    let err = stderr.recv().unwrap_or_default();
+    if !code.success() {
+        return Err(format!("The agent failed: {}", excerpt(if err.trim().is_empty() { &out } else { &err })));
+    }
+    let message = clean_message(&out);
+    if message.is_empty() {
+        let said = excerpt(&err);
+        return Err(if said.is_empty() { "The agent wrote nothing".to_string() } else { format!("The agent wrote nothing: {said}") });
+    }
+    Ok(message)
+}
+
+/// GIT-017 / GIT-018: a commit message for what is staged in `worktree`, written by Claude Code, or
+/// by the user's own `command` when one is set, following their `instructions`.
+// ponytail: Claude Code with its default writing model; choosing another agent, a model or an effort
+// is T-228-d's.
+#[tauri::command]
+pub async fn scm_commit_message(worktree: String, command: Option<String>, instructions: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
+        if diff.is_empty() {
+            return Err("Nothing is staged to describe".into());
+        }
+        // Development builds only: KOLUX_DEV_WRITER names a stand-in agent for live proofs (as KOLUX_DEV_GH).
+        #[cfg(debug_assertions)]
+        let stand_in = std::env::var_os("KOLUX_DEV_WRITER").map(std::path::PathBuf::from);
+        #[cfg(not(debug_assertions))]
+        let stand_in: Option<std::path::PathBuf> = None;
+        let prompt = message_prompt(&trim_diff(&diff, MESSAGE_BUDGET), instructions.as_deref().unwrap_or(""));
+        let limit = std::time::Duration::from_secs(180);
+        if let Some(line) = command.filter(|c| !c.trim().is_empty()) {
+            let words = split_command(&line);
+            let (args, input) = writer_args(&words[1..], &prompt);
+            let program = crate::agents::find_program(&words[0]).unwrap_or_else(|| std::path::PathBuf::from(&words[0]));
+            return write_message(&program, &args.iter().map(String::as_str).collect::<Vec<_>>(), dir, input.as_deref(), &worktree, limit);
+        }
+        let program = stand_in.or_else(|| crate::agents::find_program("claude")).ok_or("Claude Code was not found on this computer")?;
+        write_message(&program, &["-p", "--model", "sonnet"], dir, Some(&prompt), &worktree, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-017: stops the commit-message run for `worktree`.
+#[tauri::command]
+pub fn scm_commit_message_stop(worktree: String) {
+    stop_message(&worktree);
+}
+
+/// GIT-027: one workspace the background poll looks up, with its hand-linked pull request if any.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct PollItem {
+    pub path: String,
+    #[serde(default)]
+    pub linked: Option<String>,
+}
+
+/// GIT-027: what the poll found for one workspace. `error` means "keep what you had".
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PolledPr {
+    pub path: String,
+    pub linked: bool,
+    pub pr: Option<Pr>,
+    pub error: Option<String>,
+}
+
+/// GIT-027 / GIT-028: one round of the background poll. `limited_until` (Unix seconds) is set when
+/// GitHub's rate limit stopped the round; nothing more should be asked before then.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrPoll {
+    pub prs: Vec<PolledPr>,
+    pub limited_until: Option<u64>,
+}
+
+/// GIT-027: the most a round looks up; the caller puts the visible workspace first.
+pub const POLL_MAX: usize = 60;
+
+/// GIT-027: looks up the pull requests of many workspaces with one `gh pr list` per GitHub project
+/// (checkouts under different remote forms share it), in the order the items come, a short `gap`
+/// apart. A rate-limit answer stops the round (the circuit breaker) and reads when it resets.
+// ponytail: each project's 100 most recent pull requests; a branch whose PR is older shows none.
+pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPoll {
+    let config = ssh_config();
+    let mut groups: Vec<(String, Vec<&PollItem>)> = Vec::new();
+    let mut out = PrPoll::default();
+    for it in items.iter().take(POLL_MAX) {
+        let url = run(&["remote", "get-url", "origin"], Some(Path::new(&it.path))).ok();
+        match url.and_then(|u| github_repo(&u, &config)) {
+            Some(g) => match groups.iter_mut().find(|(k, _)| *k == g.key) {
+                Some((_, list)) => list.push(it),
+                None => groups.push((g.key, vec![it])),
+            },
+            None => out.prs.push(PolledPr { path: it.path.clone(), linked: it.linked.is_some(), pr: None, error: None }),
+        }
+    }
+    let mut stopped: Option<String> = None;
+    for (n, (_, list)) in groups.iter().enumerate() {
+        if n > 0 && stopped.is_none() {
+            std::thread::sleep(gap);
+        }
+        let answer = match &stopped {
+            Some(why) => Err(why.clone()),
+            None => gh_run(gh, Path::new(&list[0].path), &["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], None).map_err(|e| gh_words(&e)).and_then(|t| serde_json::from_str::<Vec<Pr>>(&t).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))),
+        };
+        if let Err(e) = &answer {
+            if stopped.is_none() && e.to_lowercase().contains("rate limit") {
+                stopped = Some(e.clone());
+                out.limited_until = gh_budget(gh).ok().and_then(|b| b.iter().find(|x| x.name == "REST").map(|x| x.reset));
+            }
+        }
+        for it in list {
+            let dir = Path::new(&it.path);
+            let found = answer.as_ref().map_err(String::clone).and_then(|prs| match &it.linked {
+                Some(url) => prs.iter().find(|p| p.url.eq_ignore_ascii_case(url.trim())).cloned().map(Some).ok_or_else(|| "The linked pull request is not among the project's latest".to_string()),
+                None => {
+                    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"], Some(dir)).unwrap_or_default();
+                    let mine: Vec<&Pr> = prs.iter().filter(|p| p.head.as_deref() == Some(branch.as_str())).collect();
+                    let pick = mine.iter().find(|p| p.state == "OPEN").or(mine.first()).map(|p| (*p).clone());
+                    let base = run(&["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], Some(dir)).ok().map(|b| b.trim_start_matches("origin/").to_string());
+                    let default = base.as_deref().map_or(branch == "main" || branch == "master", |b| b == branch);
+                    // GIT-025: a closed or merged pull request from the default branch stays hidden.
+                    Ok(pick.filter(|p| !(default && p.state != "OPEN")))
+                }
+            });
+            let (pr, error) = match found {
+                Ok(pr) => (pr, None),
+                Err(e) => (None, Some(e)),
+            };
+            out.prs.push(PolledPr { path: it.path.clone(), linked: it.linked.is_some(), pr, error });
+        }
+    }
+    out
+}
+
+#[tauri::command]
+pub async fn scm_prs_poll(items: Vec<PollItem>) -> Result<PrPoll, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400)))).await.map_err(|e| e.to_string())?
+}
+
 /// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work
 /// first. An open one the branch already has is returned instead of a second being made. The
 /// head must still be checked out and ahead of the base, with no uncommitted tracked change.
@@ -691,18 +1031,21 @@ fn pr_url_in(link: &str) -> Option<String> {
 }
 
 /// GIT-026: makes a printed link the workspace's linked pull request (the `scmLinkedPrs`
-/// setting a hand link uses); false when it already was.
-/// ponytail: a whole-settings write from the window in the same moment wins over this one.
+/// setting a hand link uses); false when it already was. Only that one setting is written.
+/// ponytail: per top-level key; a hand link or unlink sent in the same moment still writes the
+/// whole `scmLinkedPrs` map, so one of the two would be lost. Patch inside the map if that bites.
 pub fn link_printed(store: &crate::state::Store, dir: &str, url: &str) -> bool {
-    let mut settings = store.settings();
-    if settings["scmLinkedPrs"][dir] == url {
+    let mut links = store.settings()["scmLinkedPrs"].clone();
+    if links[dir] == url {
         return false;
     }
-    if !settings["scmLinkedPrs"].is_object() {
-        settings["scmLinkedPrs"] = serde_json::json!({});
+    if !links.is_object() {
+        links = serde_json::json!({});
     }
-    settings["scmLinkedPrs"][dir] = url.into();
-    store.save_settings(&settings).is_ok()
+    links[dir] = url.into();
+    let mut set = serde_json::Map::new();
+    set.insert("scmLinkedPrs".into(), links);
+    store.patch_settings(&set, &[]).is_ok()
 }
 
 /// GIT-028: one of GitHub's API budgets as `gh api rate_limit` gives it; `reset` is in Unix seconds.
@@ -729,6 +1072,302 @@ pub fn gh_budget(gh: &Path) -> Result<Vec<Budget>, String> {
 #[tauri::command]
 pub async fn scm_gh_budget() -> Result<Vec<Budget>, String> {
     tauri::async_runtime::spawn_blocking(|| gh_budget(&gh_program()?)).await.map_err(|e| e.to_string())?
+}
+
+/// GIT-043: a label as GitHub draws it; `color` is six hex digits or empty.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskLabel {
+    pub name: String,
+    pub color: String,
+}
+
+/// GIT-043: one issue or pull request found by a Tasks search.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Task {
+    /// "issue" or "pr".
+    pub kind: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    /// owner/name.
+    pub repo: String,
+    /// open, closed or merged.
+    pub state: String,
+    pub draft: bool,
+    pub labels: Vec<TaskLabel>,
+    pub assignees: Vec<String>,
+    pub updated: String,
+    /// passing, failing, running or unresolved; None for an issue.
+    pub checks: Option<String>,
+}
+
+/// GIT-043: one page of a Tasks search. `total` adds up every search's matches; `deepest` is the
+/// largest single search, which sets how many pages there are.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskPage {
+    pub total: u64,
+    pub deepest: u64,
+    pub items: Vec<Task>,
+}
+
+pub const TASKS_PER_PAGE: u32 = 25;
+/// GitHub's search hands out only its first 1000 results.
+const SEARCH_WINDOW: u32 = 1000;
+
+/// GIT-043: the checks pill's word for a commit's rollup state.
+pub fn checks_word(state: Option<&str>) -> &'static str {
+    match state {
+        Some("SUCCESS") => "passing",
+        Some("FAILURE") | Some("ERROR") => "failing",
+        Some("PENDING") | Some("EXPECTED") => "running",
+        _ => "unresolved",
+    }
+}
+
+fn task_from(v: &serde_json::Value) -> Option<(Task, String)> {
+    let pr = v.get("pull_request").filter(|p| !p.is_null());
+    let state = if pr.is_some_and(|p| p["merged_at"].is_string()) { "merged" } else { v["state"].as_str()? };
+    let mut parts = v["repository_url"].as_str()?.rsplit('/');
+    let (name, owner) = (parts.next()?, parts.next()?);
+    let hex = |c: &str| if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) { c.to_string() } else { String::new() };
+    let labels = v["labels"].as_array().map(|a| a.iter().filter_map(|l| Some(TaskLabel { name: l["name"].as_str()?.into(), color: hex(l["color"].as_str().unwrap_or("")) })).collect()).unwrap_or_default();
+    let assignees = v["assignees"].as_array().map(|a| a.iter().filter_map(|u| u["login"].as_str().map(String::from)).collect()).unwrap_or_default();
+    let task = Task {
+        kind: if pr.is_some() { "pr" } else { "issue" }.into(),
+        number: v["number"].as_u64()?,
+        title: v["title"].as_str()?.into(),
+        url: v["html_url"].as_str()?.into(),
+        repo: format!("{owner}/{name}"),
+        state: state.to_lowercase(),
+        draft: v["draft"].as_bool().unwrap_or(false),
+        labels,
+        assignees,
+        updated: v["updated_at"].as_str().unwrap_or("").into(),
+        checks: None,
+    };
+    Some((task, v["node_id"].as_str().unwrap_or("").into()))
+}
+
+/// GIT-043: the checks rollup of each pull request, by node id, in one GraphQL call. A failed read
+/// leaves every pill unresolved rather than failing the list.
+fn checks_of(gh: &Path, host: &str, ids: &[String]) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let ok = |i: &String| !i.is_empty() && i.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '=');
+    let ids: Vec<&String> = ids.iter().filter(|i| ok(i)).collect();
+    if ids.is_empty() {
+        return out;
+    }
+    let list = ids.iter().map(|i| format!("\"{i}\"")).collect::<Vec<_>>().join(",");
+    let query = format!("query{{nodes(ids:[{list}]){{... on PullRequest{{id commits(last:1){{nodes{{commit{{statusCheckRollup{{state}}}}}}}}}}}}}}");
+    let Ok(text) = gh_run(gh, &std::env::temp_dir(), &["api", "graphql", "--hostname", host, "-f", &format!("query={query}")], None) else { return out };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return out };
+    for n in v["data"]["nodes"].as_array().into_iter().flatten() {
+        if let Some(id) = n["id"].as_str() {
+            out.insert(id.to_string(), checks_word(n["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str()).to_string());
+        }
+    }
+    out
+}
+
+/// GIT-043: one page of every search in `queries` on `host`, newest first, each item once.
+pub fn tasks_search(gh: &Path, host: &str, queries: &[String], page: u32) -> Result<TaskPage, String> {
+    host_ok(host)?;
+    if page == 0 || page * TASKS_PER_PAGE > SEARCH_WINDOW {
+        return Err(format!("GitHub search reaches only the first {SEARCH_WINDOW} results; this page cannot be reached"));
+    }
+    let mut out = TaskPage::default();
+    let mut ids = Vec::new();
+    for q in queries {
+        let (q, per, pg) = (format!("q={q}"), format!("per_page={TASKS_PER_PAGE}"), format!("page={page}"));
+        let args = ["api", "search/issues", "--hostname", host, "-X", "GET", "-f", &q, "-f", "sort=updated", "-f", "order=desc", "-f", &per, "-f", &pg];
+        let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+        let total = v["total_count"].as_u64().unwrap_or(0);
+        out.total += total;
+        out.deepest = out.deepest.max(total);
+        for (t, id) in v["items"].as_array().into_iter().flatten().filter_map(task_from) {
+            if out.items.iter().all(|x| x.url != t.url) {
+                if t.kind == "pr" {
+                    ids.push(id);
+                }
+                out.items.push(t);
+            }
+        }
+    }
+    let checks = checks_of(gh, host, &ids);
+    for (at, t) in out.items.iter_mut().filter(|t| t.kind == "pr").enumerate() {
+        t.checks = Some(checks.get(&ids[at]).cloned().unwrap_or_else(|| "unresolved".into()));
+    }
+    out.items.sort_by(|a, b| b.updated.cmp(&a.updated));
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn scm_tasks_search(host: String, queries: Vec<String>, page: u32) -> Result<TaskPage, String> {
+    tauri::async_runtime::spawn_blocking(move || tasks_search(&gh_program()?, &host, &queries, page)).await.map_err(|e| e.to_string())?
+}
+
+/// GIT-043: the account gh is signed in with on `host`, from gh's own config (no network).
+#[tauri::command]
+pub fn scm_gh_account(host: String) -> Option<String> {
+    let out = std::process::Command::new(gh_program().ok()?).args(["config", "get", "-h", &host, "user"]).output().ok()?;
+    let login = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !login.is_empty()).then_some(login)
+}
+
+fn host_ok(host: &str) -> Result<(), String> {
+    if host.is_empty() || !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':') {
+        return Err("This repository's GitHub host cannot be read".into());
+    }
+    Ok(())
+}
+
+/// GIT-050: one entry in an item's timeline. `detail` is the label, the person, the new title or the
+/// start of a comment, as the event has it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskEvent {
+    pub kind: String,
+    pub actor: String,
+    pub at: String,
+    pub detail: String,
+}
+
+/// GIT-050: what the preview dialog shows for one issue or pull request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct TaskDetail {
+    pub title: String,
+    pub body: String,
+    pub state: String,
+    pub labels: Vec<TaskLabel>,
+    pub assignees: Vec<String>,
+    pub updated: String,
+    pub events: Vec<TaskEvent>,
+}
+
+/// The API address of item `number` in `repo` (owner/name), refused unless both are plain names.
+fn item_path(host: &str, repo: &str, number: u64) -> Result<String, String> {
+    host_ok(host)?;
+    let plain = |p: &str| !p.is_empty() && p != "." && p != ".." && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.');
+    match repo.split_once('/') {
+        Some((o, n)) if plain(o) && plain(n) => Ok(format!("repos/{o}/{n}/issues/{number}")),
+        _ => Err("This item's repository cannot be read".into()),
+    }
+}
+
+fn label_list(v: &serde_json::Value) -> Vec<TaskLabel> {
+    let hex = |c: &str| if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) { c.to_string() } else { String::new() };
+    v.as_array().map(|a| a.iter().filter_map(|l| Some(TaskLabel { name: l["name"].as_str()?.into(), color: hex(l["color"].as_str().unwrap_or("")) })).collect()).unwrap_or_default()
+}
+
+fn gh_value(gh: &Path, host: &str, args: &[&str], input: Option<&str>) -> Result<serde_json::Value, String> {
+    let text = gh_run(gh, &std::env::temp_dir(), args, input).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
+    serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
+}
+
+fn detail_from(v: &serde_json::Value) -> TaskDetail {
+    let merged = v["pull_request"]["merged_at"].is_string() || v["merged_at"].is_string();
+    TaskDetail {
+        title: v["title"].as_str().unwrap_or("").into(),
+        body: v["body"].as_str().unwrap_or("").into(),
+        state: if merged { "merged".into() } else { v["state"].as_str().unwrap_or("").to_lowercase() },
+        labels: label_list(&v["labels"]),
+        assignees: v["assignees"].as_array().map(|a| a.iter().filter_map(|u| u["login"].as_str().map(String::from)).collect()).unwrap_or_default(),
+        updated: v["updated_at"].as_str().unwrap_or("").into(),
+        events: Vec::new(),
+    }
+}
+
+/// GIT-050: the item's body, labels and assignees, and its timeline (the first 100 events).
+// ponytail: one timeline page of 100; follow the Link header when long threads need more.
+pub fn task_detail(gh: &Path, host: &str, repo: &str, number: u64) -> Result<TaskDetail, String> {
+    let path = item_path(host, repo, number)?;
+    let mut d = detail_from(&gh_value(gh, host, &["api", &path, "--hostname", host], None)?);
+    let line = |v: &serde_json::Value| v.as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(200).collect::<String>();
+    let timeline = gh_value(gh, host, &["api", &format!("{path}/timeline"), "--hostname", host, "-X", "GET", "-f", "per_page=100"], None)?;
+    for e in timeline.as_array().into_iter().flatten() {
+        let kind = e["event"].as_str().unwrap_or("");
+        if kind.is_empty() || matches!(kind, "subscribed" | "unsubscribed") {
+            continue;
+        }
+        let detail = match kind {
+            "labeled" | "unlabeled" => line(&e["label"]["name"]),
+            "assigned" | "unassigned" => line(&e["assignee"]["login"]),
+            "review_requested" | "review_request_removed" => line(&e["requested_reviewer"]["login"]),
+            "renamed" => format!("{} \u{2192} {}", line(&e["rename"]["from"]), line(&e["rename"]["to"])),
+            "commented" | "reviewed" => line(&e["body"]),
+            "committed" => line(&e["message"]),
+            "cross-referenced" => line(&e["source"]["issue"]["title"]),
+            "referenced" => e["commit_id"].as_str().unwrap_or("").chars().take(7).collect(),
+            _ => String::new(),
+        };
+        let actor = [&e["actor"]["login"], &e["user"]["login"], &e["author"]["name"]].into_iter().find_map(|a| a.as_str()).unwrap_or("").to_string();
+        let at = [&e["created_at"], &e["submitted_at"], &e["author"]["date"]].into_iter().find_map(|a| a.as_str()).unwrap_or("").to_string();
+        d.events.push(TaskEvent { kind: kind.into(), actor, at, detail });
+    }
+    Ok(d)
+}
+
+/// GIT-050: the labels `repo` offers (its first 100), for the dialog's label picker.
+pub fn repo_labels(gh: &Path, host: &str, repo: &str) -> Result<Vec<TaskLabel>, String> {
+    let path = item_path(host, repo, 0)?;
+    let base = path.trim_end_matches("/issues/0");
+    Ok(label_list(&gh_value(gh, host, &["api", &format!("{base}/labels"), "--hostname", host, "-X", "GET", "-f", "per_page=100"], None)?))
+}
+
+/// Percent-encodes everything but unreserved characters, for a name inside an API address.
+fn path_part(text: &str) -> String {
+    text.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// GIT-050: adds then removes labels on an item; answers with the labels it has afterwards.
+pub fn task_labels(gh: &Path, host: &str, repo: &str, number: u64, add: &[String], remove: &[String]) -> Result<Vec<TaskLabel>, String> {
+    let path = item_path(host, repo, number)?;
+    let mut now = None;
+    if !add.is_empty() {
+        let fields: Vec<String> = add.iter().map(|l| format!("labels[]={l}")).collect();
+        let mut args = vec!["api", "-X", "POST", "", "--hostname", host];
+        let at = format!("{path}/labels");
+        args[3] = &at;
+        for f in &fields {
+            args.extend(["-f", f.as_str()]);
+        }
+        now = Some(label_list(&gh_value(gh, host, &args, None)?));
+    }
+    for l in remove {
+        let at = format!("{path}/labels/{}", path_part(l));
+        now = Some(label_list(&gh_value(gh, host, &["api", "-X", "DELETE", &at, "--hostname", host], None)?));
+    }
+    match now {
+        Some(l) => Ok(l),
+        None => Ok(detail_from(&gh_value(gh, host, &["api", &path, "--hostname", host], None)?).labels),
+    }
+}
+
+/// GIT-050: saves an item's description; answers with the item as GitHub now has it.
+pub fn task_body(gh: &Path, host: &str, repo: &str, number: u64, body: &str) -> Result<TaskDetail, String> {
+    let path = item_path(host, repo, number)?;
+    let input = serde_json::json!({ "body": body }).to_string();
+    Ok(detail_from(&gh_value(gh, host, &["api", "-X", "PATCH", &path, "--hostname", host, "--input", "-"], Some(&input))?))
+}
+
+#[tauri::command]
+pub async fn scm_task_detail(host: String, repo: String, number: u64) -> Result<TaskDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || task_detail(&gh_program()?, &host, &repo, number)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_repo_labels(host: String, repo: String) -> Result<Vec<TaskLabel>, String> {
+    tauri::async_runtime::spawn_blocking(move || repo_labels(&gh_program()?, &host, &repo)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_task_labels(host: String, repo: String, number: u64, add: Vec<String>, remove: Vec<String>) -> Result<Vec<TaskLabel>, String> {
+    tauri::async_runtime::spawn_blocking(move || task_labels(&gh_program()?, &host, &repo, number, &add, &remove)).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn scm_task_body(host: String, repo: String, number: u64, body: String) -> Result<TaskDetail, String> {
+    tauri::async_runtime::spawn_blocking(move || task_body(&gh_program()?, &host, &repo, number, &body)).await.map_err(|e| e.to_string())?
 }
 
 /// GIT-033: what the merge box needs, read in one GraphQL call when the box is opened.
@@ -1848,6 +2487,298 @@ mod tests {
         assert_eq!(s["uiLook"], "classic");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git026_a_printed_link_survives_a_window_save_from_an_older_copy_of_the_settings() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-scm-git026-race-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        store.save_settings(&serde_json::json!({ "uiLook": "classic", "quietMinutes": 5 })).unwrap();
+        // The window read its copy before the link was printed, then changes one setting.
+        assert!(link_printed(&store, "C:/ws", "https://github.com/o/r/pull/42"));
+        let set = serde_json::json!({ "uiLook": "new" });
+        store.patch_settings(set.as_object().unwrap(), &["quietMinutes".to_string()]).unwrap();
+        let s = store.settings();
+        assert_eq!(s["scmLinkedPrs"]["C:/ws"], "https://github.com/o/r/pull/42");
+        assert_eq!(s["uiLook"], "new");
+        assert!(s.get("quietMinutes").is_none(), "{s}");
+        // A link printed after the window's change keeps that change.
+        assert!(link_printed(&store, "C:/ws2", "https://github.com/o/r/pull/43"));
+        assert_eq!(store.settings()["uiLook"], "new");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git043_tasks_search_pages_through_github_search_with_labels_assignees_and_checks() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git043-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let search = r#"{"total_count":1234,"incomplete_results":false,"items":[
+            {"number":3,"title":"Crash on start","html_url":"https://github.com/o/r/issues/3","repository_url":"https://api.github.com/repos/o/r","state":"open","node_id":"I_3","updated_at":"2026-10-10T08:00:00Z","labels":[{"name":"bug","color":"d73a4a"},{"name":"odd","color":"red;x"}],"assignees":[{"login":"txais"}]},
+            {"number":9,"title":"Fix crash","html_url":"https://github.com/o/r/pull/9","repository_url":"https://api.github.com/repos/o/r","state":"open","draft":true,"node_id":"PR_9","updated_at":"2026-10-11T08:00:00Z","labels":[],"assignees":[],"pull_request":{"merged_at":null}},
+            {"number":8,"title":"Old fix","html_url":"https://github.com/o/r/pull/8","repository_url":"https://api.github.com/repos/o/r","state":"closed","node_id":"PR_8","updated_at":"2026-10-01T08:00:00Z","labels":[],"assignees":[],"pull_request":{"merged_at":"2026-10-01T08:00:00Z"}}]}"#;
+        fs::write(tools.join("search.json"), search).unwrap();
+        fs::write(tools.join("checks.json"), r#"{"data":{"nodes":[{"id":"PR_9","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}},{"id":"PR_8","commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}}]}}"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"graphql\" (type \"%~dp0checks.json\") else (type \"%~dp0search.json\")\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$2\" = graphql ]; then cat \"$(dirname \"$0\")/checks.json\"; else cat \"$(dirname \"$0\")/search.json\"; fi\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let qs = ["is:issue is:open repo:o/r".to_string(), "is:pr is:open repo:o/r".to_string()];
+        let got = tasks_search(&gh, "github.com", &qs, 3).unwrap();
+        // Two searches of the same answer: summed for the count, the deeper one sets the pages, each item once.
+        assert_eq!((got.total, got.deepest), (2468, 1234));
+        let seen: Vec<(&str, u64, &str, bool, Option<&str>)> = got.items.iter().map(|t| (t.kind.as_str(), t.number, t.state.as_str(), t.draft, t.checks.as_deref())).collect();
+        assert_eq!(seen, vec![("pr", 9, "open", true, Some("failing")), ("issue", 3, "open", false, None), ("pr", 8, "merged", false, Some("unresolved"))]);
+        let issue = &got.items[1];
+        assert_eq!((issue.repo.as_str(), issue.assignees.clone()), ("o/r", vec!["txais".to_string()]));
+        // A colour that is not six hex digits is dropped, never handed to the page's style.
+        assert_eq!(issue.labels, vec![TaskLabel { name: "bug".into(), color: "d73a4a".into() }, TaskLabel { name: "odd".into(), color: String::new() }]);
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        assert!(calls.contains("api search/issues --hostname github.com -X GET"), "{calls}");
+        assert!(calls.contains("is:pr is:open repo:o/r") && calls.contains("page=3") && calls.contains("per_page=25"), "{calls}");
+        assert!(calls.contains("api graphql --hostname github.com") && calls.contains("PR_9") && !calls.contains("I_3"), "{calls}");
+        // Past GitHub's 1000-result window nothing is asked.
+        let before = calls.lines().count();
+        assert!(tasks_search(&gh, "github.com", &qs, 41).unwrap_err().contains("first 1000"));
+        assert!(tasks_search(&gh, "bad host", &qs, 1).is_err());
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
+        assert_eq!(checks_word(Some("SUCCESS")), "passing");
+        assert_eq!(checks_word(Some("PENDING")), "running");
+        assert_eq!(checks_word(Some("ERROR")), "failing");
+        assert_eq!(checks_word(None), "unresolved");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git050_preview_reads_body_and_timeline_and_edits_labels_and_body_through_gh() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git050-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        fs::write(tools.join("issue.json"), r#"{"number":3,"title":"Crash","state":"open","body":"It crashes.","updated_at":"2026-10-10T08:00:00Z","labels":[{"name":"bug","color":"d73a4a"}],"assignees":[{"login":"txais"}]}"#).unwrap();
+        fs::write(tools.join("timeline.json"), r#"[
+            {"event":"labeled","actor":{"login":"txais"},"created_at":"2026-10-09T08:00:00Z","label":{"name":"bug"}},
+            {"event":"subscribed","actor":{"login":"txais"},"created_at":"2026-10-09T08:01:00Z"},
+            {"event":"assigned","actor":{"login":"txais"},"created_at":"2026-10-09T08:02:00Z","assignee":{"login":"mo"}},
+            {"event":"commented","user":{"login":"mo"},"created_at":"2026-10-09T09:00:00Z","body":"Same here."},
+            {"event":"renamed","actor":{"login":"mo"},"created_at":"2026-10-09T10:00:00Z","rename":{"from":"Crsh","to":"Crash"}},
+            {"event":"closed","actor":{"login":"mo"},"created_at":"2026-10-09T11:00:00Z"}]"#).unwrap();
+        fs::write(tools.join("labels.json"), r#"[{"name":"bug","color":"d73a4a"},{"name":"needs info","color":"zzzzzz"}]"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            let script = "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\necho %* | findstr /c:\"/timeline\" >nul && (type \"%~dp0timeline.json\" & exit /b 0)\r\necho %* | findstr /c:\"/labels\" >nul && (type \"%~dp0labels.json\" & exit /b 0)\r\nif \"%3\"==\"PATCH\" (more >>\"%~dp0input.txt\")\r\ntype \"%~dp0issue.json\"\r\n";
+            fs::write(&f, script).unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\ncase \"$*\" in *'/timeline'*) cat \"$d/timeline.json\"; exit 0;; *'/labels'*) cat \"$d/labels.json\"; exit 0;; esac\n[ \"$3\" = PATCH ] && cat >> \"$d/input.txt\"\ncat \"$d/issue.json\"\n";
+            fs::write(&f, script).unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let d = task_detail(&gh, "github.com", "o/r", 3).unwrap();
+        assert_eq!((d.body.as_str(), d.state.as_str(), d.assignees.clone()), ("It crashes.", "open", vec!["txais".to_string()]));
+        assert_eq!(d.labels, vec![TaskLabel { name: "bug".into(), color: "d73a4a".into() }]);
+        // Subscriptions are noise and are left out; the rest keep who, when and what.
+        let seen: Vec<(&str, &str, &str)> = d.events.iter().map(|e| (e.kind.as_str(), e.actor.as_str(), e.detail.as_str())).collect();
+        assert_eq!(seen, vec![("labeled", "txais", "bug"), ("assigned", "txais", "mo"), ("commented", "mo", "Same here."), ("renamed", "mo", "Crsh \u{2192} Crash"), ("closed", "mo", "")]);
+        assert_eq!(d.events[0].at, "2026-10-09T08:00:00Z");
+        // Labels the repository offers, with a colour that is not hex dropped.
+        assert_eq!(repo_labels(&gh, "github.com", "o/r").unwrap()[1], TaskLabel { name: "needs info".into(), color: String::new() });
+        // Adding and removing a label answer with the labels the item has afterwards.
+        assert_eq!(task_labels(&gh, "github.com", "o/r", 3, &["needs info".into()], &["good first/issue".into()]).unwrap().len(), 2);
+        let body = task_body(&gh, "github.com", "o/r", 3, "New \"body\"").unwrap();
+        assert_eq!(body.body, "It crashes.");
+        // Windows quotes some arguments in the log; the words are what matter.
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap().replace('"', "");
+        assert!(calls.contains("api repos/o/r/issues/3 --hostname github.com"), "{calls}");
+        assert!(calls.contains("api repos/o/r/issues/3/timeline --hostname github.com -X GET -f per_page=100"), "{calls}");
+        assert!(calls.contains("api -X POST repos/o/r/issues/3/labels --hostname github.com -f") && calls.contains("labels[]=needs info"), "{calls}");
+        // A label name goes into the address encoded, so a slash cannot reach another path.
+        assert!(calls.contains("api -X DELETE repos/o/r/issues/3/labels/good%20first%2Fissue --hostname github.com"), "{calls}");
+        assert!(calls.contains("api -X PATCH repos/o/r/issues/3 --hostname github.com --input -"), "{calls}");
+        assert!(fs::read_to_string(tools.join("input.txt")).unwrap().contains(r#"{"body":"New \"body\""}"#));
+        // A repository or host that is not plain owner/name is refused before gh runs.
+        let before = fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count();
+        assert!(task_detail(&gh, "github.com", "o/r/../x", 3).is_err());
+        assert!(task_detail(&gh, "github.com", "o", 3).is_err());
+        assert!(task_detail(&gh, "bad host", "o/r", 3).is_err());
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git018_a_custom_writer_command_takes_the_prompt_in_place_or_on_standard_input() {
+        // Quoted arguments stay together and backslashes stay as typed.
+        assert_eq!(split_command(r#"node "C:\My Tools\w.js" --say {prompt}"#), vec!["node", r"C:\My Tools\w.js", "--say", "{prompt}"]);
+        assert_eq!(split_command(r#"  tool  -m "a b"x  "#), vec!["tool", "-m", "a bx"]);
+        // The placeholder takes the prompt; without one the prompt goes on standard input.
+        let (args, input) = writer_args(&["--say".into(), "<{prompt}>".into()], "hi there");
+        assert_eq!((args, input), (vec!["--say".to_string(), "<hi there>".to_string()], None));
+        let (args, input) = writer_args(&["-q".into()], "hi");
+        assert_eq!((args, input), (vec!["-q".to_string()], Some("hi".to_string())));
+        // Custom instructions have their own capped part; blank ones add nothing.
+        assert_eq!(message_prompt("D", "  \n "), message_prompt("D", ""));
+        let p = message_prompt("D", "Use the imperative mood.");
+        assert!(p.contains("Use the imperative mood.") && p.ends_with("\n\nD"), "{p}");
+        let long = message_prompt("D", &"x".repeat(INSTRUCTIONS_MAX * 3));
+        assert!(long.matches('x').count() <= INSTRUCTIONS_MAX, "{}", long.len());
+        // A command run with the prompt in its arguments gets no standard input.
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git018-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let f = if cfg!(windows) {
+            let f = root.join("say.cmd");
+            fs::write(&f, "@echo off\r\necho %~1\r\n").unwrap();
+            f
+        } else {
+            let f = root.join("say");
+            fs::write(&f, "#!/bin/sh\necho \"$1\"\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let (args, input) = writer_args(&["{prompt}".into()], "Fix the poll");
+        assert_eq!(write_message(&f, &args.iter().map(String::as_str).collect::<Vec<_>>(), &root, input.as_deref(), "k18", std::time::Duration::from_secs(20)), Ok("Fix the poll".to_string()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git017_commit_message_from_the_staged_diff_is_trimmed_cleaned_and_stoppable() {
+        // A large diff is cut to the budget, shared fairly: the small file stays whole.
+        let small = "diff --git a/s b/s\n+one\n+two\n";
+        let big: String = format!("diff --git a/b b/b\n{}", (0..2000).map(|i| format!("+line {i}\n")).collect::<String>());
+        let cut = trim_diff(&format!("{small}{big}"), 600);
+        assert!(cut.len() <= 600 + 200, "{}", cut.len());
+        assert!(cut.starts_with(small), "{cut}");
+        assert!(cut.contains("+line 0\n") && !cut.contains("+line 1999"), "{cut}");
+        assert!(cut.lines().all(|l| l.starts_with('+') || l.starts_with("diff ") || l.starts_with("[")), "cut mid-line: {cut}");
+        assert_eq!(trim_diff(small, 600), small);
+        // Fences, an announcing first line and bullets are stripped.
+        assert_eq!(clean_message("Here is the commit message:\n```\n- Add the poll\n- Fix the row\n```\n"), "Add the poll\nFix the row");
+        assert_eq!(clean_message("Add the poll\n\n* keeps state\n"), "Add the poll\n\nkeeps state");
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git017-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, win: &str, sh: &str| {
+            if cfg!(windows) {
+                let f = root.join(format!("{name}.cmd"));
+                fs::write(&f, format!("@echo off\r\n{win}\r\n")).unwrap();
+                f
+            } else {
+                let f = root.join(name);
+                fs::write(&f, format!("#!/bin/sh\n{sh}\n")).unwrap();
+                std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+                f
+            }
+        };
+        let limit = std::time::Duration::from_secs(20);
+        // The prompt arrives on standard input and the answer comes back cleaned.
+        let echo = script("echo", "findstr /c:\"STAGED\" >nul && echo - Wrote the message", "grep -q STAGED && echo '- Wrote the message'");
+        assert_eq!(write_message(&echo, &[], &root, Some("STAGED diff"), "k1", limit), Ok("Wrote the message".to_string()));
+        // A clean exit with nothing printed is an empty result, with the error stream's excerpt.
+        let empty = script("empty", "echo warming up 1>&2", "echo 'warming up' >&2");
+        let e = write_message(&empty, &[], &root, Some("x"), "k2", limit).unwrap_err();
+        assert!(e.contains("wrote nothing") && e.contains("warming up"), "{e}");
+        // A failure favours the error stream and masks keys.
+        let fail = script("fail", "echo partial\r\necho bad key sk-ant-abc123 1>&2\r\nexit /b 3", "echo partial; echo 'bad key sk-ant-abc123' >&2; exit 3");
+        let e = write_message(&fail, &[], &root, Some("x"), "k3", limit).unwrap_err();
+        assert!(e.contains("bad key sk-ant-[masked]") && !e.contains("abc123") && !e.contains("partial"), "{e}");
+        // Stopping a run ends it at once and leaves no message.
+        let slow = script("slow", "ping -n 30 127.0.0.1 >nul\r\necho late", "sleep 30; echo late");
+        let started = std::time::Instant::now();
+        let stopper = std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            stop_message("k4");
+        });
+        let e = write_message(&slow, &[], &root, Some("x"), "k4", limit).unwrap_err();
+        stopper.join().unwrap();
+        assert_eq!(e, "stopped");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        // The prompt names the job and carries the diff.
+        let p = message_prompt("diff --git a/x b/x\n+y\n", "");
+        assert!(p.contains("commit message") && p.ends_with("diff --git a/x b/x\n+y\n"), "{p}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git027_background_poll_asks_once_per_repository_and_stops_at_the_rate_limit() {
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git027-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let checkout = |name: &str, branch: &str, origin: Option<&str>| {
+            let dir = temp_repo(&format!("git027-{name}"));
+            if branch != "main" {
+                run(&["checkout", "-q", "-b", branch], Some(&dir)).unwrap();
+            }
+            if let Some(o) = origin {
+                run(&["remote", "add", "origin", o], Some(&dir)).unwrap();
+            }
+            dir.to_string_lossy().to_string()
+        };
+        // Two checkouts of one project under different remote forms, its main checkout, a second
+        // project that hits the rate limit, a third never reached, and one with no GitHub remote.
+        let a1 = checkout("a1", "feat", Some("https://github.com/o/r.git"));
+        let a2 = checkout("a2", "fix", Some("git@github.com:O/R.git"));
+        let a3 = checkout("a3", "main", Some("https://github.com/o/r"));
+        let b = checkout("b", "work", Some("https://github.com/o/s.git"));
+        let c = checkout("c", "work", Some("https://github.com/o/t.git"));
+        let d = checkout("d", "work", None);
+        fs::write(tools.join("list.json"), r#"[
+            {"number":5,"url":"https://github.com/o/r/pull/5","state":"CLOSED","title":"Old feat","headRefName":"feat","isDraft":false},
+            {"number":9,"url":"https://github.com/o/r/pull/9","state":"OPEN","title":"Feat","headRefName":"feat","isDraft":true},
+            {"number":8,"url":"https://github.com/o/r/pull/8","state":"MERGED","title":"Fix","headRefName":"fix","isDraft":false},
+            {"number":3,"url":"https://github.com/o/r/pull/3","state":"CLOSED","title":"From main","headRefName":"main","isDraft":false},
+            {"number":2,"url":"https://github.com/o/r/pull/2","state":"OPEN","title":"Elsewhere","headRefName":"other","isDraft":false}]"#).unwrap();
+        fs::write(tools.join("budget.json"), r#"{"resources":{"core":{"limit":5000,"remaining":0,"reset":1760000000}}}"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            let script = "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"rate_limit\" (type \"%~dp0budget.json\" & exit /b 0)\r\necho %* | findstr /c:\"o/s\" >nul && (echo API rate limit exceeded for user ID 1. 1>&2 & exit /b 1)\r\ntype \"%~dp0list.json\"\r\n";
+            fs::write(&f, script).unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\n[ \"$2\" = rate_limit ] && { cat \"$d/budget.json\"; exit 0; }\ncase \"$*\" in *o/s*) echo 'API rate limit exceeded for user ID 1.' >&2; exit 1;; esac\ncat \"$d/list.json\"\n";
+            fs::write(&f, script).unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let item = |path: &str, linked: Option<&str>| PollItem { path: path.to_string(), linked: linked.map(String::from) };
+        let items = vec![item(&a1, None), item(&d, None), item(&b, None), item(&a2, None), item(&a3, None), item(&c, None), item(&a1, Some("https://github.com/o/r/pull/2"))];
+        let got = prs_poll(&gh, &items, std::time::Duration::from_millis(10));
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap().replace('"', "");
+        // One list call per project in the order asked, then the budget read; o/t is never asked.
+        let lists: Vec<&str> = calls.lines().filter(|l| l.starts_with("pr list")).collect();
+        assert_eq!(lists.len(), 2, "{calls}");
+        assert!(lists[0].contains("--repo github.com/o/r") && lists[1].contains("--repo github.com/o/s"), "{calls}");
+        assert!(lists[0].contains("--state all --limit 100 --json number,url,state,title,headRefName,isDraft"), "{calls}");
+        assert!(calls.contains("api rate_limit") && !calls.contains("o/t"), "{calls}");
+        assert_eq!(got.limited_until, Some(1760000000));
+        let of = |p: &str, linked: bool| got.prs.iter().find(|x| x.path == p && x.linked == linked).unwrap();
+        // The branch's open pull request wins over an older closed one.
+        assert_eq!(of(&a1, false).pr.as_ref().map(|p| (p.number, p.draft)), Some((9, true)));
+        assert_eq!(of(&a2, false).pr.as_ref().map(|p| (p.number, p.state.as_str())), Some((8, "MERGED")));
+        // A closed pull request from the default branch stays hidden.
+        assert_eq!(of(&a3, false).pr, None);
+        assert!(of(&a3, false).error.is_none());
+        // A hand link is found in the same answer, wherever its branch is.
+        assert_eq!(of(&a1, true).pr.as_ref().map(|p| p.number), Some(2));
+        // The rate-limited project and the one behind it keep what they had (an error, no answer).
+        assert!(of(&b, false).error.as_deref().unwrap().contains("rate limit"));
+        assert!(of(&c, false).error.is_some() && of(&c, false).pr.is_none());
+        // No GitHub remote: no pull request and nothing to retry.
+        assert!(of(&d, false).pr.is_none() && of(&d, false).error.is_none());
+        for p in [&a1, &a2, &a3, &b, &c, &d] {
+            let _ = fs::remove_dir_all(p);
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

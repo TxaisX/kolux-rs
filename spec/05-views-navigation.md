@@ -1026,6 +1026,7 @@ Acceptance:
 Compat: keybinding id view.tasks, no default key; the Tasks button is a View > Appearance toggle, on
   by default.
 Source: D-05-010
+Amended 2026-10-12 (DT-O3): the Tasks button is the sidebar's Tasks row, hidden from Settings > Appearance.
 
 ### VIEW-043 · Find pull requests and checks from the palette
 Tier: P1 · Pushed: — · State at 0.15.0: live-unverified

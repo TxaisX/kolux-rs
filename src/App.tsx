@@ -18,6 +18,7 @@
 // Markdown (T-093-b): Mod+Shift+V opens a read-only preview tab, Mod+Shift+O picks one of the
 // worktree's markdown files, Mod+Shift+M makes a new untitled note at the worktree root.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { saveChanged } from "./settings/saveChanged";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -34,7 +35,8 @@ import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } 
 import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
-import BrowserPane from "./browser/BrowserPane";
+import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
+import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
@@ -64,6 +66,8 @@ import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
+import TasksPage from "./tasks/TasksPage";
+import { tasksRepo } from "./tasks/model";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
@@ -100,7 +104,7 @@ type KitWait = { role: string; upstream: string; key: number; prompt: string };
 type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number>; prompts: string[] };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; kitPreview?: boolean; staged?: boolean; ask?: string };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; url?: string; kitPreview?: boolean; staged?: boolean; ask?: string };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -338,6 +342,18 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     window.addEventListener(OPEN_KITS, show);
     return () => window.removeEventListener(OPEN_KITS, show);
   }, []);
+  // GIT-036: a page asked for in the built-in browser opens as a new tab in the focused split.
+  useEffect(() => {
+    const show = (e: Event) => {
+      const url = (e as CustomEvent<string>).detail;
+      const here = panes.find((p) => p.key === focused && sameDir(p.cwd, activeDir));
+      const key = nextKey.current++;
+      setPanes((ps) => [...ps, { key, cwd: activeDir, branch: here?.branch ?? null, group: here ? groupOf(here) : undefined, agent: "shell", program: null, args: [], kind: "browser", url }]);
+      setFocused(key);
+    };
+    window.addEventListener(OPEN_IN_BROWSER, show);
+    return () => window.removeEventListener(OPEN_IN_BROWSER, show);
+  }, [panes, focused, activeDir]);
   // SKILL-003: Claude, Codex and Grok, when found and not switched off, can take kit roles.
   const kitAIs = useMemo(() => VENDORS.filter((v) => agents.some((a) => a.id === v && a.installed)), [agents]) as Vendor[];
   const pickKit = (id: string) => {
@@ -360,7 +376,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const saveSetting = (key: string, value: unknown) => {
     const next = { ...settings, [key]: value };
     setSettings(next);
-    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+    saveChanged(settings, next).catch((err) => setNotice(String(err)));
   };
   // VIEW-056 / VIEW-057 (T-146-a): one right sidebar, its open state, tab and width kept in settings.
   const right = readRight(settings);
@@ -370,7 +386,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const next = { ...settings };
     for (const [k, v] of Object.entries(patch)) next[RIGHT_KEYS[k as keyof typeof RIGHT_KEYS]] = v;
     setSettings(next);
-    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+    saveChanged(settings, next).catch((err) => setNotice(String(err)));
   };
   const showRight = (tab: RightTab) => {
     setScreen("terminals");
@@ -527,6 +543,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           break;
         case "view.cycleWorkspaceView":
           if (!classic) setScreen((s) => nextScreen(s));
+          break;
+        case "view.tasks":
+          setScreen("terminals");
+          setPage((p) => (terminals && p === "tasks" ? null : "tasks"));
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
@@ -815,7 +835,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       .then((s) => {
         const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
         setSettings(next);
-        return invoke("save_settings", { value: next });
+        return saveChanged(s, next);
       })
       .catch((err) => setNotice(String(err)));
   };
@@ -1618,7 +1638,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onNest={(on) => {
               const next = { ...settings, [NESTING_KEY]: on };
               setSettings(next);
-              invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              saveChanged(settings, next).catch((err) => setNotice(String(err)));
             }}
             agents={agents}
             defaultId={defaultId}
@@ -1659,17 +1679,18 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                saveChanged(settings, next).catch((err) => setNotice(String(err)));
               }}
             />
           )}
+          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} />}
           {terminals && page === "routing" && (
             <RoutingPage
               agents={agents}
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                saveChanged(settings, next).catch((err) => setNotice(String(err)));
               }}
             />
           )}
@@ -1813,7 +1834,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} url={p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} url={p.url ?? p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.kind === "editor" && p.path ? (
                   <EditorPane
                     key={p.key}
@@ -1943,7 +1964,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           if (done) saveRight({ width: used });
         }}>
         {scmOpen && (
-          <SourceControlPanel dir={activeDir} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text) => activeDir !== null && setDrafts((d) => ({ ...d, [activeDir]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
+          <SourceControlPanel dir={activeDir} writer={writerOf(settings)} draft={activeDir === null ? "" : (drafts[activeDir] ?? "")} onDraft={(text, dir) => (dir ?? activeDir) !== null && setDrafts((d) => ({ ...d, [dir ?? activeDir!]: text }))} onClose={() => saveRight({ open: false })} onFix={fixWithAI} pinnedBase={projects.find((p) => p.id === projectOf(activeDir))?.base ?? null} onChangeBase={(base) => {
             const p = projects.find((x) => x.id === projectOf(activeDir));
             if (p) void invoke<Project>("project_set", { projectId: p.id, workspacesDir: p.workspacesDir ?? "", base }).then((u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x))));
           }} againstUpstream={settings[SUMMARY_UPSTREAM_KEY] === true} groupOrder={settings[SCM_GROUP_ORDER_KEY]} onAgainstUpstream={(on) => saveSetting(SUMMARY_UPSTREAM_KEY, on)} fixAgent={settings[SCM_AGENT_KEY]} onFixAgent={(id) => saveSetting(SCM_AGENT_KEY, id)} linkedPr={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} onLinkPr={(url) => activeDir !== null && saveSetting(SCM_LINKED_PR_KEY, withLink(linkedPrs(settings[SCM_LINKED_PR_KEY]), activeDir, url))} onAgentAction={async (a, prompt) => {

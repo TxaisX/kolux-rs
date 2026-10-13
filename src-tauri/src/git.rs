@@ -34,6 +34,9 @@ pub struct Worktree {
     pub kind: String,
     /// For an external worktree, where its visibility comes from (`visibility.rs`).
     pub source: Option<String>,
+    /// AUTO-024: who made it, from Kolux's record of how it came to be ("app", "cli" or
+    /// "automation"); none when Kolux has no record.
+    pub made_by: Option<String>,
 }
 
 /// GIT-063: what an unattended git is given, so it fails at once instead of waiting on a password
@@ -415,7 +418,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None, made_by: None });
         }
     }
     out

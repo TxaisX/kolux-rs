@@ -78,19 +78,32 @@ fn get_settings(store: tauri::State<'_, Mutex<Store>>) -> Result<serde_json::Val
 
 #[tauri::command]
 fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, value: serde_json::Value) -> Result<(), String> {
+    write_settings(&app, &store, |_| value)
+}
+
+/// Writes only the settings the window changed (`set`, and `remove` for ones it cleared) over what
+/// is on disk, so a key Kolux itself wrote meanwhile (a printed pull request link) is kept.
+#[tauri::command]
+fn settings_patch(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, set: serde_json::Map<String, serde_json::Value>, remove: Vec<String>) -> Result<(), String> {
+    write_settings(&app, &store, |old| state::patched(old, &set, &remove))
+}
+
+/// The settings `change` makes of what is on disk, written under one lock.
+fn write_settings(app: &tauri::AppHandle, store: &Mutex<Store>, change: impl FnOnce(serde_json::Value) -> serde_json::Value) -> Result<(), String> {
     let store = store.lock().map_err(|e| e.to_string())?;
+    let old = store.settings();
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
-    let value = secrets::keep_stored_secrets(&store.settings(), value);
-    let before = store.settings().get(resume::FIELD) == Some(&serde_json::Value::Bool(true));
+    let value = secrets::keep_stored_secrets(&old, change(old.clone()));
+    let before = old.get(resume::FIELD) == Some(&serde_json::Value::Bool(true));
     store.save_settings(&value).map_err(|e| e.to_string())?;
     drop(store);
     // USAGE-007: off discards the waits, on picks up the panes already stopped on a limit.
     let after = value.get(resume::FIELD) == Some(&serde_json::Value::Bool(true));
     if before != after {
-        resume::switched(&app, after);
+        resume::switched(app, after);
     }
     // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
-    let _ = tauri::Emitter::emit(&app, "settings-saved", ());
+    let _ = tauri::Emitter::emit(app, "settings-saved", ());
     Ok(())
 }
 
@@ -211,6 +224,7 @@ pub fn run() {
             notifications::open_notification_settings,
             get_settings,
             save_settings,
+            settings_patch,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -261,6 +275,15 @@ pub fn run() {
             scm::scm_merge_info,
             scm::scm_merge,
             scm::scm_gh_budget,
+            scm::scm_tasks_search,
+            scm::scm_gh_account,
+            scm::scm_prs_poll,
+            scm::scm_commit_message,
+            scm::scm_commit_message_stop,
+            scm::scm_task_detail,
+            scm::scm_repo_labels,
+            scm::scm_task_labels,
+            scm::scm_task_body,
             scm::scm_stage,
             scm::scm_discard,
             scm::scm_commit, scm::scm_remote,

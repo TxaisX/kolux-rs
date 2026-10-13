@@ -14,6 +14,10 @@ import { can as canGo, fresh, started, type Pending } from "./history";
 type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
 
 /** The pane body's place in the window, in CSS pixels, as the back end places the page. */
+/** GIT-036: asks the window for a new browser tab at `url` in the focused split. */
+export const OPEN_IN_BROWSER = "kolux-open-in-browser";
+export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
+
 function spot(el: HTMLElement) {
   const r = el.getBoundingClientRect();
   return { x: r.left, y: r.top, w: r.width, h: r.height };

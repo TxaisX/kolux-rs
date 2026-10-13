@@ -31,5 +31,5 @@ export const startScreen = (s: Record<string, unknown>): Screen => (readLook(s) 
 export const OPEN_PAGE_FIELD = "openPage";
 export function openPageAt(s: Record<string, unknown>): Page | null {
   const v = s[OPEN_PAGE_FIELD];
-  return v === "automations" || v === "routing" ? v : null;
+  return v === "automations" || v === "routing" || v === "tasks" ? v : null;
 }

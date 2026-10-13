@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 
 /** Runs `fn` one call at a time, in call order; a failed call does not hold up the next. */
@@ -16,7 +17,7 @@ export function inTurn<A, R>(fn: (arg: A) => Promise<R>): (arg: A) => Promise<R>
 const saveInTurn = inTurn((patch: Record<string, unknown>) =>
   invoke<Record<string, unknown>>("get_settings").then((s) => {
     const next = { ...s, ...patch };
-    return invoke("save_settings", { value: next }).then(() => next);
+    return saveChanged(s, next).then(() => next);
   }),
 );
 

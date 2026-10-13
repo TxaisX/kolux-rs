@@ -235,6 +235,9 @@ input { font: inherit; }
 .scm-head .count { margin-left: 8px; font-size: 11px; color: var(--fg); }
 .scm-commit { display: flex; flex-direction: column; gap: 6px; margin: 8px 8px 0; }
 .scm-commit .field.multi { min-height: 56px; }
+.scm-msg { position: relative; display: flex; flex-direction: column; }
+.scm-msg .field.multi { padding-right: 28px; }
+.scm-gen { position: absolute; right: 4px; top: 4px; }
 .scm-main { display: flex; gap: 6px; }
 .scm-main .btn.primary { flex: 1; min-width: 0; }
 .scm-main .btn.primary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1106,3 +1109,48 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .onb-error { margin: 0; font-size: 12px; color: var(--warn); }
 .onb-ping { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 13px; color: var(--fg); cursor: pointer; }
 @media (max-width: 640px) { .onb-tiles { grid-template-columns: minmax(0, 1fr); } }
+/* VIEW-010: the Tasks page reuses the Automations page frame. */
+.tasks-repo { font-size: 12px; color: var(--fg-label); }
+.tasks-none { padding: 14px; }
+.tasks-list { list-style: none; margin: 0; padding: 0; overflow: auto; font-size: 12px; color: var(--fg-row); }
+.tasks-list li { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 12px; border-bottom: 1px solid var(--line-inner); }
+.tasks-list li:hover { background: var(--input-bg); }
+.tasks-list .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--dot-live); }
+.tasks-list { flex: 1; min-height: 0; }
+.tasks-list .dot.open { background: var(--done-icon); }
+.tasks-list .dot.issue.open { opacity: .6; }
+.tasks-list .dot.merged { background: var(--link); }
+.tasks-list .dot.closed, .tasks-list .dot.draft { background: var(--fg-faint); }
+.tasks-label { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; color: var(--fg-muted); }
+.tasks-label i { width: 6px; height: 6px; border-radius: 50%; }
+.tasks-who { flex: none; color: var(--fg-label); }
+.tasks-checks { flex: none; padding: 1px 6px; border-radius: 999px; background: var(--chip-bg); font-size: 11px; color: var(--fg-faint); }
+.tasks-checks.passing { color: var(--done); }
+.tasks-checks.failing { color: var(--danger); }
+.tasks-checks.running { color: var(--working-icon); }
+.tasks-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 8px 12px; border-top: 1px solid var(--line-subtle); font-size: 12px; }
+.tasks-foot .btn { min-width: 26px; padding: 2px 6px; }
+.tasks-foot .btn[aria-current="page"] { background: var(--row-selected); color: var(--fg); }
+.tasks-count, .tasks-gap { color: var(--fg-label); }
+.tasks-window { flex-basis: 100%; text-align: right; }
+.tasks-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.tasks-kind, .tasks-when { flex: none; color: var(--fg-label); }
+.tasks-list li { cursor: pointer; }
+.tasks-list li:focus-visible { outline: 1px solid var(--line-focus); outline-offset: -1px; }
+.task-dialog { outline: none; }
+.task-dialog h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-state { display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--chip-bg); font-size: 11px; font-weight: 500; color: var(--fg-faint); vertical-align: 1px; }
+.task-state.open { color: var(--done); }
+.task-state.merged { color: var(--link); }
+.task-main { overflow: auto; }
+.task-sect { display: flex; align-items: center; gap: 6px; }
+.task-sect .task-cap { flex: 1; }
+.task-cap { font-size: 11px; font-weight: 600; color: var(--fg-label); text-transform: uppercase; letter-spacing: .04em; }
+.task-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; padding: 10px 12px; border: 1px solid var(--line-inner); border-radius: 8px; background: var(--input-bg); }
+.task-body-edit { min-height: 160px; resize: vertical; font-family: inherit; font-size: 13px; line-height: 1.5; }
+.task-timeline { list-style: none; margin: 0; padding: 0; font-size: 12px; color: var(--fg-row); }
+.task-timeline li { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--line-inner); }
+.task-line { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.task-labels { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
+.task-x { margin-left: 2px; color: var(--fg-faint); font-size: 12px; line-height: 1; }
+.task-x:hover:not(:disabled) { color: var(--fg); }

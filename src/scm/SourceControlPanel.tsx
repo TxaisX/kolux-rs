@@ -13,19 +13,23 @@
 // ponytail: the list refreshes after each action and every 4 s while the panel is open; the
 // watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033). GIT-021 / GIT-023: the pull-request step looks the
 // branch's pull request up through gh once it is published, and Create pull request opens a composer.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
-import { ChevronDown, Close, Minus, Plus, Refresh, Undo } from "../chrome/icons";
+import { ChevronDown, Close, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
+import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle } from "./model";
+import { openInBrowser } from "../browser/BrowserPane";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
   dir: string | null;
   draft: string;
-  onDraft: (text: string) => void;
+  onDraft: (text: string, dir?: string) => void;
+  /** GIT-018: who writes commit messages. */
+  writer?: Writer;
   onClose: () => void;
   /** GIT-004: starts an agent primed with what git and its hooks printed. */
   onFix: (output: string) => void;
@@ -75,7 +79,7 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
+export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
@@ -96,6 +100,19 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     if (saved) return void runAgent(saved, prompt);
     setAsking({ agent: agents[0]?.id ?? "", prompt, remember: false });
   };
+  // GIT-036: Open in browser shows the commit's GitHub page in a built-in browser tab; it is offered
+  // only when the workspace's project is on GitHub.
+  const [ghRepo, setGhRepo] = useState<{ host: string; owner: string; name: string } | null>(null);
+  useEffect(() => {
+    setGhRepo(null);
+    invoke<{ host: string; owner: string; name: string } | null>("scm_github_repo", { worktree: dir })
+      .then(setGhRepo)
+      .catch(() => setGhRepo(null));
+  }, [dir]);
+  // GIT-017: Claude Code writes the message from what is staged; the run belongs to this worktree.
+  useSyncExternalStore(genSubscribe, genVersion);
+  const gen = dir === null ? null : genState(dir);
+  const canGenerate = writer.mode === "custom" || (writer.mode === "claude" && agents.some((a) => a.id === "claude" && a.installed));
   // GIT-036: Explain changes starts an agent with a prompt about the commit.
   const explain = (c: Commit) => {
     const prompt = explainPrompt(c);
@@ -564,7 +581,29 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               </details>
             )}
             <div className="scm-commit">
-              <textarea className="field multi" placeholder={status?.branch ? `Message (Ctrl+Enter to commit on ${status.branch})` : "Message (Ctrl+Enter to commit)"} value={draft} onChange={(e) => onDraft(e.target.value)} />
+              <div className="scm-msg">
+                <textarea className="field multi" placeholder={status?.branch ? `Message (Ctrl+Enter to commit on ${status.branch})` : "Message (Ctrl+Enter to commit)"} value={draft} onChange={(e) => onDraft(e.target.value)} />
+                {gen === "running" ? (
+                  <button className="ib scm-gen" title="Stop writing the message" aria-label="Stop writing the message" onClick={() => dir !== null && void stopGenerate(dir)}>
+                    <Stop />
+                  </button>
+                ) : (
+                  canGenerate &&
+                  (status?.staged.length ?? 0) > 0 && (
+                    <button className="ib scm-gen" title={`Write the message from what is staged with ${writer.mode === "custom" ? "your command" : "Claude Code"}`} aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft, writer)}>
+                      <Spark />
+                    </button>
+                  )
+                )}
+              </div>
+              {gen !== null && gen !== "running" && (
+                <div className="note warn" role="status">
+                  {gen}{" "}
+                  <button className="link" onClick={() => dir !== null && dismissGenerate(dir)}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
               <div className="scm-main">
                 <button className="btn primary" title={step.reason ?? step.label} disabled={busy || step.reason !== null} onClick={() => void mainAction()}>
                   <span>{step.label}</span>
@@ -928,6 +967,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                   {[
                     { id: "hash", label: "Copy hash", run: () => copy(ctx.commit.hash, "commit hash") },
                     { id: "message", label: "Copy message", run: () => copy(ctx.commit.message, "commit message") },
+                    ...(ghRepo ? [{ id: "open", label: "Open in browser", run: () => openInBrowser(commitUrl(ghRepo, ctx.commit.hash)!) }] : []),
                     { id: "explain", label: "Explain changes", run: () => explain(ctx.commit) },
                   ].map((item) => (
                     <button

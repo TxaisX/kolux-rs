@@ -3,6 +3,7 @@
 // (STAT-045, 10 by default, 0 off). All plain settings keys; the importer task carries the old
 // app's saved choices into them.
 import { useEffect, useState } from "react";
+import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 
 export const FINISH_FIELD = "notifyOnFinish";
@@ -18,7 +19,7 @@ export default function Notifications() {
   const save = (key: string, value: unknown) => {
     setSettings((s) => ({ ...(s ?? {}), [key]: value }));
     invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [key]: value } }))
+      .then((s) => saveChanged(s, { ...s, [key]: value }))
       .catch(() => {});
   };
   if (!settings) return null;

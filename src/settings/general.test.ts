@@ -21,6 +21,7 @@ test("the first screen counts only under New", () => {
 });
 
 test("VIEW-011: the page open at quit comes back", () => {
+  expect(openPageAt({ openPage: "tasks" })).toBe("tasks");
   expect(openPageAt({ openPage: "automations" })).toBe("automations");
   expect(openPageAt({ openPage: "routing" })).toBe("routing");
   expect(openPageAt({ openPage: "skills" })).toBe(null);
