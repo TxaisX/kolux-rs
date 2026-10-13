@@ -953,7 +953,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             </span>
             Artifacts
           </button>
-          <button className="row" onClick={openKits}>
+          <button className="row" onClick={() => openKits()}>
             <span className="ic">
               <Box />
             </span>

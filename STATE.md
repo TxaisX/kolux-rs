@@ -1424,6 +1424,12 @@ same close again. A record from an older version is raised to version 7 on start
 fields. After Pick a folder, or Skip while no project exists, the next project added starts the
 saved default agent in it, once.
 
+[accounts] T-201-b gives the chooser pane the older launch dialog's kit row: the six starter kits
+and See all kits (the gallery). Choosing a kit folds Advanced (shape, count, folders), lists the
+kit's roles with the AI each gets, and turns Start into Set up kit, which opens that kit's setup;
+a kit started from there closes the chooser. Choosing it again clears it and puts the seats back.
+The footer counts the sessions and names the first seat (or role) still lacking an AI or a model.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2573,7 +2579,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-208 · The corner close asks the same question as Escape and a click outside. Escape or a click outside while the question shows answers No, keep going (it never opens a second copy). The question names the help menu's Onboarding item as ONB 006 and DT-25 say; that item arrives with T-298 (ONB 009). A failed close store keeps the wizard and the close: whichever way out is clicked next (Start kit, Just open a session, Pick a folder, Skip) retries that close and does not repeat its own action, so a kit is never started twice. On start, a record from an older version gets version 7, its step held to -1..3 and a close time when it has an outcome but none; fields Kolux RS does not read yet (checklist ticks, milestones) are kept. ONB 010 is armed by Pick a folder, or by Skip while the project list is empty (a sample opened from the wizard is a project, so it disarms); it lives in the window only, so a relaunch disarms it; the saved default agent starts only when it is installed and not switched off, Auto starts nothing and a plain terminal is what the new workspace opens anyway.
 
+- [accounts] T-201-b · SESS 019's older launch dialog is the chooser pane (SESS 007), the only launch surface until T-046 builds the new look's page. A chosen kit replaces the seat list and the shared task box with its roles, because a kit's prompts come from its own setup; Advanced can still be unfolded with a kit chosen, under a line saying it applies once the kit is cleared, and choosing a kit again folds it. The kit row is a toggle: the pressed kit clicked again clears it. Set up kit opens the kit's setup dialog (inputs come from there, SKILL-004) and is disabled while a role has no AI; the chooser closes only when that kit really starts. The footer count reads "N sessions" plus, for the first unfinished seat, "still needs an AI" or "still needs a model". Every child row of the chooser keeps its height (no squashed task box when the pane is short).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-201-b · done: kit row, Advanced fold, kit roles and Set up kit in `src/launch/ChooserPane.tsx`; `seatGap` in seats.ts; `openKits(kit, chooser)` opens one kit's setup and App closes the chooser once it starts; Grok docs link · evidence/T-201-b.txt, T-201-b-*.png
 - 2026-10-12 · [accounts] T-208 · done: leave question (Escape, click outside, corner close) through Ask's new cancel words and safe confirm; firstRun.ts closer latch with retry, leaveKey, firstFolderAgent; onboarding.rs raises older records and keeps unknown fields; ProjectsPanel onAdded starts the default agent once · evidence/T-208.txt, T-208-*.png
 - 2026-10-12 · [accounts] T-207 · done: `onboarding.rs` record and onboarding_get / _step / _close; `src/onboarding/` Wizard (four screens) and firstRun.ts rules; Connect cards report connected; KitCard split out of the gallery; Add project opens on a window event · evidence/T-207.txt, T-207-*.png
 - 2026-10-12 · [accounts] T-206 · done: `kits.rs` kit_collect / kit_history / kit_open_file, the project-or-samples guard on every kit command, the per-folder and app-wide run history; strip Preview / Open / Collect results / Move to / Restart; Recent kit runs in the gallery; read-only editor and start-URL browser panes for previews · evidence/T-206.txt, T-206-*.png

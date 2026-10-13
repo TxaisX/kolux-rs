@@ -11,7 +11,8 @@ import { sameDir } from "../workspaces";
 import type { Past } from "./run";
 
 export const OPEN_KITS = "kolux-open-kits";
-export const openKits = () => window.dispatchEvent(new CustomEvent(OPEN_KITS));
+/** The gallery, or with `kit` that kit's setup; `chooser` is the chooser pane it came from (SESS-019), closed once the kit starts. */
+export const openKits = (kit?: string, chooser?: number) => window.dispatchEvent(new CustomEvent(OPEN_KITS, { detail: kit ? { kit, chooser } : undefined }));
 
 const ICONS: Record<string, (p: { size?: number }) => ReactElement> = { spreadsheet: Table, "tidy-merge": Merge, marketing: Megaphone, research: Book, sales: Funnel, weekly: Pulse };
 export const KitIcon = ({ id, size = 18 }: { id: string; size?: number }) => {

@@ -488,3 +488,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-207 · rules from the ONB-001..005 cards; CSS backdrop-filter and prefers-reduced-motion from public MDN docs; no old Kolux source read
 
 > 2026-10-12 · T-208 · rules from the ONB-006, 007, 008, 010 and 012 cards and DT-25; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-201-b · rules from the SESS-017 and SESS-019 cards; no outside sources; no old Kolux source read

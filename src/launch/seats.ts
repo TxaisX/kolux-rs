@@ -47,6 +47,12 @@ export function seatReady(s: Seat): boolean {
 
 export const allReady = (seats: Seat[]): boolean => seats.length > 0 && seats.every(seatReady);
 
+/** SESS-019: what the footer says the first unfinished seat still lacks; null when all are ready. */
+export function seatGap(seats: Seat[]): string | null {
+  const i = seats.findIndex((s) => !seatReady(s));
+  return i < 0 ? null : `Seat ${i + 1} still needs ${seats[i].agent === null ? "an AI" : "a model"}`;
+}
+
 /** SESS-015 "Same for all": the first finished seat's AI and model go into every other seat;
  * job titles stay per seat. Unchanged when no seat is finished. */
 export function sameForAll(seats: Seat[]): Seat[] {

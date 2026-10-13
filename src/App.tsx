@@ -99,7 +99,7 @@ type KitWait = { role: string; upstream: string; key: number; prompt: string };
 type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number>; prompts: string[] };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; kitPreview?: boolean; staged?: boolean; ask?: string };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; kit?: string | null; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; kitPreview?: boolean; staged?: boolean; ask?: string };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -322,8 +322,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   useEffect(() => {
     if (galleryOpen) invoke<Past[]>("kit_history").then(setKitRecent, () => setKitRecent([]));
   }, [galleryOpen]);
+  // SESS-019: a chooser's Set up kit names the kit and the chooser, which closes once the kit starts.
+  const chooserSetup = useRef<number | null>(null);
   useEffect(() => {
-    const show = () => setKits((k) => k ?? { kit: null, sampleDir: null });
+    const show = (e: Event) => {
+      const from = (e as CustomEvent<{ kit: string; chooser?: number } | undefined>).detail;
+      if (!from) return setKits((k) => k ?? { kit: null, sampleDir: null });
+      chooserSetup.current = from.chooser ?? null;
+      pickKit(from.kit);
+    };
     window.addEventListener(OPEN_KITS, show);
     return () => window.removeEventListener(OPEN_KITS, show);
   }, []);
@@ -1845,6 +1852,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
                     task={p.task ?? ""}
                     onTask={(task) => setChooser(p.key, { task })}
+                    kit={p.kit ?? null}
+                    onKit={(kit) => setChooser(p.key, { kit })}
+                    vendors={kitAIs}
                     onStart={(s) => void startSeats(p.key, s)}
                     copies={p.copies ?? defaultCopies(p.seats.length, inGitFor(p))}
                     inGit={inGitFor(p)}
@@ -1970,13 +1980,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               setKitConflict(null);
               setKits(null);
               wizardSetup.current = false;
+              chooserSetup.current = null;
             }}
             onStart={(values, assigned) => {
               const fromWizard = wizardSetup.current;
+              const chooser = chooserSetup.current;
               // SKILL-005: real inputs are remembered for this workspace; a sample workspace's are not.
               const real = !!activeDir && !sameDir(activeDir, kits.sampleDir);
               if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
-              if (activeDir) void startKit(kit, values, assigned, activeDir).then((ok) => ok && fromWizard && endWizard("completed"));
+              if (activeDir)
+                void startKit(kit, values, assigned, activeDir).then((ok) => {
+                  if (ok && fromWizard) endWizard("completed");
+                  if (ok && chooser !== null) closePane(chooser);
+                });
             }}
           />
         );
