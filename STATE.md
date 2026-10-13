@@ -1620,6 +1620,11 @@ and adds input, output, cache and session counts for that worktree, its subfolde
 worktrees nested inside it left out. Token scans also remember what each log file held across
 restarts, so the first scan after starting Kolux again reads only the files that changed.
 
+[accounts] T-154-c: the Explorer can now create, rename, delete, restore, copy and move only inside
+your projects and worktrees, Source Control stages and discards only there, and the kit result check
+ignores other folders. Files you drag in from the desktop can still be copied into a project. A file
+you picked with Open a file stays readable after Kolux restarts, so a reopened tab for it will load.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2841,7 +2846,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-170-b · USAGE-016: the lookup is a `--usage` switch on `worktree show` and `worktree current` (COMPAT lists `worktree current [--json]`; the default output is unchanged), so a run asks with the command it already has; it rescans only providers whose tracking is on (USAGE-012 opt-in) and a provider not tracked shows {tracked:false}. A worktree nested inside the asked one keeps its own figures. The scan memory is a JSON file per provider in the profile (token-scan-claude.json / token-scan-codex.json, with the results' format mark, ignored when damaged or older), not a kv row, since it holds one entry per reply; it is written only when a log file was read or went. ponytail: the whole memory is rewritten on such a scan; write per-file entries if it grows slow.
 
+- [accounts] T-154-c · ACCT-055: every Explorer file command takes each path through the fence (exact=false: projects and worktrees; a picked-file grant opens that file to read and save, not to rename, trash or move). A refusal fails the whole call (trash, restore, move), except a copy, where each outside source is refused on its own line so the rest still land. A copy source from outside is allowed only when it is one of the paths of the latest drop, which the Rust side notes from the window's own drop event (WindowEvent::DragDrop), so the page cannot name an outside file and copy it in; a new drop replaces the list, shares never count. scm_stage/scm_discard take the worktree through the fence; kit_check goes through the same kit-folder guard as the other kit commands (projects and the samples folder), giving no result elsewhere. Grants are saved as one kv row (file_grants, a JSON list) on each pick; on load every entry is resolved again and a share, drive root, folder or missing file is dropped, a damaged row grants nothing, and the cap of 100 holds. ponytail: the list is rewritten on each pick; it is at most 100 lines.
+
 ## Last 10 passes  (date · task · result · evidence)
+Explorer file operations, Source Control stage/discard and kit_check fenced; drops from outside copyable; picked-file grants survive a restart
 automation runs look up their worktree's token use with worktree show|current --usage; the scan memory survives restarts
 Check again detects without connecting; account cards refresh on focus; Codex settings copied into each managed home with warnings and trust kept; renewed sign-ins saved on quit with a time limit
 - 2026-10-12 · [accounts] T-339 · done: CloseAsk folded into chrome/Ask (OK-only when confirm is null); duplicate notification switches removed; claudeFigures / publishClaude in launchWarn.ts fed by ClaudePill; TopBar onSettings dropped; titleBarButton and the Title bar card removed, automationsButton drives the title-bar button; reset summary explains each scope; test_dir.rs guard for the account and usage tests; T-138-c split for the Codex list move · evidence/T-339.txt, T-339-1-one-automations-switch.png, T-339-2-switch-off-no-button.png, T-339-3-notification-switches-once.png

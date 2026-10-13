@@ -149,7 +149,9 @@ pub fn run() {
             // Git the app still opens, and the landing screen says so (APP-023).
             app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
             app.manage(tools::Cache::default());
-            app.manage(fence::Fence::default());
+            // ACCT-055: picked-file grants saved by the last run come back.
+            let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
+            app.manage(fence);
             app.manage(token_usage::Flights::default());
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
@@ -203,6 +205,10 @@ pub fn run() {
             // The window is gone: no shell may outlive it.
             if let tauri::WindowEvent::Destroyed = event {
                 window.state::<Terminals>().kill_all();
+            }
+            // ACCT-055: files dropped in from outside may be copied into the Explorer, nothing else.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<fence::Fence>().dropped(paths);
             }
         })
         .invoke_handler(tauri::generate_handler![

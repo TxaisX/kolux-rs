@@ -125,23 +125,27 @@ pub fn restore(_paths: &[String]) -> Result<(), String> {
     Err("putting files back from the trash needs the Finder on macOS".into()) // ponytail: no restore API in the trash crate on macOS
 }
 
+// ACCT-055: each command below works only on paths inside the user's projects and worktrees
+// (fence.rs); a copy may also take files the user just dropped in from outside.
 #[tauri::command]
-pub fn fs_create(dir: String, name: String, folder: bool) -> Result<String, String> {
-    create(Path::new(&dir), &name, folder).map(|p| shown(&p))
+pub fn fs_create(dir: String, name: String, folder: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
+    create(&fence.allow(&dir, &store, &git, false)?, &name, folder).map(|p| shown(&p))
 }
 
 #[tauri::command]
-pub fn fs_rename(path: String, name: String) -> Result<String, String> {
-    rename(Path::new(&path), &name).map(|p| shown(&p))
+pub fn fs_rename(path: String, name: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
+    rename(&fence.allow(&path, &store, &git, false)?, &name).map(|p| shown(&p))
 }
 
 #[tauri::command]
-pub async fn fs_trash(paths: Vec<String>) -> Vec<Gone> {
-    tauri::async_runtime::spawn_blocking(move || trash_each(&paths)).await.unwrap_or_default()
+pub async fn fs_trash(paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<Gone>, String> {
+    fence.allow_all(&paths, &store, &git)?;
+    Ok(tauri::async_runtime::spawn_blocking(move || trash_each(&paths)).await.unwrap_or_default())
 }
 
 #[tauri::command]
-pub async fn fs_restore(paths: Vec<String>) -> Result<(), String> {
+pub async fn fs_restore(paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    fence.allow_all(&paths, &store, &git)?;
     tauri::async_runtime::spawn_blocking(move || restore(&paths)).await.map_err(|e| e.to_string())?
 }
 
@@ -240,11 +244,14 @@ pub fn move_into(from: &Path, dir: &Path) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn fs_copy(paths: Vec<String>, dir: String) -> Vec<Placed> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn fs_copy(paths: Vec<String>, dir: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<Placed>, String> {
+    fence.allow(&dir, &store, &git, false)?;
+    let outside = paths.iter().map(|p| fence.allow_source(p, &store, &git).err()).collect::<Vec<_>>();
+    Ok(tauri::async_runtime::spawn_blocking(move || {
         paths
             .into_iter()
-            .map(|p| match copy_into(Path::new(&p), Path::new(&dir)) {
+            .zip(outside)
+            .map(|(p, refused)| match refused.map_or_else(|| copy_into(Path::new(&p), Path::new(&dir)), Err) {
                 Ok((to, 0)) => Placed { from: p, to: Some(shown(&to)), error: None },
                 Ok((to, n)) => Placed { from: p, error: Some(format!("{}: {n} link(s) inside were left out", shown(&to))), to: Some(shown(&to)) },
                 Err(e) => Placed { from: p, to: None, error: Some(e) },
@@ -252,13 +259,14 @@ pub async fn fs_copy(paths: Vec<String>, dir: String) -> Vec<Placed> {
             .collect()
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_default())
 }
 
 /// Each move is (entry, folder to move it into).
 #[tauri::command]
-pub async fn fs_move(moves: Vec<(String, String)>) -> Vec<Placed> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn fs_move(moves: Vec<(String, String)>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<Placed>, String> {
+    fence.allow_all(moves.iter().flat_map(|(p, d)| [p, d]), &store, &git)?;
+    Ok(tauri::async_runtime::spawn_blocking(move || {
         moves
             .into_iter()
             .map(|(p, dir)| match move_into(Path::new(&p), Path::new(&dir)) {
@@ -268,7 +276,7 @@ pub async fn fs_move(moves: Vec<(String, String)>) -> Vec<Placed> {
             .collect()
     })
     .await
-    .unwrap_or_default()
+    .unwrap_or_default())
 }
 
 /// Puts text on the system clipboard from the app side, so a copy works whether or not the web view

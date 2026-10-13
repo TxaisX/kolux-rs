@@ -1146,13 +1146,14 @@ pub fn scm_abort(worktree: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool) -> Result<(), String> {
-    stage(Path::new(&worktree), &paths, on)
+/// ACCT-055: stage and discard only in a project or worktree (fence.rs).
+pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    stage(&fence.allow(&worktree, &store, &git, false)?, &paths, on)
 }
 
 #[tauri::command]
-pub fn scm_discard(worktree: String, section: String, paths: Vec<String>) -> Result<(), String> {
-    discard(Path::new(&worktree), &section, &paths)
+pub fn scm_discard(worktree: String, section: String, paths: Vec<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    discard(&fence.allow(&worktree, &store, &git, false)?, &section, &paths)
 }
 
 #[tauri::command]
