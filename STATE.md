@@ -1454,6 +1454,9 @@ T-116-c-a: Settings > a repository edits its base branch and its workspaces fold
 the inherited value, and nothing is written unless a field is changed.
 T-117-b-a: `kolux-dev worktree set` gives a worktree a new display name, issue link (or none with
 --issue null), comment or parent, and the sidebar and the palette show the change at once.
+T-214-a: Add project > Copy from a web address clones a Git project into a folder filled in for
+you, shows Git's progress and its own words on failure, can be cancelled, and opens the copy;
+New project makes an empty project with one first commit from a name, in the home folder unless changed.
 
 T-100-a adds per-seat options to the launch screen. A Claude Opus or Sonnet seat gets an effort
 picker, and Opus a fast-mode box (fast mode bills usage credits). After a launch, the launch screen

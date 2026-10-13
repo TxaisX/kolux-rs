@@ -331,13 +331,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   }, [creating]);
 
   // PROJ-007: the new project's main checkout becomes the workspace in front, its worktrees listed.
-  const added = async (p: Project) => {
+  // PROJ-003: a project just cloned goes straight to its checkout, with no setup question first.
+  const added = async (p: Project, offerSetup = true) => {
     say("ok", `${p.name} is a project (${p.path})`);
     setPathDraft("");
     setShowAdd(false);
     await reload();
     const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
     if (open) onSelect(open.path, open.branch);
+    if (!offerSetup) return;
     // VIEW-112: another tool's setup file in the new project is offered for import.
     const list = await invoke<SetupImport[]>("setup_imports_list", { path: p.path }).catch(() => [] as SetupImport[]);
     if (list.some((i) => !i.refused)) setImporting({ project: p.name, path: p.path, list });
@@ -1368,7 +1370,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             }}
           />
         )}
-        {adding && <AddProject onBrowse={browse} onClose={() => setAdding(false)} />}
+        {adding && <AddProject onBrowse={browse} onClose={() => setAdding(false)} onAdded={(p) => { setAdding(false); void added(p, false); }} />}
         <div className="sb-foot">
           <button
             className="ib"

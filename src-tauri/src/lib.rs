@@ -22,6 +22,7 @@ mod install;
 mod keybindings;
 mod kits;
 mod names;
+mod newproject;
 mod notifications;
 mod orchestration;
 mod procs;
@@ -312,6 +313,11 @@ pub fn run() {
             codex_accounts::codex_account_remove,
             projects::git_first_commit_preview,
             projects::git_start,
+            newproject::clone_suggest,
+            newproject::project_clone,
+            newproject::clone_cancel,
+            newproject::project_new_defaults,
+            newproject::project_create,
             kits::kit_samples,
             kits::kit_samples_dir,
             kits::kit_check,
