@@ -1,6 +1,8 @@
 import { expect, test } from "vitest";
 import { EMPTY_HISTORY, matchWords, navTarget, travel, visit, wordsOf, type Place } from "./nav";
-import { paletteRows, worktreeItems, type PaletteItem } from "./WorktreePalette";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
+import { RowMark, dirMark, paletteAge, paletteRows, worktreeItems, type PaletteItem } from "./WorktreePalette";
 import type { Project, Worktree } from "./model";
 
 test("next and previous wrap, a number picks a row", () => {
@@ -63,4 +65,36 @@ test("rows come out in section order", () => {
   const it = (section: string, label: string): PaletteItem => ({ section, label, run: () => {} });
   const rows = paletteRows([it("Settings", "Terminal"), it("Open tabs", "terminal 1"), it("Quick actions", "New terminal")], "term");
   expect(rows.map((r) => r.section)).toEqual(["Open tabs", "Settings", "Quick actions"]);
+});
+
+test("palette rows carry the agent's mark, permission over unread over a fresh finish (VIEW-040)", () => {
+  expect(dirMark("permission", true)).toBe("permission");
+  expect(dirMark("waiting", true)).toBe("permission");
+  expect(dirMark("working", false)).toBe("working");
+  expect(dirMark("done", true)).toBe("unread");
+  expect(dirMark("done", false)).toBe("done");
+  expect(dirMark("idle", false)).toBeNull();
+  expect(dirMark(null, true)).toBe("unread");
+  const at = (d: string) => (d.endsWith("login") ? { mark: "permission" as const, since: 5 } : null);
+  const items = worktreeItems([proj], { p1: ws }, false, () => null, () => {}, at);
+  expect(items.filter((i) => i.section === "Worktrees").map((i) => i.mark ?? null)).toEqual([null, "permission"]);
+  const html = renderToStaticMarkup(createElement(RowMark, { mark: "permission", since: 1, now: 1 + 50 * 60_000 }));
+  expect(html).toContain('aria-label="needs permission"');
+  expect(html).toContain(">50m<");
+  expect(renderToStaticMarkup(createElement(RowMark, { mark: "unread", since: 0, now: 0 }))).toContain('aria-label="unread"');
+  expect(renderToStaticMarkup(createElement(RowMark, { mark: null, since: 0, now: 0 }))).toBe("");
+});
+
+test("ages read in minutes for the first hour, hours until two days, then days (VIEW-040)", () => {
+  const m = 60_000;
+  const h = 60 * m;
+  expect(paletteAge(0, 30_000)).toBe("now");
+  expect(paletteAge(0, 4 * m)).toBe("4m");
+  expect(paletteAge(0, 50 * m)).toBe("50m");
+  expect(paletteAge(0, 60 * m - 1)).toBe("59m");
+  expect(paletteAge(0, h)).toBe("1h");
+  expect(paletteAge(0, 3 * h)).toBe("3h");
+  expect(paletteAge(0, 48 * h - 1)).toBe("47h");
+  expect(paletteAge(0, 48 * h)).toBe("2d");
+  expect(paletteAge(0, 72 * h)).toBe("3d");
 });

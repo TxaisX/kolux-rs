@@ -32,7 +32,7 @@ import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
-import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
+import WorktreePalette, { dirMark, type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
@@ -988,6 +988,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         section: "Open tabs",
         label: tabName(p, titles),
         hint: p.cwd ? folderName(p.cwd) : "Home",
+        // VIEW-040: the tab's own badge, with how long it has been in that state.
+        ...(!p.kind ? { mark: tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key]), since: stamp[p.key]?.at ?? 0 } : {}),
         run: () => {
           setScreen("terminals");
           if (!sameDir(p.cwd, activeDir)) {
@@ -1596,6 +1598,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             projects={projects}
             items={paletteItems()}
             prOf={(d) => Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1].pr ?? null}
+            atOf={(d) => {
+              const row = Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1];
+              const mark = dirMark(row?.state ?? null, [...unreadDirs].some((x) => sameDir(x, d)));
+              return mark ? { mark, since: row?.changed ?? 0 } : null;
+            }}
             onWorktree={(w) => {
               setScreen("terminals");
               select(w.path, w.branch ?? null);

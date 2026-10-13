@@ -927,6 +927,13 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .picker-list .menu-item.at { background: var(--row-selected); }
 .picker-list .menu-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; max-width: 60%; }
 .picker-folder { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-faint); }
+/* VIEW-040: a palette row's agent mark and age, coloured as on the tab. */
+.palette-mark { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.palette-mark .badge { display: inline-flex; }
+.palette-mark .badge.working, .palette-mark .badge.unread, .palette-mark .badge.permission { color: var(--working-icon); }
+.palette-mark .badge.done { color: var(--done-icon); }
+.palette-mark .badge.dot { width: 7px; height: 7px; margin: 0 2px; border-radius: 50%; background: var(--working-icon); }
+.palette-age { font-size: 11px; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
 .picker-tip { position: fixed; z-index: 60; max-width: min(640px, 70vw); padding: 4px 8px; border: 1px solid var(--line-focus); border-radius: 6px; background: var(--pane-bg); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; pointer-events: none; }
 .picker-tip-folder { color: var(--fg-muted); }
 /* PROJ-057 / VIEW-037: the worktree palette's section headings and matched letters. */
