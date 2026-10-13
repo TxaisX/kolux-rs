@@ -80,6 +80,11 @@ Rules: there is no usage telemetry, analytics or diagnostic upload, and the buil
   account the user set up, AI providers the user connected (using the user's credentials), and
   sites the user opens in the browser pane; Send Feedback and Report Crash submit nothing
   themselves, the browser does it after the user has read the text.
+  (Kolux RS, T-064-b: the statement sits in Settings > General > Privacy with the whole list of connections,
+  including the WebView2 runtime's own startup checks to Microsoft, which belong to the Edge engine the
+  window runs in and which the app cannot switch off (DT-C25); `scripts/privacy-audit.test.mjs` fails the
+  build on any network client the list does not cover; the feedback link itself is here, the message box is
+  the Send Feedback card's task.)
 Acceptance:
   - [ ] Watch a normal session with a network monitor → every connection goes to one of the listed
         destinations; none goes to an analytics or telemetry host.

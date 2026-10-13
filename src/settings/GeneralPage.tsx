@@ -1,9 +1,11 @@
 // Settings > General: the Classic or New look and the screen that opens first (SET-037).
 import { invoke } from "@tauri-apps/api/core";
 import { useState } from "react";
+import type { AppInfo } from "../app-info";
 import { screens } from "../chrome/TopBar";
 import { useSettings } from "./useSettings";
 import { FIRST_FIELD, LOOK_FIELD, readLook, savedFirst, type Look } from "./general";
+import { feedbackUrl, OUTBOUND } from "./privacy";
 
 /** A row of buttons that behaves as one radio group. */
 export function Segmented<T extends string>({ label, options, value, onPick, off = [] }: { label: string; options: Array<{ id: T; label: string }>; value: T; onPick: (v: T) => void; off?: T[] }) {
@@ -69,6 +71,37 @@ export function DiagnosticsCard() {
   );
 }
 
+/** APP-070: what leaves this computer (the whole list), and the feedback link that opens in the browser instead. */
+export function PrivacyCard() {
+  const [note, setNote] = useState("");
+  const send = () =>
+    void invoke<AppInfo>("app_info")
+      .then((i) => invoke("open_external", { url: feedbackUrl(i.version, navigator.platform) }))
+      .then(() => setNote("A new-issue page opened in your browser; the app sent nothing. Read it over there, then submit it or close it."))
+      .catch((e: unknown) => setNote(`Could not open the browser: ${String(e)}`));
+  return (
+    <section className="conn-card" data-section="privacy">
+      <h2 className="conn-name">Privacy</h2>
+      <p className="conn-detail">
+        Your work stays on this computer. What you type, the files you open, terminal output, projects, settings and saved keys live only in your profile folder. The app sends no usage data and has no server to send it to. The app itself connects only to:
+      </p>
+      <ul className="conn-detail conn-list">
+        {OUTBOUND.map((o) => (
+          <li key={o.to}>
+            <b>{o.to}</b>: {o.when}.
+          </li>
+        ))}
+      </ul>
+      <div className="btn-row">
+        <button className="btn" onClick={send}>
+          Send feedback
+        </button>
+      </div>
+      {note && <p className="conn-detail">{note}</p>}
+    </section>
+  );
+}
+
 export default function GeneralPage() {
   const { settings, error, save } = useSettings();
   return (
@@ -76,6 +109,7 @@ export default function GeneralPage() {
       {error && <p className="conn-detail warn">{error}</p>}
       {settings && <GeneralView settings={settings} onSave={save} />}
       <DiagnosticsCard />
+      <PrivacyCard />
     </>
   );
 }
