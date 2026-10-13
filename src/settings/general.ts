@@ -2,6 +2,7 @@
 import type { Screen } from "../chrome/TopBar";
 import type { Page } from "../projects/ProjectsPanel";
 import { FIELD } from "../theme";
+import type { SavedLayout } from "../terminal/layout";
 
 export type Look = "classic" | "new";
 export const LOOK_FIELD = "uiLook";
@@ -65,6 +66,28 @@ export function lastWriter<T>(write: (v: T) => void, ms = 400) {
   return { set, flush };
 }
 
+
+/** VIEW-107 (T-069-b): the layout's durable part, the tabs and the workspace in front; the focus,
+ *  each cell's active tab and the stacking are what a fallback save leaves out. */
+export const durableOnly = (l: SavedLayout): SavedLayout => ({ panes: l.panes, activeTab: {}, focused: 0, activeDir: l.activeDir, stacked: {} });
+
+/** VIEW-107 (T-069-b): writes the layout; a failed write is tried once more after `wait` ms, then the
+ *  durable part alone is written. Rejects only when that last write fails too. */
+export async function saveLayout(l: SavedLayout, write: (l: SavedLayout) => Promise<unknown>, wait = 300): Promise<"saved" | "retried" | "durable"> {
+  try {
+    await write(l);
+    return "saved";
+  } catch {
+    await new Promise((r) => setTimeout(r, wait));
+  }
+  try {
+    await write(l);
+    return "retried";
+  } catch {
+    await write(durableOnly(l));
+    return "durable";
+  }
+}
 
 /** VIEW-011: the page that was open at quit, shown again at start (none when unset or unknown). */
 export const OPEN_PAGE_FIELD = "openPage";

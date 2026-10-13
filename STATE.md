@@ -589,7 +589,12 @@ Inbox; Agents and Board only under New) with the page that was open, Tasks inclu
 first screen in General sets the next start's screen. A run of quick switches is written once, and
 a pending one before the window closes; an unreadable settings file opens on Board with no
 error. With no screen ever chosen a New profile opens on Board (T-049-a). Closing the window with unsaved editor text asks first (Keep working / Quit without
-saving). Workspaces and tabs coming back after a restart is T-069-b.
+saving). A slow start no longer drops the saved tabs (T-069-b): until settings.json has really been
+read, a change to the panes writes no layout, so the fallback shell shown while get_settings
+hangs never replaces the saved tabs; the next normal start shows them all. A layout write that
+fails is tried once more, then only the tabs and the workspace in front are written (focus,
+active tabs and stacking dropped). Rebuilding restored workspaces in session order in one pass
+is T-069-c.
 
 [orchestration] T-189-a adds the Automations title-bar button and asks an agent to resolve
 merge conflicts (VIEW-011, VIEW-069). Settings > Appearance has a Title bar card whose
