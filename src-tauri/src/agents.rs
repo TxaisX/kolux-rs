@@ -28,6 +28,8 @@ pub struct AgentInfo {
     pub installed: bool,
     /// Where the program was found, when it was.
     pub path: Option<String>,
+    /// SESS-017: Kolux knows the agent's own documentation page (`install_page`).
+    pub docs: bool,
 }
 
 /// id, name, program names (the first is the main one, the rest also count), fixed arguments.
@@ -94,6 +96,7 @@ pub fn catalogue() -> Vec<AgentInfo> {
                 args: args.iter().map(|a| a.to_string()).collect(),
                 installed: found.is_some(),
                 path: found.map(|(_, f)| f.display().to_string()),
+                docs: install_page(id).is_some(),
             }
         })
         .collect()
@@ -518,10 +521,42 @@ pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::S
 /// ACCT-013 "Open install page": the agent's own install page in the default browser. Only these
 /// fixed addresses are ever opened.
 pub fn install_page(agent: &str) -> Option<&'static str> {
+    // SESS-017 (T-201-c): each address checked against the agent's own site or repository on
+    // 2026-10-13. Trae has none yet: no official TRAE CLI page could be found (T-201-d).
     match agent {
         "claude" => Some("https://code.claude.com/docs/en/setup"),
         "codex" => Some("https://developers.openai.com/codex/cli"),
         "grok" => Some("https://x.ai/cli"),
+        "openclaude" => Some("https://github.com/Twigpine/openclaude"),
+        "autohand" => Some("https://docs.autohand.ai/guides/cli-quick-start"),
+        "ante" => Some("https://docs.antigma.ai/"),
+        "mimo-code" => Some("https://mimo.xiaomi.com/mimocode/install"),
+        "pi" => Some("https://github.com/earendil-works/pi"),
+        "omp" => Some("https://github.com/can1357/oh-my-pi"),
+        "prime-agent" => Some("https://github.com/PrimeIntellect-ai/prime-agent"),
+        "gemini" => Some("https://geminicli.com/docs/"),
+        "antigravity" => Some("https://antigravity.google/docs/getting-started?tab=cli"),
+        "aider" => Some("https://aider.chat/docs/install.html"),
+        "goose" => Some("https://goose-docs.ai/docs/getting-started/installation"),
+        "amp" => Some("https://ampcode.com/docs"),
+        "kilo" => Some("https://kilo.ai/docs/code-with-ai/platforms/cli"),
+        "kiro" => Some("https://kiro.dev/docs/cli/"),
+        "crush" => Some("https://github.com/charmbracelet/crush"),
+        "aug" => Some("https://docs.augmentcode.com/cli/overview"),
+        "cline" => Some("https://docs.cline.bot/usage/cli-overview"),
+        "codebuff" => Some("https://www.codebuff.com/docs/help/quick-start"),
+        "command-code" => Some("https://commandcode.ai/docs"),
+        "continue" => Some("https://docs.continue.dev/cli/overview"),
+        "cursor" => Some("https://cursor.com/docs/cli/overview"),
+        "droid" => Some("https://docs.factory.com/droid-cli/quickstart"),
+        "kimi" => Some("https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started"),
+        "mistral-vibe" => Some("https://github.com/mistralai/mistral-vibe"),
+        "qwen-code" => Some("https://github.com/QwenLM/qwen-code"),
+        "rovo" => Some("https://support.atlassian.com/rovo/docs/install-and-run-rovo-dev-cli-on-your-device/"),
+        "hermes" => Some("https://github.com/NousResearch/hermes-agent"),
+        "openclaw" => Some("https://docs.openclaw.ai/"),
+        "copilot" => Some("https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"),
+        "devin" => Some("https://docs.devin.ai/cli"),
         _ => None,
     }
 }
@@ -561,6 +596,16 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn sess_017_every_catalogue_agent_but_trae_links_to_its_own_page() {
+        for (id, ..) in CATALOGUE {
+            let page = install_page(id);
+            assert_eq!(page.is_some(), id != "trae", "{id}");
+            assert!(page.is_none_or(|p| p.starts_with("https://") && !p.contains(' ')), "{id}: {page:?}");
+        }
+        assert!(catalogue().iter().all(|a| a.docs == install_page(&a.id).is_some()));
     }
 
     #[test]

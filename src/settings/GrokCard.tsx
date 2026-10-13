@@ -7,8 +7,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { AttentionNote, fixFor, type Attention } from "./Attention";
-import { OtherWays, taglineOf } from "./ConnectGrid";
+import { AttentionNote, fixDoes, fixFor, type Attention } from "./Attention";
+import { liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
 import Ask, { type Question } from "../chrome/Ask";
 
@@ -75,7 +75,7 @@ export function GrokCardView({ view, pending, error, onAction }: { view: GrokVie
       )}
       {view.signingIn === "browser" && view.inBrowser && <p className="conn-detail">Sign in on the xAI page that opened in your browser.</p>}
       {state === "connected" && view.connection === "key" && <p className="conn-detail">Grok bills this key per use. A Grok sign-in, once you make one, takes its place.</p>}
-      {state !== "connecting" && <AttentionNote attention={view.attention} route="grok" busy={pending !== null} onFix={() => onAction("connect")} />}
+      {state !== "connecting" && <AttentionNote attention={view.attention} route="grok" busy={pending !== null} onFix={(f) => onAction(fixDoes(f) === "check" ? "cancel" : "connect")} />}
       {error && (
         <p className="conn-detail warn" role="alert">
           {error}
@@ -183,7 +183,8 @@ export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on
     listen("grok", read)
       .then((un) => (stop = un))
       .catch(() => {});
-    return () => stop();
+    const off = liveCheck(read, window, document, 0);
+    return () => (stop(), off());
   }, [read]);
   const run = (a: GrokAction, call: Promise<unknown>) => {
     setError(null);

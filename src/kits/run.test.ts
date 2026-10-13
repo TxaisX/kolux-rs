@@ -122,6 +122,27 @@ test("done rows offer Preview and Open per file, stopped rows Restart and Move t
   expect(html(["codex"])).not.toContain("Move to");
 });
 
+test("T-206-b SKILL-011: a role stopped by a usage limit or a sign-in says so and offers its own way out", () => {
+  const limited = { key: 7, running: true, ai: "claude", stop: "limit" as const };
+  expect(roleRow(sheet, analyst, run(), limited, null, T0 + 10)).toEqual({ state: "limit", text: "Stopped: this AI reached its usage limit", key: 7 });
+  expect(roleRow(sheet, analyst, run(), { ...limited, stop: "signin" as const }, null, T0 + 10)).toEqual({ state: "signin", text: "Stopped: this AI needs signing in again", key: 7 });
+  // A finished role stays done whatever its session later reports.
+  expect(roleRow(sheet, analyst, run({ analyst: { [MARKER]: T0 + 5 } }), limited, null, T0 + 10).state).toBe("done");
+  const noop = () => {};
+  let signIn = 0;
+  const html = (connected: ("claude" | "codex" | "grok")[], stop: "limit" | "signin") =>
+    renderToString(createElement(KitStrip, { check: run(), seats: [{ ...limited, stop }, null, null], sent: {}, now: T0 + 10, folded: false, onFold: noop, onOpen: noop, onFocusSeat: noop, connected, onRestart: noop, onSignIn: () => signIn++ }));
+  const limit = html(["claude", "codex"], "limit");
+  expect(limit).toContain(">Move to Codex</button>");
+  // Restarting on the AI that hit its limit would only stop again.
+  expect(limit).not.toContain(">Restart</button>");
+  expect(html(["claude"], "limit")).not.toContain("Move to");
+  const signin = html(["claude", "codex"], "signin");
+  expect(signin).toContain(">Sign in</button>");
+  expect(signin).not.toContain("Move to");
+  expect(signin).not.toContain(">Restart</button>");
+});
+
 test("recent kit runs are hidden with none and name each kit and folder with its two actions", () => {
   const noop = () => {};
   expect(renderToString(createElement(RecentRuns, { runs: [], onResults: noop, onProject: noop }))).toBe("");

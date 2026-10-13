@@ -66,6 +66,9 @@ User sees: the compact meter (context bar plus 5-hour and weekly figures) in the
 Rules: the footer names the provider, gives its 5-hour percentage and its reset time, and follows
   the used-or-left display choice (USAGE-025); session rows use the same ring as tabs and leave it
   off when there is no context reading.
+  (Kolux RS, T-040-b: the detail header is the picked session's pane header, which shows the 5-hour
+  and weekly figures beside its context gauge; the footer sits at the foot of the rail and follows
+  the used-or-left display setting, whose Appearance control comes with the used-or-left task.)
 Acceptance:
   - [ ] Pick a Claude agent at 40% of its 5-hour window → the footer reads Claude 40% with a reset
         time; switch the display to remaining → the footer reads 60%.

@@ -25,6 +25,10 @@ pub const GRACE_MINUTES: [u64; 7] = [0, 30, 60, 180, 720, 1440, 2880];
 const KEEP_RUNS: usize = 100;
 /// A due time older than this was missed, not merely caught late by the half-minute clock.
 const ON_TIME_MS: i64 = 120_000;
+/// AUTO-004: what an event trigger can listen for, and how long an automation rests after an
+/// event has started a run.
+const EVENTS: [&str; 3] = ["pr-opened", "checks-failed", "agent-finished"];
+const EVENT_REST_MS: i64 = 5 * 60_000;
 /// AUTO-008: how long a precheck may take, in seconds; the first is the default.
 pub const PRECHECK_SECONDS: [u64; 4] = [60, 120, 300, 600];
 /// The end of a precheck's output kept with its skipped run.
@@ -61,7 +65,19 @@ pub fn list(store: &Store) -> Result<Value, String> {
         })
         .collect();
     Ok(match load(store, RUNS_KEY) {
-        Ok(runs) => json!({ "automations": autos, "runs": runs }),
+        Ok(runs) => {
+            // AUTO-013: a run whose worktree folder is gone opens its saved output instead.
+            let runs: Vec<Value> = runs
+                .into_iter()
+                .map(|mut r| {
+                    if r["worktree"].as_str().is_some_and(|w| !Path::new(w).exists()) {
+                        r["worktreeGone"] = json!(true);
+                    }
+                    r
+                })
+                .collect();
+            json!({ "automations": autos, "runs": runs })
+        }
         Err(e) => json!({ "automations": autos, "runs": [], "runsError": e.replace("automations", "runs") }),
     })
 }
@@ -156,7 +172,17 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         "new-per-run" => Value::Null,
         _ => return Err("choose an existing workspace or a new one for every run".into()),
     };
-    let timing = preview(&input["schedule"], now)?;
+    // AUTO-004: an event trigger has no timetable; going back to Schedule works the run out afresh.
+    let timing = match input["trigger"]["kind"].as_str() {
+        Some("event") => {
+            let event = input["trigger"]["event"].as_str().unwrap_or_default();
+            if !EVENTS.contains(&event) {
+                return Err("choose the event: a pull request opens, checks fail, or an agent finishes".into());
+            }
+            json!({ "trigger": { "kind": "event", "event": event }, "nextRunAt": null })
+        }
+        _ => preview(&input["schedule"], now)?,
+    };
     let g = &input["missedRunGraceMinutes"];
     let grace = match g.is_null() {
         true => None,
@@ -192,6 +218,8 @@ pub fn save_automation(store: &Store, input: &Value, now: i64) -> Result<Value, 
         ("workspace", workspace),
         // Empty means the project's default branch (AUTO-005).
         ("baseBranch", json!(text("baseBranch"))),
+        // AUTO-010: only a new worktree runs the project setup, and only when chosen.
+        ("runSetup", json!(mode == "new-per-run" && input["runSetup"].as_bool().unwrap_or(false))),
         ("trigger", timing["trigger"].clone()),
         ("nextRunAt", timing["nextRunAt"].clone()),
         ("missedRunGraceMinutes", json!(grace)),
@@ -231,6 +259,68 @@ pub fn tick(l: &Launch, now: i64) -> Result<Vec<Value>, String> {
         }
     }
     Ok(started)
+}
+
+/// AUTO-004: the folders whose pull request went from none to open since the last poll, drafts
+/// included. The first state learned about a folder is only a starting point, so opening Kolux
+/// never sets off a burst of runs; a failed lookup is no news, and a hand-linked pull request
+/// (GIT-025) is not one opened from the branch.
+pub fn pr_opened(seen: &mut std::collections::HashMap<String, bool>, polled: &[crate::scm::PolledPr]) -> Vec<(String, crate::scm::Pr)> {
+    let mut out = Vec::new();
+    for p in polled.iter().filter(|p| p.error.is_none() && !p.linked) {
+        let open = p.pr.as_ref().filter(|pr| pr.state.eq_ignore_ascii_case("open"));
+        if seen.insert(projects::name_key(&p.path), open.is_some()) == Some(false) {
+            out.extend(open.map(|pr| (p.path.clone(), pr.clone())));
+        }
+    }
+    out
+}
+
+/// AUTO-004: a happening in the worktree at `path` starts every switched-on automation of that
+/// repo that listens for it, with `line` on the end of its prompt. Once an event has started a
+/// run the automation ignores further events for five minutes, and a worktree an automation made
+/// never sets one off, so no automation triggers itself. The run lands in the workspace the
+/// automation names, not where the event came from. Returns the runs it began.
+pub fn on_event(l: &Launch, event: &str, path: &str, line: &str, now: i64) -> Result<Vec<Value>, String> {
+    let ids: Vec<String> = {
+        let store = l.store.lock().map_err(|e| e.to_string())?;
+        let mut all = load(&store, KEY)?;
+        let projects = projects::load_projects(&store);
+        let from_here = |a: &Value| {
+            let Some(project) = projects.iter().find(|p| a["projectId"] == p.id.as_str()) else { return false };
+            let listed = projects::list_workspaces(l.git, &store, project).unwrap_or_default();
+            listed.iter().any(|w| projects::same_folder(Path::new(&w.path), Path::new(path)) && w.made_by.as_deref() != Some("automation"))
+        };
+        let ids: Vec<String> = all
+            .iter()
+            .filter(|a| a["enabled"] == true && a["trigger"]["kind"] == "event" && a["trigger"]["event"] == event)
+            .filter(|a| a["lastEventAt"].as_i64().is_none_or(|t| now - t >= EVENT_REST_MS))
+            .filter(|a| from_here(a))
+            .filter_map(|a| a["id"].as_str().map(String::from))
+            .collect();
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        for a in all.iter_mut().filter(|a| ids.iter().any(|id| a["id"] == id.as_str())) {
+            a["lastEventAt"] = json!(now);
+        }
+        save(&store, KEY, &all)?;
+        ids
+    };
+    ids.iter().map(|id| run_with(l, id, "event", Some(line))).collect()
+}
+
+/// AUTO-004: fed every round of the window's pull request poll (GIT-027), so a new pull request
+/// is spotted only while Kolux is already polling that branch.
+pub fn on_poll(app: &tauri::AppHandle, polled: &[crate::scm::PolledPr]) {
+    static SEEN: std::sync::OnceLock<Mutex<std::collections::HashMap<String, bool>>> = std::sync::OnceLock::new();
+    let opened = pr_opened(&mut SEEN.get_or_init(Default::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner), polled);
+    for (path, pr) in opened {
+        let line = format!("Event: pull request #{} opened from {}: {} {}", pr.number, pr.head.as_deref().unwrap_or("its branch"), pr.title.as_deref().unwrap_or("(no title)"), pr.url);
+        if let Err(e) = launch_for(app, |l| on_event(l, "pr-opened", &path, &line, now_ms() as i64)) {
+            eprintln!("automations event: {e}");
+        }
+    }
 }
 
 /// A run that never started, logged so the gap shows (AUTO-007, AUTO-022). AUTO-012: when the
@@ -540,7 +630,17 @@ pub struct Launch<'a> {
 /// timed or event-started run first runs the automation's precheck in its target folder and is
 /// skipped with the exit code and output when it fails; Run now never runs it.
 pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
-    let (auto, run) = {
+    run_with(l, id, trigger, None)
+}
+
+/// AUTO-004: an event-started run carries the happening's line (`eventDetail`, the marker's
+/// tooltip) and has it on the end of the agent's prompt.
+fn run_with(l: &Launch, id: &str, trigger: &str, event: Option<&str>) -> Result<Value, String> {
+    let marked = |store: &Store, run: Value| match event {
+        Some(line) => patch_run(store, run["id"].as_str().unwrap_or_default(), json!({ "eventDetail": line })),
+        None => Ok(run),
+    };
+    let (mut auto, run) = {
         let store = l.store.lock().map_err(|e| e.to_string())?;
         let all = load(&store, KEY)?;
         let auto = all[position(&all, id)?].clone();
@@ -548,14 +648,20 @@ pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
             if trigger == "manual" {
                 return Err(format!("Run now is blocked: {why}"));
             }
-            let out = skip(&store, id, trigger, cause, &why)?;
+            let out = marked(&store, skip(&store, id, trigger, cause, &why)?)?;
             reschedule(&store, id, now_ms() as i64)?;
             drop(store);
             (l.notify)(EVENT, json!({ "runId": out["id"] }));
             return Ok(out);
         }
-        (auto, new_run(&store, id, trigger)?)
+        let run = marked(&store, new_run(&store, id, trigger)?)?;
+        (auto, run)
     };
+    if let Some(line) = event {
+        auto["prompt"] = json!(format!("{}
+
+{line}", auto["prompt"].as_str().unwrap_or_default()));
+    }
     let check = auto["precheck"].as_str().map(str::trim).unwrap_or_default();
     if trigger != "manual" && !check.is_empty() {
         let dir = match auto["workspaceMode"] == "new-per-run" {
@@ -579,7 +685,7 @@ pub fn run(l: &Launch, id: &str, trigger: &str) -> Result<Value, String> {
     }
     let run_id = run["id"].as_str().unwrap_or_default().to_string();
     (l.notify)(EVENT, json!({ "runId": run_id }));
-    let outcome = place_and_start(l, &auto);
+    let outcome = place_and_start(l, &auto, &run_id);
     let fields = match outcome {
         Ok((wt, project_id)) => json!({ "status": "dispatched", "provider": auto["provider"], "dispatchedAt": now_ms(), "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id }),
         Err(Stop::Skipped(why)) => json!({ "status": "skipped", "cause": "unavailable", "detail": why }),
@@ -677,8 +783,15 @@ fn folder_name(path: &str) -> String {
     Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string())
 }
 
+/// The window's notice that a run made its worktree. AUTO-010: it runs the project setup only when
+/// the automation chose that; one saved before the choice existed skips it.
+fn created_event(project_id: &str, wt: &Worktree, auto: &Value) -> Value {
+    let setup = if auto["runSetup"].as_bool() == Some(true) { "run" } else { "skip" };
+    json!({ "kind": "created", "projectId": project_id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false, "setup": setup })
+}
+
 /// Finds or makes the run's workspace and asks the window to start the agent there.
-fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop> {
+fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, String), Stop> {
     let agent = auto["provider"].as_str().unwrap_or_default().to_string();
     if !(l.installed)(&agent) {
         return Err(Stop::Failed(format!("{agent} is not installed")));
@@ -705,14 +818,14 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
         if !Path::new(&path).is_dir() {
             return Err(Stop::Skipped(format!("its worktree {path} is gone")));
         }
-        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None }
+        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None }
     };
     // SAFE-023 (T-443): only a worktree Kolux made is trusted ahead of time, never the main checkout.
     let _ = crate::trust::trust_folders(&l.claude_config, &agent, &crate::trust::made_by_kolux(l.store, &[PathBuf::from(&wt.path)]));
     if new_per_run {
-        (l.notify)(crate::cli::EVENT, json!({ "kind": "created", "projectId": project.id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false }));
+        (l.notify)(crate::cli::EVENT, created_event(&project.id, &wt, auto));
     }
-    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"] }));
+    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
     Ok((wt, project.id))
 }
 
@@ -817,6 +930,99 @@ mod tests {
         store.set(KEY, &autos.to_string()).unwrap();
     }
 
+    fn polled(path: &str, state: Option<&str>) -> crate::scm::PolledPr {
+        let pr = state.map(|st| crate::scm::Pr { number: 7, url: "https://github.com/o/r/pull/7".into(), state: st.into(), title: Some("Fix".into()), head: Some("feat".into()), draft: true });
+        crate::scm::PolledPr { path: path.into(), linked: false, pr, error: None }
+    }
+
+    #[test]
+    fn auto004_a_pull_request_counts_as_opened_only_on_the_step_from_none_to_open() {
+        let mut seen = std::collections::HashMap::new();
+        // The first state Kolux learns is a starting point: an open one at start-up never fires.
+        assert!(pr_opened(&mut seen, &[polled("C:/a", Some("OPEN")), polled("C:/b", None)]).is_empty());
+        assert!(pr_opened(&mut seen, &[polled("C:/a", Some("OPEN"))]).is_empty());
+        // None to open fires once, drafts included; staying open does not fire again.
+        let fired = pr_opened(&mut seen, &[polled("c:/B/", Some("OPEN"))]);
+        assert_eq!(fired.iter().map(|(p, pr)| (p.as_str(), pr.number)).collect::<Vec<_>>(), [("c:/B/", 7)]);
+        assert!(pr_opened(&mut seen, &[polled("C:/b", Some("OPEN"))]).is_empty());
+        // A failed lookup is no news; a hand-linked pull request is not one opened from the branch.
+        let mut e = polled("C:/c", None);
+        e.error = Some("rate limited".into());
+        assert!(pr_opened(&mut seen, &[polled("C:/c", None), e, polled("C:/c", Some("OPEN"))]).len() == 1);
+        let mut l = polled("C:/d", None);
+        assert!(pr_opened(&mut seen, std::slice::from_ref(&l)).is_empty());
+        l.linked = true;
+        l.pr = polled("C:/d", Some("OPEN")).pr;
+        assert!(pr_opened(&mut seen, &[l]).is_empty());
+    }
+
+    #[test]
+    fn auto004_an_event_starts_one_run_with_its_line_on_the_prompt_then_rests_five_minutes() {
+        let dir = temp("a004");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.email", "t@example.com"], &["config", "user.name", "t"], &["commit", "-q", "--allow-empty", "-m", "first"]] {
+            assert!(std::process::Command::new("git").args(args).current_dir(&repo).status().unwrap().success());
+        }
+        let wt = dir.join("feat");
+        assert!(std::process::Command::new("git").args(["worktree", "add", "-q", "-b", "feat"]).arg(&wt).current_dir(&repo).status().unwrap().success());
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        let ev = json!({ "kind": "event", "event": "pr-opened" });
+        {
+            let s = store.lock().unwrap();
+            s.set("projects", &json!([{ "id": "p1", "name": "repo", "path": repo.to_string_lossy() }, { "id": "p2", "name": "other", "path": dir.to_string_lossy() }]).to_string()).unwrap();
+            let row = |id: &str, project: &str, trigger: &Value, on: bool| json!({ "id": id, "name": id, "prompt": "review it", "provider": "claude", "projectId": project, "workspaceMode": "existing", "workspace": repo.to_string_lossy(), "trigger": trigger, "enabled": on });
+            s.set(KEY, &json!([row("auto-1", "p1", &ev, true), row("auto-2", "p1", &ev, false), row("auto-3", "p2", &ev, true), row("auto-4", "p1", &json!({ "kind": "schedule", "cron": "0 * * * *", "timezone": "UTC" }), true), row("auto-5", "p1", &json!({ "kind": "event", "event": "checks-failed" }), true)]).to_string()).unwrap();
+        }
+        let git = Git::detect().unwrap();
+        let said = RefCell::new(Vec::<(String, Value)>::new());
+        let notify = |e: &str, v: Value| said.borrow_mut().push((e.to_string(), v));
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        let line = "Event: pull request #7 opened from feat: Fix https://github.com/o/r/pull/7";
+        let path = wt.to_string_lossy().to_string();
+        let started = on_event(&l, "pr-opened", &path, line, FRI_NOON).unwrap();
+        // Only the switched-on automation of that repo listening for that event runs.
+        assert_eq!(started.iter().map(|r| r["automationId"].as_str().unwrap()).collect::<Vec<_>>(), ["auto-1"]);
+        assert_eq!((started[0]["trigger"].as_str(), started[0]["status"].as_str(), started[0]["eventDetail"].as_str()), (Some("event"), Some("dispatched"), Some(line)));
+        let start = said.borrow().iter().find(|(e, v)| e == crate::cli::EVENT && v["kind"] == "start").cloned().expect("a start");
+        assert!(start.1["prompt"].as_str().unwrap().ends_with(line), "{}", start.1["prompt"]);
+        // AUTO-013: the window learns which run the pane belongs to, so View run finds it.
+        assert_eq!(start.1["runId"], started[0]["id"]);
+        assert!(start.1["prompt"].as_str().unwrap().starts_with("review it"));
+        // Another event inside five minutes is ignored; after that it runs again.
+        assert!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 4 * 60_000).unwrap().is_empty());
+        assert_eq!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 5 * 60_000 + 1).unwrap().len(), 1);
+        // A folder that is not one of the project's worktrees starts nothing.
+        assert!(on_event(&l, "pr-opened", &dir.join("elsewhere").to_string_lossy(), line, FRI_NOON + 20 * 60_000).unwrap().is_empty());
+        // A worktree an automation made never sets off an automation (no automation triggers itself).
+        projects::set_origin(&store.lock().unwrap(), &path, Some(&json!({ "madeBy": "automation", "automationId": "auto-9" }))).unwrap();
+        assert!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 40 * 60_000).unwrap().is_empty());
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto004_saving_an_event_drops_the_timetable_and_going_back_works_it_out_afresh() {
+        let dir = temp("a004s");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let base = json!({ "name": "Review", "prompt": "look", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": dir.to_string_lossy(), "schedule": { "preset": "hourly", "time": "00:15", "timezone": "UTC" } });
+        let mut ev = base.clone();
+        ev["trigger"] = json!({ "kind": "event", "event": "pr-opened" });
+        let saved = save_automation(&store, &ev, FRI_NOON).unwrap();
+        assert_eq!((saved["trigger"].clone(), saved["nextRunAt"].clone()), (json!({ "kind": "event", "event": "pr-opened" }), Value::Null));
+        let mut back = base.clone();
+        back["id"] = saved["id"].clone();
+        let timed = save_automation(&store, &back, FRI_NOON).unwrap();
+        assert_eq!((timed["trigger"]["kind"].as_str(), timed["nextRunAt"].as_i64()), (Some("schedule"), Some(FRI_NOON + 15 * 60_000)));
+        ev["trigger"]["event"] = json!("lunch");
+        assert!(save_automation(&store, &ev, FRI_NOON).unwrap_err().contains("event"));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_broken_saved_list_is_an_error_not_an_empty_one() {
         let dir = temp("broken");
@@ -831,6 +1037,11 @@ mod tests {
         let out = list(&store).unwrap();
         assert_eq!((out["automations"].clone(), out["runs"].clone()), (json!([]), json!([])));
         assert!(out["runsError"].as_str().unwrap().contains("could not be read"));
+        // AUTO-013: a run whose worktree folder is gone says so, so the page opens its saved output.
+        let here = dir.to_string_lossy().to_string();
+        store.set(RUNS_KEY, &json!([{ "id": "r1", "worktree": here }, { "id": "r2", "worktree": dir.join("gone").to_string_lossy() }, { "id": "r3" }]).to_string()).unwrap();
+        let runs = list(&store).unwrap()["runs"].clone();
+        assert_eq!((runs[0].get("worktreeGone"), &runs[1]["worktreeGone"], runs[2].get("worktreeGone")), (None, &json!(true), None));
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -926,6 +1137,34 @@ mod tests {
 
     fn form(ws: &Path, schedule: Value) -> Value {
         json!({ "requestId": "r1", "name": "Morning", "prompt": "check", "provider": "claude", "projectId": "p1", "workspaceMode": "existing", "workspace": ws.to_string_lossy(), "schedule": schedule })
+    }
+
+    #[test]
+    fn auto010_a_new_per_run_worktree_runs_the_setup_only_when_chosen_and_old_ones_skip() {
+        let dir = temp("auto010");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let schedule = json!({ "preset": "weekdays", "time": "09:00", "timezone": "UTC" });
+        let mut f = form(&dir, schedule.clone());
+        f["workspaceMode"] = json!("new-per-run");
+        f["runSetup"] = json!(true);
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(true));
+        let mut f = form(&dir, schedule.clone());
+        f["requestId"] = json!("r2");
+        f["runSetup"] = json!(true);
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(false), "an existing worktree never runs setup again");
+        let mut f = form(&dir, schedule);
+        f["requestId"] = json!("r3");
+        f["workspaceMode"] = json!("new-per-run");
+        assert_eq!(save_automation(&store, &f, FRI_NOON).unwrap()["runSetup"], json!(false), "no choice sent is skip");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let wt = Worktree { name: Some("run-1".into()), branch: Some("b".into()), head: String::new(), is_main: false, path: "C:/w/run-1".into(), parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None, number: None, comment: None };
+        assert_eq!(created_event("p1", &wt, &json!({ "runSetup": true }))["setup"], json!("run"));
+        assert_eq!(created_event("p1", &wt, &json!({ "runSetup": false }))["setup"], json!("skip"));
+        let old = created_event("p1", &wt, &json!({ "name": "made before the choice existed" }));
+        assert_eq!((old["setup"].as_str(), old["kind"].as_str(), old["worktree"]["path"].as_str()), (Some("skip"), Some("created"), Some("C:/w/run-1")));
     }
 
     #[test]

@@ -45,8 +45,9 @@ export function datedName(title: string, ms: number): string {
 export const roleDone = (check: RunCheck, roleId: string) => (check.files[roleId]?.[MARKER] ?? -1) >= check.record.started;
 
 /** A session as the strip sees it. */
-export type SeatInfo = { key: number; running?: boolean; needs?: boolean; ai?: string | null };
-export type RowState = "not-ready" | "waiting" | "working" | "done" | "left" | "needs" | "stopped";
+/** `stop`: why the session's hooks say it is stopped, while it is (STAT-022's limit or sign-in). */
+export type SeatInfo = { key: number; running?: boolean; needs?: boolean; ai?: string | null; stop?: "limit" | "signin" | null };
+export type RowState = "not-ready" | "waiting" | "working" | "done" | "left" | "needs" | "stopped" | "limit" | "signin";
 export type RoleRow = { state: RowState; text: string; key: number | null };
 
 /** SKILL-010: one role's plain status. `sentAt` is when a waiting role got its prompt. */
@@ -57,8 +58,10 @@ export function roleRow(kit: Kit, role: KitRole, check: RunCheck, seat: SeatInfo
     const old = role.delivers.some((f) => (check.files[role.id]?.[f] ?? Infinity) < check.record.started);
     return old ? { state: "left", text: "Left from the last run", key } : { state: "not-ready", text: "Not ready yet", key };
   }
-  // ponytail: needs you and stopped come from what the window knows (bell / program ended); the
-  // sign-in, review-hooks and usage-limit labels arrive with the status hooks (T-025) and SKILL-011.
+  // SKILL-011: a usage limit or a lapsed sign-in comes from the status hooks; needs you and stopped
+  // from what the window knows (bell / program ended).
+  if (seat.stop === "limit") return { state: "limit", text: "Stopped: this AI reached its usage limit", key };
+  if (seat.stop === "signin") return { state: "signin", text: "Stopped: this AI needs signing in again", key };
   if (seat.needs) return { state: "needs", text: "Needs you", key };
   if (seat.running === false) return { state: "stopped", text: "Stopped: the AI ended before it finished", key };
   const upstream = role.waitsFor ? kit.roles.find((r) => r.id === role.waitsFor) : undefined;

@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
+import { CHECK_AGAIN } from "./Attention";
 import { CONNECT, InstallCardView, liveCheck, stageOf, type ConnectId, type InstallView } from "./ConnectGrid";
 import type { AgentInfo } from "../launch/PlusMenu";
 
@@ -83,6 +84,27 @@ test("the connection check runs on focus and on a timer only while visible", () 
   doc.visibilityState = "hidden";
   tick!();
   expect(n).toBe(2);
+  handlers[CHECK_AGAIN]();
+  expect(n).toBe(3);
   stop();
-  expect(cleared && !handlers.focus).toBe(true);
+  expect(cleared && !handlers.focus && !handlers[CHECK_AGAIN]).toBe(true);
+});
+
+// ACCT-014: an account card re-reads on focus and on Check again, with no timer of its own.
+test("an account card's check has no timer", () => {
+  const handlers: Record<string, () => void> = {};
+  let timers = 0;
+  const win = {
+    addEventListener: (k: string, f: () => void) => void (handlers[k] = f),
+    removeEventListener: (k: string) => void delete handlers[k],
+    setInterval: () => (timers++, 1),
+    clearInterval: () => {},
+  };
+  let n = 0;
+  const stop = liveCheck(() => n++, win, { visibilityState: "visible" }, 0);
+  handlers.focus();
+  handlers[CHECK_AGAIN]();
+  expect([n, timers]).toEqual([2, 0]);
+  stop();
+  expect(Object.keys(handlers)).toEqual([]);
 });

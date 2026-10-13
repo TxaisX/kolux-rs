@@ -11,7 +11,7 @@ import { ConnectGrid } from "../settings/ConnectGrid";
 import { ClaudeCard } from "../settings/SettingsPage";
 import CodexCard from "../settings/CodexCard";
 import GrokCard from "../settings/GrokCard";
-import { chordFires, leaveKey, SCREENS } from "./firstRun";
+import { chordFires, leaveKey, milestone, SCREENS } from "./firstRun";
 
 const TILES = [
   { ai: "Claude", doing: "Writing up the findings" },
@@ -182,6 +182,10 @@ export default function Wizard(props: Props) {
   // ONB-006: Escape, a click on the dimmed app or the corner close asks first; one question at a time.
   const [leaving, setLeaving] = useState(false);
   const connected = Object.values(on).some(Boolean);
+  // ONB-003 / ONB-011: the Connect cards first reporting a connected AI is the first-AI milestone.
+  useEffect(() => {
+    if (connected) void milestone("aiConnected");
+  }, [connected]);
   const go = (to: number) => {
     // The stored step is the last screen finished (onboarding.rs); a failed save keeps the wizard going.
     if (to > at) invoke("onboarding_step", { step: to - 1 }).catch(() => {});

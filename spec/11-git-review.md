@@ -233,6 +233,11 @@ Rules: every version warns that there is no undo; the confirm button is named fo
   (Delete, Restore or Discard); a symbolic link is never followed out of the repository and its
   target is never removed; a long list of untracked files scrolls inside the dialog while its
   buttons stay in view.
+  (Kolux RS, T-061: the panel lists files flat, so a folder is discarded through its selected rows
+  or its section; a renamed file is put back under its old name and the new name removed; a
+  tracked link is removed before git rewrites it, an untracked link or folder is removed as
+  itself, so no target is written or removed; the confirm button is focused on open, Escape keeps
+  everything.)
 Acceptance:
   - [ ] Discard an untracked file → the dialog says it is removed for good; confirm → the file is
         gone.
