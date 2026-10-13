@@ -280,3 +280,13 @@ export const itemLabel = (l: Linked) => `${l.kind === "pull" ? "pull request" : 
 
 /** SESS-038: switching project drops a GitHub item of the old repository, keeps a link bound to none. */
 export const keepOnSwitch = (l: Linked | null): Linked | null => (l && l.repo === null ? l : null);
+
+/** SESS-038: what a create the user cancelled mid-submit says: `err` is the back end's answer, null
+ * when Git had already finished (the workspace then stays). */
+export function stoppedNote(name: string, err: string | null): { kind: "ok" | "warn"; text: string } {
+  if (err === null) return { kind: "warn", text: `${name} was already made when the cancel arrived, so it stays; delete it if you do not want it.` };
+  const lead = "cancelled: a newer workspace creation took its place";
+  if (!err.startsWith(lead)) return { kind: "warn", text: `${name}: ${err}` };
+  const rest = err.slice(lead.length);
+  return rest ? { kind: "warn", text: `Stopped creating ${name}${rest}` } : { kind: "ok", text: `Stopped creating ${name}; nothing was left behind.` };
+}

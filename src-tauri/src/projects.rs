@@ -669,6 +669,43 @@ fn undo_create(git: &Git, repo: &Path, dest: &Path, branch: Option<&str>) -> Str
     }
 }
 
+/// SESS-038: the retry policy for a failed `git worktree add`. A lock another Git process holds
+/// is waited out: two more tries, 0.2 s and then 0.8 s later. Any other failure is final at once.
+const CREATE_WAITS_MS: [u64; 2] = [200, 800];
+
+/// Whether Git refused because another Git process holds one of its lock files.
+pub fn lock_held(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains(".lock") || e.contains("another git process") || e.contains("cannot lock") || e.contains("could not lock")
+}
+
+/// What a failed `git worktree add` may have left: the folder (it did not exist before), Git's
+/// record of it, and `made`, the branch the add was creating (none of that name existed before).
+fn clear_failed_add(repo: &Path, dest: &Path, made: Option<&str>) {
+    let _ = std::fs::remove_dir_all(dest);
+    let _ = crate::git::run(&["worktree", "prune"], Some(repo));
+    if let Some(branch) = made.filter(|b| crate::git::run(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{b}")], Some(repo)).is_ok()) {
+        let _ = crate::git::run(&["branch", "-D", branch], Some(repo));
+    }
+}
+
+/// `add` (a `git worktree add` into `dest`, creating branch `made` if any) under the retry
+/// policy: each failed try is cleared away first, and a cancel stops the waiting.
+pub fn add_retrying(repo: &Path, dest: &Path, made: Option<&str>, overtaken: &dyn Fn() -> bool, add: impl Fn() -> Result<(), String>) -> Result<(), String> {
+    let mut waits = CREATE_WAITS_MS.iter();
+    while let Err(e) = add() {
+        clear_failed_add(repo, dest, made);
+        if overtaken() {
+            return Err(OVERTAKEN.to_string());
+        }
+        match waits.next() {
+            Some(ms) if lock_held(&e) => std::thread::sleep(std::time::Duration::from_millis(*ms)),
+            _ => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>) -> Result<Created, String> {
     create_workspace_until(git, place, project, typed_name, start, &|| false)
 }
@@ -699,7 +736,7 @@ pub fn create_workspace_until(git: &Git, place: &Place, project: &Project, typed
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     let new_branch = format!("{}{safe}", place.prefix);
-    git.worktree_add(repo, &dest, &new_branch, &from)?;
+    add_retrying(repo, &dest, Some(&new_branch), overtaken, || git.worktree_add(repo, &dest, &new_branch, &from))?;
     let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().chain(refreshed).collect();
     warnings.extend(crate::include::bring_along(repo, &dest));
     if overtaken() {
@@ -820,7 +857,7 @@ pub fn open_branch_workspace_until(git: &Git, place: &Place, project: &Project, 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo))?;
+    add_retrying(repo, &dest, None, overtaken, || crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo)).map(drop))?;
     let warnings = crate::include::bring_along(repo, &dest);
     if overtaken() {
         return Err(undo_create(git, repo, &dest, None));
@@ -1571,6 +1608,54 @@ mod tests {
         assert!(same_folder(Path::new(&made.worktree.path), &workspace_path(&place, &project, "fix-login")));
         let bad = Place { prefix_warning: Some("w".into()), ..nested(&root) };
         assert_eq!(create_workspace(&git, &bad, &project, "two", None).unwrap().warnings, vec!["w".to_string()]);
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn sess038_a_create_git_finds_locked_is_retried_and_a_failed_one_leaves_nothing() {
+        use std::time::{Duration, Instant};
+        assert!(lock_held("fatal: cannot lock ref 'refs/heads/x': Unable to create 'C:/r/.git/refs/heads/x.lock': File exists."));
+        assert!(lock_held("Another git process seems to be running in this repository"));
+        assert!(!lock_held("fatal: invalid reference: nope"));
+        let git = Git::detect().unwrap();
+        let profile = temp("locked");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("locked-r");
+        let root = temp("locked-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        // Another Git process holds the new branch's lock the whole time: three tries, then the
+        // error, and nothing half-made is left.
+        let lock = repo.join(".git").join("refs").join("heads").join("held.lock");
+        fs::write(&lock, "").unwrap();
+        let started = Instant::now();
+        let err = create_workspace_until(&git, &place, &project, "held", None, &|| false).unwrap_err();
+        assert!(lock_held(&err), "{err}");
+        assert!(started.elapsed() >= Duration::from_millis(900), "it waited between three tries");
+        assert!(!workspace_path(&place, &project, "held").exists(), "no half-made folder");
+        assert!(!git.branch_taken(&repo, "held"), "no half-made branch");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 1, "only the main checkout");
+        // The lock goes while Kolux waits: a later try makes the workspace.
+        let gone = lock.clone();
+        let other = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            fs::remove_file(gone).unwrap();
+        });
+        let made = create_workspace_until(&git, &place, &project, "held", None, &|| false).unwrap();
+        other.join().unwrap();
+        assert_eq!(made.worktree.branch.as_deref(), Some("held"));
+        // Cancelled while it waits: no further try.
+        fs::write(repo.join(".git").join("refs").join("heads").join("again.lock"), "").unwrap();
+        let tries = std::cell::Cell::new(0);
+        let cancel_after_first = || {
+            tries.set(tries.get() + 1);
+            tries.get() > 1
+        };
+        assert_eq!(create_workspace_until(&git, &place, &project, "again", None, &cancel_after_first).unwrap_err(), OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "again").exists());
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);

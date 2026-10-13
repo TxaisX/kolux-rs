@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
@@ -163,6 +163,13 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   };
   const tickets = useRef(Date.now()); // PROJ-020: one ticket per create, never reused in a session
   const overtaken = useRef(new Set<number>());
+  const [stopping, setStopping] = useState<number[]>([]); // SESS-038: creates the user cancelled mid-submit
+  const stopped = useRef(new Set<number>());
+  const stopCreate = (ticket: number) => {
+    stopped.current.add(ticket);
+    setStopping((s) => [...s, ticket]);
+    invoke("workspace_create_cancel", { ticket }).catch(() => {});
+  };
   const shown = useRef(activeDir); // the workspace in front, read when a create finishes
   shown.current = activeDir;
   const [name, setName] = useState("");
@@ -466,6 +473,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket, issue });
       const lost = overtaken.current.has(mine.ticket);
       noteRecent(project.id);
+      if (stopped.current.has(mine.ticket)) {
+        const n = stoppedNote(worktreeLabel(wt), null);
+        say(n.kind, n.text);
+        return void (await reload());
+      }
       const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
       say(extra ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${extra ? ` · ${extra}` : ""}`);
       await reload();
@@ -483,10 +495,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         if (setup && onSetup) onSetup(wt.path, wt.branch, setup, setupWhere, false);
       }
     } catch (err) {
-      if (overtaken.current.has(mine.ticket)) say("warn", `${mine.name}: ${String(err)}`);
+      if (stopped.current.has(mine.ticket)) {
+        const n = stoppedNote(mine.name, String(err));
+        say(n.kind, n.text);
+      } else if (overtaken.current.has(mine.ticket)) say("warn", `${mine.name}: ${String(err)}`);
       else fail(err);
     } finally {
       overtaken.current.delete(mine.ticket);
+      stopped.current.delete(mine.ticket);
+      setStopping((s) => s.filter((t) => t !== mine.ticket));
       setPending(pendingNow.current.filter((p) => p.ticket !== mine.ticket));
       if (keepOpen) nameRef.current?.focus();
     }
@@ -1053,7 +1070,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         <div key={c.ticket} className="sess pending" data-pending={c.name} aria-busy="true">
           <span className="dot" role="img" aria-label="creating" />
           <span className="name">{c.name}</span>
-          <span className="hint">creating…</span>
+          <span className="hint">{stopping.includes(c.ticket) ? "stopping…" : "creating…"}</span>
+          {!stopping.includes(c.ticket) && (
+            <button className="ib" title={`Cancel creating ${c.name}; what Git made so far is removed`} aria-label={`cancel creating ${c.name}`} onClick={() => stopCreate(c.ticket)}>
+              ×
+            </button>
+          )}
         </div>
       ));
 

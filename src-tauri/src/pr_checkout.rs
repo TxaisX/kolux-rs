@@ -203,10 +203,11 @@ pub fn open(git: &Git, place: &Place, project: &Project, pr: &PrHead, fork: Opti
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
     let dest_s = dest.to_string_lossy().to_string();
+    // SESS-038: the same retry policy as a new workspace's
     if reuse {
-        run(&["worktree", "add", &dest_s, &branch], Some(repo))?;
+        crate::projects::add_retrying(repo, &dest, None, overtaken, || run(&["worktree", "add", &dest_s, &branch], Some(repo)).map(drop))?;
     } else {
-        run(&["worktree", "add", "-b", &branch, &dest_s, &latest], Some(repo))?;
+        crate::projects::add_retrying(repo, &dest, Some(&branch), overtaken, || run(&["worktree", "add", "-b", &branch, &dest_s, &latest], Some(repo)).map(drop))?;
         run(&["branch", &format!("--set-upstream-to={remote}/{head}"), &branch], Some(repo))?;
     }
     let warnings = crate::include::bring_along(repo, &dest);
