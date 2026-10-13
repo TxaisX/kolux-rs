@@ -216,9 +216,16 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
   const cliFailed = useRef<Record<string, string>>({}); // CLI-026: command-line requests the window could not open
-  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; quit?: boolean } | null>(null);
+  const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string; quit?: boolean; info?: boolean } | null>(null);
   // APP-039: the crash report shown; report null says none was captured.
   const [crash, setCrash] = useState<{ report: Report | null } | null>(null);
+  // APP-021: what the startup check could not repair is named here (it never fails the launch).
+  useEffect(() => {
+    invoke<string[]>("startup_problems").then(
+      (problems) => problems.length > 0 && setAsking({ keys: [], title: "Kolux RS has a permissions problem", body: problems.join(" "), info: true }),
+      () => {},
+    );
+  }, []);
   useEffect(() => {
     invoke<Report | null>("crash_pending").then(
       (report) => report && setCrash({ report }),
@@ -1546,7 +1553,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             title={asking.title}
             body={asking.body}
             onCancel={() => setAsking(null)}
-            confirm={asking.quit ? "Quit" : undefined}
+            confirm={asking.quit ? "Quit" : asking.info ? null : undefined}
             onConfirm={() => {
               if (asking.quit) return void getCurrentWindow().destroy().catch(() => {});
               asking.keys.forEach(dropPane);

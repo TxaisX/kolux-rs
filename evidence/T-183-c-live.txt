@@ -1,0 +1,18 @@
+T-183-c live proof (APP-021), lane dev app on port 1422, 2026-10-13. The install folder of a dev build is src-tauri/target/debug.
+
+A. a file in the install folder (src-tauri/target/debug) with read refused to the user:
+   before launch: cat: /g/Dev/kolux-rs-lanes/release/src-tauri/target/debug/kolux-perm-probe.txt: Permission denied
+   after launch: probe
+   log: 1791892034 permissions: G:\Dev\kolux-rs-lanes\release\src-tauri\target\debug\kolux-perm-probe.txt could not be read; its permissions were reset
+   prompt: "none"
+
+B. a file whose permissions cannot be reset (read refused, and OWNER RIGHTS refused changing permissions):
+   before launch: cat: /g/Dev/kolux-rs-lanes/release/src-tauri/target/debug/kolux-perm-probe2.txt: Permission denied
+   log (newest permissions line; nothing new was repaired, so it is still the line from A): 1791892034 permissions: G:\Dev\kolux-rs-lanes\release\src-tauri\target\debug\kolux-perm-probe.txt could not be read; its permissions were reset
+   prompt title: "Kolux RS has a permissions problem"
+   prompt body: "Kolux RS cannot read G:\\Dev\\kolux-rs-lanes\\release\\src-tauri\\target\\debug\\kolux-perm-probe2.txt in its install folder: a permissions problem it could not repair. To fix it, run icacls \"G:\\Dev\\kolux-rs-lanes\\release\\src-tauri\\target\\debug\\kolux-perm-probe2.txt\" /reset in a terminal."
+   buttons: "OK"
+   after OK: prompt "gone", app running: 1
+
+Afterwards both probe files were deleted and the lane profile (settings.json, state.db, -wal, -shm and logs/kolux.log) was restored from the backup: cmp same for all five.
+Screenshot: evidence/T-183-c-problem.png (the prompt over the running app).

@@ -3,6 +3,7 @@ mod artifacts;
 mod automations;
 mod capture;
 mod crash;
+mod perms;
 mod browser;
 mod cap;
 pub mod cli;
@@ -97,6 +98,14 @@ const QUIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 struct Closing(std::sync::atomic::AtomicU32, std::sync::atomic::AtomicU32);
 
 /// APP-006: the window's close handler heard the request (it then asks, or closes).
+/// APP-021: what the startup check could not repair, for the window to name.
+struct StartupProblems(Vec<String>);
+
+#[tauri::command]
+fn startup_problems(problems: tauri::State<'_, StartupProblems>) -> Vec<String> {
+    problems.0.clone()
+}
+
 #[tauri::command]
 fn close_heard(closing: tauri::State<'_, Closing>) {
     use std::sync::atomic::Ordering::SeqCst;
@@ -167,7 +176,25 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             // APP-039: from here on a panic leaves a crash report for the next launch to offer.
             crash::install(dir.clone(), app.package_info().version.to_string());
-            let store = Store::open(&dir)?;
+            // APP-021: folders the app cannot write to and install files it cannot read are repaired
+            // when they are the user's own; what stays broken is named in the window instead of
+            // failing the launch.
+            let checked = match std::env::current_exe() {
+                Ok(exe) if cfg!(windows) => exe.parent().map(|i| perms::check(i, &dir)).unwrap_or_default(),
+                _ => perms::Outcome::default(),
+            };
+            for r in &checked.repaired {
+                secrets::log(&dir, &format!("permissions: {r}"));
+            }
+            let mut problems = checked.problems;
+            let store = match Store::open(&dir) {
+                Ok(store) => store,
+                Err(e) => {
+                    problems.push(format!("Kolux RS could not open its saved state in {} ({e}), so nothing this session changes is saved.", dir.display()));
+                    Store::in_memory(&dir)?
+                }
+            };
+            app.manage(StartupProblems(problems));
             if let Some(why) = &store.recovered {
                 secrets::log(&dir, &format!("state: {why}"));
             }
@@ -278,6 +305,7 @@ pub fn run() {
             patch_settings,
             save_point,
             close_heard,
+            startup_problems,
             crash::crash_pending,
             crash::crash_newest,
             crash::crash_logs,

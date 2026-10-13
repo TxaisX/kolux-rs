@@ -112,6 +112,11 @@ impl Store {
         Ok(Store { conn, settings_path: dir.join("settings.json"), closed: Cell::new(false), recovered })
     }
 
+    /// APP-021: a store kept in memory when the profile's cannot be opened, so the launch goes on.
+    pub fn in_memory(dir: &Path) -> rusqlite::Result<Store> {
+        Ok(Store { conn: connect(Path::new(""))?, settings_path: dir.join("settings.json"), closed: Cell::new(false), recovered: None })
+    }
+
     /// The profile folder the store lives in.
     pub fn dir(&self) -> PathBuf {
         self.settings_path.parent().map(Path::to_path_buf).unwrap_or_default()
