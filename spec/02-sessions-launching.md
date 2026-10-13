@@ -215,7 +215,10 @@ Rules: works for every agent that can resume, among them Claude Code, Codex, Dev
   Kimi; a resume never runs twice and does not pull focus away from where the user is working;
   resuming Claude Code never lands in its interactive pick-a-session screen by accident; on
   Windows the resume command is quoted correctly for the shell; restored sessions and tabs are
-  matched up so nothing is doubled or lost.
+  matched up so nothing is doubled or lost. (Kolux RS, T-066: the session id comes from the agent's
+  own hook events and is kept in the saved layout; Claude Code and Codex are wired, the others in the
+  catalogue come back at their prompt until T-066-b; a resume starts on the agent's standing start
+  line, so its permission mode and the user's own arguments return with it.)
 Acceptance:
   - [ ] Run Claude Code, quit, reopen → the same conversation carries on in the same pane.
   - [ ] Kill Kolux during a session and reopen → the session resumes.

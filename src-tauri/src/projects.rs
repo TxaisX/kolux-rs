@@ -1040,8 +1040,13 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     if let Some(why) = removal_refused(&remove_check(&git, &project, &path)?, force, &stamp) {
         return Err(why);
     }
-    // A shell still sitting in the folder would keep Windows from deleting it.
-    terminals.kill_under(Path::new(&path));
+    // ORCH-058: a shell still sitting in the folder would keep Windows from deleting it, so its
+    // terminals end first; one that cannot be shown gone blocks unless the force box waives it.
+    let stopped = terminals.kill_under(Path::new(&path));
+    if !force && !stopped.stuck.is_empty() {
+        let n = stopped.stuck.len();
+        return Err(format!("{n} process{} in this workspace did not stop. Tick Delete my changes too to delete it anyway, leaving {} running.", if n == 1 { "" } else { "es" }, if n == 1 { "it" } else { "them" }));
+    }
     let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
     remove_worktree(&git, &project, &path, force, keep)?;
     let store = store.lock().map_err(|e| e.to_string())?;

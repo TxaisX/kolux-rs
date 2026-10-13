@@ -12,6 +12,7 @@ mod claude_key;
 mod codex_accounts;
 mod codex_usage;
 mod creatures;
+mod diag;
 mod fence;
 mod files;
 mod fsops;
@@ -23,11 +24,13 @@ mod grok;
 mod install;
 mod keybindings;
 mod kits;
+mod links;
 mod names;
 mod notifications;
 mod onboarding;
 mod orchestration;
 mod procs;
+mod protected;
 mod resources;
 mod projects;
 mod scm;
@@ -138,6 +141,9 @@ pub fn run() {
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
+            app.manage(links::Grants::default());
+            // APP-041: the app's own start-and-stop record, next to what the terminals report.
+            diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
             if let Some(w) = app.get_webview_window("main") {
@@ -231,6 +237,7 @@ pub fn run() {
             resources::resources,
             terminal::terminal_spawn,
             terminal::terminal_write,
+            terminal::terminal_screen_reply,
             status::agent_history,
             activity::activity_counts,
             status::agent_answer,
@@ -367,6 +374,7 @@ pub fn run() {
             files::diff_image,
             files::dir_list,
             files::path_kind,
+            links::open_path, links::file_grant,
             fsops::fs_create,
             fsops::fs_rename,
             fsops::fs_trash,
@@ -374,13 +382,15 @@ pub fn run() {
             fsops::fs_copy,
             fsops::fs_move,
             fsops::clip_write,
+            diag::diag_bundle,
+            diag::diag_review,
+            diag::diag_review_discard,
             update::update_status,
             update::update_mark,
             update::update_check,
             update::update_download,
             update::update_restart,
             claude_accounts::claude_account_remove,
-            codex_accounts::codex_account_remove,
             codex_accounts::codex_account_label,
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
@@ -395,6 +405,7 @@ pub fn run() {
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
+                    diag::write(&dir, "app exit");
                     let _ = std::fs::remove_file(dir.join(cli::FILE));
                     let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));
                 }

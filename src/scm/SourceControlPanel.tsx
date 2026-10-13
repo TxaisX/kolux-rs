@@ -1,6 +1,8 @@
-// The Source Control card on the right of the content (spec 11; GIT-002 / GIT-004 / GIT-006 /
-// GIT-007): the changes of the workspace in front under conflicts, staged, changes and untracked,
-// each section with its count and a stage-all / unstage-all control, plus or minus on every row,
+// The Source Control card on the right of the content (spec 11; GIT-002 / GIT-003 / GIT-004 /
+// GIT-006 / GIT-007): the changes of the workspace in front under conflicts, staged, changes and
+// untracked, each section with its count, a stage-all / unstage-all control and a discard-all
+// control, plus or minus and a discard arrow on every row (GIT-003: discarding asks first, worded
+// for what goes, with the untracked list scrolling inside the question),
 // a commit box (Ctrl+Enter commits while focus is in here), the main button that always proposes
 // the next step, a remote menu whose labels carry counts and whose disabled items say why, and a
 // notice when an action fails or a hook refuses a commit, with a Fix with AI action. The draft
@@ -21,7 +23,7 @@ import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGene
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import { openInBrowser } from "../browser/BrowserPane";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -81,6 +83,8 @@ type Composer = { title: string; body: string; base: string; draft: boolean; err
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
 export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
+  // GIT-003: the rows waiting for a yes before their work is thrown away.
+  const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
   const [busyAgent, setBusyAgent] = useState(false);
@@ -239,6 +243,13 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     setDiscarding(null);
     const section = d.section === "Changes" ? "changed" : d.section.toLowerCase();
     void guarded(() => invoke("scm_discard", { worktree: dir, section, paths: d.paths }));
+  };
+  // GIT-003: rows picked across sections go through the section-free discard.
+  const discardRows = (rows: Change[]) => rows.length > 0 && !busy && setDiscardingRows(rows);
+  const confirmDiscard = () => {
+    const rows = discardingRows ?? [];
+    setDiscardingRows(null);
+    void guarded(() => invoke("scm_discard", { worktree: dir, paths: rows.map((r) => r.path) }));
   };
   const commit = () =>
     canCommit(status, draft) &&
@@ -435,6 +446,11 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     if (!e.shiftKey) setAnchor(path);
   };
   const chosen = status ? bulk(status, selected) : { present: [], stage: [], unstage: [] };
+  const plan = discardingRows && discardPlan(discardingRows);
+  const rowsOf = (paths: string[]): Change[] => {
+    const all = status ? [...status.conflicts, ...status.staged, ...status.changed, ...status.untracked] : [];
+    return paths.flatMap((p) => all.find((c) => c.path === p) ?? []);
+  };
 
   const section = (name: "Conflicts" | Section, rows: Change[], on: boolean) =>
     rows.length > 0 && (
@@ -880,6 +896,9 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 <button className="btn" disabled={busy || chosen.unstage.length === 0} title={`Unstage the ${chosen.unstage.length} selected staged rows`} onClick={() => void stage(chosen.unstage, false)}>
                   Unstage {chosen.unstage.length}
                 </button>
+                <button className="btn" disabled={busy} title={`Discard the ${chosen.present.length} selected rows`} onClick={() => discardRows(rowsOf(chosen.present))}>
+                  Discard {chosen.present.length}
+                </button>
                 <button className="ib" title="Clear selection (Esc)" onClick={() => setSelected([])}>
                   <Close />
                 </button>
@@ -990,6 +1009,26 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
           </>
         )}
       </div>
+      {discardingRows && plan && (
+        <Ask
+          title={plan.title}
+          body={
+            <>
+              <p>{plan.body}</p>
+              {discardingRows.length > 1 && (
+                <ul className="ask-list" aria-label="files affected">
+                  {discardingRows.map((r) => (
+                    <li key={r.path}>{r.from ? `${r.from} → ${r.path}` : r.path}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          }
+          confirm={plan.button}
+          onConfirm={confirmDiscard}
+          onCancel={() => setDiscardingRows(null)}
+        />
+      )}
     </aside>
   );
 }

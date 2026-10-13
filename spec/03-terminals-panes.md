@@ -485,6 +485,9 @@ Rules: close tab Cmd/Ctrl+W (closes the focused pane when the tab is split); clo
   worktree open; Close to the left is also in the tab menu; closing the active tab returns to the
   tab used before it, otherwise to its right neighbour (left if it was last); when nothing is left
   open, the workspace shows its empty start view.
+  (Kolux RS, T-102-a: the five close items live in the tab's right-click menu, a bulk close is one
+  TERM-045 question for the whole set, and `tab.closeAll` on Ctrl+Alt+W closes the focused strip;
+  pinned tabs do not exist yet, so nothing is spared until the pin task lands.)
 Acceptance:
   - [ ] Close to the right on the last tab is disabled.
   - [ ] Closing the active tab returns to the tab that was used just before it.
@@ -499,6 +502,8 @@ User sees: pin or unpin, Change Title, Tab Color, split, close, close others, cl
   close to the left.
 Rules: directional close items are disabled when there is nothing to close; split actions move the
   tab into a split view; middle-click closes an unpinned tab.
+  (Kolux RS, T-102-a: the close items and middle-click are in; pin, title, colour and split items
+  follow with the rest of the menu.)
 Acceptance:
   - [ ] The first tab has close-to-the-left (if present) disabled.
   - [ ] Middle-clicking an unpinned tab closes it.
@@ -650,9 +655,14 @@ User sees: the panes resize live; the divider is a thin coloured line.
 Rules: divider thickness defaults to 3 px; divider colour has separate light and dark values
   (neutral grey tones by default); if the pointer is lost mid-drag (left the window, capture lost),
   the drag still finishes cleanly instead of sticking.
+  (Kolux RS, T-144-a: the defaults follow DT-A7 in the Appearance chapter, 6 px and no colour, with
+  the width and the light / dark colours still settable there; the grid's gap is the divider, the grid
+  captures the pointer, a lost capture ends the drag where it was, a pane never goes under 120 px, and
+  the program hears only the final size.)
 Acceptance:
   - [ ] Releasing the mouse outside the window ends the drag at the last position.
   - [ ] Dividers are about 3 px thick by default and take a different colour in light and dark mode.
+      (Kolux RS: 6 px and uncoloured by default per DT-A7; the colours apply once set.)
 Compat: —
 Source: D-03-010
 
@@ -663,6 +673,8 @@ User sees: header items disappear one by one; the dot, agent mark and session na
 Rules: first the branch chip goes (around 344 px); then the program name (around 264 px); then the
   action buttons (around 204 px); then the status word (around 134 px); the session name truncates
   rather than disappearing.
+  (Kolux RS, T-144-a: CSS container queries on the pane at exactly those widths; under 134 px the
+  whole right-hand group goes with the status word.)
 Acceptance:
   - [ ] At 250 px wide the header shows dot, mark, name, status word and buttons but no branch or
       program name.
@@ -720,6 +732,11 @@ Rules: defaults: a Kolux dark theme and a Tango-style light theme, separate ligh
   asking the terminal for its colours get correct answers, with no leaked replies at startup; no
   flash of the wrong theme at startup; programs that subscribe to light/dark changes are told when
   the mode flips.
+  (Kolux RS, T-145-b: on Windows the pane's replies are written to the console layer as
+  win32-input-mode key events, since it drops them as plain bytes; the palette question and the
+  light/dark question and subscription get through and are answered; the foreground/background
+  questions, OSC 10 and 11 with "?", never leave the console layer, so they go unanswered until the
+  pseudoconsole's pass-through flag is reachable, DT-C20 and T-145-c.)
 Acceptance:
   - [ ] Switching the app to light mode switches terminals to the light theme.
   - [ ] A program asking for the terminal's colours gets the current theme's colours, and nothing

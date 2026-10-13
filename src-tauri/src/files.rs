@@ -1,8 +1,9 @@
 // Reading and saving the text of a file shown in an editor tab (EDIT-001). A save goes to a
 // temporary file beside the target and is then moved over it, so a failed write never leaves a
 // half-written file behind. Every command here takes only paths inside the user's projects and
-// worktrees (ACCT-055, fence.rs); the WSL and share parts of EDIT-045 are T-062;
-// large and binary files are EDIT-046 (T-178).
+// worktrees (ACCT-055, fence.rs); EDIT-045's `links::fence` guards the file operations and
+// `path_kind` (inside a project or granted exactly, never out through a link); the WSL and share
+// parts of EDIT-045 are T-062; large and binary files are EDIT-046 (T-178).
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -26,6 +27,11 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     fs::rename(&temp, path).map_err(fail)
 }
 
+type Store<'a> = tauri::State<'a, std::sync::Mutex<crate::state::Store>>;
+type Grants<'a> = tauri::State<'a, crate::links::Grants>;
+
+/// SAFE-021 / EDIT-045: a path on another machine, outside the projects, or leading out through a
+/// link is refused before the file is touched.
 #[tauri::command]
 pub fn file_read(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
     read_text(&fence.allow(&path, &store, &git, true)?)
@@ -271,10 +277,20 @@ pub fn dir_list(path: String, fence: tauri::State<'_, crate::fence::Fence>, stor
     list_dir(&fence.allow(&path, &store, &git, false)?)
 }
 
-/// What a path really is, following links: "dir", "file" or "missing".
+/// What a path really is: "remote" (another machine, never looked up; SAFE-021), "outside" (not
+/// in a project, or out through a link; EDIT-045), else following links "dir", "file" or "missing".
 #[tauri::command]
-pub fn path_kind(path: String) -> &'static str {
-    match fs::metadata(&path) {
+pub fn path_kind(store: Store<'_>, grants: Grants<'_>, path: String) -> &'static str {
+    let roots = crate::links::roots(&store);
+    match crate::links::fence(&path, &roots, &grants.snapshot(), true) {
+        Ok(p) => kind_of(&p),
+        Err(_) if crate::links::host_path(&path, &roots) => "remote",
+        Err(_) => "outside",
+    }
+}
+
+pub fn kind_of(path: &Path) -> &'static str {
+    match fs::metadata(path) {
         Ok(m) if m.is_dir() => "dir",
         Ok(_) => "file",
         Err(_) => "missing",
@@ -303,8 +319,8 @@ mod tests {
         }
         let got: Vec<_> = list_dir(&d).unwrap().into_iter().map(|e| (e.name, e.kind)).collect();
         assert_eq!(got, [("Alpha".to_string(), "dir"), ("zeta".to_string(), "dir"), ("A.txt".to_string(), "file"), ("b.txt".to_string(), "file")]);
-        assert_eq!(path_kind(d.join("zeta").to_string_lossy().into()), "dir");
-        assert_eq!(path_kind(d.join("nope").to_string_lossy().into()), "missing");
+        assert_eq!(kind_of(&d.join("zeta")), "dir");
+        assert_eq!(kind_of(&d.join("nope")), "missing");
         let _ = fs::remove_dir_all(&d);
     }
 

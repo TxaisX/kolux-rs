@@ -127,6 +127,27 @@ pub fn ready_home(mut active: impl FnMut() -> Option<String>, signed_in: impl Fn
     }
 }
 
+/// ACCT-023: the home a resumed pane runs on. `None` when its account is no longer listed (the
+/// pane is stale, never moved to another account), `Some(None)` while the home is not on disk yet.
+pub fn resume_home(accounts: &[Account], id: &str) -> Option<Option<String>> {
+    let a = accounts.iter().find(|a| a.id == id)?;
+    Some(PathBuf::from(&a.home).is_dir().then(|| a.home.clone()))
+}
+
+/// ACCT-023: waits about two seconds for the resumed account's home, then gives up with a
+/// try-again message rather than carrying on as another account.
+pub fn wait_home(store: &Mutex<Store>, id: &str) -> Result<String, String> {
+    for _ in 0..20 {
+        let listed = store.lock().map(|s| resume_home(&load(&s), id)).map_err(|e| e.to_string())?;
+        match listed {
+            None => return Err("The Codex account this session ran on is no longer listed, so it was not resumed on another one. Pick an account in Settings and start it again.".into()),
+            Some(Some(home)) => return Ok(home),
+            Some(None) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    Err("That account's Codex sign-in is not in place yet; try again in a moment.".into())
+}
+
 /// The variable a new pane gets: only a Codex pane, only with an active account.
 pub fn pane_env(program: Option<&str>, home: Option<String>) -> Option<(&'static str, String)> {
     if crate::agents::credited_agent(program?) != Some("codex") {
@@ -529,6 +550,17 @@ pub fn codex_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resumed_pane_gets_its_own_home_or_none() {
+        let on_disk = temp("resume");
+        let acct = |id: &str, home: &Path| Account { id: id.into(), email: None, home: home.to_string_lossy().into_owned(), last_sign_in: 0, sign_in_error: false, label: None };
+        let accounts = [acct("a", &on_disk), acct("b", &on_disk.join("missing"))];
+        assert_eq!(resume_home(&accounts, "a"), Some(Some(on_disk.to_string_lossy().into_owned())));
+        assert_eq!(resume_home(&accounts, "b"), Some(None));
+        assert_eq!(resume_home(&accounts, "gone"), None);
+        let _ = fs::remove_dir_all(&*on_disk);
+    }
 
     fn temp(name: &str) -> crate::test_dir::TempDir {
         crate::test_dir::temp(&format!("codex-acct-{name}"))

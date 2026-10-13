@@ -504,3 +504,22 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-137-b / T-139-c · source check only: docs.x.ai/build/cli/reference and docs.x.ai/build/features/status-line read; neither documents Grok credit figures or a session-file format; nothing built or copied
 
 > 2026-10-12 · T-339 · rules from SET-020, VIEW-011, VIEW-116, USAGE-010, ORCH-031 and ACCT-001 cards and DT-A6; no outside source used; no old Kolux source read
+> 2026-10-12 · T-134-a · The cards CLI-024/CLI-025, COMPAT 2.1 rows for terminal read/send/wait, the xterm.js public typings in node_modules (`buffer.active`, `viewportY`, `translateToString`). Nothing from the old app.
+> 2026-10-12 · T-139-b · The cards ACCT-023/ACCT-064 and the repo's own codex_accounts and terminal modules. Nothing from the old app.
+> 2026-10-12 · T-145-b · The card TERM-098, the public win32-input-mode spec in microsoft/terminal's doc/specs (via context7) for the key-event sequence, the vendored portable-pty 0.9.0 source for the pseudoconsole flags. Nothing from the old app.
+> 2026-10-12 · T-050 · The cards VIEW-015, VIEW-019, VIEW-021 and VIEW-024, and this repo's own sidebar rows, chooser pane and Board cells. Nothing from the old app.
+> 2026-10-12 · T-028-b · The card VIEW-017 and this repo's own status vocabulary and Board chip. Nothing from the old app.
+> 2026-10-12 · T-040-b · The cards USAGE-004, VIEW-018 and USAGE-025, and this repo's own meter, ring and pill code. Nothing from the old app.
+> 2026-10-12 · T-144-a · The cards TERM-010 and TERM-024, DT-A7, and this repo's own grid and pane code; CSS container queries and pointer capture are platform features. Nothing from the old app.
+> 2026-10-12 · T-102-a · The cards TERM-044, TERM-049 and TERM-045, COMPAT's tab.close / tab.closeAll rows, and this repo's own close question, grid and menu code. Nothing from the old app.
+> 2026-10-12 · T-174-a · The cards ORCH-054 and ORCH-058, COMPAT 7, CLI-007 and this repo's own CLI, terminal and process code; taskkill, the Toolhelp snapshot and kill(1) are platform tools. Nothing from the old app.
+> 2026-10-12 · T-058 · The cards SAFE-009..012, COMPAT 3.2 and the PreToolUse reply shape from Claude Code's published hook docs (context7), and this repo's own hook server and script. Nothing from the old app.
+> 2026-10-12 · T-059-a · The cards SAFE-013 and SAFE-014, the hook input fields (`cwd`) from Claude Code's published hook docs (context7), PowerShell's and cmd's public switch names, and this repo's own protected module. Nothing from the old app.
+> 2026-10-12 · T-060 · The cards SAFE-021 and SAFE-022, Windows' public path forms (UNC, long-path and device prefixes, 8.3 short names, alternate data streams), Explorer's /select switch and macOS open -R, and this repo's own files and artifacts modules. Nothing from the old app.
+> 2026-10-12 · T-061 · The card GIT-003 and the app's own CloseAsk dialog; git's reset, checkout and pathspec-from-file behaviour as the unit test exercises it on this machine; no outside source.
+> 2026-10-12 · T-062-a · The cards EDIT-044, EDIT-045 and EDIT-053 and the T-060 host refusal; Rust std `canonicalize` and Windows sharing-violation error codes as the unit tests exercise them on this machine; no outside source.
+> 2026-10-12 · T-063 · The card BROW-051 and the app's own hooks and CLI servers; the Fetch standard's CORS and Sec-Fetch behaviour as the app's own web view showed it; no outside source.
+> 2026-10-12 · T-064-a · The card APP-041 and the app's own secrets, terminal and settings modules; the token prefixes are the public formats of Anthropic, GitHub, Slack, AWS, Google, GitLab and npm keys as their documentation shows them; no outside source.
+> 2026-10-12 · T-064-b · The card APP-070, the Send Feedback card's Compat line and the app's own update, artifacts and CLI modules; GitHub's new-issue address parameters (title, body) as its public documentation shows them; the WebView2 flag from Tauri's config reference (additionalBrowserArgs); no outside source.
+> 2026-10-12 · T-065 · The card PROJ-067, DESIGN.md and the lane's own App.tsx/workspaces.ts; no outside source.
+> 2026-10-12 · T-066 · The card SESS-030, Claude Code's public CLI/hook docs (`claude --resume <id>`, hook `session_id`) and the Codex CLI's public `resume` subcommand, read through context7; the lane's own hooks.rs, layout.ts and agents.rs.

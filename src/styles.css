@@ -188,6 +188,8 @@ input { font: inherit; }
 .btn.danger { border-color: #7a3b1e; color: #f0a07a; }
 .btn.danger:hover:not(:disabled) { background: #2a1911; }
 .btn-row { display: flex; gap: 6px; }
+.conn-list { margin: 0 0 8px; padding-left: 18px; }
+.conn-list li { margin: 2px 0; }
 .note { font-size: 12px; padding: 4px 9px; word-break: normal; overflow-wrap: anywhere; line-height: 1.4; }
 .note.ok { color: var(--done); }
 .note.warn { color: #e2c06a; }
@@ -392,7 +394,7 @@ input { font: inherit; }
 .tab .tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .tab .tab-x { width: 18px; height: 18px; border-radius: 4px; color: var(--fg-muted); line-height: 1; }
 .tab .tab-x:hover { background: var(--row-selected); color: var(--fg); }
-.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
+.pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
 .pane.focused { border-color: var(--line-focus); }
 /* TERM-023: a soft, static green glow on a pane whose agent finished while it was not focused. */
 .pane.glow { border-color: var(--done); box-shadow: inset 0 0 0 1px var(--line-inner), 0 0 18px rgba(1, 200, 143, 0.3); }
@@ -803,6 +805,10 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .add-more { display: flex; gap: 8px; }
 .add-more .add-choice { flex: 1; }
 .ask-check { display: flex; align-items: center; gap: 6px; margin: -6px 0 14px; font-size: 12px; color: var(--fg-muted); }
+.ask-list { margin: 0 0 14px; padding: 0 0 0 18px; max-height: min(40vh, 240px); overflow: auto; font: 11.5px var(--mono-font); color: var(--fg-muted); }
+.ask-list li { overflow-wrap: anywhere; }
+/* ACCT-064: a question over one pane's terminal, not the window. */
+.pane-ask { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.35); }
 .agent-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--chip-bg); min-width: 0; }
 .agent-on { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .agent-name { font-size: 13px; color: var(--fg-row); }
@@ -1154,3 +1160,34 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .task-labels { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
 .task-x { margin-left: 2px; color: var(--fg-faint); font-size: 12px; line-height: 1; }
 .task-x:hover:not(:disabled) { color: var(--fg); }
+
+/* VIEW-015: the Agents rail, a 268px card in the New look, a flat 240px rail under Classic. */
+.rail { width: 268px; padding: 4px; overflow-y: auto; }
+.rail.classic { width: 240px; border-radius: 0; border-width: 0 1px 0 0; }
+.rail-wrap.classic { padding: 0; }
+.rail .proj .ib { opacity: 1; }
+.grid.agents .tabs { display: none; }
+/* VIEW-017: the row's status word, one of the fixed set; what needs you is amber, working green, done teal. */
+.sess .status { flex: none; font-size: 11px; color: var(--fg-muted); }
+.sess .status.attention { color: var(--working-icon); }
+.sess .status.working { color: var(--dot-live); }
+.sess .status.done { color: var(--done-icon); }
+/* USAGE-004: a context ring on rail rows that have a reading; the plan footer under the groups. */
+.sess .ring { flex: none; color: var(--gauge); }
+.sess .ring.warn { color: var(--working-icon); }
+.sess .ring.danger { color: var(--meter-danger); }
+.rail-group { flex: none; }
+.rail-foot { margin-top: auto; padding: 10px 8px 4px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-head .right .meter-plan { margin-right: 8px; font-size: 11px; color: var(--fg-muted); }
+/* TERM-010: the grid's gap is the divider (width and light / dark colours from Appearance, DT-A7);
+   while one is dragged the whole window keeps the resize cursor and nothing gets selected. */
+.grid { touch-action: none; }
+html[data-divider="col"], html[data-divider="col"] * { cursor: col-resize !important; user-select: none; }
+html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !important; user-select: none; }
+/* TERM-024: a narrow pane drops header items in a set order; the dot, mark and name always stay. */
+.pane { container-type: inline-size; }
+.pane-head .title { min-width: 0; }
+@container (max-width: 344px) { .pane-head .chip { display: none; } }
+@container (max-width: 264px) { .pane-head .word { display: none; } }
+@container (max-width: 204px) { .pane-head .right .ib { display: none; } }
+@container (max-width: 134px) { .pane-head .status, .pane-head .right { display: none; } }

@@ -513,6 +513,10 @@ Rules: stale panes are matched by account identity, not by label; sign-in errors
   in a pane are caught and raise the re-auth notice (ACCT-012); a resume waits until the right
   account's home is in place; if the original account's sign-in is still unavailable after about two
   seconds, the resume fails with a try-again message rather than carrying on as another account.
+  (Kolux RS, T-139-b: a pane keeps the account id it started on and a restart hands it back to
+  `terminal_spawn`, which waits up to 2 s for that account's home; an account no longer listed
+  refuses the start with a try-again message. Panes are not yet restored across a Kolux restart
+  and sign-in errors printed in a pane are not scanned, T-139-d.)
 Acceptance:
   - [ ] Start Codex on account A, change to B, restart the pane → it still runs as A.
   - [ ] Remove account A → the pane shows that it needs a new account.
@@ -592,6 +596,10 @@ Rules: only panes whose foreground program truly is Codex are asked; a pane wher
   background panes never take focus; panes on remote hosts or in WSL are not asked about a change
   made for this computer (those cases left with area 18); a resumed Codex pane whose sign-in folder
   matches no known account is tied to no account and is never asked.
+  (Kolux RS, T-139-b: a Codex pane runs the program itself, so "foreground program is Codex" is
+  the pane's program being credited as Codex and still running; Restart remounts the pane on the
+  active account at once, there is no shell to wait for; a restart that fails is a failed launch,
+  DT-C19; the setup-change version and re-asking after a Kolux restart are T-139-d.)
 Acceptance:
   - [ ] Codex in two panes and a plain shell in a third; change the Codex account → both Codex panes
         show the prompt and the shell pane does not.
