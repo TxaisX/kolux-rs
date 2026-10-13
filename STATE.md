@@ -1625,6 +1625,8 @@ your projects and worktrees, Source Control stages and discards only there, and 
 ignores other folders. Files you drag in from the desktop can still be copied into a project. A file
 you picked with Open a file stays readable after Kolux restarts, so a reopened tab for it will load.
 
+[accounts] T-136-d: Pull requests created on the Usage page now goes up by one each time Kolux makes a pull request from Source Control. Linking a pull request the branch already has, or a create that fails, does not count. The count is kept with the other activity numbers across restarts.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2849,6 +2851,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-154-c · ACCT-055: every Explorer file command takes each path through the fence (exact=false: projects and worktrees; a picked-file grant opens that file to read and save, not to rename, trash or move). A refusal fails the whole call (trash, restore, move), except a copy, where each outside source is refused on its own line so the rest still land. A copy source from outside is allowed only when it is one of the paths of the latest drop, which the Rust side notes from the window's own drop event (WindowEvent::DragDrop), so the page cannot name an outside file and copy it in; a new drop replaces the list, shares never count. scm_stage/scm_discard take the worktree through the fence; kit_check goes through the same kit-folder guard as the other kit commands (projects and the samples folder), giving no result elsewhere. Grants are saved as one kv row (file_grants, a JSON list) on each pick; on load every entry is resolved again and a share, drive root, folder or missing file is dropped, a damaged row grants nothing, and the cap of 100 holds. ponytail: the list is rewritten on each pick; it is at most 100 lines.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-13 · [accounts] T-136-d · done: activity::pr_created counted from scm.rs pr_create on the new-PR path only; lost connection to T-067, importer to T-075, tried-usage to T-244; live create refused by the installed gh (local remote), count stays 0 · evidence/T-136-d.txt, T-136-d-1-usage-after-a-refused-create.png
 - 2026-10-13 · [accounts] T-153-e · not started, left open: Manage Sessions lists the sessions the background terminal host holds, which is T-067 TERM-105 (not built yet; terminal host work); build it after T-067
 - 2026-10-13 · [accounts] T-153-d · not started, left open: delete, reveal and open act on rows of the Agents tab past-sessions list, which is T-146-b (not built yet); build it after T-146-b
 - 2026-10-13 · [accounts] T-154-c · done: Explorer file operations, Source Control stage/discard and kit_check fenced; drops from outside copyable; picked-file grants survive a restart (kv file_grants) · evidence/T-154-c.txt, T-154-c-1-app-after-restart.png, T-154-c-2-explorer-in-the-project.png

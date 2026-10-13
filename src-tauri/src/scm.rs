@@ -640,6 +640,7 @@ pub fn pr_create(gh: &Path, worktree: &Path, title: &str, body: &str, base: &str
     let said = gh_run(gh, worktree, &args, Some(body)).map_err(|e| gh_words(&e))?;
     let url = said.lines().rev().map(str::trim).find(|l| l.contains("/pull/")).ok_or_else(|| format!("gh did not say where the pull request is: {said}"))?;
     let number = url.rsplit('/').next().and_then(|n| n.parse().ok()).ok_or_else(|| format!("gh gave a link without a number: {url}"))?;
+    crate::activity::pr_created(); // USAGE-011
     Ok(Pr { number, url: url.to_string(), state: "OPEN".into(), title: Some(title.trim().to_string()), head: Some(branch.clone()), draft })
 }
 
@@ -1299,7 +1300,10 @@ mod tests {
         // None yet; creating pushes the unpublished branch first, then hands gh the title, base,
         // head and draft flag, with the description on standard input.
         assert_eq!(pr_find(&gh, &dir, "feat").unwrap(), None);
+        let counted = crate::activity::activity_counts().prs_created;
         let pr = pr_create(&gh, &dir, "Add feat", "Why:\nbecause", "origin/main", true).unwrap();
+        // USAGE-011: a pull request Kolux made counts once on the Stats & Usage page.
+        assert_eq!(crate::activity::activity_counts().prs_created, counted + 1);
         assert_eq!((pr.number, pr.url.as_str(), pr.state.as_str()), (7, "https://github.com/o/r/pull/7", "OPEN"));
         assert!(run(&["rev-parse", "--verify", "refs/heads/feat"], Some(&bare)).is_ok(), "the branch was pushed first");
         let said = calls();
@@ -1309,6 +1313,7 @@ mod tests {
         // A second create links the PR the branch already has instead of making another.
         assert_eq!(pr_create(&gh, &dir, "Add feat", "", "main", false).unwrap().number, 7);
         assert_eq!(calls().matches("pr create").count(), 1);
+        assert_eq!(crate::activity::activity_counts().prs_created, counted + 1, "linking the PR a branch has is not a new one");
 
         // gh's own failures come back in plain words.
         assert!(gh_words("none of the git remotes configured for this repository point to a known GitHub host").contains("not supported"));
