@@ -114,6 +114,16 @@ export function createOpens(projectId: string): "name" | "add" {
   return projectId ? "name" : "add";
 }
 
+/** PROJ-033: how the Setup terminal starts (Rust's SetupLine). */
+export type SetupLine = { program: string; args: string[]; script: string };
+/** PROJ-033: where the Setup terminal opens: a tab beside the workspace's first pane, or a split. */
+export type SetupWhere = "tab" | "right" | "down";
+
+/** PROJ-033: the agent waits for setup only in new-tab mode with wait on, and only when both run. */
+export function waitsForSetup(where: SetupWhere, wait: boolean, agent: boolean, setup: boolean): boolean {
+  return where === "tab" && wait && agent && setup;
+}
+
 /** PROJ-030: an open pull request the composer can open as a workspace (gh's fields). */
 export type PrHead = { number: number; title: string; url: string; headRefName: string; headRefOid: string; isCrossRepository?: boolean; headRepositoryOwner?: { login: string } | null };
 
@@ -145,7 +155,7 @@ export function previewSentence(typed: string, preview: Preview | null, project:
 
 /** What the command line tells the window after `worktree create` or `worktree rm` (PROJ-077). */
 export type CliWorkspace =
-  | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean }
+  | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean; setup?: "run" | "skip" | "inherit" }
   | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null }
   | { kind: "removed"; path: string }
   // CLI-026, CLI-027: the terminal commands; ask is the request the window answers through its layout.

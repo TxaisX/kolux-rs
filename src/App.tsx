@@ -82,7 +82,7 @@ import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./u
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, type CliWorkspace, type PendingCreate, type Project, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, type CliWorkspace, type PendingCreate, type Project, type SetupLine, type SetupWhere, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
@@ -905,6 +905,28 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     }
     return key;
   };
+  // PROJ-033 / SESS-037: the setup script runs in a Setup terminal of the new workspace: a tab
+  // beside its first pane, or a cell of its own to the right or below. `then` runs once it ends
+  // (the agent waiting for setup), whatever its exit code, and lands as a tab beside it.
+  const afterSetup = useRef<Record<number, () => void>>({});
+  const startSetup = (dir: string, branch: string | null, line: SetupLine, where: SetupWhere, show: boolean, then?: () => Promise<number | null> | void) => {
+    const key = nextKey.current++;
+    setPanes((ps) => {
+      const cells = cellsOf(panesIn(ps, dir));
+      const tab = where === "tab" || cells.length >= MAX_PANES;
+      if (!tab && where === "down" && cells.length === 1) setStacked((st) => ({ ...st, [dir]: true }));
+      return [...ps, { key, cwd: dir, branch, agent: "shell", program: line.program, args: line.args, title: "Setup", word: line.program.split(/[\\/]/).pop()?.replace(/\.exe$/i, ""), group: tab ? cells[0]?.group : undefined }];
+    });
+    if (then)
+      afterSetup.current[key] = () =>
+        void Promise.resolve(then()).then((k) => {
+          if (typeof k === "number") setPanes((ps) => ps.map((p) => (p.key === k ? { ...p, group: groupOf(ps.find((x) => x.key === key) ?? p) } : p)));
+        });
+    if (show) {
+      setActiveDir(dir);
+      setFocused(key);
+    }
+  };
   // VIEW-011: the open page is written down, so it is shown again after a restart.
   useEffect(() => {
     if ((settings[OPEN_PAGE_FIELD] ?? null) !== page) saveSetting(OPEN_PAGE_FIELD, page);
@@ -1024,8 +1046,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const key = keyOfHandle(handle);
     setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title: title ?? undefined } : p)));
   };
-  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, dropPane: (_k: number) => {} });
-  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, dropPane: (k: number) => dropPane(k) };
+  const cli = useRef({ startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, dropPane: (_k: number) => {} });
+  cli.current = { startIn, select, removed, termCreate, termSwitch, termRename, splitPane, keyOfHandle, startSetup, dropPane: (k: number) => dropPane(k) };
   useEffect(() => {
     const off = listen<CliWorkspace>("cli-workspace", (e) => {
       const p = e.payload;
@@ -1049,6 +1071,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
       if (a) void cli.current.startIn(a, p.worktree.path, p.worktree.branch, p.prompt, p.activate);
       else if (p.activate) cli.current.select(p.worktree.path, p.worktree.branch);
+      // PROJ-033: a workspace made from the command line runs its setup script in a background tab
+      // unless it was told to skip it.
+      if (p.setup !== "skip")
+        invoke<SetupLine | null>("workspace_setup", { path: p.worktree.path })
+          .then((line) => line && cli.current.startSetup(p.worktree.path, p.worktree.branch, line, "tab", false))
+          .catch((err) => setNotice(String(err)));
     });
     return () => {
       off.then((f) => f()).catch(() => undefined);
@@ -1499,6 +1527,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
             onPending={setStandIns}
+            onSetup={startSetup}
             onIndex={(list, dirs, typed) => {
               setProjects(list);
               setOwner(dirs);
@@ -1768,6 +1797,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                       if (on) setStamp((m) => (m[p.key] ? m : { ...m, [p.key]: { at: Date.now(), interrupted: false } }));
                       // The program is gone: its last hook state goes with it.
                       if (!on && p.key in hookRef.current) setHook((h) => Object.fromEntries(Object.entries(h).filter(([k]) => Number(k) !== p.key)));
+                      const then = !on && runRef.current[p.key] && afterSetup.current[p.key];
+                      if (then) {
+                        delete afterSetup.current[p.key];
+                        then();
+                      }
                     }}
                     hook={hook[p.key]}
                     crew={crew[p.key]}
@@ -1779,7 +1813,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                       report.current();
                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                     }}
-                    onFailed={(error) => failedPane(p.key, error)}
+                    onFailed={(error) => {
+                      failedPane(p.key, error);
+                      const then = afterSetup.current[p.key];
+                      delete afterSetup.current[p.key];
+                      then?.();
+                    }}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title || nameOf(names, p.cwd)}
                     typed={p.typed}

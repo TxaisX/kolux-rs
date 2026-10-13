@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, type PendingCreate, type PrHead } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, type PendingCreate, type PrHead } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -59,6 +59,15 @@ test("nesting keeps the order it is handed when the list is sorted elsewhere (PR
 test("New workspace with no project yet opens the add-project form instead of a dead name field (T-013-fix-a)", () => {
   expect(createOpens("")).toBe("add");
   expect(createOpens("app-1")).toBe("name");
+});
+
+test("the agent waits for setup only in new-tab mode with wait on (PROJ-033)", () => {
+  expect(waitsForSetup("tab", true, true, true)).toBe(true);
+  expect(waitsForSetup("right", true, true, true)).toBe(false);
+  expect(waitsForSetup("down", true, true, true)).toBe(false);
+  expect(waitsForSetup("tab", false, true, true)).toBe(false);
+  expect(waitsForSetup("tab", true, false, true)).toBe(false);
+  expect(waitsForSetup("tab", true, true, false)).toBe(false);
 });
 
 test("the pull-request picker matches number, title or head branch (PROJ-030)", () => {

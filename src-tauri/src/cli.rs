@@ -1542,23 +1542,19 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             obj.insert("agent".into(), json!(agent));
             obj.insert("activated".into(), json!(activate));
             obj.extend(origin.as_object().expect("an origin is an object").clone());
-            // ponytail: setup scripts (PROJ-033) and issue lookups (PROJ-037) are T-107; the
-            // values are recorded and echoed, nothing runs on them yet, and the caller is told so
-            // (T-014-b-fix) rather than left to think the scripts ran.
-            let setup = text("setup").unwrap_or_else(|| "inherit".into());
-            let mut warnings = Vec::new();
-            if setup == "run" {
-                warnings.push("--setup run: setup scripts do not run yet; the worktree was made without them");
-            }
+            // PROJ-033: the window runs the setup script in a Setup tab unless it is skipped;
+            // --run-hooks runs it as --setup run does. Issue lookups (PROJ-037) are T-107-c.
+            let mut setup = text("setup").unwrap_or_else(|| "inherit".into());
             if a["runHooks"].as_bool().unwrap_or(false) {
-                warnings.push("--run-hooks: setup scripts do not run yet; the worktree was only activated");
+                setup = "run".into();
             }
+            let mut warnings = Vec::new();
             if text("comment").is_some() {
                 warnings.push("--comment: recorded with the worktree's origin, shown nowhere yet");
             }
             obj.insert("setup".into(), json!(setup));
             obj.insert("warnings".into(), json!(warnings));
-            (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": made, "agent": agent, "prompt": text("prompt").unwrap_or_default(), "activate": activate }));
+            (ctx.notify)(json!({ "kind": "created", "projectId": project.id, "worktree": made, "agent": agent, "prompt": text("prompt").unwrap_or_default(), "activate": activate, "setup": setup }));
             Ok(result)
         }
         "worktree.rm" => {
@@ -3732,10 +3728,7 @@ mod tests {
         assert_eq!(alone["parent"], Value::Null);
         let from_elsewhere = dispatch(&ctx, &req("worktree.create", &dir, json!({ "name": "top", "repo": "name:repo", "setup": "run", "runHooks": true, "activate": true }))).unwrap();
         assert_eq!(from_elsewhere["parent"], Value::Null, "called from outside every worktree");
-        let warned = from_elsewhere["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert_eq!(warned.len(), 2, "{warned:?}");
-        assert!(warned[0].starts_with("--setup run"), "{warned:?}");
-        assert!(warned[1].starts_with("--run-hooks"), "{warned:?}");
+        assert_eq!(from_elsewhere["warnings"], json!([]), "T-107-b: --setup and --run-hooks act now (PROJ-033)");
         let missing = dispatch(&ctx, &req("worktree.create", &repo, json!({ "name": "x", "parentWorktree": "name:nope" }))).unwrap_err();
         assert_eq!(missing.code, "not_found");
         // T-014-b-fix: the issue: selector finds the worktree made for that issue; the forms with

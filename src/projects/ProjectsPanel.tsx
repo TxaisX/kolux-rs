@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, type PendingCreate, type PrHead } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
@@ -87,7 +87,7 @@ type Props = {
   /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
   deleteRequest: number;
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
-  onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
+  onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => Promise<number | null> | void;
   /** PROJ-047: child workspaces nest under their parent unless this is off. */
   nest: boolean;
   onNest: (on: boolean) => void;
@@ -96,6 +96,8 @@ type Props = {
   onArtifacts: () => void;
   /** PROJ-020: the creates Git is still working on, for the stand-in tabs beside the panes. */
   onPending?: (pending: PendingCreate[]) => void;
+  /** PROJ-033: open a Setup terminal in a new workspace; `then` runs once it has ended. */
+  onSetup?: (dir: string, branch: string | null, line: SetupLine, where: SetupWhere, show: boolean, then?: () => Promise<number | null> | void) => void;
 };
 
 // SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
@@ -117,7 +119,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -172,6 +174,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [parentDraft, setParentDraft] = useState<string | null>(null); // SESS-037: the parent worktree, none by default
   const [advanced, setAdvanced] = useState(false);
   const [more, setMore] = useState(false); // SESS-038: Create more
+  const [setupSkip, setSetupSkip] = useState(false); // PROJ-033: the setup policy; the project's script runs unless skipped
+  const [setupWhere, setSetupWhere] = useState<SetupWhere>("tab");
+  const [setupWait, setSetupWait] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
@@ -441,8 +446,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       // Create more the new workspace does not take the front, so the next name can be typed.
       // A create overtaken after Git had already finished it stays, but never takes the front.
       const front = !keepOpen && !lost && shown.current === from;
-      if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
-      else if (front) onSelect(wt.path, wt.branch, true);
+      // PROJ-033: the project's setup script runs in a Setup terminal; a script that cannot run says why.
+      const setup = setupSkip || !onSetup ? null : await invoke<SetupLine | null>("workspace_setup", { path: wt.path }).catch((err) => (say("warn", String(err)), null));
+      if (agent && setup && onSetup && waitsForSetup(setupWhere, setupWait, true, true)) {
+        onSetup(wt.path, wt.branch, setup, setupWhere, front, () => onStartIn(agent, wt.path, wt.branch, prompt, front));
+      } else {
+        if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
+        else if (front) onSelect(wt.path, wt.branch, true);
+        if (setup && onSetup) onSetup(wt.path, wt.branch, setup, setupWhere, false);
+      }
     } catch (err) {
       if (overtaken.current.has(mine.ticket)) say("warn", `${mine.name}: ${String(err)}`);
       else fail(err);
@@ -571,6 +583,24 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           </label>
           {prList !== null && (
             <Picker key={`pr-${p?.id ?? ""}`} name="Pull request" value={prDraft ? `#${prDraft.number} ${prDraft.title}` : "pick a pull request"} items={(q) => prItems(prList, q)} onPick={(k) => setPrDraft(prList.find((x) => String(x.number) === k) ?? null)} startOpen={!prDraft} />
+          )}
+          <label>Setup</label>
+          <select aria-label="setup policy" className="field" value={setupSkip ? "skip" : "run"} onChange={(e) => setSetupSkip(e.target.value === "skip")}>
+            <option value="run">Run the project's setup script (kolux.yaml)</option>
+            <option value="skip">Skip setup</option>
+          </select>
+          {!setupSkip && (
+            <select aria-label="setup opens in" className="field" value={setupWhere} onChange={(e) => setSetupWhere(e.target.value as SetupWhere)}>
+              <option value="tab">Setup in a new tab</option>
+              <option value="right">Setup in a split to the right</option>
+              <option value="down">Setup in a split below</option>
+            </select>
+          )}
+          {!setupSkip && setupWhere === "tab" && (
+            <label className="check">
+              <input type="checkbox" aria-label="wait for setup" checked={setupWait} onChange={(e) => setSetupWait(e.target.checked)} />
+              Wait for setup to finish before the agent starts
+            </label>
           )}
           {!existing && prList === null && (
             <input aria-label="start from" className="field" placeholder={p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={submitKeys(p)} />
