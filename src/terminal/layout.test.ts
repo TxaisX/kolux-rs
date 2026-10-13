@@ -1,7 +1,7 @@
 // PROJ-067: tabs and layout are saved and restored; damaged entries are dropped on their own and
 // the active workspace and tab come back while they still exist.
 import { expect, test } from "vitest";
-import { layoutOf, restoreLayout, resumeArgs, stillThere } from "./layout";
+import { layoutOf, restoreLayout, resumeArgs, resumes, stillThere } from "./layout";
 
 const shell = (key: number, cwd: string | null, extra: Record<string, unknown> = {}) => ({ key, cwd, branch: null, agent: "shell" as const, program: null, args: [], ...extra });
 
@@ -83,4 +83,12 @@ test("sess030: an agent tab with a known session comes back resumed, one without
   expect(resumeArgs("claude", undefined)).toEqual([]);
   expect(resumeArgs("claude", "")).toEqual([]);
   expect(resumeArgs("shell", "x")).toEqual([]);
+});
+
+test("TERM-107: a restored agent pane counts as resumed only when its start line carries the resume flag", () => {
+  expect(resumes("claude", ["--resume", "abc"])).toBe(true);
+  expect(resumes("codex", ["resume", "abc"])).toBe(true);
+  expect(resumes("claude", [])).toBe(false);
+  expect(resumes("codex", ["--resume", "abc"])).toBe(false);
+  expect(resumes("shell", [])).toBe(false);
 });

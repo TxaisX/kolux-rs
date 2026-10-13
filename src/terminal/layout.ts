@@ -140,3 +140,9 @@ function tidy(panes: SavedPane[], activeTab: Record<number, number>, focused: nu
   if (!keys.has(f)) f = panesIn(panes, activeDir)[0]?.key ?? panes[0]?.key ?? 1;
   return { panes, activeTab: tabs, focused: f, activeDir, stacked };
 }
+
+/** TERM-107: whether an agent pane's start line resumes a saved conversation (else it is a fresh one). */
+export function resumes(agent: Agent, args: readonly string[]): boolean {
+  const [flag] = resumeArgs(agent, "-");
+  return flag !== undefined && args.includes(flag);
+}

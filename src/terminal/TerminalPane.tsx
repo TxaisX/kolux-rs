@@ -19,6 +19,7 @@ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { batchAcks, memoryProfile } from "./flow";
+import { resumes } from "./layout";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
@@ -167,6 +168,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const t = setTimeout(() => setFlash(null), 6000);
     return () => clearTimeout(t);
   }, [flash]);
+  // TERM-107: a restored pane wears a mark in its header until the first key or click in it; an agent
+  // pane whose start line does not resume its conversation is marked as restored without resume.
+  const [restoredMark, setRestoredMark] = useState<string | null>(null);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   // ACCT-050: the agent the user started by hand in this shell, as Rust recognises it.
   const [found, setFound] = useState<Agent | null>(null);
@@ -296,6 +300,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     // TERM-115: keys typed while the shell is still starting are held and sent once it runs
     // (capped); a write the program side refuses is said out loud rather than lost in silence.
     const held = new HeldKeys();
+    // TERM-071: writes go one after another (terminal_write is async, so two in flight could land out
+    // of order); a chunked paste then reaches the program in order, and a key typed during it waits its turn.
+    let chain: Promise<unknown> = Promise.resolve();
     const write = (data: string) => {
       const id = idRef.current;
       if (ended) return;
@@ -303,7 +310,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         if (!held.push(data)) setFlash("Keys typed before the shell started were dropped past 16 KB");
         return;
       }
-      invoke("terminal_write", { id, data }).catch((e) => setFlash(`Typing could not reach the program (${String(e)})`));
+      chain = chain.then(() => invoke("terminal_write", { id, data })).catch((e) => setFlash(`Typing could not reach the program (${String(e)})`));
     };
     term.onData(write);
     term.onBell(() => bell.current?.());
@@ -331,6 +338,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         if (text.length > 2048) choice.clearGlyphs();
       },
       () => pending !== null,
+      setFlash, // TERM-071: a paste over the limit says so in the header; nothing is sent
     );
     // TERM-065: the copy chord copies a selection and gives the keyboard back; Ctrl+C with nothing
     // selected is the program's interrupt and goes through untouched. Nothing selected under
@@ -406,6 +414,14 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         // onData: the terminal's own answers to the shell's start-up questions go through onData.
         let keepInView = false;
         if (restored) {
+          setRestoredMark(agent !== "shell" && !resumes(agent, args) ? "restored without resume" : "restored");
+          const unmark = () => {
+            setRestoredMark(null);
+            key.dispose();
+            box.current?.removeEventListener("mousedown", unmark);
+          };
+          const key = term.onKey(unmark);
+          box.current?.addEventListener("mousedown", unmark);
           const saved = await invoke<string>("terminal_history", { paneKey: number }).catch(() => "");
           if (!alive) return;
           const text = replay(saved);
@@ -618,6 +634,11 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         {flash && (
           <span className="status attention" role="status">
             {flash}
+          </span>
+        )}
+        {restoredMark && (
+          <span className="status attention restored" role="status" title="restored from saved history; a key or a click in the pane clears this">
+            {restoredMark}
           </span>
         )}
         {crew && crew.length > 0 && (
