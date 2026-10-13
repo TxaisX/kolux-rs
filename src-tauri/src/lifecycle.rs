@@ -349,6 +349,16 @@ pub fn close_alive() {
     mark_alive();
 }
 
+/// APP-006: set once a quit or restart has been asked for, so the last window closing on the way
+/// out never holds the app open.
+pub static QUIT_UNDER_WAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// APP-006: whether the app stays running when it is asked to exit. `code` is None when the last
+/// window closed and Some when a quit or restart asked. Only macOS keeps an app with no windows.
+pub fn keeps_running(mac: bool, code: Option<i32>, quitting: bool) -> bool {
+    mac && code.is_none() && !quitting
+}
+
 /// The main window is gone (Windows, Linux): the quit is under way, and ends by the deadline
 /// however the final save or the WebView2 wait behave.
 pub fn quit_watchdog<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -509,6 +519,16 @@ fn registry_string(root: windows_sys::Win32::System::Registry::HKEY, subkey: &st
 
 #[cfg(test)]
 mod tests {
+    /// APP-006: closing the last window quits on Windows and Linux; on macOS the app keeps running,
+    /// unless a quit is already under way.
+    #[test]
+    fn app006_only_macos_keeps_running_when_the_last_window_closes_and_a_quit_still_quits() {
+        assert!(!keeps_running(false, None, false), "Windows and Linux: the last window closing quits");
+        assert!(keeps_running(true, None, false), "macOS: the app stays in the dock");
+        assert!(!keeps_running(true, None, true), "macOS: a quit under way finishes");
+        assert!(!keeps_running(true, Some(0), false), "macOS: an explicit quit or restart finishes");
+    }
+
     use super::*;
 
     fn temp(name: &str) -> PathBuf {

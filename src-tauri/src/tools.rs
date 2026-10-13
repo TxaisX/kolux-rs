@@ -367,6 +367,48 @@ fn native_message(_title: &str, text: &str) {
     eprintln!("{text}");
 }
 
+/// One window from its config, with the page's navigation guards (APP-015): an outside web address
+/// opens in the default browser instead, and anything else is dropped (menu::navigation decides). A
+/// new-window request (target=_blank, window.open) takes the same road: web and mail addresses go
+/// to the browser, the rest is denied (menu::new_window).
+fn build_window<R: tauri::Runtime>(handle: &tauri::AppHandle<R>, config: &tauri::utils::config::WindowConfig) -> Result<(), String> {
+    let dev = if cfg!(debug_assertions) { handle.config().build.dev_url.clone() } else { None };
+    let own = crate::menu::Own::for_platform(crate::menu::Os::current(), config.use_https_scheme);
+    let (dev_nav, dev_win) = (dev.clone(), dev);
+    tauri::WebviewWindowBuilder::from_config(handle, config)
+        .map(|b| {
+            b.on_navigation(move |url| match crate::menu::navigation(url, own, dev_nav.as_ref()) {
+                crate::menu::Nav::Allow => true,
+                crate::menu::Nav::External => {
+                    let _ = crate::artifacts::system_open(url.as_str());
+                    false
+                }
+                crate::menu::Nav::Block => false,
+            })
+            .on_new_window(move |url, _features| {
+                if crate::menu::new_window(&url, own, dev_win.as_ref()) == crate::menu::Nav::External {
+                    let _ = crate::artifacts::system_open(url.as_str());
+                }
+                tauri::webview::NewWindowResponse::Deny
+            })
+        })
+        .and_then(|b| b.build())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// APP-006 on macOS: the Dock icon of an app with no window builds the main window again.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn reopen_main<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if app.webview_windows().is_empty() {
+        if let Some(config) = app.config().app.windows.first() {
+            if let Err(e) = build_window(app, config) {
+                eprintln!("reopen: the window could not be made again: {e}");
+            }
+        }
+    }
+}
+
 /// T-552: the app's setup, with the config's windows (`labels`, the ones it marks to open) opened
 /// first through the busy wait, then `body`. Any failure ends in startup_failed, so Tauri never
 /// sees an error to panic on.
@@ -381,35 +423,7 @@ pub fn guarded_setup<R: tauri::Runtime>(
     let configs: Vec<_> = app.config().app.windows.iter().filter(|w| labels.contains(&w.label)).cloned().collect();
     for config in &configs {
         let handle = app.handle().clone();
-        // APP-015: the window never navigates away from the app; an outside web address opens in the
-        // default browser instead, and anything else is dropped (menu::navigation decides). A new-window
-        // request (target=_blank, window.open) takes the same road: web and mail addresses go to the
-        // browser, the rest is denied (menu::new_window).
-        let dev = if cfg!(debug_assertions) { handle.config().build.dev_url.clone() } else { None };
-        let own = crate::menu::Own::for_platform(crate::menu::Os::current(), config.use_https_scheme);
-        let open = || {
-            let (dev_nav, dev_win) = (dev.clone(), dev.clone());
-            tauri::WebviewWindowBuilder::from_config(&handle, config)
-                .map(|b| {
-                    b.on_navigation(move |url| match crate::menu::navigation(url, own, dev_nav.as_ref()) {
-                        crate::menu::Nav::Allow => true,
-                        crate::menu::Nav::External => {
-                            let _ = crate::artifacts::system_open(url.as_str());
-                            false
-                        }
-                        crate::menu::Nav::Block => false,
-                    })
-                    .on_new_window(move |url, _features| {
-                        if crate::menu::new_window(&url, own, dev_win.as_ref()) == crate::menu::Nav::External {
-                            let _ = crate::artifacts::system_open(url.as_str());
-                        }
-                        tauri::webview::NewWindowResponse::Deny
-                    })
-                })
-                .and_then(|b| b.build())
-                .map(|_| ())
-        };
-        if let Err(e) = open_retrying(open, std::thread::sleep) {
+        if let Err(e) = open_retrying(|| build_window(&handle, config), std::thread::sleep) {
             startup_failed(&e);
         }
     }

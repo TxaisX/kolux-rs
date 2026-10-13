@@ -923,9 +923,23 @@ pub fn run() {
         .build(context)
         .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
-            // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                browser::crash::quitting();
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                use std::sync::atomic::Ordering::SeqCst;
+                // T-182-e (APP-006): "a quit under way" is any exit the app asked for (quit, restart, the
+                // unanswered-close fallback); remembered, so windows closing on the way out never hold it open.
+                if code.is_some() {
+                    lifecycle::QUIT_UNDER_WAY.store(true, SeqCst);
+                }
+                if lifecycle::keeps_running(cfg!(target_os = "macos"), *code, lifecycle::QUIT_UNDER_WAY.load(SeqCst)) {
+                    api.prevent_exit();
+                } else {
+                    // T-286-b (APP-040): engine exits once the app is quitting are not crashes.
+                    browser::crash::quitting();
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = &event {
+                tools::reopen_main(app);
             }
             if let tauri::RunEvent::Exit = event {
                 // T-075 (APP-050): the final save is one barrier with a deadline: begin() stops the
