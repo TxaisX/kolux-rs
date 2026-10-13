@@ -1,4 +1,4 @@
-use super::super::{install_claude_hooks, install_codex_hooks, is_mine, write_script, CLAUDE_EVENTS};
+use super::super::{install_claude, install_claude_hooks, install_codex_hooks, is_mine, write_script, CLAUDE_EVENTS};
 use super::*;
 use serde_json::json;
 
@@ -552,4 +552,68 @@ fn t_152_6_switching_off_gives_back_the_file_byte_for_byte_and_codex_is_not_writ
     assert_eq!(fs::read_to_string(&file).unwrap(), shaped());
     // Codex: switching on writes nothing into any Codex home.
     assert_eq!(apply(&home, &dir.join("profile"), "codex", Plan::Install).unwrap(), "not written (Codex hooks wait for T-025-e)");
+}
+
+
+#[test]
+fn t_152_5_an_install_on_a_file_changed_since_the_start_fails_and_writes_nothing() {
+    let dir = temp("t152-install-race");
+    let file = dir.join("settings.json");
+    // Read at the start of the operation ...
+    let read_first = shaped();
+    // ... then Claude Code rewrote the file before Kolux's write.
+    let newer = shaped().replace("\"opus\"", "\"sonnet\"");
+    fs::write(&file, &newer).unwrap();
+    let err = install_claude_from(&file, Some(read_first), MINE, "x").unwrap_err();
+    println!("kolux-rs: claude hooks: {err}");
+    assert!(err.ends_with("changed since it was read; nothing written"));
+    assert_eq!(fs::read_to_string(&file).unwrap(), newer, "the target is untouched");
+    assert!(!file.with_extension("json.kolux-rs-tmp").exists());
+}
+
+#[allow(clippy::permissions_set_readonly_false)]
+fn read_only(file: &Path, on: bool) {
+    let mut p = fs::metadata(file).unwrap().permissions();
+    p.set_readonly(on);
+    fs::set_permissions(file, p).unwrap();
+}
+
+#[test]
+fn t_152_4_a_failed_install_after_the_status_line_save_leaves_his_line_for_the_next_off() {
+    let dir = temp("t152-prev-first");
+    let (home, file) = (dir.join("home"), dir.join("settings.json"));
+    let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
+    let user = shaped();
+    fs::write(&file, &user).unwrap();
+    // A settings file that cannot be replaced: install_claude fails after the status line save.
+    read_only(&file, true);
+    let err = install_claude_at(&home, &file).unwrap_err();
+    println!("kolux-rs: claude hooks: {err}");
+    let line = ev(&user)["statusLine"].clone();
+    assert_eq!(fs::read_to_string(&prev).unwrap().trim_end(), line["command"].as_str().unwrap(), "saved before the install ran");
+    assert_eq!(ev(&fs::read_to_string(prev.with_extension("json")).unwrap()), line);
+    assert_eq!(fs::read_to_string(&file).unwrap(), user, "his line was never replaced");
+    assert!(!file.with_extension("json.kolux-rs-tmp").exists(), "no temp file left");
+    read_only(&file, false);
+    read_only(&backup_of(&file), false);
+    // The next "off": the status line is still his and the file is exactly as it was.
+    remove_claude(&file, &prev).unwrap();
+    assert_eq!(ev(&fs::read_to_string(&file).unwrap())["statusLine"], line);
+    assert_eq!(fs::read_to_string(&file).unwrap(), user);
+}
+
+#[test]
+fn t_152_6_a_codex_hooks_file_with_empty_hooks_comes_back_byte_for_byte() {
+    let dir = temp("t152-codex-empty");
+    let (home, profile) = (dir.join("home"), dir.join("profile"));
+    let managed = profile.join(crate::codex_accounts::FOLDER).join("c1");
+    fs::create_dir_all(&managed).unwrap();
+    for text in ["{\"hooks\":{}}", "{\n  \"hooks\": {}\n}\n"] {
+        fs::write(managed.join("hooks.json"), text).unwrap();
+        assert_eq!(apply(&home, &profile, "codex", Plan::Install).unwrap(), "not written (Codex hooks wait for T-025-e)");
+        apply(&home, &profile, "codex", Plan::Remove).unwrap();
+        assert_eq!(fs::read_to_string(managed.join("hooks.json")).unwrap(), text, "on then off leaves {text:?}");
+        assert!(!remove_codex(&managed).unwrap(), "nothing of Kolux's: nothing written");
+        assert_eq!(fs::read_to_string(managed.join("hooks.json")).unwrap(), text);
+    }
 }

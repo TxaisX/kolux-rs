@@ -119,9 +119,61 @@ test result: ok. 7 passed; 0 failed   (t_152_1 .. t_152_6 plus t_152_gate)
   Unit (t_152_6): shaped, compact one-line and CRLF variants all come back byte for byte; without the
   copy the layout still comes back (indent, line ends, final newline); apply(codex, Install) returns
   "not written (Codex hooks wait for T-025-e)".
-  The proof on a copy of HIS real file is T-025-d's job, after Txais says yes in session.
+  The proof on a copy shaped like HIS real file is the next section (the coordinator's stripped copy);
+  the proof on his real file itself stays T-025-d's job, after Txais says yes in session.
 
-Cleanup: app closed (process count 0), ports 1419 and 9245 free, G:\Temp\hooks-T-152 deleted.
+---------------------------------------------------------------------------------------------------
+Second pass (council gates audit additions), same day
+---------------------------------------------------------------------------------------------------
+Code: install_claude_at reads the settings file once, saves the status line slot (prev .json) AND its
+command (prev .sh) before the settings file is touched, then installs against that first read
+(hooks::install_claude_from), so a file Claude Code rewrote in between is never overwritten; a rename
+that fails removes the temp file. Codex: the user's CODEX_HOME is neither written on "on" nor cleared
+on "off" until T-025-e (only Kolux's managed Codex homes are cleared).
+
+Unit: cargo test t_152 -- --nocapture --test-threads=1 (scratch env) -> test result: ok. 10 passed; 0 failed
+  t_152_5_an_install_on_a_file_changed_since_the_start_fails_and_writes_nothing   (addition 1)
+    kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152-install-race-64912\settings.json changed since it was read; nothing written
+    the target keeps the newer bytes, no temp file left
+  t_152_4_a_failed_install_after_the_status_line_save_leaves_his_line_for_the_next_off   (addition 2)
+    settings.json made read-only so install_claude fails after the save:
+    kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152-prev-first-64912\settings.json: Access is denied. (os error 5); nothing written
+    prev .sh and .json hold his line, the file is unchanged, no temp file; the next "off" leaves his
+    statusLine in place and the file byte for byte as it was
+  t_152_6_a_codex_hooks_file_with_empty_hooks_comes_back_byte_for_byte   (addition 4)
+    {"hooks":{}} and its pretty form survive on then off unchanged (no more {} after the round trip)
+  Addition 3: the hash record (line 2 above) holds the sha256 of the original and of the backup.
+
+Real-shape proof (addition 5). Input: the coordinator's copy of Txais's settings file, stripped of
+Kolux RS entries, G:\Temp\hooks-proof\settings-copy.json, used as
+G:\Temp\hooks-T-152\claude-config\settings.json (CLAUDE_CONFIG_DIR=G:\Temp\hooks-T-152\claude-config,
+CODEX_HOME=G:\Temp\hooks-T-152\codex holding hooks.json = {"hooks":{}} (12 bytes) and config.toml).
+His real G:\Dev\claude-config\settings.json was never opened. Hashes and counts only (node count.js):
+  copy : sha256 c0aa884ff99527c684427fc4c4cd932e99067172866021af4ca336085ad771de bytes 13066 top-level keys 13 events 12 groups 13 hook commands 13 claude-hook.cmd 12 .kolux-rs entries 0 statusLine is Kolux's false
+  launch with the switch off: sha256sum -c pre.sha -> claude-config/settings.json OK, codex/hooks.json OK, codex/config.toml OK
+  switch on (app.log):
+    kolux-rs: claude hooks: kept a copy before the first write: sha256 original c0aa884ff99527c684427fc4c4cd932e99067172866021af4ca336085ad771de, backup c0aa884ff99527c684427fc4c4cd932e99067172866021af4ca336085ad771de
+    kolux-rs: claude hooks: installed
+    kolux-rs: codex hooks: not written (Codex hooks wait for T-025-e)
+  after on:
+    now  : sha256 7d1edf3d2fb14311adcd955a024323840d20300050570a24ff23f394af778804 bytes 13233 top-level keys 13 events 12 groups 25 hook commands 25 claude-hook.cmd 12 .kolux-rs entries 12 statusLine is Kolux's true
+    pre-existing hook groups still in place, unchanged: 13 of 13   (the 12 old-app claude-hook.cmd entries among them)
+    parsed-equal once Kolux entries and statusLine are set aside: true
+    settings.json.bak-kolux sha256 c0aa884ff99527c684427fc4c4cd932e99067172866021af4ca336085ad771de; the record file holds the same hash twice
+    claude-status-prev.json equals the copy's statusLine slot: true; claude-status-prev.sh equals its command: true
+    codex folder listing and hashes unchanged
+  switch off:
+    c0aa884ff99527c684427fc4c4cd932e99067172866021af4ca336085ad771de */g/Temp/hooks-proof/settings-copy.json
+    c0aa884ff99527c684427fc4c4cd932e99067172866021af4ca336085ad771de *claude-config/settings.json
+    c0aa884ff99527c684427fc4c4cd932e99067172866021af4ca336085ad771de *claude-config/settings.json.bak-kolux
+    cmp -> post-off file byte-identical to the coordinator's copy
+    now  : ... bytes 13066 ... claude-hook.cmd 12 .kolux-rs entries 0 statusLine is Kolux's false; 13 of 13 groups in place
+    prev .json and .sh removed; codex/hooks.json ({"hooks":{}}) and codex/config.toml: sha256sum -c OK,
+    codex folder listing unchanged
+  App closed (count 0), ports 1419 and 9245 free.
+
+
+Cleanup (both passes): app closed (process count 0), ports 1419 and 9245 free, the scratch folders hooks-T-152 and hooks-T-152-gate under G:\Temp deleted.
 
 ===================================================================================================
 Earlier proof (the first T-152 pass, 3a40770; kept for history, superseded by the acceptance above)

@@ -741,12 +741,20 @@ fn indent_of(text: &str) -> usize {
 
 /// Installs the Claude hooks and the status line into `file` (created when missing, never
 /// rewritten when unreadable): whether it changed, and the status-line command displaced.
+#[cfg(test)]
 pub fn install_claude(file: &Path, command: &str, status: &str) -> Result<(bool, Option<String>), String> {
     let text = match std::fs::read_to_string(file) {
         Ok(t) => Some(t),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e.to_string()),
     };
+    install_claude_from(file, text, command, status)
+}
+
+/// `install_claude` on the text read at the start of the whole operation (`None`: no file then):
+/// if the file no longer holds those bytes when the new one is about to replace it (Claude Code
+/// rewrites its settings on its own), nothing is written and the install fails (T-152 (5)).
+pub fn install_claude_from(file: &Path, text: Option<String>, command: &str, status: &str) -> Result<(bool, Option<String>), String> {
     let original: Value = serde_json::from_str(text.as_deref().unwrap_or("{}")).map_err(|e| format!("{} is not JSON ({e}); hooks not installed", file.display()))?;
     let mut settings = original.clone();
     let hooks = install_claude_hooks(&mut settings, command);
@@ -819,7 +827,10 @@ pub(crate) fn write_atomic(file: &Path, bytes: &[u8], before: Option<&str>) -> R
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("{} changed since it was read; nothing written", file.display()));
     }
-    std::fs::rename(&tmp, file).map_err(|e| e.to_string())
+    std::fs::rename(&tmp, file).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("{}: {e}; nothing written", file.display())
+    })
 }
 
 /// `SessionStart` -> `session_start`: the label Codex uses in its trust keys.

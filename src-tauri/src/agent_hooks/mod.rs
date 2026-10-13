@@ -8,7 +8,7 @@
 //!
 //! A child of `hooks` so it shares that module's script and settings helpers.
 
-use super::{claude_settings_file, home_dir, install_claude, is_my_command, status_command, write_atomic, write_claude_script, write_codex_script, write_json, write_status_script, SCRIPT_DIR, STATUS_PREV};
+use super::{claude_settings_file, home_dir, install_claude_from, is_my_command, status_command, write_atomic, write_claude_script, write_codex_script, write_json, write_status_script, SCRIPT_DIR, STATUS_PREV};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::Write as _;
@@ -297,23 +297,28 @@ pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
     let prev = dir.join(STATUS_PREV);
     let status = status_command(&status, &prev.to_string_lossy().replace('\\', "/"));
     // T-152 (3): a file that is not JSON is refused before anything is written, the copy included.
-    let had: Option<Value> = read_opt(file)?.map(|t| serde_json::from_str(&t)).transpose().map_err(|e| format!("{} is not JSON ({e}); hooks not installed", file.display()))?;
+    let text = read_opt(file)?;
+    let had: Option<Value> = text.as_deref().map(serde_json::from_str).transpose().map_err(|e| format!("{} is not JSON ({e}); hooks not installed", file.display()))?;
     if let Some((original, copy)) = back_up(file)? {
         let record = format!("{original}  {}\n{copy}  {}\n", file.display(), backup_of(file).display());
         fs::write(dir.join(BACKUP_RECORD), &record).map_err(|e| format!("claude settings copy record: {e}"))?;
         eprintln!("kolux-rs: claude hooks: kept a copy before the first write: sha256 original {original}, backup {copy}");
     }
-    // T-152 (4): the status line slot as the user had it (`null`: none), put back whole on removal.
-    if let Some(s) = had {
+    // T-152 (4): the status line slot as the user had it (`null`: none), put back whole on removal,
+    // and its command, which keeps running from `prev` (STAT-040). Both are saved BEFORE the
+    // settings file is touched, so a failed save never leaves his line replaced.
+    if let Some(s) = &had {
         let slot = s.get("statusLine").cloned().unwrap_or(Value::Null);
-        if !slot.get("command").and_then(Value::as_str).is_some_and(is_my_command) {
+        let command = slot.get("command").and_then(Value::as_str);
+        if !command.is_some_and(is_my_command) {
             fs::write(prev.with_extension("json"), slot.to_string()).map_err(|e| format!("claude status line: {e}"))?;
+            if let Some(c) = command.filter(|c| !c.trim().is_empty()) {
+                fs::write(&prev, format!("{c}\n")).map_err(|e| format!("claude status line: {e}"))?;
+            }
         }
     }
-    // The status line the user had keeps running from this file (STAT-040).
-    if let (_, Some(displaced)) = install_claude(file, &format!("\"{path}\" || exit 0"), &status)? {
-        fs::write(&prev, format!("{displaced}\n")).map_err(|e| format!("claude status line: {e}"))?;
-    }
+    // T-152 (5): against the bytes read above, so a file changed since then is never overwritten.
+    install_claude_from(file, text, &format!("\"{path}\" || exit 0"), &status)?;
     Ok(())
 }
 
@@ -332,11 +337,12 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
     match (id, plan) {
         ("claude", Plan::Install) => install_claude_all(home).map(|_| "installed"),
         ("claude", Plan::Remove) => remove_claude(&claude_target()?, &prev).map(|_| "removed"),
-        // T-152 (6): the user's own Codex home is not written while T-025-e is off the cutline;
-        // its script is still refreshed for the managed homes a pane starts in.
+        // T-152 (6): the user's own Codex home is neither written nor cleared while T-025-e is off
+        // the cutline, so on and off leave its bytes exactly as they were; only the managed homes a
+        // pane starts in (Kolux's own folders) are cleared.
         ("codex", Plan::Install) => Ok("not written (Codex hooks wait for T-025-e)"),
         ("codex", Plan::Remove) => {
-            for h in codex_home().into_iter().chain(managed_codex_homes(profile)) {
+            for h in managed_codex_homes(profile) {
                 remove_codex(&h)?;
             }
             Ok("removed")
