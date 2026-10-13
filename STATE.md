@@ -1447,6 +1447,12 @@ unless key mode is on; with a managed Claude account, a pane whose own settings 
 key or token is not started and says which override to remove. A new Codex pane waits about two
 seconds for the chosen account's sign-in, then starts on the system login instead of hanging.
 
+[accounts] T-170: Usage no longer counts a forked or copied Claude or Codex session twice. The
+turns a fork copied stay credited to the original session; if the original file is deleted they
+move to the copy that is left, so the total stays the same. Rescans skip files that did not change,
+nested folders are read, Codex accounts whose folder points outside Kolux's own storage are not
+followed, and results saved by the older scan are rebuilt once.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2604,7 +2610,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-171 · ACCT-014: the backup check runs on the connection grid (ConnectGrid) only, so it runs only while that page is open; it re-reads agent detection and install state, and a changed detection result is sent to every window as agents-changed. Account cards are not re-checked every 5 s, since a Claude account check starts a program per account (T-171-b covers their focus refresh). ACCT-024: the sign-in variables are ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN; terminal_spawn became an async command so the Codex wait (re-reading the active account every 100 ms) does not hold up the window; when the account changed during the wait and the new one also has no sign-in, the pane is refused with "Open it again".
 
+- [accounts] T-170 · USAGE-016/017: files are read oldest first (creation time, then change time, then path) and a reply (Claude message id) or token event (Codex time plus running total) held by several files counts for the first; the per-file memory (size and change time) lives in memory only, so the first scan after a restart reads every file once (T-170-b keeps it across restarts). The saved results carry a format mark (2) and anything else is thrown away and rescanned. The computer's own Codex folder is always <user folder>/.codex/sessions, whatever CODEX_HOME says; a managed home counts only when its resolved sessions folder lies inside <app data>/codex-accounts. Worktree credit (Kolux scope) now works out "." and ".." before comparing, so a path that climbs out of a worktree gets no credit.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-170 · done (part): token_usage claude_file/codex_file/merge, per-file Cache, codex_roots, format mark; workspaces trim resolves . and .. · evidence/T-170.txt, T-170-1-fork-counted-once.png, T-170-2-original-gone-total-kept.png
 - 2026-10-12 · [accounts] T-171 · done (part): ConnectGrid liveCheck (5 s while visible, on focus, changes broadcast); claude_key::strip_inherited, claude_accounts::sign_in_overrides, codex_accounts::ready_home wired in terminal_spawn · evidence/T-171.txt, T-171-1-grok-not-installed.png, T-171-2-grok-found-without-reload.png
 - 2026-10-12 · [accounts] T-154-b · done: `src-tauri/src/fence.rs` (projects, worktrees and exact grants; shares, drive roots and links refused); file commands fenced; Open a file uses file_pick · evidence/T-154-b.txt, T-154-b-1-picker.png
 - 2026-10-12 · [accounts] T-153-c · skipped this batch, left open: VIEW-054 is built or marked SKIPPED only after Txais clicks through the installed app (DT-37), which the clean-room rule bars the builder from
