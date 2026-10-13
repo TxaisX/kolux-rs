@@ -41,6 +41,7 @@ import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
 import { LINE_NOTES_KEY, clearDelivered, lineNotesOf, markSent, noteBlocks, withLineNotes, type LineNote } from "./editor/diffNotes";
 import LineNotes from "./scm/LineNotes";
+import ChecksPanel from "./scm/ChecksPanel";
 import PreviewPane from "./editor/PreviewPane";
 import ReviewNotes from "./editor/ReviewNotes";
 import { reviewOn, selections, type Note, type Picked } from "./editor/notes";
@@ -2099,6 +2100,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             }
           }} agents={menuAgents(agents, defaultId)} onHand={(a, note) => activeDir !== null && void startIn(a, activeDir, panesIn(panes, activeDir)[0]?.branch ?? null, note, true)} />
         )}
+        {/* VIEW-073: the Checks tab follows the workspace of the focused terminal. */}
+        {right.open && right.tab === "checks" && <ChecksPanel dir={activeDir} linked={activeDir === null ? null : (linkedPrs(settings[SCM_LINKED_PR_KEY])[activeDir] ?? null)} visible={terminals} />}
         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
         </RightSidebar>
       </div>

@@ -645,6 +645,89 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
 
+/// VIEW-073: one check on a pull request, in the Checks panel's words.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Check {
+    pub name: String,
+    pub workflow: Option<String>,
+    /// passed, failed, running, skipped, cancelled or unresolved.
+    pub outcome: String,
+    pub link: Option<String>,
+    pub started: Option<String>,
+    pub finished: Option<String>,
+    pub description: Option<String>,
+}
+
+/// VIEW-073: the Checks panel's answer; `pr` is None when the branch has no pull request.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Default)]
+pub struct PrChecks {
+    pub pr: Option<Pr>,
+    pub conflict: bool,
+    pub checks: Vec<Check>,
+}
+
+const CHECK_FIELDS: &str = "number,url,state,title,headRefName,isDraft,mergeable,statusCheckRollup";
+
+/// VIEW-073: a check run's status and conclusion, or a commit status's state, as one word. A run
+/// that finished without a conclusion is unresolved, never pending.
+fn check_outcome(v: &serde_json::Value) -> &'static str {
+    let word = |k: &str| v[k].as_str().unwrap_or("").to_ascii_uppercase();
+    if v["__typename"] == "StatusContext" || v.get("status").is_none() {
+        return match word("state").as_str() {
+            "SUCCESS" => "passed",
+            "PENDING" | "EXPECTED" => "running",
+            "FAILURE" | "ERROR" => "failed",
+            _ => "unresolved",
+        };
+    }
+    if word("status") != "COMPLETED" {
+        return "running";
+    }
+    match word("conclusion").as_str() {
+        "SUCCESS" | "NEUTRAL" => "passed",
+        "FAILURE" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" => "failed",
+        "SKIPPED" | "STALE" => "skipped",
+        "CANCELLED" => "cancelled",
+        _ => "unresolved",
+    }
+}
+
+/// VIEW-073: gh's pull request answer, read into the review header, the conflict notice and the checks.
+pub fn checks_from(text: &str) -> Result<PrChecks, String> {
+    let bad = |e: serde_json::Error| format!("gh answered in a form Kolux cannot read: {e}");
+    let v: serde_json::Value = serde_json::from_str(text).map_err(bad)?;
+    let pr: Pr = serde_json::from_value(v.clone()).map_err(bad)?;
+    // gh writes a zero time for a run that has not finished yet.
+    let time = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty() && !t.starts_with("0001-")).map(String::from);
+    let text_of = |x: &serde_json::Value| x.as_str().filter(|t| !t.is_empty()).map(String::from);
+    let checks = v["statusCheckRollup"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|c| Check {
+                    name: text_of(&c["name"]).or_else(|| text_of(&c["context"])).unwrap_or_else(|| "check".into()),
+                    workflow: text_of(&c["workflowName"]),
+                    outcome: check_outcome(c).into(),
+                    link: text_of(&c["detailsUrl"]).or_else(|| text_of(&c["targetUrl"])),
+                    started: time(&c["startedAt"]),
+                    finished: time(&c["completedAt"]),
+                    description: text_of(&c["description"]),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(PrChecks { pr: Some(pr), conflict: v["mergeable"] == "CONFLICTING", checks })
+}
+
+/// VIEW-073: the checks of the pull request for `target` (a branch or a hand-linked PR link).
+pub fn pr_checks(gh: &Path, worktree: &Path, target: &str) -> Result<PrChecks, String> {
+    match gh_run(gh, worktree, &["pr", "view", target, "--json", CHECK_FIELDS], None) {
+        Ok(text) => checks_from(&text),
+        Err(e) if e.to_lowercase().contains("no pull requests found") => Ok(PrChecks::default()),
+        Err(e) => Err(gh_words(&e)),
+    }
+}
+
 /// GIT-017: the most diff text a commit-message prompt carries.
 pub const MESSAGE_BUDGET: usize = 24_000;
 
@@ -1530,6 +1613,22 @@ pub async fn scm_pr(worktree: String, linked: Option<String>) -> Result<Option<P
     .map_err(|e| e.to_string())?
 }
 
+/// VIEW-073: the Checks panel's lookup, for the worktree's branch or its hand-linked pull request.
+#[tauri::command]
+pub async fn scm_pr_checks(worktree: String, linked: Option<String>) -> Result<PrChecks, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let target = match linked {
+            Some(url) if safe_pr_url(url.trim()) => url.trim().to_string(),
+            Some(_) => return Err("The linked pull request is not a pull request link".into()),
+            None => status(dir)?.branch.ok_or("No branch is checked out here")?,
+        };
+        pr_checks(&gh_program()?, dir, &target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn scm_pr_create(worktree: String, title: String, body: String, base: String, draft: bool) -> Result<Pr, String> {
     tauri::async_runtime::spawn_blocking(move || pr_create(&gh_program()?, Path::new(&worktree), &title, &body, &base, draft)).await.map_err(|e| e.to_string())?
@@ -1930,6 +2029,47 @@ mod tests {
         let err = gh_run_for(&gh, &tools, &["pr", "view"], None, std::time::Duration::from_secs(1)).unwrap_err();
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "took {:?}", started.elapsed());
         assert!(err.contains("did not answer within 1 second"), "{err}");
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn checks_read_every_kind_and_a_finished_check_without_an_outcome_is_unresolved() {
+        // VIEW-073: gh's statusCheckRollup mixes check runs (status + conclusion) and commit
+        // statuses (state); each reads as one word, and COMPLETED with no conclusion is unresolved.
+        let text = r#"{"number":12,"url":"https://github.com/o/r/pull/12","state":"OPEN","title":"Helper work","headRefName":"helper","isDraft":false,"mergeable":"CONFLICTING","statusCheckRollup":[
+            {"__typename":"CheckRun","name":"build","workflowName":"CI","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://github.com/o/r/runs/1","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:04:00Z"},
+            {"__typename":"CheckRun","name":"test","workflowName":"CI","status":"IN_PROGRESS","conclusion":"","detailsUrl":"https://github.com/o/r/runs/2","startedAt":"2026-10-13T10:00:00Z","completedAt":"0001-01-01T00:00:00Z"},
+            {"__typename":"CheckRun","name":"lint","status":"COMPLETED","conclusion":"","startedAt":"2026-10-13T10:00:00Z","completedAt":"2026-10-13T10:01:00Z"},
+            {"__typename":"CheckRun","name":"docs","status":"COMPLETED","conclusion":"SKIPPED"},
+            {"__typename":"CheckRun","name":"deploy","status":"COMPLETED","conclusion":"CANCELLED"},
+            {"__typename":"StatusContext","context":"ci/legacy","state":"FAILURE","targetUrl":"https://ci.example/9","description":"2 tests failed","startedAt":"2026-10-13T10:02:00Z"}
+        ]}"#;
+        let got = checks_from(text).unwrap();
+        let pr = got.pr.as_ref().unwrap();
+        assert_eq!((pr.number, pr.title.as_deref()), (12, Some("Helper work")));
+        assert!(got.conflict, "CONFLICTING is a merge conflict notice");
+        let words: Vec<(&str, &str)> = got.checks.iter().map(|c| (c.name.as_str(), c.outcome.as_str())).collect();
+        assert_eq!(words, [("build", "passed"), ("test", "running"), ("lint", "unresolved"), ("docs", "skipped"), ("deploy", "cancelled"), ("ci/legacy", "failed")]);
+        assert_eq!(got.checks[0].workflow.as_deref(), Some("CI"));
+        assert_eq!(got.checks[0].link.as_deref(), Some("https://github.com/o/r/runs/1"));
+        assert_eq!(got.checks[1].finished, None, "gh's zero time for a running check is no finish time");
+        assert_eq!(got.checks[5].description.as_deref(), Some("2 tests failed"));
+        assert_eq!(got.checks[5].link.as_deref(), Some("https://ci.example/9"));
+
+        // A PR without checks, or mergeable, reads as none and no conflict.
+        let bare = checks_from(r#"{"number":3,"url":"https://github.com/o/r/pull/3","state":"OPEN","mergeable":"MERGEABLE","statusCheckRollup":[]}"#).unwrap();
+        assert!(!bare.conflict && bare.checks.is_empty());
+    }
+
+    #[test]
+    fn a_branch_without_a_pull_request_has_no_checks_rather_than_an_error() {
+        // VIEW-073: gh's "no pull requests found" is the plain no-review answer.
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-checks-gh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        let gh = stand_in_gh(&tools);
+        let got = pr_checks(&gh, &tools, "feat").unwrap();
+        assert!(got.pr.is_none() && got.checks.is_empty() && !got.conflict);
+        assert!(fs::read_to_string(tools.join("calls.txt")).unwrap().contains("statusCheckRollup"));
         let _ = fs::remove_dir_all(&tools);
     }
 
