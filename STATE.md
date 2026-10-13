@@ -1430,6 +1430,11 @@ kit's roles with the AI each gets, and turns Start into Set up kit, which opens 
 a kit started from there closes the chooser. Choosing it again clears it and puts the seats back.
 The footer counts the sessions and names the first seat (or role) still lacking an AI or a model.
 
+[accounts] T-153-b: End in the Resource Manager reads the sessions again before it asks; a
+session that has already ended drops from the list with no question, and a failed read still
+asks, so nothing is ended unasked. The past-session files (VIEW-089) wait for the Agents tab
+(T-153-d) and Manage Sessions waits for the background host (T-153-e).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2581,7 +2586,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-201-b · SESS 019's older launch dialog is the chooser pane (SESS 007), the only launch surface until T-046 builds the new look's page. A chosen kit replaces the seat list and the shared task box with its roles, because a kit's prompts come from its own setup; Advanced can still be unfolded with a kit chosen, under a line saying it applies once the kit is cleared, and choosing a kit again folds it. The kit row is a toggle: the pressed kit clicked again clears it. Set up kit opens the kit's setup dialog (inputs come from there, SKILL-004) and is disabled while a role has no AI; the chooser closes only when that kit really starts. The footer count reads "N sessions" plus, for the first unfinished seat, "still needs an AI" or "still needs a model". Every child row of the chooser keeps its height (no squashed task box when the pane is short).
 
+- [accounts] T-153-b · End skips its question only when a fresh read no longer lists the session; a failed read asks. Kolux RS sessions belong to the panes that opened them and end with the window, so the card's "nothing shown attached until the window has loaded its workspaces" and "sessions no window owns" only apply once T-067's background host exists (T-153-e). The per-row End stays the user's own explicit choice for every session, agent-owned ones included; the never-offered rule is about Manage Sessions' cleanup (T-153-e).
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-153-b · done: `src/status/resources.ts` endNeedsAsk; Resource Manager End reads again before asking · evidence/T-153-b.txt, T-153-b-*.png
 - 2026-10-12 · [accounts] T-201-b · done: kit row, Advanced fold, kit roles and Set up kit in `src/launch/ChooserPane.tsx`; `seatGap` in seats.ts; `openKits(kit, chooser)` opens one kit's setup and App closes the chooser once it starts; Grok docs link · evidence/T-201-b.txt, T-201-b-*.png
 - 2026-10-12 · [accounts] T-208 · done: leave question (Escape, click outside, corner close) through Ask's new cancel words and safe confirm; firstRun.ts closer latch with retry, leaveKey, firstFolderAgent; onboarding.rs raises older records and keeps unknown fields; ProjectsPanel onAdded starts the default agent once · evidence/T-208.txt, T-208-*.png
 - 2026-10-12 · [accounts] T-207 · done: `onboarding.rs` record and onboarding_get / _step / _close; `src/onboarding/` Wizard (four screens) and firstRun.ts rules; Connect cards report connected; KitCard split out of the gallery; Add project opens on a window event · evidence/T-207.txt, T-207-*.png
