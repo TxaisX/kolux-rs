@@ -137,6 +137,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-052 · USAGE-001 Each agent pane header carries a context ring and a percentage
 - [x] T-053 · SET-001 [compat] App colour theme: Classic or one of 16 hues · SET-002 [compat] Tint, saturation and depth sliders adjust the theme · SET-003 Terminal colours can follow the app theme · SET-004 Startup never flashes the wrong theme or font
 - [x] T-054 · SET-005 [compat] Light, Dark or System mode · SET-006 [compat] Settings: ten pages plus a small page per repository · SET-037 [compat] Classic or New look, and the screen that opens first
+- [x] T-418 · First launch is dark with the new look: a profile with no appearanceMode seeds "dark" (DECISIONS §7 row amending the mode card's System default, pending Txais's confirm); evidence profiles seed the same; main.tsx must not patch settings onto {} after its 1500 ms timeout
+- [ ] T-419 · NotificationSwitches cleanup, deletes only: the unused FINISH_FIELD and STOPPED_FIELD constants go and KINDS is read instead; it moves onto useSettings; the "Agent settings…" row shows when every switch is off even without onManage, or the dead row and its test go; one openSettings call form everywhere
 
 ### P0 · theme 5 · Safety and trust (20 cards)
 

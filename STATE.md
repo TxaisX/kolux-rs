@@ -1255,8 +1255,9 @@ flash before the interface loads is gone too.
 
 [accounts] Settings now has its ten pages (General, Appearance, Accounts & keys, Agents, Terminal &
 sessions, Git & worktrees, Safety, Notifications, Shortcuts, Usage) plus one small page per
-repository, and opens on the page used last (T-054). Appearance has a Mode switch: System (the
-default, follows Windows while the app runs), Light or Dark, and terminals turn light with the
+repository, and opens on the page used last (T-054). Appearance has a Mode switch: System
+(follows Windows while the app runs), Light or Dark; a profile that never chose starts on Dark
+(T-418), and terminals turn light with the
 app unless that is switched off. General has the Classic or New look and the screen that opens
 first; under Classic the Agents / Board / Terminals switcher is gone and the window stays on
 Terminals. Pages with nothing built yet say so.

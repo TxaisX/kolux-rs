@@ -1,6 +1,7 @@
 // SET-037: the Classic or New look and the workspace screen that opens first. Both live in General.
 import type { Screen } from "../chrome/TopBar";
 import type { Page } from "../projects/ProjectsPanel";
+import { FIELD } from "../theme";
 
 export type Look = "classic" | "new";
 export const LOOK_FIELD = "uiLook";
@@ -14,8 +15,16 @@ export function readLook(s: Record<string, unknown>): Look {
   return Object.keys(s).length === 0 ? "new" : "classic";
 }
 
-/** The settings with the look written down, so a fresh profile stays New once other fields are saved. */
-export const stampLook = (s: Record<string, unknown>): Record<string, unknown> | null => (s[LOOK_FIELD] === "classic" || s[LOOK_FIELD] === "new" ? null : { ...s, [LOOK_FIELD]: readLook(s) });
+/** The settings with the look written down, so a fresh profile stays New once other fields are
+ *  saved, and (T-418) a missing mode written down as Dark, so a first launch is dark; null when both
+ *  are already there. Only ever given settings read from disk, never the empty stand-in a slow read
+ *  leaves, or it would write New and Dark over a profile it never saw. */
+export function stampLook(s: Record<string, unknown>): Record<string, unknown> | null {
+  const look = s[LOOK_FIELD] === "classic" || s[LOOK_FIELD] === "new";
+  const mode = s[FIELD.mode] === "light" || s[FIELD.mode] === "dark" || s[FIELD.mode] === "system";
+  if (look && mode) return null;
+  return { ...s, ...(look ? {} : { [LOOK_FIELD]: readLook(s) }), ...(mode ? {} : { [FIELD.mode]: "dark" }) };
+}
 
 /** The saved first screen (Terminals when unset or unknown). */
 export function savedFirst(s: Record<string, unknown>): Screen {

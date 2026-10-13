@@ -19,12 +19,13 @@ async function start() {
     invoke<Record<string, unknown>>("get_settings").catch(() => null),
     new Promise<null>((r) => setTimeout(() => r(null), 1500)),
   ]);
-  if (saved) applyAppearance(readAppearance(saved));
-  // SET-017: the saved language is in force before the first frame draws.
-  applyLanguage(saved?.[LANGUAGE_FIELD]);
-  // SET-037: the look is written down on the first start, so a fresh profile stays New.
+  // SET-037 / T-418: the look and a missing mode are written down on the first start (New, Dark),
+  // and only from settings really read: after the timeout (`saved` null) nothing is written.
   const stamped = saved && stampLook(saved);
   if (stamped) void saveChanged(saved, stamped).catch(() => {});
+  if (saved) applyAppearance(readAppearance(stamped || saved));
+  // SET-017: the saved language is in force before the first frame draws.
+  applyLanguage(saved?.[LANGUAGE_FIELD]);
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <App initial={stamped || saved || {}} />
