@@ -161,9 +161,48 @@ pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
     }
     set_name(store, path, None)?;
     set_parent(store, path, None)?;
+    // EDIT-004: its editor tabs and drafts go with it.
+    let sessions: Vec<serde_json::Value> = store.get(EDITOR_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let n = sessions.len();
+    let kept: Vec<serde_json::Value> = sessions.into_iter().filter(|v| v.get("dir").and_then(|d| d.as_str()).map(name_key) != Some(name_key(path))).collect();
+    if kept.len() != n {
+        store.set(EDITOR_KEY, &serde_json::Value::Array(kept).to_string()).map_err(|e| e.to_string())?;
+    }
     // EDIT-040: a later workspace in the same folder starts with an empty note.
     store.set(&format!("{NOTE_PREFIX}{}", name_key(path)), "").map_err(|e| e.to_string())?;
     set_origin(store, path, None)
+}
+
+/// EDIT-004: each workspace's editor session (tabs, the tab in front, drafts), as one list.
+pub const EDITOR_KEY: &str = "editorSessions";
+
+fn live_sessions(all: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    all.into_iter().filter(|v| v.get("dir").and_then(|d| d.as_str()).is_some_and(|d| Path::new(d).is_dir())).collect()
+}
+
+/// The saved editor sessions whose workspace folder is still there; the others are dropped.
+pub fn editor_sessions(store: &Store) -> Vec<serde_json::Value> {
+    let all: Vec<serde_json::Value> = store.get(EDITOR_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let n = all.len();
+    let live = live_sessions(all);
+    if live.len() != n {
+        let _ = store.set(EDITOR_KEY, &serde_json::Value::Array(live.clone()).to_string());
+    }
+    live
+}
+
+pub fn save_editor_sessions(store: &Store, sessions: Vec<serde_json::Value>) -> Result<(), String> {
+    store.set(EDITOR_KEY, &serde_json::Value::Array(live_sessions(sessions)).to_string()).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+pub fn editor_sessions_get(store: StoreState<'_>) -> Result<Vec<serde_json::Value>, String> {
+    Ok(editor_sessions(&*store.lock().map_err(|e| e.to_string())?))
+}
+
+#[tauri::command(async)]
+pub fn editor_sessions_save(store: StoreState<'_>, sessions: Vec<serde_json::Value>) -> Result<(), String> {
+    save_editor_sessions(&*store.lock().map_err(|e| e.to_string())?, sessions)
 }
 
 /// EDIT-040: the handoff note of one workspace, stored under its own key (one write each, so a
@@ -1428,6 +1467,34 @@ mod tests {
         for s in [".env.example", ".env.sample", "README.md", "src/tokens.ts", "id_rsa.pub", "package.json", "secret-santa.md"] {
             assert!(!looks_secret(s), "{s}");
         }
+    }
+
+    #[test]
+    fn edit004_editor_sessions_keep_live_workspaces_and_a_removed_one_loses_its_session() {
+        let profile = temp("editor-profile");
+        let store = Store::open(&profile).unwrap();
+        let root = temp("editor-root");
+        let (a, b) = (root.join("a"), root.join("b"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        let s = |d: &Path| serde_json::json!({ "dir": d.to_string_lossy(), "tabs": [{ "path": d.join("x.ts").to_string_lossy(), "kind": "editor", "draft": "unsaved" }], "front": null });
+        let gone = root.join("gone");
+        save_editor_sessions(&store, vec![s(&a), s(&b), s(&gone), serde_json::json!({ "no": "dir" })]).unwrap();
+        assert_eq!(editor_sessions(&store), vec![s(&a), s(&b)], "a folder that is not there is not kept");
+        assert!(!a.join("x.ts").exists(), "a draft never reaches the real file");
+        // a folder removed while the app was closed is skipped on the next start, and dropped
+        fs::remove_dir_all(&b).unwrap();
+        assert_eq!(editor_sessions(&store), vec![s(&a)]);
+        assert_eq!(store.get(EDITOR_KEY).unwrap().unwrap(), serde_json::Value::Array(vec![s(&a)]).to_string());
+        // removing a workspace drops its editor state and drafts (whatever slashes the path uses)
+        forget_workspace(&store, &a.to_string_lossy().replace('\\', "/")).unwrap();
+        assert!(editor_sessions(&store).is_empty());
+        // a damaged entry reads as nothing
+        store.set(EDITOR_KEY, "{not json").unwrap();
+        assert!(editor_sessions(&store).is_empty());
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

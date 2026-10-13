@@ -34,8 +34,9 @@ import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane from "./browser/BrowserPane";
-import EditorPane, { editors } from "./editor/EditorPane";
-import { baseName, keyOf } from "./editor/buffers";
+import EditorPane, { editors, looks } from "./editor/EditorPane";
+import { baseName, draftOf, keyOf, textOf } from "./editor/buffers";
+import { collect, hashText, restore, tidy, type Start } from "./editor/session";
 import PreviewPane from "./editor/PreviewPane";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
@@ -94,7 +95,7 @@ type KitWait = { role: string; upstream: string; key: number; prompt: string };
 type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number> };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string; start?: Start };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -1310,6 +1311,63 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     graphSent.current = true;
     void invoke("workspace_ready").catch(() => undefined);
   });
+
+  // EDIT-004: every workspace's editor tabs come back after a quit or a crash, with the same tab
+  // in front and unsaved text still unsaved. After the restore, what is open is kept each second
+  // it changes (a failed read never starts that, so it cannot wipe the saved sessions).
+  // ponytail: a 1 s poll, so a crash can lose the last second of typing; a buffer change event if that matters.
+  const sessionLive = useRef({ panes, activeTab });
+  sessionLive.current = { panes, activeTab };
+  const restoring = useRef(false);
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    if (restoring.current || (listing && !indexed)) return;
+    restoring.current = true;
+    const known = [...projects.map((p) => p.path), ...Object.keys(owner)];
+    invoke<unknown>("editor_sessions_get").then(
+      (raw) => {
+        const r = restore(tidy(raw, known), nextKey.current);
+        nextKey.current = r.next;
+        if (r.panes.length) {
+          setPanes((ps) => [...ps, ...r.panes.map((p): Pane => ({ ...p, branch: null, agent: "shell", program: null, args: [] }))]);
+          setActiveTab((a) => ({ ...a, ...r.front }));
+        }
+        setRestored(true);
+      },
+      (err) => setToast(`Editor tabs from last time were not restored: ${String(err)}`),
+    );
+  });
+  useEffect(() => {
+    if (!restored) return;
+    let last = "";
+    const keep = () => {
+      const { panes: ps, activeTab: at } = sessionLive.current;
+      const cs = cellsOf(ps);
+      const frontOf = (g: number) => {
+        const c = cs.find((x) => x.group === g);
+        return !c ? -1 : c.panes.some((p) => p.key === at[g]) ? at[g] : c.panes[c.panes.length - 1].key;
+      };
+      const startOf = (k: number) => ps.find((p) => p.key === k)?.start;
+      const sessions = collect(
+        ps,
+        frontOf,
+        (k) => looks.get(k) ?? { caret: startOf(k)?.caret, mode: startOf(k)?.mode },
+        (path, k) => {
+          const d = draftOf(path);
+          if (d) return { text: d.text, base: hashText(d.disk) };
+          // A restored tab that has not loaded (or did not open) keeps its draft.
+          const st = startOf(k);
+          return textOf(path) === null && st?.draft !== undefined ? { text: st.draft, base: st.base } : null;
+        },
+      );
+      const json = JSON.stringify(sessions);
+      if (json === last) return;
+      last = json;
+      void invoke("editor_sessions_save", { sessions }).catch(() => (last = ""));
+    };
+    const t = window.setInterval(keep, 1000);
+    return () => window.clearInterval(t);
+  }, [restored]);
   // STAT-041: the note names the repository when more than one has agents running.
   const repoOf = (p: Pane): string | null => {
     const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
@@ -1654,6 +1712,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
                     autosave={autosaveOf(settings)}
+                    start={p.start}
                   />
                 ) : p.kind === "diff" && p.path ? (
                   <DiffPane

@@ -21,6 +21,10 @@ import { Close, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, diskNews, isDirty, keepMine, loadText, relay, replaceAll, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { resumeAutosave, stopAutosave, watchAutosave } from "./autosave";
+import { hashText, type Mode, type Start } from "./session";
+
+/** EDIT-004: each editor pane's caret and view mode, by pane key, kept with the session. */
+export const looks = new Map<number, { caret: number; mode: Mode }>();
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
@@ -40,9 +44,11 @@ export const look = EditorView.theme(
   { dark: true },
 );
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null };
+type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null; start?: Start };
 
-export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null }: Props) {
+export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null, start }: Props) {
+  // EDIT-004: a restored tab's draft, caret and view mode, used by its first load only.
+  const first = useRef(start);
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +62,9 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
   const richHost = useRef<HTMLDivElement>(null);
   const rich = useRef<ReturnType<typeof mountRich> | null>(null);
   const [ready, setReady] = useState(0); // counts loads, so the rich view starts after each one
-  const [mode, setMode] = useState<"rich" | "source">(md ? "rich" : "source");
+  const [mode, setMode] = useState<Mode>(md ? (start?.mode ?? "rich") : "source");
+  const modeNow = useRef(mode);
+  modeNow.current = mode;
   const [banner, setBanner] = useState<{ text: string; big?: boolean } | null>(null);
   const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
   const [richError, setRichError] = useState<string | null>(null);
@@ -81,15 +89,29 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     loadText(() => invoke<string>("file_read", { path })).then(
       (text) => {
         if (!alive) return;
+        const begin = first.current;
+        first.current = undefined;
+        const doc = begin?.draft ?? text;
         made = new EditorView({
-          doc: text,
+          doc,
+          selection: begin?.caret !== undefined ? { anchor: Math.min(begin.caret, doc.length) } : undefined,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr)))],
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => {
+              u.transactions.forEach((tr) => relay(path, u.view, tr));
+              looks.set(id, { caret: u.state.selection.main.head, mode: modeNow.current });
+            }),
+          ],
         });
         view.current = made;
         stamp.current = null;
         attach(path, made, text);
+        looks.set(id, { caret: made.state.selection.main.head, mode: modeNow.current });
+        // EDIT-003 after a restart: a draft whose file moved on meanwhile gets the banner.
+        if (begin?.draft !== undefined && begin.base !== undefined && begin.base !== hashText(text) && isDirty(path)) {
+          stopAutosave(path);
+          setMoved(text);
+        }
         setReady((n) => n + 1);
         // A newly opened file takes the keyboard at once.
         if (wantFocus.current) made.focus();
@@ -112,6 +134,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     return () => {
       alive = false;
       editors.delete(id);
+      looks.delete(id);
       off();
       if (made) {
         detach(path, made);
@@ -121,8 +144,17 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     };
   }, [id, path, tries]);
 
-  // A new file in this tab starts over: rich again, and Open anyway forgotten.
   useEffect(() => {
+    const l = looks.get(id);
+    if (l) l.mode = mode;
+  }, [id, mode]);
+
+  // A new file in this tab starts over: rich again, and Open anyway forgotten.
+  // Only a change of file: the first file keeps a restored mode.
+  const lastPath = useRef(path);
+  useEffect(() => {
+    if (lastPath.current === path) return;
+    lastPath.current = path;
     setMode(isMarkdown(path) ? "rich" : "source");
     setBigOk(false);
     setBanner(null);

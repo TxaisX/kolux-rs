@@ -1,0 +1,28 @@
+T-177-b (EDIT-004, open tabs and unsaved drafts come back after a quit or crash) live proof, 2026-10-12, lane release,
+dev build on port 1422, CDP 9232, window on the second screen. Lane profile backed up first and restored afterwards
+(settings.json, state.db, state.db-wal, state.db-shm: cmp same).
+
+Setup: throwaway project G:/Temp/release-T-177/repo (committed a.ts "export const a = 1;", b.md "# Title / Some text.",
+notes.txt "line one / line two") added with project_add; a second workspace t177del made through the app (workspace_create),
+at C:/Users/XiongT/kolux-rs/workspaces/repo/t177del.
+
+1. Drafts typed and never saved: repo/a.ts "/* draft A */ ", repo/b.md switched to Source and "DRAFT-B " typed (caret 8),
+   t177del/notes.txt "WT-DRAFT ". editor_sessions_get then showed two sessions (repo: a.ts front + b.md; t177del: notes.txt),
+   each editor tab carrying its draft, the disk stamp (base) it was made from, its caret and its mode.
+2. The dev app was killed (taskkill /F, standing in for a crash). The real files were unchanged on disk: no draft is ever
+   written into a file.
+3. While Kolux was closed, a.ts was rewritten from a shell: "export const a = 2; // changed while Kolux was closed".
+4. Relaunched. All three tabs came back, each with its unsaved dot and its draft text:
+     a.ts pane (front) UNSAVED "/* draft A */ export const a = 1;"   banner "a.ts changed on disk while you have unsaved edits."
+     b.md pane (behind) UNSAVED "DRAFT-B # TitleSome text."          mode Source (kept)
+     notes.txt pane (front, its own cell) UNSAVED "WT-DRAFT line oneline two"
+   a.ts's draft was made from the old disk copy, so its stamp no longer matched and the changed-on-disk banner came up
+   (Reload / Keep my edits / Compare) and autosave stood down for it. Screenshot T-177-b-restored.png.
+5. Workspace t177del removed through the app (workspace_remove_check, then workspace_remove force=false with its stamp; no
+   changes). The folder is gone; editor_sessions_get at once listed only the repo session (a.ts, b.md).
+6. Killed and relaunched: only a.ts (front) and b.md (behind) came back, both UNSAVED with their drafts; nothing from the
+   removed workspace. Screenshot T-177-b-removed.png.
+7. App killed, profile restored (cmp same). On disk a.ts still held the outside text and b.md its committed text.
+
+Gates: bash /g/Temp/release-b3/verify.sh -> Rust 285 + 3 passed, licenses ok; Test Files 77 passed, Tests 461 passed;
+tsc-ok; license-check OK; plan-check OK; workflow-check OK.

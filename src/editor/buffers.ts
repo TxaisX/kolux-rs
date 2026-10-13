@@ -126,6 +126,13 @@ export function subscribe(path: string, f: () => void): () => void {
   };
 }
 
+/** EDIT-004: a file's unsaved text and the disk copy it differs from, or null when it has no edits. */
+export function draftOf(path: string): { text: string; disk: string } | null {
+  const b = buffers.get(keyOf(path));
+  const v = b && [...b.views][0];
+  return v && isDirty(path) ? { text: v.state.sliceDoc(), disk: b.disk } : null;
+}
+
 /** The open text of a file, or null when no editor has it open (a preview then reads the disk). */
 export function textOf(path: string): string | null {
   const v = buffers.get(keyOf(path))?.views.values().next().value;

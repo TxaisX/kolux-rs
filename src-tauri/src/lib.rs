@@ -235,6 +235,8 @@ pub fn run() {
             projects::workspace_remove_check,
             projects::workspace_branch_delete,
             projects::workspace_cleanup_scan,
+            projects::editor_sessions_get,
+            projects::editor_sessions_save,
             projects::project_set,
             agents::agent_list,
             models::agent_models,
