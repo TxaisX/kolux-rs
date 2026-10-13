@@ -13,10 +13,15 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
-import { Close, FileCode } from "../chrome/icons";
+import { ChevronDown, Close, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, loadText, relay, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections } from "./notes";
+import { findSupport, openFind } from "./find";
+import { conflictColours, conflictField, goConflict } from "./conflicts";
+import { useKeymap } from "../keys/KeymapContext";
+import { matchEvent } from "../keys/keymap";
+import "./editor-extras.css";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
@@ -58,6 +63,7 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
   const [bigOk, setBigOk] = useState(false); // Open anyway, for this tab and this file only
   const [richError, setRichError] = useState<string | null>(null);
   const [richTries, setRichTries] = useState(0);
+  const [conflicts, setConflicts] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -75,11 +81,17 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
           doc: text,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr)))],
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), findSupport, conflictColours, EditorView.updateListener.of((u) => {
+            u.transactions.forEach((tr) => relay(path, u.view, tr));
+            if (u.docChanged) setConflicts(u.state.field(conflictField).list.length);
+          })],
         });
         view.current = made;
         attach(path, made, text);
         setReady((n) => n + 1);
+        // EDIT-009: a file still holding conflicts opens on the first one.
+        setConflicts(made.state.field(conflictField).list.length);
+        goConflict(made, 0);
         // A newly opened file takes the keyboard at once.
         if (wantFocus.current) made.focus();
         LanguageDescription.matchFilename(languages, baseName(path))
@@ -164,6 +176,28 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
   }, [focused, hidden]);
 
   const name = baseName(path);
+  // EDIT-005 / EDIT-009: find and conflict stepping act on the source view (the rich view's
+  // find comes with EDIT-017).
+  const sourceShown = !md || mode === "source";
+  const keymap = useKeymap();
+  const stepConflicts = (dir: 1 | -1) => {
+    const cm = view.current;
+    if (cm && goConflict(cm, dir)) cm.focus();
+  };
+  // The user's own chords for editor.find / editor.replace (a rebinding is the one that works;
+  // CodeMirror's built-in Mod+F is off) and, with conflicts in the file, editor.nextChange /
+  // editor.previousChange. App's router leaves these to the focused editor pane.
+  const onKeys = (e: React.KeyboardEvent) => {
+    if (!sourceShown || !view.current) return;
+    const hit = matchEvent(keymap, e.nativeEvent, ["editor"]);
+    if (hit?.id === "editor.find" || hit?.id === "editor.replace") {
+      // Holding the chord down does not keep reopening the bar.
+      if (!e.repeat) openFind(view.current, hit.id === "editor.replace" && !readOnly);
+    } else if ((hit?.id === "editor.nextChange" || hit?.id === "editor.previousChange") && conflicts) stepConflicts(hit.id === "editor.nextChange" ? 1 : -1);
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
   const shown = !md || mode === "source" ? "source" : richError ? "error" : "rich";
   // GIT-042: the add-note shortcut reads this tab's selection (Markdown files only).
   useEffect(() => {
@@ -180,7 +214,7 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
     return () => void selections.delete(id);
   }, [md, id, path, shown]);
   return (
-    <section className={`pane editor${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} data-kind="editor" data-key={id}>
+    <section className={`pane editor${focused ? " focused" : ""}`} hidden={hidden} aria-label={`${name} pane`} onMouseDown={onFocus} onKeyDownCapture={onKeys} data-kind="editor" data-key={id}>
       <header className="pane-head">
         <span className="agent-mark" title="File">
           <FileCode size={13} />
@@ -204,6 +238,17 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
               title="Source view"
             >
               Source
+            </button>
+          </span>
+        )}
+        {conflicts > 0 && sourceShown && (
+          <span className="conflict-nav" role="group" aria-label="Merge conflicts">
+            <span className="count">{conflicts === 1 ? "1 conflict" : `${conflicts} conflicts`}</span>
+            <button className="ib up" title="Previous conflict (Shift+F7)" aria-label="Previous conflict" onClick={() => stepConflicts(-1)}>
+              <ChevronDown size={12} />
+            </button>
+            <button className="ib" title="Next conflict (F7)" aria-label="Next conflict" onClick={() => stepConflicts(1)}>
+              <ChevronDown size={12} />
             </button>
           </span>
         )}

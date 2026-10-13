@@ -1,0 +1,14 @@
+/* EDIT-009: the conflict count and arrows in an editor tab's header. */
+.pane-head .conflict-nav { flex: none; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 8px; font-size: 11px; font-weight: 600; color: var(--warn); }
+.pane-head .conflict-nav .count { margin-right: 4px; }
+.pane-head .conflict-nav .ib.up svg { transform: rotate(180deg); }
+/* EDIT-005: the find bar over a code editor, in the app's own colours. */
+.pane.editor .cm-panels { background: var(--surface); color: var(--fg); border-color: var(--line-subtle); }
+.pane.editor .cm-search { font: 12px var(--ui-font); padding: 6px 8px; }
+.pane.editor .cm-search .cm-textfield { font-size: 12px; width: 220px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; }
+.pane.editor .cm-search .cm-textfield:focus { border-color: var(--line-focus); outline: none; }
+.pane.editor .cm-search .cm-button { font-size: 11.5px; padding: 2px 8px; background: none; border: 1px solid var(--line-subtle); border-radius: 5px; color: var(--fg-muted); }
+.pane.editor .cm-search .cm-button:hover { color: var(--fg); }
+.pane.editor .cm-search label { font-size: 11.5px; color: var(--fg-muted); }
+.pane.editor .cm-searchMatch { background: color-mix(in srgb, var(--warn) 30%, transparent); }
+.pane.editor .cm-searchMatch-selected { background: color-mix(in srgb, var(--warn) 60%, transparent); }
