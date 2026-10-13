@@ -81,7 +81,7 @@ import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./usage/meter";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
+import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, startFailure, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
 import { failureOf, folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, underDir, withoutDir, nameOf } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -97,7 +97,7 @@ type KitWait = { role: string; upstream: string; key: number; prompt: string };
 type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number> };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { movedFrom?: string; key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string; start?: Start };
+type Pane = { movedFrom?: string; key: number; agentName?: string; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string; start?: Start };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 // APP-002: optional overlays are not loaded at startup; each loads the first time it opens.
@@ -693,11 +693,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     try {
       if (a) await pretrust(a.id, [activeDir]);
       const line = a ? await invoke<StartLine>("agent_start_line", { id: a.id, extra: [], prompt: "" }) : null;
-      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
+      const pane: Pane = a && line ? { ...base, agent: markFor(a.id), agentName: a.name, program: line.program ?? a.program, args: line.args, env: line.env, typed: line.typed ?? undefined } : { ...base, agent: "shell", program: null, args: [] };
       setPanes((ps) => [...ps, pane]);
       setFocused(key);
     } catch (err) {
-      setNotice(String(err));
+      // SESS-005: a start line that cannot be put together is reported at once, naming the agent.
+      setNotice(a ? startFailure(a.name, String(err)) : String(err));
     }
   };
 
@@ -854,7 +855,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         const note = a && side ? await invoke<string>("handoff_note_prepare", { root, name: separate ? folderName(cwd) : `${folderName(cwd)}-seat-${i + 1}` }) : null;
         prompts.push(a ? openingPrompt(seats[i], task, note && rulesBlock(note)) : "");
       }
-      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: seatArgs(seats[i]), prompt: prompts[i], picked: true }) : null)));
+      const lines = await Promise.all(picked.map((a, i) => (a ? invoke<StartLine>("agent_start_line", { id: a.id, extra: seatArgs(seats[i]), prompt: prompts[i], picked: true }).catch((err) => Promise.reject(new Error(startFailure(a.name, String(err))))) : null)));
       const made: Pane[] = seats.map((s, i) => {
         const a = picked[i];
         const line = lines[i];
@@ -862,7 +863,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         const title = s.title?.trim() || (s.role && s.role[0].toUpperCase() + s.role.slice(1)) || undefined;
         const { cwd, branch } = places[i];
         return a && line
-          ? { key: k, cwd, branch, agent: markFor(a.id), program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
+          ? { key: k, cwd, branch, agent: markFor(a.id), agentName: a.name, program: line.program ?? a.program, args: line.args, env: line.env, title, batch, typed: line.typed ?? undefined }
           : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
       if (pid && picked.some(Boolean)) pendingLineup.current[batch] = { pid, lineup: lineupOf(chooser.shape ?? "custom", separate ? "separate" : "shared", seats) };
@@ -885,7 +886,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     try {
       return await openIn(agent, dir, branch, prompt, show, extra, title);
     } catch (err) {
-      setNotice(String(err));
+      setNotice(startFailure(agent.name, String(err)));
       return null;
     }
   };
@@ -895,7 +896,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     await pretrust(agent.id, [dir]);
     const line = await invoke<StartLine>("agent_start_line", { id: agent.id, extra, prompt });
     const key = nextKey.current++;
-    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined };
+    const pane: Pane = { key, cwd: dir, branch, agent: markFor(agent.id), agentName: agent.name, program: line.program ?? agent.program, args: line.args, env: line.env, title, typed: line.typed ?? undefined };
     // TERM-007: an empty pane in that workspace takes the session; else it gets a cell of its own.
     setPanes((ps) => {
       const free = freeCell(cellsOf(panesIn(ps, dir)));
@@ -1214,12 +1215,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // the workspace's empty placeholder.
   // SESS-024: a pane whose session failed to start goes away, with the reason in a toast.
   const failedPane = (key: number, error: string) => {
-    const ask = panes.find((p) => p.key === key)?.ask;
+    const { ask, agentName } = panes.find((p) => p.key === key) ?? {};
     if (ask) cliFailed.current[ask] = error;
     const { panes: rest, batchEmpty } = withoutFailed(panes, key);
     setPanes(rest);
     setFocused((f) => (f === key ? focusIn(rest, activeDir, f) : f));
-    setToast(batchEmpty ? `Nothing started: ${error}` : `A session did not start: ${error}`);
+    setToast(batchEmpty ? `Nothing started: ${error}` : startFailure(agentName, error));
   };
 
   const dropPane = (key: number) => {
@@ -1878,6 +1879,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                       if (p.batch !== undefined && p.agent !== "shell") rememberLineup(p.batch);
                     }}
                     onFailed={(error) => failedPane(p.key, error)}
+                    onSlow={() => setToast(`${p.agentName ?? "The session"} has not started: no process has appeared after 5 seconds.`)}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title || nameOf(names, p.cwd)}
                     typed={p.typed}

@@ -1,0 +1,23 @@
+T-163 live proof, lane dev app (port 1422, CDP 9232), 2026-10-13. Lane profile backed up first and
+restored afterwards (cmp same for every file). Throwaway project G:/Temp/release-T-163/proj (git init).
+
+SESS-005, acceptance 1: Claude Code's command overridden to C:/nope/missing-agent.exe (Settings
+agentOptions through patch_settings), then New tab > Claude Code in the proj workspace. Toast text
+read by a MutationObserver in the page, 179 ms after the click:
+  "Claude Code did not start: CreateProcessW `"C:/nope/missing-agent.exe --permission-mode auto
+   --model opus --effort high\0"` in cwd ... failed: The system cannot find the path specified. (os error 3)"
+SESS-005, acceptance 2 (no agents): unchanged, the plus menu's empty-state lines and its
+"Agent settings..." row were already in place (PlusMenu tests).
+SESS-005, five-second check: unit-tested (watchStart: warns at 5 s only while terminal_spawn has not
+answered; a start that answers or fails never warns). A spawn that hangs cannot be staged live.
+
+SESS-032, acceptance 2: stub agent "aider" (typed route; G:/Temp/release-T-163/stub/aider.cmd ->
+node script that turns bracketed paste on after 1.5 s and logs every byte it reads). Started from
+the chooser with the 3-line task "Fix the failing test. / Then run the whole suite. / Report what
+changed." The stub's log:
+  {"ms":1514,"text":"\u001b[200~Fix the failing test.\rThen run the whole suite.\rReport what changed.\u001b[201~"}
+  {"ms":1819,"text":"\r"}
+One pasted block with its line breaks inside, then Enter on its own 305 ms later (Windows pause
+300 + 68/10 ms), delivered once.
+Screenshot: evidence/T-163-prompt.png (dark, maximised on the 1920 screen): the stub pane echoing
+the paste and the separate Enter.

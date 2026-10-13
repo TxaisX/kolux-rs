@@ -1,4 +1,5 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import { pastedPrompt, startFailure, submitPause, watchStart } from "./seats";
 import { allReady, clearMissing, defaultCopies, emptySeat, modelArgs, modelsFor, openingPrompt, pickShape, resizeLineup, resizeSeats, ROLE_BRIEFS, rulesBlock, sameForAll, seatReady, sharedWarning, TERMINAL, withoutFailed, withoutRules, saveShape, renameShape, restoreShape, SHAPE_LIMITS, type SavedShape, type Seat, applyLineup, FAST_SETTINGS, lineupAgents, lineupOf, offeredLineup, seatArgs, removeTarget, setDiscovered } from "./seats";
 
 const claude: Seat = { agent: "claude", model: "opus" };
@@ -209,4 +210,46 @@ test("TERM-002: add then remove returns the grid to its previous pane count; a s
   expect(t).toEqual({ key: 3, chooser: true });
   expect(added.filter((p) => p.key !== t?.key)).toEqual(before);
   expect(removeTarget(before, 2)).toEqual({ key: 2, chooser: false });
+});
+
+test("SESS-032: a typed opening prompt goes in as one pasted block with its line breaks inside", () => {
+  expect(pastedPrompt("fix the bug\nthen run the tests\r\nand stop")).toBe("\x1b[200~fix the bug\rthen run the tests\rand stop\x1b[201~");
+  // a paste-end mark inside the prompt cannot end the paste early
+  expect(pastedPrompt("a\x1b[201~b")).toBe("\x1b[200~ab\x1b[201~");
+});
+
+test("SESS-032: on Windows the pause before Enter grows with the prompt's length, within a cap", () => {
+  expect(submitPause(10, false)).toBe(300);
+  expect(submitPause(10_000, false)).toBe(300);
+  expect(submitPause(10, true)).toBe(301);
+  expect(submitPause(2_000, true)).toBe(500);
+  expect(submitPause(100_000, true)).toBe(3_000);
+});
+
+test("SESS-005: the five-second warning fires only when no process has appeared", async () => {
+  vi.useFakeTimers();
+  try {
+    const warn = vi.fn();
+    watchStart(new Promise(() => {}), warn);
+    await vi.advanceTimersByTimeAsync(4_900);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(warn).toHaveBeenCalledTimes(1);
+    // a process that shows up (or a start that fails and is reported on its own) never warns
+    for (const make of [() => Promise.resolve(1), () => Promise.reject(new Error("no such program"))]) {
+      const settled = make();
+      settled.catch(() => {});
+      const quiet = vi.fn();
+      watchStart(settled, quiet);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(quiet).not.toHaveBeenCalled();
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("SESS-005: a start that cannot be put together names the agent", () => {
+  expect(startFailure("Codex", "Unknown agent codex")).toBe("Codex did not start: Unknown agent codex");
+  expect(startFailure(undefined, "boom")).toBe("A session did not start: boom");
 });

@@ -232,8 +232,8 @@ export function rulesBlock(note: string): string {
 /** SESS-012 / SESS-025: a seat's first message: its role's brief, then the shared task, then the
  * seat's own opening prompt (SESS-051), blank parts left out; then the rules block when given.
  * Empty when there is nothing to say, so no rules block goes out alone. */
-// ponytail: a prompt with line breaks reaches a typed-route agent, or one started through a .cmd
-// shim, only up to its first line break; T-163 (SESS-032) delivers it as one pasted block.
+// ponytail: a prompt with line breaks reaches an agent started through a .cmd shim only up to its
+// first line break (cmd.exe cuts the argument there); T-163-b types it in instead.
 export function openingPrompt(seat: Seat, task: string, rules: string | null): string {
   const body = [seat.role ? ROLE_BRIEFS[seat.role] : "", task.trim(), seat.prompt?.trim() ?? ""].filter(Boolean).join("\n\n");
   return body && rules ? `${body}\n\n${rules}` : body;
@@ -291,4 +291,31 @@ export function removeTarget<T extends { key: number; seats?: Seat[] }>(shown: T
   if (chooser) return shown.length > 1 ? { key: chooser.key, chooser: true } : null;
   const target = shown.find((p) => p.key === focused) ?? shown[shown.length - 1];
   return target ? { key: target.key, chooser: false } : null;
+}
+
+/** SESS-032: a typed opening prompt as one bracketed paste, so its line breaks stay inside the
+ * prompt instead of sending it early; Enter goes separately (`submitPause` later). Line breaks
+ * go as a terminal's Enter, and a paste-end mark inside the prompt is dropped. */
+export function pastedPrompt(text: string): string {
+  return `\x1b[200~${text.replace(/\x1b\[201~/g, "").replace(/\r?\n/g, "\r")}\x1b[201~`;
+}
+
+/** SESS-032: how long to wait between the pasted prompt and its Enter. On Windows the console
+ * passes a long paste on slowly, so the pause grows by 1 ms per 10 characters, up to 3 s. */
+export function submitPause(length: number, windows: boolean): number {
+  return windows ? Math.min(300 + Math.ceil(length / 10), 3_000) : 300;
+}
+
+/** SESS-005: warns once when the start has not produced a process after `ms`. A start that
+ * settles first (a process, or a failure reported on its own) never warns. Returns the cancel. */
+export function watchStart(started: Promise<unknown>, warn: () => void, ms = 5_000): () => void {
+  const t = setTimeout(warn, ms);
+  const stop = () => clearTimeout(t);
+  started.then(stop, stop);
+  return stop;
+}
+
+/** SESS-005 / SESS-024: the toast for a session that did not start, naming its agent. */
+export function startFailure(agent: string | undefined, error: string): string {
+  return `${agent ?? "A session"} did not start: ${error}`;
 }

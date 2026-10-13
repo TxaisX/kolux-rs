@@ -17,7 +17,7 @@ import { decodeOutput, endedLabel, type ExitEvent, type OutputEvent } from "./co
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
-import { withoutRules } from "../launch/seats";
+import { pastedPrompt, submitPause, watchStart, withoutRules } from "../launch/seats";
 import { modelOf } from "../settings/routing";
 import { openSettings } from "../settings/pages";
 import { Close, Dots, Expand, Plus, SplitRight, StatusGlyph } from "../chrome/icons";
@@ -63,6 +63,8 @@ type Props = {
   onPty?: (id: number) => void;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
+  /** SESS-005: no process has appeared five seconds after the start. */
+  onSlow?: () => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
   title?: string;
   /** SESS-006: the shell picked in the create menu names itself in the header. */
@@ -98,7 +100,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, onSlow, title: jobTitle, typed, shellName, number, onFocus, onClose, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const box = useRef<HTMLElement>(null);
@@ -126,6 +128,8 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   pty.current = onPty;
   const failed = useRef(onFailed);
   failed.current = onFailed;
+  const slow = useRef(onSlow);
+  slow.current = onSlow;
 
   useEffect(() => {
     report.current?.(status.kind === "running");
@@ -184,9 +188,10 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
     };
     term.onData(write);
     term.onBell(() => bell.current?.());
-    // SESS-051: a typed-route prompt goes in once the program has drawn its screen and gone
-    // quiet. ponytail: "ready" is the first 1.5 s of silence after some output; SESS-032 owns the
-    // real readiness rule and replaces this timer.
+    // SESS-051 / SESS-032: a typed-route prompt goes in once, after the program has drawn its
+    // screen and gone quiet: 0.5 s once it has switched bracketed paste on (its input box is
+    // reading), else 1.5 s. It goes as one pasted block, then Enter after a pause on its own.
+    // ponytail: output quiet stands in for a real input-ready signal from each agent.
     let pending = typed?.trim() ? typed.trim() : null;
     let quiet: ReturnType<typeof setTimeout> | undefined;
     const sawOutput = () => {
@@ -194,10 +199,12 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       clearTimeout(quiet);
       quiet = setTimeout(() => {
         if (pending === null || !alive) return;
-        write(pending + "\r");
+        const prompt = pending;
         pending = null;
+        write(pastedPrompt(prompt));
+        setTimeout(() => alive && write("\r"), submitPause(prompt.length, navigator.userAgent.includes("Windows")));
         pasting.flush();
-      }, 1500);
+      }, term.modes.bracketedPasteMode ? 500 : 1500);
     };
     // TERM-068 lives in paste.ts (tested there); the paste chords are left to the browser instead of xterm.
     const pasting = attachPaste(term.textarea, (text) => term.paste(text), () => pending !== null);
@@ -227,7 +234,9 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
       );
       if (!alive) return;
       try {
-        const { id, program: ran } = await invoke<{ id: number; program: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number });
+        const spawning = invoke<{ id: number; program: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number });
+        watchStart(spawning, () => alive && slow.current?.());
+        const { id, program: ran } = await spawning;
         setStarted(ran);
         if (!alive) {
           invoke("terminal_kill", { id }).catch(() => {});

@@ -333,7 +333,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-162-a · PROJ-073 Branches stay when a workspace was opened on an existing branch (T-162 split)
 - [x] T-162-b · PROJ-074 Deleted folders go to a hidden trash and are cleared in the background (T-162 split)
 - [x] T-162-c · PROJ-080 Workspace cleanup: scan for stale and merged workspaces (T-162 split)
-- [ ] T-163 · SESS-005 The user hears about an agent that will not start · SESS-032 The opening prompt reaches the agent exactly once, or the user is told
+- [x] [release] T-163 · SESS-005 The user hears about an agent that will not start · SESS-032 The opening prompt reaches the agent exactly once, or the user is told
+- [ ] T-163-b · also from T-163, the opening-prompt card's rules it left: a multi-line prompt for an agent started through a Windows command shim (cut at its first line break today) goes in typed instead; an agent started behind an interpreter wrapper gets its typed prompt only once the real agent is running, never into the bare shell
 - [ ] T-164 · TERM-047 [compat] Reopen a closed tab · TERM-071 Large pastes stay responsive · TERM-090 Scroll position: follow output or stay put · TERM-107 Restored-session banner · TERM-108 Background host updates without losing sessions
 - [ ] T-165 · TERM-109 Host crash containment · TERM-110 Terminal error messages in plain words · TERM-111 Shell exit overlay with restart · TERM-112 Hidden terminals use less memory · TERM-113 Fast startup with many saved terminals
 - [ ] T-166 · TERM-114 Recover after sleep, wake and window focus · TERM-115 Typing and output never get stuck · TERM-116 Copy terminal diagnostics · TERM-132 Full-screen programs keep their own screen · TERM-134 Programs always see the pane's true size
