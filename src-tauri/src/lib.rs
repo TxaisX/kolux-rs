@@ -132,14 +132,35 @@ fn quiet_minutes(store: &Mutex<Store>) -> u64 {
     settings.get("quietMinutes").and_then(|v| v.as_f64()).map(|m| m.max(0.0) as u64).unwrap_or(10)
 }
 
+/// APP-003 proof, dev builds only: KOLUX_DEV_INJECT=startup fails the launch before the window
+/// opens, =background panics a background thread a few seconds in.
+#[cfg(debug_assertions)]
+fn dev_inject() -> Result<(), String> {
+    match std::env::var("KOLUX_DEV_INJECT").as_deref() {
+        Ok("startup") => Err("KOLUX_DEV_INJECT=startup: a failure injected before the window opens".into()),
+        Ok("background") => {
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                panic!("KOLUX_DEV_INJECT=background: a failure injected into background work");
+            });
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    diag::catch_panics();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
+            diag::set_dir(&dir);
+            #[cfg(debug_assertions)]
+            dev_inject()?;
             let store = Store::open(&dir)?;
             skill_delete::recover(&dir); // SKILL-023: an interrupted skill delete is undone or completed.
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
@@ -176,6 +197,7 @@ pub fn run() {
             // Git is checked once here; every project and workspace action runs through it. Without
             // Git the app still opens, and the landing screen says so (APP-023).
             app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
+            projects::forget_gone_at_start(app.handle().clone()); // APP-051
             app.manage(tools::Cache::default());
             // ACCT-055: picked-file grants saved by the last run come back.
             let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
@@ -438,7 +460,7 @@ pub fn run() {
             usage_alerts::usage_alert_send
         ])
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
+        .unwrap_or_else(|e| diag::fatal(&e.to_string()))
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 // USAGE-011: open turns end and the counts are written; no batched save follows.

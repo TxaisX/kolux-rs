@@ -1464,10 +1464,98 @@ pub fn handoff_note_prepare(root: String, name: String) -> Result<String, String
     prepare_handoff(Path::new(&root), &name).map(|p| p.to_string_lossy().into_owned())
 }
 
+/// APP-051: linked worktrees whose folder is confirmed gone and that no session (`busy`, the
+/// folders sessions run in) uses are dropped from Git's list. Only Git's own record goes, never a
+/// folder or a branch. A folder counts as gone only when its drive or share is there and the
+/// folder is not: storage that cannot be reached (a drive unplugged, a share offline) keeps it.
+/// The paths forgotten.
+pub fn forget_gone(repo: &Path, all: &[Worktree], busy: &[String]) -> Vec<String> {
+    let used = |w: &Worktree| {
+        let k = name_key(&w.path);
+        busy.iter().map(|b| name_key(b)).any(|b| b == k || b.starts_with(&format!("{k}\\")))
+    };
+    let gone = |p: &Path| {
+        matches!(std::fs::symlink_metadata(p), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+            && p.is_absolute()
+            && p.ancestors().last().is_some_and(Path::exists)
+    };
+    all.iter()
+        .filter(|w| !w.is_main && !used(w) && gone(Path::new(&w.path)))
+        .filter(|w| forget_record(repo, &w.path).is_ok())
+        .map(|w| w.path.clone())
+        .collect()
+}
+
+/// The `<git common dir>/worktrees/<id>` entry whose `gitdir` points into `path`, removed.
+fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
+    let common = crate::git::run(&["rev-parse", "--git-common-dir"], Some(repo))?;
+    let admin = repo.join(common.trim()).join("worktrees");
+    for entry in std::fs::read_dir(&admin).map_err(|e| e.to_string())?.flatten() {
+        let Ok(gitdir) = std::fs::read_to_string(entry.path().join("gitdir")) else { continue };
+        if Path::new(gitdir.trim()).parent().is_some_and(|p| name_key(&p.to_string_lossy()) == name_key(path)) {
+            return std::fs::remove_dir_all(entry.path()).map_err(|e| e.to_string());
+        }
+    }
+    Err(format!("no record of {path}"))
+}
+
+/// APP-051 at launch, off the startup path: every project's gone worktrees are forgotten.
+pub fn forget_gone_at_start(app: tauri::AppHandle) {
+    use tauri::Manager;
+    std::thread::spawn(move || {
+        let projects = match app.state::<Mutex<Store>>().lock() {
+            Ok(store) => load_projects(&store),
+            Err(_) => return,
+        };
+        let busy: Vec<String> = app.state::<crate::terminal::Terminals>().list().into_iter().filter_map(|(_, _, dir)| dir).collect();
+        let git = app.state::<Git>();
+        for p in projects {
+            let repo = Path::new(&p.path);
+            if let Ok(all) = git.worktrees(repo) {
+                for path in forget_gone(repo, &all, &busy) {
+                    if let Ok(dir) = app.path().app_data_dir() {
+                        crate::diag::write(&dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn app051_only_gone_unused_worktrees_on_reachable_storage_are_forgotten() {
+        let base = temp("app051");
+        let repo = base.join("r");
+        init_repo(&repo);
+        for w in ["gone", "used", "here"] {
+            git_in(&repo, &["worktree", "add", "-q", &base.join(w).to_string_lossy(), "-b", w]);
+        }
+        fs::remove_dir_all(base.join("gone")).unwrap();
+        fs::remove_dir_all(base.join("used")).unwrap();
+        let git = Git::detect().unwrap();
+        let mut all = git.worktrees(&repo).unwrap();
+        let busy = vec![base.join("used").join("src").to_string_lossy().into_owned()];
+        #[cfg(windows)]
+        if let Some(letter) = (b'D'..=b'Z').map(char::from).find(|c| !Path::new(&format!("{c}:/")).exists()) {
+            let mut away = all[1].clone();
+            away.path = format!("{letter}:/unplugged/wt");
+            all.push(away);
+        }
+        let forgot = forget_gone(&repo, &all, &busy);
+        assert_eq!(forgot.len(), 1, "{forgot:?}");
+        assert!(name_key(&forgot[0]).ends_with("gone"));
+        let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
+        assert!(left.iter().any(|p| p.ends_with("used")) && left.iter().any(|p| p.ends_with("here")), "{left:?}");
+        assert!(!left.iter().any(|p| p.ends_with("gone")), "{left:?}");
+        assert!(base.join("here").join("a.txt").exists());
+        git_in(&repo, &["rev-parse", "--verify", "refs/heads/gone"]);
+        let _ = fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn view038_a_workspace_carries_the_number_of_the_issue_or_pull_request_it_is_linked_to() {
