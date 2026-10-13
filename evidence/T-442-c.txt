@@ -50,3 +50,11 @@ Run 1 (the first minute after a fresh dev launch) had worst samples of 41 ms (fi
 The calls themselves still take about 22 s against the 3 s stand-in git; only the waiting moved off the
 window thread. Seen, not fixed: fence.allow holds its trees mutex while git runs, so a second fence
 check waits for the first (now on a worker thread, not the window).
+
+AFTER run 4, a fresh dev launch of the merged tree (lane HEAD 1ade74b, main 080f9b3 merged in), the harness
+run first thing after the window came up. idle echo 3 ms, 269 echo samples, samples over 20 ms: []. read back: "saved by the T-442-c harness\n"
+  file_read | 81 | 5 | 21501 | -
+  file_write | 81 | 5 | 21550 | -
+  dir_list | 82 | 3 | 21810 | -
+  kit_samples | 24 | 4 | 6397 | -
+So the run-1 outliers did not come back on a fresh launch: every sample under 50 ms in runs 2-4.
