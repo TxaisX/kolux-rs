@@ -250,7 +250,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-112-b · VIEW-076 Folder workspaces: attached worktrees and PR checks (needs folder workspaces, built on T-218, and the right panel's Attached worktrees and PR Checks tabs on T-146-b)
 - [x] T-113-a · ACCT-056 A failed scan never drops worktrees from the list (the sidebar half)
 - [ ] T-113-b · The cleanup half of the failed-scan card on T-113-a: cleanup offers and removes only worktrees Kolux can show it made (its origin record), and a worktree Kolux did not create is left in place; built with the cleanup dialog on T-162
-- [ ] T-114 · AUTO-010 Choose whether per-run worktrees run the project setup
+- [x] T-114 · AUTO-010 Choose whether per-run worktrees run the project setup
 - [x] T-115-a · EDIT-040 [compat] Per-workspace handoff note that can be given to an agent
 - [ ] T-115-b · EDIT-047 Worktree switcher search in the Mod+J palette (needs the worktree palette on T-098)
 - [x] T-116-a · SET-031 Git & worktrees page: branch names and source control defaults (the next-branch sample, the refused and only-slashes prefix notes, and Default compare base; in the sidebar gear until the Settings page, T-054)

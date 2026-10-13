@@ -83,6 +83,12 @@ function TimeBox({ label, value, lo, hi, twoDigits, onValue }: { label: string; 
   );
 }
 
+/** AUTO-010: whether a run's new worktree runs the project setup, or null when the choice is not
+ * offered: only a new worktree per run, in a project known to have a setup. */
+export function setupChoice(mode: "existing" | "new-per-run", hasSetup: boolean | null, chosen: boolean): boolean | null {
+  return mode === "new-per-run" && hasSetup === true ? chosen : null;
+}
+
 export default function AutomationDialog({ projects, agents, editing, template, onClose, onSaved }: Props) {
   const [requestId] = useState(() => `req-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const start = editing ? null : template;
@@ -93,6 +99,8 @@ export default function AutomationDialog({ projects, agents, editing, template, 
   const [mode, setMode] = useState<"existing" | "new-per-run">(editing?.workspaceMode ?? "existing");
   const [workspace, setWorkspace] = useState(editing?.workspace ?? "");
   const [base, setBase] = useState(editing?.baseBranch ?? "");
+  const [runSetup, setRunSetup] = useState(editing?.runSetup ?? false);
+  const [hasSetup, setHasSetup] = useState<boolean | null>(null);
   const [grace, setGrace] = useState(editing?.missedRunGraceMinutes ?? start?.graceMinutes ?? 0);
   const [precheck, setPrecheck] = useState(editing?.precheck ?? "");
   const [limit, setLimit] = useState(editing?.precheckTimeoutSeconds ?? 60);
@@ -133,6 +141,22 @@ export default function AutomationDialog({ projects, agents, editing, template, 
       live = false;
     };
   }, [projectId]);
+
+  // AUTO-010: whether the project has a setup (kolux.yaml in its folder); one cmd cannot run as
+  // written still counts, since it is there to be chosen.
+  const projectPath = project?.path;
+  useEffect(() => {
+    setHasSetup(null);
+    if (!projectPath) return;
+    let live = true;
+    invoke<unknown>("workspace_setup", { path: projectPath })
+      .then((line) => live && setHasSetup(line !== null))
+      .catch(() => live && setHasSetup(true));
+    return () => {
+      live = false;
+    };
+  }, [projectPath]);
+  const setupShown = setupChoice(mode, hasSetup, runSetup);
 
   useEffect(() => {
     let live = true;
@@ -180,7 +204,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     if (saving || !ready) return;
     setSaving(true);
     setSaveError(null);
-    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule };
+    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", runSetup: setupShown === true, missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule };
     invoke<Automation>("automation_save", { input })
       .then((a) => {
         onSaved(a);
@@ -287,6 +311,11 @@ export default function AutomationDialog({ projects, agents, editing, template, 
                 <input type="radio" checked={mode === "new-per-run"} onChange={() => setMode("new-per-run")} /> A new worktree for every run
               </label>
               {mode === "new-per-run" && <input className="field" aria-label="Base branch" value={base} onChange={(e) => setBase(e.target.value)} placeholder={`From ${project?.base || "the default branch"}`} />}
+              {setupShown !== null && (
+                <label className="auto-radio">
+                  <input type="checkbox" checked={setupShown} onChange={(e) => setRunSetup(e.target.checked)} /> Run the project setup in each new worktree
+                </label>
+              )}
             </fieldset>
             <label className="auto-label">
               Timetable

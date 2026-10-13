@@ -3,7 +3,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import AutomationDialog from "./AutomationDialog";
+import AutomationDialog, { setupChoice } from "./AutomationDialog";
 import type { Automation } from "./model";
 import { templates } from "./timetable";
 
@@ -77,4 +77,13 @@ test("a precheck command and its 1, 2, 5 or 10 minute limit, run only ahead of t
   const html = render({ id: "a", name: "u", prompt: "p", provider: "claude", projectId: "p1", enabled: true, precheck: "git diff --quiet", precheckTimeoutSeconds: 300, form: { preset: "hourly", time: "00:15", day: null, custom: "" } });
   expect(html).toContain('value="git diff --quiet"');
   expect(html).toMatch(/<option value="300" selected="">5 minutes/);
+});
+
+test("AUTO-010: the setup choice shows only for a new worktree per run in a project with a setup", () => {
+  expect(setupChoice("new-per-run", true, true)).toBe(true);
+  expect(setupChoice("new-per-run", true, false)).toBe(false);
+  expect(setupChoice("new-per-run", false, true), "no setup at all: no option").toBeNull();
+  expect(setupChoice("new-per-run", null, true), "not known yet: no option").toBeNull();
+  expect(setupChoice("existing", true, true), "an existing worktree never runs setup again").toBeNull();
+  expect(render(null)).not.toContain("Run the project setup");
 });

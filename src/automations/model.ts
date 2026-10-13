@@ -18,6 +18,8 @@ export type Automation = {
   nextRunAt?: number | null;
   /** AUTO-005: the branch a new-per-run worktree is cut from; empty means the project's default. */
   baseBranch?: string;
+  /** AUTO-010: whether each new-per-run worktree runs the project setup; missing means skip. */
+  runSetup?: boolean;
   /** AUTO-007: how many minutes late a missed run may still start; 0 skips it. */
   missedRunGraceMinutes?: number;
   precheck?: string;
