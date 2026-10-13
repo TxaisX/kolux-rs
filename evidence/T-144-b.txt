@@ -57,3 +57,9 @@ ok at 1384px: .topbar-left 0-579 · .switcher 587-797
 ok at 1384px: .switcher 587-797 · .topbar-right 815-1384
 ok at 1384px: .ib.dots 27-51 · .ib.panel 62-86
 "innerWidth 1384"
+
+T-144-e (2026-10-13, council D2 MERGE 25 item 2): the terminal text default (TERM-097 size) is 13, not 14, so day one
+looks exactly like the 13 pt terminal of today until the user moves the slider. src/theme.ts SPAN.termSize default 13;
+src/theme.test.ts "terminal font defaults to size 13 (T-144-e: ...)" asserts readAppearance({}).termSize === 13, and the
+zoom test now starts from 13 (in, in = 15, reset = 13). Spec card TERM-097 still says "size 14": the card amendment and a
+DECISIONS.md section 7 line are coordinator edits (out of the look lane's scope).
