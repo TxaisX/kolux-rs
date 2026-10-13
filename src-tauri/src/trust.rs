@@ -155,9 +155,19 @@ pub fn trust_folders(claude_config: &Path, agent: &str, paths: &[PathBuf]) -> Re
     }
 }
 
+/// SAFE-023 (T-443): the folders of `paths` that are worktrees Kolux made itself (it keeps a record
+/// of each one it creates). Any other folder, the project's own main checkout included, is never
+/// trusted ahead of time and keeps the agent's own trust prompt.
+pub fn made_by_kolux(store: &std::sync::Mutex<crate::state::Store>, paths: &[PathBuf]) -> Vec<PathBuf> {
+    let Ok(store) = store.lock() else { return Vec::new() };
+    paths.iter().filter(|p| crate::projects::origin(&store, &p.to_string_lossy()).is_some()).cloned().collect()
+}
+
+/// The window's pre-trust before a launch: only the Kolux-made worktrees among `paths` are trusted.
 #[tauri::command]
-pub fn trust_folders_cmd(agent: String, paths: Vec<String>) -> Result<usize, String> {
-    trust_folders(&claude_config_file(), &agent, &paths.into_iter().map(PathBuf::from).collect::<Vec<_>>())
+pub fn trust_folders_cmd(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, agent: String, paths: Vec<String>) -> Result<usize, String> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    trust_folders(&claude_config_file(), &agent, &made_by_kolux(&store, &paths))
 }
 
 #[cfg(test)]
@@ -261,6 +271,27 @@ mod tests {
         std::fs::write(&file, "[broken").unwrap();
         assert!(trust_codex(&file, std::slice::from_ref(&a)).unwrap_err().contains("untouched"));
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "[broken");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn t443_only_worktrees_kolux_made_are_trusted_ahead_of_time() {
+        let d = temp("made");
+        let (made, main, other) = (d.join("wt-made"), d.join("main"), d.join("elsewhere"));
+        for f in [&made, &main, &other] {
+            std::fs::create_dir_all(f).unwrap();
+        }
+        let store = std::sync::Mutex::new(crate::state::Store::open(&d.join("profile")).unwrap());
+        crate::projects::set_origin(&store.lock().unwrap(), &made.to_string_lossy(), Some(&json!({ "madeBy": "app" }))).unwrap();
+        let picked = made_by_kolux(&store, &[made.clone(), main.clone(), other.clone()]);
+        assert_eq!(picked, vec![made.clone()], "the main checkout and a folder made elsewhere are left out");
+        let file = d.join(".claude.json");
+        assert_eq!(trust_folders(&file, "claude", &picked).unwrap(), 1);
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(doc["projects"][claude_key(&made).unwrap()]["hasTrustDialogAccepted"], true);
+        assert!(doc["projects"].get(claude_key(&main).unwrap()).is_none());
+        assert!(doc["projects"].get(claude_key(&other).unwrap()).is_none());
+        drop(store);
         let _ = std::fs::remove_dir_all(&d);
     }
 }
