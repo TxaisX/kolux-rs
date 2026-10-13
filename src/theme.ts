@@ -100,13 +100,18 @@ export type TerminalScheme = string;
 export type Mode = "system" | "light" | "dark";
 export const MODES: Mode[] = ["system", "light", "dark"];
 /** `lightTerminal`: in light mode terminals use `lightScheme`; off keeps `terminal` for both. */
-export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string; dividerWidth: number; dividerDark: string; dividerLight: string; paneDim: number; termFont: string; termSize: number; termLineHeight: number; termWeight: FontWeight; termWeightBold: FontWeight };
+export type Appearance = { theme: ThemeName; tint: number; saturation: number; depth: number; terminal: TerminalScheme; mode: Mode; lightTerminal: boolean; lightScheme: TerminalScheme; custom: CustomScheme[]; appFont: string; editorFont: string; dividerWidth: number; dividerDark: string; dividerLight: string; paneDim: number; termFont: string; termSize: number; termLineHeight: number; termWeight: FontWeight; termWeightBold: FontWeight; screens: ScreenModes };
+/** VIEW-006: a mode of its own for one of the three workspace screens; a screen not listed follows `mode`. */
+export type ScreenModes = Partial<Record<"agents" | "board" | "terminals", Mode>>;
+export const THEMED_SCREENS = ["agents", "board", "terminals"] as const;
+const screenModesOf = (v: unknown): ScreenModes =>
+  v && typeof v === "object" ? Object.fromEntries(THEMED_SCREENS.flatMap((k) => ((MODES as unknown[]).includes((v as Record<string, unknown>)[k]) ? [[k, (v as Record<string, Mode>)[k]]] : []))) : {};
 /** TERM-097: the weights a terminal font can be drawn in (what xterm takes). */
 export const WEIGHTS = ["normal", "bold", "100", "200", "300", "400", "500", "600", "700", "800", "900"] as const;
 export type FontWeight = (typeof WEIGHTS)[number];
 const weightOr = (v: unknown, dflt: FontWeight): FontWeight => (typeof v === "string" && (WEIGHTS as readonly string[]).includes(v) ? (v as FontWeight) : typeof v === "number" && (WEIGHTS as readonly string[]).includes(String(v)) ? (String(v) as FontWeight) : dflt);
 /** The settings fields the appearance lives in. */
-export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont", dividerWidth: "paneDividerWidth", dividerDark: "paneDividerDark", dividerLight: "paneDividerLight", paneDim: "paneDim", termFont: "terminalFont", termSize: "terminalFontSize", termLineHeight: "terminalLineHeight", termWeight: "terminalFontWeight", termWeightBold: "terminalFontWeightBold" } as const;
+export const FIELD = { theme: "appTheme", tint: "themeTint", saturation: "themeSaturation", depth: "themeDepth", terminal: "terminalScheme", mode: "appearanceMode", lightTerminal: "terminalLightScheme", lightScheme: "terminalSchemeLight", custom: "terminalCustomSchemes", appFont: "appFont", editorFont: "editorFont", dividerWidth: "paneDividerWidth", dividerDark: "paneDividerDark", dividerLight: "paneDividerLight", paneDim: "paneDim", termFont: "terminalFont", termSize: "terminalFontSize", termLineHeight: "terminalLineHeight", termWeight: "terminalFontWeight", termWeightBold: "terminalFontWeightBold", screens: "screenThemes" } as const;
 export const SPAN = { tint: [-180, 180, 0], saturation: [0, 160, 100], depth: [-3, 6, 0], dividerWidth: [2, 12, 6], paneDim: [30, 100, 100], termSize: [8, 32, 14], termLineHeight: [1, 2, 1] } as const;
 /** A divider colour is #rrggbb or empty (the window shows through, as DESIGN.md measured). */
 const hexOrEmpty = (v: unknown) => (typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v.trim()) ? v.trim().toLowerCase() : "");
@@ -152,6 +157,7 @@ export function readAppearance(s: Record<string, unknown>): Appearance {
     termLineHeight: Math.round(clampNum(s[FIELD.termLineHeight], SPAN.termLineHeight) * 10) / 10,
     termWeight: weightOr(s[FIELD.termWeight], "normal"),
     termWeightBold: weightOr(s[FIELD.termWeightBold], "bold"),
+    screens: screenModesOf(s[FIELD.screens]),
   };
 }
 
@@ -307,6 +313,22 @@ export function themeVars(t: Theme): Record<string, string> {
 }
 
 let last: Appearance | null = null;
+/** VIEW-006: the screen in front and whether the Classic look is on (App.tsx tells, showScreen). */
+let shown = { screen: "terminals", classic: false };
+
+/** VIEW-006: the mode a screen paints in: its own override, else the app's. A screen with no saved
+ *  value (Inbox, Artifacts, anything unknown) counts as Terminals; the Classic look ignores the
+ *  Board and Agents overrides. */
+export function screenMode(a: Appearance, screen: string, classic: boolean): Mode {
+  const s = (screen === "agents" || screen === "board") && !classic ? screen : "terminals";
+  return a.screens[s] ?? a.mode;
+}
+
+/** VIEW-006: the window moved to `screen`; repaint when that screen's mode differs. */
+export function showScreen(screen: string, classic: boolean): void {
+  shown = { screen, classic };
+  if (last) applyAppearance(last);
+}
 let lastDark: boolean | null = null;
 
 /** SET-004: a switch between light and dark shows at once; transitions are held off two frames. */
@@ -320,13 +342,13 @@ function holdTransitions() {
 export function followSystemMode(): void {
   if (typeof matchMedia !== "function") return;
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (last?.mode === "system") applyAppearance(last);
+    if (last) applyAppearance(last); // the screen in front may be on System even when the app is not
   });
 }
 
 /** Puts an appearance on the window now and remembers it for the next start's first frame. */
 export function applyAppearance(a: Appearance, root: StyleHost = document.documentElement): void {
-  const dark = isDark(a);
+  const dark = isDark({ ...a, mode: screenMode(a, shown.screen, shown.classic) });
   if (lastDark !== null && lastDark !== dark && typeof document !== "undefined") holdTransitions();
   last = a;
   lastDark = dark;

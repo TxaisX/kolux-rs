@@ -1,6 +1,6 @@
 import design from "../design/DESIGN.md?raw";
 import { expect, test } from "vitest";
-import { applyTheme, buildTheme, classic, coreTokens, isDark, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance, appearanceVars, termFont, zoomTerm } from "./theme";
+import { applyTheme, buildTheme, classic, coreTokens, isDark, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance, appearanceVars, termFont, zoomTerm, screenMode } from "./theme";
 
 /** The `| \`--token\` | \`#hex\` |` rows of DESIGN.md section 2, as a name-to-hex map. */
 function designPalette(): Record<string, string> {
@@ -159,4 +159,18 @@ test("zooming in twice then reset returns to the configured size, and only the z
   for (let i = 0; i < 20; i++) zoomTerm(8, "out");
   expect(termFont(8).fontSize, "floor").toBe(6);
   zoomTerm(8, "reset");
+});
+
+// VIEW-006 (T-146-c)
+test("a screen paints in its own mode; screens without one follow the app; Classic ignores Board and Agents", () => {
+  const a = readAppearance({ appearanceMode: "light", screenThemes: { board: "dark", agents: "nope", inbox: "dark" } });
+  expect(a.screens, "only the three screens and known modes are kept").toEqual({ board: "dark" });
+  expect(screenMode(a, "board", false)).toBe("dark");
+  expect(screenMode(a, "terminals", false)).toBe("light");
+  expect(screenMode(a, "agents", false)).toBe("light");
+  expect(screenMode(a, "board", true), "classic look").toBe("light");
+  const t = readAppearance({ appearanceMode: "dark", screenThemes: { terminals: "light" } });
+  expect(screenMode(t, "inbox", false), "no saved value counts as Terminals").toBe("light");
+  expect(screenMode(t, "board", true), "classic uses the Terminals choice").toBe("light");
+  expect(writeAppearance({}, a)).toMatchObject({ screenThemes: { board: "dark" } });
 });

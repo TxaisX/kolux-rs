@@ -23,7 +23,7 @@ export const screens: Array<{ id: Screen; label: string }> = [
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
 /** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
-export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void };
+export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void; onZoom?: (how: "in" | "out" | "reset") => void; fullPage?: boolean };
 
 /** TERM-078: the overflow menu's View section; each item names its keybinding id. */
 export const VIEW_ITEMS = [
@@ -33,7 +33,7 @@ export const VIEW_ITEMS = [
 ] as const;
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
-export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom }: TopBarProps) {
+export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward, onZoom, fullPage = false }: TopBarProps) {
   const [maximized, setMaximized] = useState(false);
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   // USAGE-008 / VIEW-008: a pill per provider, only with a weekly figure (or Codex's refused
@@ -85,8 +85,8 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
             <div className="menu-backdrop" onClick={() => setMenuAt(null)} aria-hidden="true" />
             <div className="menu" role="menu" aria-label="View" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
               <div className="menu-title">View</div>
-              {VIEW_ITEMS.map((i) => (
-                <button key={i.id} role="menuitem" className="menu-item" disabled={!onZoom} title={`${i.label} the focused terminal`} onClick={() => (setMenuAt(null), onZoom?.(i.how))}>
+              {VIEW_ITEMS.map((i, n) => (
+                <button key={i.id} role="menuitem" className="menu-item" autoFocus={n === 0} disabled={!onZoom} title={`${i.label} the focused terminal`} onClick={() => (setMenuAt(null), onZoom?.(i.how))}>
                   <span className="name">{i.label}</span>
                   <Kbd id={i.id} />
                 </button>
@@ -121,7 +121,8 @@ export default function TopBar({ screen, classic = false, onScreen, sidebarOpen,
             <Clock />
           </button>
         )}
-        <button className="ib panel" title={rightOpen ? "Hide the right panel" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
+        {/* VIEW-009: while a full page shows, the right sidebar and its control are hidden. */}
+        <button className="ib panel" hidden={fullPage} title={rightOpen ? "Hide the right panel" : "Show Source Control"} aria-pressed={rightOpen} onClick={onToggleRight}>
           <PanelRight />
         </button>
         <button className="searchbox" title="Jump to a worktree, tab, project or setting" onClick={onSearch}>

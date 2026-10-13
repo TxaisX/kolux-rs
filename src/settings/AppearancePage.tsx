@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
-import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, type Appearance, type FontWeight, type Mode } from "../theme";
+import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, THEMED_SCREENS, type Appearance, type FontWeight, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
 import { GPU_FIELD, gpuOn } from "../terminal/renderer";
 import { schemeOptions, SchemeList } from "./SchemePicker";
@@ -156,6 +156,22 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "",
           <Segmented<Mode> label="Mode" options={MODES.map((m) => ({ id: m, label: MODE_LABEL[m] }))} value={look.mode} onPick={(mode) => onChange({ ...look, mode })} />
         </div>
         {look.mode === "system" && <p className="conn-detail">Follows Windows, also while Kolux is running.</p>}
+        {/* VIEW-006: one of the three workspace screens can paint in its own mode. */}
+        {THEMED_SCREENS.map((s) => (
+          <div key={s} className="look-select" data-screen-theme={s}>
+            <span>{s[0].toUpperCase() + s.slice(1)} screen</span>
+            <Segmented<Mode | "app">
+              label={`${s} screen mode`}
+              options={[{ id: "app", label: "Same as app" }, ...MODES.map((m) => ({ id: m, label: MODE_LABEL[m] }))]}
+              value={look.screens[s] ?? "app"}
+              onPick={(m) => {
+                const rest = Object.fromEntries(Object.entries(look.screens).filter(([k]) => k !== s));
+                onChange({ ...look, screens: m === "app" ? rest : { ...rest, [s]: m } });
+              }}
+            />
+          </div>
+        ))}
+        <p className="conn-detail">Inbox and Artifacts follow the Terminals screen. The classic look uses the Terminals choice everywhere.</p>
       </section>
       {languagePart}
       <section className="conn-card" data-section="theme">
