@@ -78,6 +78,15 @@ pub struct Change {
     /// Why a blocked state happened (STAT-022): `limit`, `signin` or `error`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cause: Option<&'static str>,
+    /// SAFE-001: the whole plan Claude asks to leave plan mode with; only on its exit-plan step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// SAFE-006: the plan was trimmed to fit its status update; the whole plan is in the terminal.
+    #[serde(rename = "planCut", skip_serializing_if = "std::ops::Not::not")]
+    pub plan_cut: bool,
+    /// SESS-030: the agent's own session id (`session_id`), what its resume command takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// STAT-022's three causes for Claude Code's failure kinds (the StopFailure `error` values): a
@@ -111,6 +120,11 @@ fn tool_detail(input: Option<&Value>) -> Option<String> {
     Some(trim(&fold(pick), 160))
 }
 
+/// SAFE-001: the plan text of Claude's exit-plan tool call, when it carries one.
+fn plan_of(tool: Option<&str>, input: Option<&Value>) -> Option<String> {
+    (tool == Some("ExitPlanMode")).then(|| input?.get("plan")?.as_str().filter(|p| !p.trim().is_empty()).map(str::to_string)).flatten()
+}
+
 /// Claude Code's event mapping (COMPAT 3.5). `None` means the pane's state does not change.
 pub fn claude_change(event: &Value) -> Option<Change> {
     let name = event.get("hook_event_name")?.as_str()?;
@@ -121,7 +135,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
     let str_of = |k: &str| event.get(k).and_then(Value::as_str);
     let tool = str_of("tool_name").map(|t| trim(t, 60));
     let plain = |state: &'static str| Some(Change { state, ..Change::default() });
-    match name {
+    let change = match name {
         "SessionStart" => matches!(str_of("source"), Some("startup" | "resume" | "clear")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
         "UserPromptSubmit" => Some(Change {
             state: "working",
@@ -138,6 +152,7 @@ pub fn claude_change(event: &Value) -> Option<Change> {
         "PreToolUse" => Some(Change {
             state: if matches!(tool.as_deref(), Some("AskUserQuestion" | "ExitPlanMode")) { "waiting" } else { "working" },
             detail: tool_detail(event.get("tool_input")),
+            plan: plan_of(tool.as_deref(), event.get("tool_input")),
             tool,
             ..Change::default()
         }),
@@ -149,11 +164,19 @@ pub fn claude_change(event: &Value) -> Option<Change> {
             ..Change::default()
         }),
         "PostToolUseFailure" => plain("working"),
-        "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), tool, ..Change::default() }),
+        "PermissionRequest" => Some(Change { state: "permission", detail: tool_detail(event.get("tool_input")), plan: plan_of(tool.as_deref(), event.get("tool_input")), tool, ..Change::default() }),
         "PostCompact" => (str_of("trigger") == Some("manual")).then_some(Change { state: "done", boundary: true, ..Change::default() }),
         // SubagentStart, SubagentStop and TeammateIdle feed the roster (status.rs); PreCompact is refused.
         _ => None,
-    }
+    };
+    change.map(|c| with_session(c, event))
+}
+
+/// SESS-030, TERM-036: the event's `session_id`, if any, rides on the change (trimmed, at most 100
+/// characters); a pane's resume command and Copy Session ID both read it.
+fn with_session(mut change: Change, event: &Value) -> Change {
+    change.session = event.get("session_id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(|s| trim(s, 100));
+    change
 }
 
 /// Codex's event mapping (COMPAT 3.5, STAT-008). `None` means the pane's state does not change.
@@ -165,7 +188,7 @@ pub fn codex_change(event: &Value) -> Option<Change> {
     let str_of = |k: &str| event.get(k).and_then(Value::as_str);
     let tool = str_of("tool_name").map(|t| trim(t, 60));
     let plain = |state: &'static str| Some(Change { state, ..Change::default() });
-    match name {
+    let change = match name {
         // Codex is working from the moment a session opens; the roster and transcript start over.
         "SessionStart" => Some(Change { state: "working", boundary: true, ..Change::default() }),
         "UserPromptSubmit" => Some(Change { state: "working", prompt: str_of("prompt").map(|p| trim(&fold(p), 16000)), ..Change::default() }),
@@ -180,7 +203,8 @@ pub fn codex_change(event: &Value) -> Option<Change> {
         "PostToolUse" => plain("working"),
         "Stop" => plain("done"),
         _ => None,
-    }
+    };
+    change.map(|c| with_session(c, event))
 }
 
 /// One HTTP request as the hook scripts send it: a request line, headers, a body.
@@ -225,6 +249,24 @@ pub fn identity(header: &str) -> Option<(u32, Option<u32>)> {
 }
 
 /// Answers one hook: `(status code, the status to raise)`.
+/// BROW-051: the local endpoint answers only Kolux's own tools. A request from a web page (one
+/// carrying an Origin, Referer or Sec-Fetch header, which every browser adds and no tool does),
+/// one whose Host names anything but this computer (DNS rebinding aims a name at 127.0.0.1) and
+/// one without the token all get 404 with an empty body, so nothing about the endpoint is told.
+pub fn gate(req: &Request, token: &str) -> Option<u16> {
+    let h = &req.headers;
+    if ["origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest"].iter().any(|k| h.contains_key(*k)) {
+        return Some(404);
+    }
+    if let Some(host) = h.get("host") {
+        let name = host.rsplit_once(':').filter(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())).map_or(host.as_str(), |(n, _)| n);
+        if !matches!(name, "127.0.0.1" | "localhost" | "[::1]") {
+            return Some(404);
+        }
+    }
+    (h.get(TOKEN_HEADER).map(String::as_str) != Some(token)).then_some(404)
+}
+
 pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>) {
     if req.headers.get(TOKEN_HEADER).map(String::as_str) != Some(token) {
         return (403, None);
@@ -237,6 +279,26 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
         _ => return (404, None),
     };
     (200, crate::status::report(pane_key, terminal, agent, &event))
+}
+
+/// SAFE-009: what the hook prints back to Claude. A Bash or PowerShell command that trips a
+/// protected rule gets the PreToolUse ask block naming the rule; everything else (another tool or
+/// event, Codex, a body that cannot be read) gets `{}`, no opinion, so Claude's own permission
+/// flow carries on and Kolux never blocks by itself.
+pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
+    let ask = || {
+        if path != "/claude" {
+            return None;
+        }
+        let event: Value = serde_json::from_slice(body).ok()?;
+        if event.get("hook_event_name")?.as_str()? != "PreToolUse" || !matches!(event.get("tool_name")?.as_str()?, "Bash" | "PowerShell") {
+            return None;
+        }
+        let base = crate::protected::Base::from_env(event.get("cwd").and_then(Value::as_str));
+        let rule = crate::protected::check(event.get("tool_input")?.get("command")?.as_str()?, &base, settings)?;
+        Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": crate::protected::reason(rule.name) } }).to_string())
+    };
+    ask().unwrap_or_else(|| "{}".into())
 }
 
 /// One rate-limit window as Claude Code's status line reports it (STAT-040), reset in ms.
@@ -404,7 +466,9 @@ pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Resu
 fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
     let mut reader = BufReader::new(&stream);
+    let mut body = String::from("{}");
     let code = match parse_request(&mut reader) {
+        Some(req) if gate(&req, token).is_some() => 404,
         Some(req) if req.path == "/claude-status" => match usage(&req, token) {
             // USAGE-021: a report from another config folder than the active account's is dropped.
             Ok(u) if same_folder(active_config_dir(app).as_deref(), u.config_dir.as_deref()) => {
@@ -420,11 +484,19 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
                 let _ = app.emit(EVENT, status);
             }
+            if code == 200 {
+                // SAFE-009: the settings are read now, so a rule switched off applies to this command.
+                let settings = app.try_state::<Mutex<crate::state::Store>>().and_then(|s| s.lock().ok().map(|s| s.settings())).unwrap_or_default();
+                body = reply_body(&req.path, &req.body, &settings);
+            }
             code
         }
         None => 400,
     };
-    let _ = write!(stream, "HTTP/1.1 {code} OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+    if code == 404 {
+        body.clear();
+    }
+    let _ = write!(stream, "HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = stream.flush();
 }
 
@@ -461,19 +533,20 @@ impl Hooks {
 }
 
 /// The Claude hook script (COMPAT 3.2): guards first, reads the endpoint file, posts stdin with the
-/// system curl inside 1.5 s, always exits 0.
+/// system curl inside 1.5 s, always exits 0. It prints Kolux's answer, which is `{}` or the
+/// PreToolUse ask of a protected command (SAFE-009); nothing when Kolux cannot be reached.
 pub fn claude_script() -> String {
-    script("Claude Code (STAT-001, STAT-007)", "claude")
+    script("Claude Code (STAT-001, STAT-007, SAFE-009)", "claude", true)
 }
 
-/// The Codex hook script (STAT-008): the same, posting to Kolux's Codex path.
+/// The Codex hook script (STAT-008): the same, posting to Kolux's Codex path, answer discarded.
 pub fn codex_script() -> String {
-    script("Codex (STAT-008)", "codex")
+    script("Codex (STAT-008)", "codex", false)
 }
 
 /// The status-line script (STAT-040): the same guards and post, to the status route.
 pub fn status_script() -> String {
-    script("Claude Code's status line (STAT-040)", "claude-status")
+    script("Claude Code's status line (STAT-040)", "claude-status", false)
 }
 
 /// The `statusLine` command (STAT-040). Claude Code runs it through a POSIX shell on Windows
@@ -484,9 +557,10 @@ pub fn status_command(script: &str, prev: &str) -> String {
     format!("k=\"${{TMPDIR:-/tmp}}/kolux-rs-status-$$\"; cat >\"$k\"; \"{script}\" <\"$k\" >/dev/null 2>&1; [ -f \"{prev}\" ] && sh \"{prev}\" <\"$k\"; rm -f \"$k\"; exit 0")
 }
 
-fn script(agent: &str, route: &str) -> String {
+fn script(agent: &str, route: &str, prints: bool) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
-    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\" --data-binary @- -o NUL \"http://127.0.0.1:%KP%/{route}\" >NUL 2>&1");
+    let (out, after) = if prints { ("", "2>NUL") } else { ("-o NUL ", ">NUL 2>&1") };
+    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\" --data-binary @- {out}\"http://127.0.0.1:%KP%/{route}\" {after}");
     [
         "@echo off",
         head.as_str(),
@@ -838,6 +912,29 @@ mod tests {
     }
 
     #[test]
+    fn the_session_id_rides_along_so_a_pane_can_be_resumed_later() {
+        // SESS-030: both agents name their session in every event; a pane remembers the newest.
+        let c = claude_change(&ev(r#"{"hook_event_name":"SessionStart","source":"resume","session_id":"11111111-aaaa"}"#)).unwrap();
+        assert_eq!(c.session.as_deref(), Some("11111111-aaaa"));
+        let x = codex_change(&ev(r#"{"hook_event_name":"Stop","session_id":"thr_22"}"#)).unwrap();
+        assert_eq!(x.session.as_deref(), Some("thr_22"));
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop"}"#)).unwrap().session, None);
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop","session_id":""}"#)).unwrap().session, None);
+    }
+
+    #[test]
+    fn every_change_names_its_session_when_the_event_does() {
+        // TERM-036: Copy Session ID needs the agent's own session id, which every hook event carries.
+        let stop = claude_change(&ev(r#"{"hook_event_name":"Stop","session_id":"0b3c-9f"}"#)).unwrap();
+        assert_eq!(stop.session.as_deref(), Some("0b3c-9f"));
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop"}"#)).unwrap().session, None);
+        assert_eq!(claude_change(&ev(r#"{"hook_event_name":"Stop","session_id":"  "}"#)).unwrap().session, None);
+        let codex = codex_change(&ev(r#"{"hook_event_name":"SessionStart","session_id":"019a-c"}"#)).unwrap();
+        assert_eq!(codex.session.as_deref(), Some("019a-c"));
+        assert!(serde_json::to_string(&stop).unwrap().contains(r#""session":"0b3c-9f""#));
+    }
+
+    #[test]
     fn claude_events_map_to_pane_states() {
         let c = |j: &str| claude_change(&ev(j));
         let start = c(r#"{"hook_event_name":"SessionStart","source":"startup"}"#).unwrap();
@@ -849,6 +946,13 @@ mod tests {
         assert_eq!((t.state, t.tool.as_deref(), t.detail.as_deref()), ("working", Some("Bash"), Some("ls -la")));
         assert_eq!(c(r#"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{}}"#).unwrap().state, "waiting");
         assert_eq!(c(r#"{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode"}"#).unwrap().state, "waiting");
+        // SAFE-001: the exit-plan step carries the whole plan on both events; nothing else does.
+        let plan = "# Plan\n\n1. Read it";
+        let pre = c(&format!(r#"{{"hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{{"plan":{}}}}}"#, json!(plan))).unwrap();
+        let ask = c(&format!(r#"{{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode","tool_input":{{"plan":{}}}}}"#, json!(plan))).unwrap();
+        assert_eq!((pre.plan.as_deref(), ask.plan.as_deref()), (Some(plan), Some(plan)));
+        assert_eq!(c(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"ls","plan":"x"}}"#).unwrap().plan, None);
+        assert_eq!(c(r#"{"hook_event_name":"PermissionRequest","tool_name":"ExitPlanMode","tool_input":{"plan":"  "}}"#).unwrap().plan, None);
         let perm = c(r#"{"hook_event_name":"PermissionRequest","tool_name":"Write","tool_input":{"file_path":"C:/x/hello.txt","content":"hi"}}"#).unwrap();
         assert_eq!((perm.state, perm.tool.as_deref(), perm.detail.as_deref()), ("permission", Some("Write"), Some("C:/x/hello.txt")));
         assert_eq!(c(r#"{"hook_event_name":"PostToolUse","tool_name":"Write"}"#).unwrap().state, "working");
@@ -902,6 +1006,32 @@ mod tests {
         assert!(codex_script().contains("%KP%/codex\" >NUL") && !codex_script().contains("/claude"));
     }
 
+    /// SAFE-009: a protected shell command makes the hook answer Claude's PreToolUse with an ask;
+    /// everything else, a garbled body included, gets the neutral `{}` so Claude carries on.
+    #[test]
+    fn safe009_a_protected_command_asks_and_everything_else_is_neutral() {
+        let s = json!({});
+        let pre = |tool: &str, cmd: &str| format!(r#"{{"hook_event_name":"PreToolUse","tool_name":"{tool}","tool_input":{{"command":"{cmd}"}}}}"#);
+        let ask = reply_body("/claude", pre("Bash", "git push --force origin main").as_bytes(), &s);
+        let v: Value = serde_json::from_str(&ask).unwrap();
+        let out = &v["hookSpecificOutput"];
+        assert_eq!((out["hookEventName"].as_str(), out["permissionDecision"].as_str()), (Some("PreToolUse"), Some("ask")));
+        assert!(out["permissionDecisionReason"].as_str().unwrap().contains("Force-push to main"));
+        assert_ne!(reply_body("/claude", pre("PowerShell", "git reset --hard").as_bytes(), &s), "{}", "PowerShell is read too");
+        assert_eq!(reply_body("/claude", pre("Bash", "git status").as_bytes(), &s), "{}");
+        assert_eq!(reply_body("/claude", pre("Write", "git push -f").as_bytes(), &s), "{}", "only shells are inspected");
+        assert_eq!(reply_body("/claude", br#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git push -f"}}"#, &s), "{}");
+        assert_eq!(reply_body("/claude", b"not json {", &s), "{}", "a garbled body fails open");
+        assert_eq!(reply_body("/codex", pre("Bash", "git push -f").as_bytes(), &s), "{}", "Codex is not guarded");
+        let body = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"/home/me/app","tool_input":{"command":"rm -rf .git"}}"#;
+        assert!(reply_body("/claude", body, &json!({})).contains("Deleting folders outside the workspace"), "SAFE-013 through the hook, judged against cwd");
+        let off = json!({ "protectedOff": ["force-push"] });
+        assert_eq!(reply_body("/claude", pre("Bash", "git push -f").as_bytes(), &off), "{}", "a switched-off rule asks no more");
+        // The Claude script prints the answer for Claude to read; Codex's still discards it.
+        assert!(claude_script().contains("%KP%/claude\" 2>NUL") && !claude_script().contains("-o NUL"));
+        assert!(codex_script().contains("-o NUL"));
+    }
+
     #[test]
     fn codex_hooks_go_last_and_are_replaced_in_place() {
         let mut file = ev(r#"{"description":"mine","hooks":{
@@ -943,6 +1073,37 @@ mod tests {
         let state = &again["hooks"]["state"];
         assert_eq!(state[format!("{file}:stop:1:0").as_str()]["trusted_hash"].as_str(), Some("sha256:aa"));
         assert_eq!(state[format!("{file}:session_start:0:0").as_str()]["trusted_hash"].as_str(), Some("sha256:dd"));
+    }
+
+    #[test]
+    fn brow051_the_endpoint_answers_only_kolux_tools_never_a_web_page_or_another_host() {
+        let id = base64::engine::general_purpose::STANDARD.encode(r#"{"paneKey":7,"terminal":3,"hookVersion":1}"#);
+        let req = |extra: &str| {
+            let raw = format!("POST /claude HTTP/1.1\r\nHost: 127.0.0.1:4321\r\nX-Kolux-Token: tok\r\nX-Kolux-Pane: {id}\r\n{extra}Content-Length: 2\r\n\r\n{{}}");
+            parse_request(&mut raw.as_bytes()).unwrap()
+        };
+        // Kolux's own hook script: curl with the token, no web headers.
+        assert_eq!(gate(&req(""), "tok"), None);
+        // Anything a web page sends carries an Origin or a Sec-Fetch header; a page's GET through
+        // an <img> or <script> tag carries no Origin but still the Sec-Fetch ones.
+        assert_eq!(gate(&req("Origin: http://127.0.0.1:1424\r\n"), "tok"), Some(404));
+        assert_eq!(gate(&req("Sec-Fetch-Mode: no-cors\r\nSec-Fetch-Site: cross-site\r\n"), "tok"), Some(404));
+        assert_eq!(gate(&req("Referer: http://127.0.0.1:1424/\r\n"), "tok"), Some(404));
+        // A Host naming anything but this computer: DNS rebinding points a name at 127.0.0.1.
+        let mut rebound = req("");
+        rebound.headers.insert("host".into(), "evil.example:4321".into());
+        assert_eq!(gate(&rebound, "tok"), Some(404));
+        for ok in ["localhost", "localhost:4321", "127.0.0.1", "[::1]:4321", "[::1]"] {
+            rebound.headers.insert("host".into(), ok.into());
+            assert_eq!(gate(&rebound, "tok"), None, "{ok}");
+        }
+        // The bare endpoint, a wrong token or no token: refused the same way, nothing described.
+        let mut bare = req("");
+        bare.headers.remove(TOKEN_HEADER);
+        assert_eq!(gate(&bare, "tok"), Some(404));
+        assert_eq!(gate(&req(""), "other"), Some(404));
+        let plain = parse_request(&mut "GET / HTTP/1.1\r\nHost: 127.0.0.1:4321\r\n\r\n".as_bytes()).unwrap();
+        assert_eq!(gate(&plain, "tok"), Some(404));
     }
 
     #[test]

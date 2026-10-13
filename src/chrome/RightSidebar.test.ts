@@ -22,11 +22,16 @@ test("VIEW-056: a saved width wider than 500 is honoured; the minimum and the wo
   expect(clampWidth(500, 700, 297)).toBe(RIGHT_MIN);
 });
 
-test("VIEW-057: the tab strip lists Explorer and Source Control and marks the open one", () => {
+test("VIEW-073: a saved Checks tab comes back as Checks", () => {
+  expect(readRight({ rightSidebarTab: "checks" }).tab).toBe("checks");
+});
+
+test("VIEW-057: the tab strip lists Explorer, Source Control and Checks and marks the open one", () => {
   const html = renderToString(createElement(RightSidebar, { tab: "scm", width: 320, onTab: () => {}, onWidth: () => {}, children: "body" }));
   expect(html).toMatch(/aria-label="Right sidebar"/);
   expect(html).toMatch(/role="tab" aria-selected="false"[^>]*>Explorer/);
   expect(html).toMatch(/role="tab" aria-selected="true"[^>]*>Source Control/);
+  expect(html).toMatch(/role="tab" aria-selected="false"[^>]*>Checks/);
   expect(html).toContain("width:320px");
   expect(html).toContain('aria-label="Resize the right sidebar"');
 });

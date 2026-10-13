@@ -11,6 +11,7 @@ import { useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
+import { PERCENT_FIELD, percentMode, type PercentMode } from "../usage/meter";
 import { Segmented } from "./GeneralPage";
 import { applyLanguage, LANGUAGE_FIELD, LANGUAGES, savedLanguage, systemLanguage, type LanguageChoice } from "../language";
 
@@ -285,6 +286,22 @@ function TerminalColours({ look, onChange }: { look: Appearance; onChange: (a: A
   );
 }
 
+/** USAGE-025: how plan usage percentages read. Only the Agents screen's usage footer follows it. */
+export function UsagePercentPick({ value, onPick }: { value: PercentMode; onPick: (v: PercentMode) => void }) {
+  return (
+    <>
+      <div className="look-select">
+        <span>Usage percentages</span>
+        <select aria-label="Usage percentages" className="field" value={value} onChange={(e) => onPick(percentMode(e.target.value))}>
+          <option value="used">Used</option>
+          <option value="remaining">Remaining</option>
+        </select>
+      </div>
+      <p className="conn-detail">How the Agents screen's usage footer reads plan use; the top bar always shows what is left.</p>
+    </>
+  );
+}
+
 /** SET-020: the app name, the Tasks and Automations buttons, and the status bar with its items.
  *  VIEW-096: a status bar hidden from its right-click menu comes back here. */
 function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings>) {
@@ -318,6 +335,7 @@ function WindowSwitches({ settings, error, save }: ReturnType<typeof useSettings
             </label>
           ))}
         </div>
+        <UsagePercentPick value={percentMode(settings[PERCENT_FIELD])} onPick={(v) => void save({ [PERCENT_FIELD]: v })} />
         {error && <p className="conn-detail warn">{error}</p>}
       </section>
     </>

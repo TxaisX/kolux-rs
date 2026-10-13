@@ -1,14 +1,15 @@
 // VIEW-056 / VIEW-057 (T-146-a): one right sidebar on the Terminals screen. It holds the Explorer
 // and Source Control as tabs, opens with Ctrl+L, and comes back after a restart open or closed, on
-// the same tab and at the same width; its left edge drags to resize. Agents, Checks, Search, the
-// More overflow and folder-workspace tabs come with T-146-b. VIEW-050 (T-051): the left sidebar's
-// width lives here too, and both sidebars resize by the same Grip.
+// the same tab and at the same width; its left edge drags to resize. VIEW-073 adds Checks; Agents,
+// Search, the More overflow and folder-workspace tabs come with T-146-b. VIEW-050 (T-051): the left
+// sidebar's width lives here too, and both sidebars resize by the same Grip.
 import { useRef, type ReactNode } from "react";
 
-export type RightTab = "explorer" | "scm";
+export type RightTab = "explorer" | "scm" | "checks";
 export const RIGHT_TABS: { id: RightTab; label: string; hint: string }[] = [
   { id: "explorer", label: "Explorer", hint: "Explorer (Ctrl+Shift+E)" },
   { id: "scm", label: "Source Control", hint: "Source Control (Ctrl+Shift+G)" },
+  { id: "checks", label: "Checks", hint: "Checks on this workspace's pull request" },
 ];
 export const RIGHT_KEYS = { open: "rightSidebarOpen", tab: "rightSidebarTab", width: "rightSidebarWidth" } as const;
 export const RIGHT_MIN = 240;
@@ -21,7 +22,7 @@ export function readRight(s: Record<string, unknown>): { open: boolean; tab: Rig
   return {
     open: s[RIGHT_KEYS.open] !== false,
     // an older saved "search" tab, or any other unknown one, opens the Explorer
-    tab: s[RIGHT_KEYS.tab] === "scm" ? "scm" : "explorer",
+    tab: s[RIGHT_KEYS.tab] === "scm" || s[RIGHT_KEYS.tab] === "checks" ? (s[RIGHT_KEYS.tab] as RightTab) : "explorer",
     width: typeof w === "number" && Number.isFinite(w) && w >= RIGHT_MIN ? Math.round(w) : RIGHT_DEFAULT,
   };
 }

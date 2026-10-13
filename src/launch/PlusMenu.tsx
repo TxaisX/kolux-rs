@@ -11,7 +11,7 @@ import VendorMark, { type Agent } from "../chrome/VendorMark";
 import { Kbd, useLabel } from "../keys/KeymapContext";
 import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
 
-export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null };
+export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
 
 /** Which vendor mark an agent id draws; anything unknown gets the plain-shell glyph. */
 export function markFor(id: string): Agent {

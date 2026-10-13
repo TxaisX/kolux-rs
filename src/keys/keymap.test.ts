@@ -6,13 +6,13 @@ import { chordMatches, chordsOf, labelOf, labelParts, matchEvent, parseChord, re
 
 const key = (k: Partial<KeyLike>): KeyLike => ({ key: "", code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...k });
 
-test("the table registers the 127 carried commands; 50 ship unbound and 6 have only a macOS chord", () => {
-  expect(actions.length).toBe(127);
+test("the table registers the 128 carried commands (VIEW-053 added one); 51 ship unbound and 6 have only a macOS chord", () => {
+  expect(actions.length).toBe(128);
   const ids = new Set(actions.map((a) => a.id));
-  expect(ids.size).toBe(127);
+  expect(ids.size).toBe(128);
   expect(ids.has("tab.newSimulator")).toBe(false);
   expect(ids.has("tab.openQuickCommandsMenu")).toBe(false);
-  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(50);
+  expect(actions.filter((a) => a.win32.length === 0 && !a.darwin).length).toBe(51);
   expect(actions.filter((a) => a.win32.length === 0 && a.darwin).map((a) => a.id).sort()).toEqual(["floatingWorkspace.maximize", "sidebar.ports.toggle", "tab.newAgent", "tab.rename", "workspace.rename"].sort());
   expect(actions.filter((a) => a.id.startsWith("tab.newAgent.")).length).toBe(35);
 });

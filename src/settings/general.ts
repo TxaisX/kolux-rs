@@ -72,3 +72,7 @@ export function openPageAt(s: Record<string, unknown>): Page | null {
   const v = s[OPEN_PAGE_FIELD];
   return v === "automations" || v === "routing" || v === "tasks" ? v : null;
 }
+
+/** TERM-029: the needs-you strip above the grid, on unless turned off. */
+export const NEEDS_STRIP_FIELD = "needsStrip";
+export const stripOn = (s: Record<string, unknown>): boolean => s[NEEDS_STRIP_FIELD] !== false;
