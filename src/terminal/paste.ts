@@ -2,28 +2,80 @@
 // that has focus, and the browser hands over the clipboard in the same tick, so there is no
 // moment in which the target could change. A paste made while the opening prompt is still owed
 // (SESS-051) waits and goes in after it. Pure enough to test with a bare EventTarget.
-// TERM-071: a large paste goes to the terminal in CHUNK-sized pieces with a timer tick between
-// them, so the page stays clickable while a multi-megabyte block is fed; text over LIMIT is
-// refused with a message and nothing is sent.
+// TERM-071: a large paste goes to the program in CHUNK-sized pieces, each sent only after the one
+// before it landed, so the page stays clickable while a multi-megabyte block is fed; text over
+// LIMIT is refused with a message and nothing is sent.
+// Council D2 MERGE 31 (2): a chunk is never cut between "\r" and "\n" or inside a surrogate pair
+// (an emoji split in two reaches the program as two broken characters), the whole paste is
+// bracketed once (xterm's own paste would wrap every chunk, which a program reads as several
+// pastes), newlines are rewritten the way xterm does it, and Ctrl+C or Esc drops what is still
+// queued and closes the open bracket before the key goes.
 export const CHUNK = 64 * 1024;
 export const LIMIT = 8 * 1024 * 1024;
+export const BRACKET_OPEN = "\x1b[200~";
+export const BRACKET_CLOSE = "\x1b[201~";
 
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
 
-export function attachPaste(target: EventTarget | null | undefined, paste: (text: string) => void, held: () => boolean, refused: (message: string) => void = () => {}) {
+/** Cuts `text` into pieces of at most `size` chars, stepping back one when the cut would fall between "\r" and "\n" or inside a surrogate pair. */
+export function cutChunks(text: string, size = CHUNK): string[] {
+  const out: string[] = [];
+  for (let at = 0; at < text.length; ) {
+    let end = Math.min(at + size, text.length);
+    if (end < text.length) {
+      const c = text.charCodeAt(end);
+      if ((c >= 0xdc00 && c <= 0xdfff) || (c === 0x0a && text.charCodeAt(end - 1) === 0x0d)) end = Math.max(end - 1, at + 1);
+    }
+    out.push(text.slice(at, end));
+    at = end;
+  }
+  return out;
+}
+
+/** What xterm does to pasted text before the program sees it: every line end becomes a carriage return. */
+export const prepareForTerminal = (text: string) => text.replace(/\r?\n/g, "\r");
+
+type Chunk = { data: string; open: boolean };
+
+export function attachPaste(
+  target: EventTarget | null | undefined,
+  send: (data: string) => unknown,
+  held: () => boolean,
+  refused: (message: string) => void = () => {},
+  bracketed: () => boolean = () => false,
+) {
   const queued: string[] = [];
-  const chunks: string[] = [];
+  const chunks: Chunk[] = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** The last chunk's write has not landed yet (a `send` that returns a promise); the next waits for it. */
+  let inFlight = false;
+  /** A bracket pair is open: its opening went to the program and its closing has not. */
+  let open = false;
   const pump = () => {
     timer = null;
+    inFlight = false;
     const next = chunks.shift();
     if (next === undefined) return;
-    paste(next);
-    if (chunks.length > 0) timer = setTimeout(pump, 0);
+    open = next.open;
+    const landed = send(next.data);
+    if (landed instanceof Promise) {
+      inFlight = true;
+      landed.then(pump, () => {
+        inFlight = false;
+        chunks.length = 0; // the program side refused the write (already said out loud); the rest would fail the same way
+      });
+    } else if (chunks.length > 0) timer = setTimeout(pump, 0);
   };
   const deliver = (text: string) => {
-    for (let at = 0; at < text.length; at += CHUNK) chunks.push(text.slice(at, at + CHUNK));
-    if (timer === null) pump();
+    const pieces = cutChunks(text).map(prepareForTerminal);
+    const wrap = bracketed();
+    const last = pieces.length - 1;
+    pieces.forEach((data, i) => {
+      if (wrap && i === 0) data = BRACKET_OPEN + data;
+      if (wrap && i === last) data += BRACKET_CLOSE;
+      chunks.push({ data, open: wrap && i < last });
+    });
+    if (timer === null && !inFlight) pump();
   };
   const onPaste = (e: Event) => {
     const text = (e as ClipboardEvent).clipboardData?.getData("text") ?? "";
@@ -42,6 +94,15 @@ export function attachPaste(target: EventTarget | null | undefined, paste: (text
     /** Deliver what waited, oldest first. */
     flush: () => {
       for (const text of queued.splice(0)) deliver(text);
+    },
+    /** Ctrl+C or Esc mid-paste: drop what has not gone yet and close the bracket the program is still inside. */
+    cancel: () => {
+      chunks.length = 0;
+      queued.length = 0;
+      if (open) {
+        open = false;
+        void send(BRACKET_CLOSE);
+      }
     },
     detach: () => {
       target?.removeEventListener("paste", onPaste, { capture: true });

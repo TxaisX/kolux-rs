@@ -30,3 +30,4 @@ Result: before 13px "Cascadia Mono" (cell 7x15) -> after Settings family Courier
 on the same pane, no reload -> Zoom In x2: 20px (cell 12x23) -> Zoom Out: 19px (cell 11x22) -> Reset Size: 18px (the cell
 reading after reset is stale because nothing was typed after it; the glyph font shows 18px).
 Note: while Settings is open the pane is hidden, so resize() skips the fit; the cell grows when the pane shows again.
+No old Kolux source read, nothing copied.
