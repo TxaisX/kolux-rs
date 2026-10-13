@@ -178,8 +178,9 @@ pub fn run() {
             let hooks = hooks::serve(app.handle().clone(), &dir)?;
             app.manage(hooks);
             let settings = app.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default();
+            let profile = dir.clone();
             std::thread::spawn(move || {
-                hooks::agent_hooks::sync(&settings);
+                hooks::agent_hooks::sync(&settings, &profile);
             });
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.

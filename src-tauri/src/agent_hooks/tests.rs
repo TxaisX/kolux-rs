@@ -315,3 +315,58 @@ mod script_runs {
         assert!(!data.join(saved::SPOOL_FILE).exists(), "nothing is held once delivered");
     }
 }
+
+// ---- T-120-a: STAT-002 / STAT-003 ----
+
+#[test]
+fn stat_002_the_switch_off_takes_every_agent_out_and_on_is_the_default() {
+    let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let found = ids(&["claude", "codex"]);
+    assert!(switch::on(&json!({})) && switch::on(&json!({ "agentStatusHooks": "garbage" })), "never saved, or unreadable, reads as on");
+    let off = json!({ "agentStatusHooks": false });
+    assert!(!switch::on(&off));
+    assert_eq!(plan(&off, &found, true), vec![("claude", Plan::Remove), ("codex", Plan::Remove)]);
+    assert_eq!(plan(&off, &[], false), vec![("claude", Plan::Remove), ("codex", Plan::Remove)], "off even when no agent could be looked for");
+    assert_eq!(plan(&json!({ "agentStatusHooks": true }), &found, true), vec![("claude", Plan::Install), ("codex", Plan::Install)]);
+}
+
+#[test]
+fn stat_003_each_agent_reads_installed_partial_not_installed_or_error() {
+    let dir = temp("inspect");
+    let file = dir.join("settings.json");
+    let events = ["Stop", "PreToolUse"];
+    assert_eq!(switch::inspect(&file, &events), ("not installed", None), "no file at all");
+    let mut s = json!({ "model": "opus" });
+    install_claude_hooks(&mut s, MINE);
+    let keep = |v: &Value, only: &[&str]| {
+        let mut v = v.clone();
+        v["hooks"].as_object_mut().unwrap().retain(|k, _| only.contains(&k.as_str()));
+        v
+    };
+    fs::write(&file, keep(&s, &events).to_string()).unwrap();
+    assert_eq!(switch::inspect(&file, &events), ("installed", None));
+    fs::write(&file, keep(&s, &["Stop"]).to_string()).unwrap();
+    assert_eq!(switch::inspect(&file, &events), ("partial", Some("no Kolux entry for PreToolUse".into())));
+    fs::write(&file, keep(&s, &["Stop", "PreToolUse", "SessionStart"]).to_string()).unwrap();
+    assert_eq!(switch::inspect(&file, &events), ("partial", Some("an old Kolux entry under SessionStart".into())), "an entry under an event Kolux no longer uses");
+    fs::write(&file, r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"node mine.js"}]}]}}"#).unwrap();
+    assert_eq!(switch::inspect(&file, &events).0, "not installed", "the user's own hooks are not Kolux's");
+    fs::write(&file, "{ not json").unwrap();
+    let (state, why) = switch::inspect(&file, &events);
+    assert!(state == "error" && why.unwrap().contains("is not JSON"));
+    assert_eq!(fs::read_to_string(&file).unwrap(), "{ not json", "an unreadable file is never rewritten");
+}
+
+#[test]
+fn stat_002_off_clears_the_managed_codex_homes_too() {
+    let profile = temp("managed");
+    let home = profile.join(crate::codex_accounts::FOLDER).join("c1");
+    fs::create_dir_all(&home).unwrap();
+    let mut v = json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": "keep.cmd" }] }] } });
+    install_codex_hooks(&mut v, MINE);
+    fs::write(home.join("hooks.json"), v.to_string()).unwrap();
+    assert_eq!(managed_codex_homes(&profile), vec![home.clone()]);
+    remove_codex(&home).unwrap();
+    let left: Value = serde_json::from_str(&fs::read_to_string(home.join("hooks.json")).unwrap()).unwrap();
+    assert_eq!(left, json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": "keep.cmd" }] }] } }));
+}

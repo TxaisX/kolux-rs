@@ -402,7 +402,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // ACCT-004: a Claude pane in key mode is handed the 1-year key; nothing else ever is.
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
-    let (env, cap): (Vec<(String, String)>, bool) = {
+    let (env, cap, hooks_on): (Vec<(String, String)>, bool, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         let token = crate::secrets::read_setting(&store, crate::claude_key::TOKEN_FIELD).ok().flatten();
@@ -416,7 +416,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
-        (env, crate::cap::on(&settings))
+        (env, crate::cap::on(&settings), crate::hooks::agent_hooks::switch::on(&settings))
     };
     // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
     if env.iter().any(|(k, _)| k == crate::claude_accounts::CONFIG_ENV) {
@@ -441,8 +441,9 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     if cap {
         crate::cap::apply(program.as_deref(), &mut args, &mut env, crate::cap::env_set());
     }
-    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it.
-    if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
+    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it,
+    // unless the status hooks are switched off (STAT-002).
+    if let Some((_, home)) = env.iter().find(|(k, _)| hooks_on && k == crate::codex_accounts::HOME_ENV) {
         crate::hooks::install_codex_home(std::path::Path::new(home));
     }
     let id = terminals.spawn(app, cols, rows, cwd, program, args, env_own, env, pane_key)?;

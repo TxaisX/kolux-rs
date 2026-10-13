@@ -40,11 +40,13 @@ pub enum Plan {
 /// and then nothing is installed.
 pub fn plan(settings: &Value, installed: &[String], searched: bool) -> Vec<(&'static str, Plan)> {
     let off: Vec<&str> = settings.get(DISABLED_KEY).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    // STAT-002: with the status hooks switched off, every agent has Kolux's entries taken out.
+    let all_off = !switch::on(settings);
     MANAGED
         .iter()
         .map(|&id| {
             let found = installed.iter().any(|i| i == id) || explicit(settings, id);
-            (id, if off.contains(&id) { Plan::Remove } else if searched && found { Plan::Install } else { Plan::Leave })
+            (id, if all_off || off.contains(&id) { Plan::Remove } else if searched && found { Plan::Install } else { Plan::Leave })
         })
         .collect()
 }
@@ -253,7 +255,13 @@ fn codex_home() -> Option<PathBuf> {
     crate::trust::codex_config_file().parent().map(Path::to_path_buf)
 }
 
-fn apply(home: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
+/// The private Codex homes of the accounts Kolux manages (ACCT-007), which get Kolux's hooks as a
+/// pane starts in them.
+fn managed_codex_homes(profile: &Path) -> Vec<PathBuf> {
+    fs::read_dir(profile.join(crate::codex_accounts::FOLDER)).map(|d| d.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect()).unwrap_or_default()
+}
+
+fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
     let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
     match (id, plan) {
         ("claude", Plan::Install) => install_claude_all(home).map(|_| "installed"),
@@ -262,15 +270,20 @@ fn apply(home: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
             let command = codex_command(&write_codex_script(home)?);
             codex_home().map_or(Ok(false), |h| install_codex(&h, &command)).map(|_| "installed")
         }
-        ("codex", Plan::Remove) => codex_home().map_or(Ok(false), |h| remove_codex(&h)).map(|_| "removed"),
+        ("codex", Plan::Remove) => {
+            for h in codex_home().into_iter().chain(managed_codex_homes(profile)) {
+                remove_codex(&h)?;
+            }
+            Ok("removed")
+        }
         _ => Ok("left as it was"),
     }
 }
 
 /// At start, and whenever an agent is switched on or off: Kolux's scripts are refreshed, then
 /// each managed agent is installed, cleared or left by `plan`. Never stops the launch; each
-/// agent's outcome is returned and problems also go to stderr.
-pub fn sync(settings: &Value) -> Vec<(&'static str, Result<&'static str, String>)> {
+/// agent's outcome is returned and problems also go to stderr. `profile` is Kolux's data folder.
+pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
     let home = home_dir();
     let _lock = match Lock::take(&home.join(SCRIPT_DIR)) {
         Ok(l) => l,
@@ -292,7 +305,7 @@ pub fn sync(settings: &Value) -> Vec<(&'static str, Result<&'static str, String>
     plan(settings, &installed, searched)
         .into_iter()
         .map(|(id, p)| {
-            let out = apply(&home, id, p);
+            let out = apply(&home, profile, id, p);
             match &out {
                 Ok(what) => eprintln!("kolux-rs: {id} hooks: {what}"),
                 Err(e) => eprintln!("kolux-rs: {id} hooks: {e}"),
@@ -305,12 +318,13 @@ pub fn sync(settings: &Value) -> Vec<(&'static str, Result<&'static str, String>
 /// STAT-004: the Agents page switched an agent on or off; the hooks follow in the background.
 #[tauri::command]
 pub fn agent_hooks_sync(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<(), String> {
-    let settings = store.lock().map_err(|e| e.to_string())?.settings();
-    std::thread::spawn(move || sync(&settings));
+    let (settings, profile) = store.lock().map(|s| (s.settings(), s.dir())).map_err(|e| e.to_string())?;
+    std::thread::spawn(move || sync(&settings, &profile));
     Ok(())
 }
 
 pub mod saved;
+pub mod switch;
 
 #[cfg(test)]
 mod tests;

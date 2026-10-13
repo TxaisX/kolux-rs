@@ -47,6 +47,25 @@ export function AgentsPageView({ cap, onCap }: { cap: boolean; onCap: (on: boole
   );
 }
 
+// STAT-002: one switch for every agent's status hooks, on unless saved off. Rust takes Kolux's
+// entries out (or puts them back) when `agent_hooks_sync` runs after the save.
+export const HOOKS_FIELD = "agentStatusHooks";
+export const hooksOn = (s: Record<string, unknown>) => s[HOOKS_FIELD] !== false;
+
+export function HooksSwitch({ on, onSwitch }: { on: boolean; onSwitch: (on: boolean) => void }) {
+  return (
+    <section className="conn-card" aria-label="Agent status hooks" data-section="hooks">
+      <label className="conn-switch">
+        <input type="checkbox" role="switch" checked={on} onChange={(e) => onSwitch(e.target.checked)} />
+        <span>
+          Agent status hooks
+          <small>Agents tell Kolux when they work, wait for you or finish. Turning this off removes Kolux's hooks from every agent's settings and stops them being put back; your own hooks stay.</small>
+        </span>
+      </label>
+    </section>
+  );
+}
+
 export default function AgentsPage() {
   const { settings, error, save: write } = useSettings();
   const [written, setWritten] = useState(0);
@@ -149,6 +168,7 @@ export default function AgentsPage() {
           );
         })}
       </section>
+      <HooksSwitch on={hooksOn(settings)} onSwitch={(on) => void save({ [HOOKS_FIELD]: on }).then(() => invoke("agent_hooks_sync")).catch(() => {})} />
       <AgentsPageView cap={capOn(settings ?? {})} onCap={(on) => void save({ [CAP_FIELD]: on })} />
     </>
   );
