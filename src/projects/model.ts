@@ -16,7 +16,7 @@ export function placeFieldAction(key: string, composing: boolean): "save" | "rev
   return key === "Enter" ? "save" : key === "Escape" ? "revert" : null;
 }
 /** `parent` is the workspace it was made from (PROJ-047); gone or main means it sits at the top level. */
-export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null; hidden?: boolean; kind?: "main" | "managed" | "external" | ""; source?: string | null };
+export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null; hidden?: boolean; kind?: "main" | "managed" | "external" | ""; source?: string | null; number?: number | null };
 
 /** SET-032 / PROJ-042: one visibility source; `own` is the project's choice over the global one. */
 export type VisSource = { key: string; label: string; global: boolean; own: boolean | null; root: string | null };

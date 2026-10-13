@@ -183,6 +183,12 @@ fn load_origins(store: &Store) -> serde_json::Map<String, serde_json::Value> {
     store.get(ORIGINS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
 }
 
+/// VIEW-038: the issue or pull request number an origin links to: `issue`, or the number at the
+/// end of a `pr` address.
+pub fn item_number(origin: &serde_json::Value) -> Option<u64> {
+    origin["issue"].as_u64().or_else(|| origin["pr"].as_str()?.rsplit('/').next()?.parse().ok())
+}
+
 /// Records (or with `None`, forgets) how the workspace at `path` came to be.
 pub fn set_origin(store: &Store, path: &str, origin: Option<&serde_json::Value>) -> Result<(), String> {
     let mut all = load_origins(store);
@@ -322,11 +328,13 @@ pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<
     let names = load_names(store);
     let parents: serde_json::Map<String, serde_json::Value> = store.get(PARENTS_KEY).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     let hidden = load_map(store, HIDDEN_KEY);
+    let origins = load_origins(store);
     Ok(crate::visibility::apply(store, project, &hidden, all)?
         .into_iter()
         .map(|mut w| {
             w.name = names.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
             w.parent = parents.get(&name_key(&w.path)).and_then(|v| v.as_str()).map(String::from);
+            w.number = origins.get(&name_key(&w.path)).and_then(item_number);
             w
         })
         .collect())
@@ -1354,6 +1362,14 @@ pub fn handoff_note_prepare(root: String, name: String) -> Result<String, String
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn view038_a_workspace_carries_the_number_of_the_issue_or_pull_request_it_is_linked_to() {
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "app", "issue": 34, "issueUrl": "https://github.com/o/r/issues/34" })), Some(34));
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "app", "pr": "https://github.com/o/r/pull/12" })), Some(12));
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "cli", "issue": null })), None);
+        assert_eq!(item_number(&serde_json::json!({ "madeBy": "app" })), None);
+    }
 
     #[test]
     fn sess025_handoff_note_is_made_once_and_never_overwritten() {

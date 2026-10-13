@@ -245,7 +245,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-110 · STAT-039 The agent's first real work names a new worktree · STAT-055 [compat] Setup and archive scripts for worktrees
 - [x] T-111-a · VIEW-068 Branch summary against the base branch
 - [x] T-111-b · VIEW-048 [compat] Delete-workspace and rename-tab shortcuts (the delete half; its Mod+R rename of the active tab moves to the tab-rename task T-119)
-- [ ] T-111-c · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette (needs the worktree palette on T-098)
+- [x] T-111-c · VIEW-038 Palette ranking · VIEW-041 Filter the palette by repository · VIEW-042 Create a worktree and run quick actions from the palette (needs the worktree palette on T-098)
 - [ ] T-112 · VIEW-076 Folder workspaces: attached worktrees and PR checks · VIEW-112 [compat] Import setup scripts from other tools' configs
 - [x] T-113-a · ACCT-056 A failed scan never drops worktrees from the list (the sidebar half)
 - [ ] T-113-b · The cleanup half of the failed-scan card on T-113-a: cleanup offers and removes only worktrees Kolux can show it made (its origin record), and a worktree Kolux did not create is left in place; built with the cleanup dialog on T-162

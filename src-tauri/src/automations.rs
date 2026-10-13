@@ -551,7 +551,7 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
         if !Path::new(&path).is_dir() {
             return Err(Stop::Skipped(format!("its worktree {path} is gone")));
         }
-        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None }
+        Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, number: None }
     };
     let _ = crate::trust::trust_folders(&l.claude_config, &agent, &[PathBuf::from(&wt.path), PathBuf::from(&project.path)]);
     if new_per_run {

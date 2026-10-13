@@ -943,6 +943,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       })
       .catch((err) => setNotice(String(err)));
   };
+  // VIEW-042: a name typed in the palette is made at once in that project; the palette has closed.
+  const fromName = (projectId: string, name: string) => {
+    setToast(`Making the workspace ${name}…`);
+    invoke<Created>("workspace_create", { projectId, name, base: null, branch: null, parent: null, ticket: null, issue: null })
+      .then((made) => {
+        setRefresh((n) => n + 1);
+        cli.current.select(made.path, made.branch, true);
+        void runSetup(made.path, made.branch);
+      })
+      .catch((err) => setNotice(String(err)));
+  };
   // VIEW-011: the open page is written down, so it is shown again after a restart.
   useEffect(() => {
     if ((settings[OPEN_PAGE_FIELD] ?? null) !== page) saveSetting(OPEN_PAGE_FIELD, page);
@@ -989,6 +1000,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         section: "Open tabs",
         label: tabName(p, titles),
         hint: p.cwd ? folderName(p.cwd) : "Home",
+        dir: p.cwd ?? undefined,
         run: () => {
           setScreen("terminals");
           if (!sameDir(p.cwd, activeDir)) {
@@ -1001,6 +1013,18 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     ...(Object.keys(PAGES) as PageId[]).map((id) => ({ section: "Settings", label: PAGES[id], hint: "Settings page", run: () => openSettings(id) })),
     { section: "Quick actions", label: "New terminal tab", run: () => void newTab(null) },
     { section: "Quick actions", label: "New session", run: () => addChooser() },
+    // VIEW-042: actions on the worktree in front, not runnable while none is open
+    { section: "Quick actions", label: "Source control for this workspace", needs: "worktree", run: () => showRight("scm") },
+    {
+      section: "Quick actions",
+      label: "Delete this workspace",
+      needs: "worktree",
+      run: () => {
+        setScreen("terminals");
+        setSidebarOpen(true);
+        setDeleteRequest((n) => n + 1);
+      },
+    },
     {
       section: "Quick actions",
       label: "New workspace",
@@ -1476,14 +1500,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             projects={projects}
             items={paletteItems()}
             prOf={(d) => Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1].pr ?? null}
+            recent={recentDirs.current}
+            scope={[]}
+            hasWorktree={activeDir !== null && projectOf(activeDir) !== null}
             onWorktree={(w) => {
               setScreen("terminals");
               select(w.path, w.branch ?? null);
             }}
-            onCreate={(name) => {
+            onCreate={(name, repo) => {
               setScreen("terminals");
               const item = workItem(name);
               if (item) return fromItem(item);
+              const pid = repo ?? projectOf(activeDir) ?? projectFor(null);
+              if (pid) return fromName(pid, name);
               setSidebarOpen(true);
               setCreateName(name);
               setCreateRequest((n) => n + 1);

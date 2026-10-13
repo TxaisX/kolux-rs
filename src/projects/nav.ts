@@ -37,18 +37,80 @@ export function travel(h: History, dir: 1 | -1, exists: (p: Place) => boolean): 
 /** The longest query the palette searches; a longer paste is refused. */
 export const MAX_QUERY = 200;
 
-/** The query's words, lower case. */
-export const wordsOf = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
+/** VIEW-038: words that say where to go rather than what to find; dropped when others remain. */
+const FILLER = new Set(["go", "goto", "open", "jump", "switch", "to"]);
 
-/** Where every word matches in `text`, as [start, end) ranges for highlighting, merged and in
- * order; null when any word matches nowhere. No words: an empty match. */
-export function matchWords(text: string, words: string[]): [number, number][] | null {
-  const low = text.toLowerCase();
+/** Text folded character by character: accents dropped, full-width forms narrowed, lower case. A
+ * character whose folding would change its length is kept as it is, so positions stay those of
+ * the shown text. */
+export function fold(text: string): string {
+  let out = "";
+  for (const c of text) {
+    const f = c.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+    out += f.length === c.length ? f : c;
+  }
+  return out;
+}
+
+/** The query's words, folded; `#` is dropped from a word with digits, filler words when others remain. */
+export function queryWords(q: string): string[] {
+  const all = fold(q)
+    .split(/\s+/)
+    .map((w) => (/\d/.test(w) ? w.replace(/^#+/, "") : w))
+    .filter(Boolean);
+  const kept = all.filter((w) => !FILLER.has(w));
+  return kept.length > 0 ? kept : all;
+}
+
+/** How well a row matched: `tier` 3 a whole word, 2 the start of a word, 1 inside a word or a
+ * forgiven typo (the weakest word decides); `own` is false when some word landed only after
+ * `ownEnd` (the row's parent project); `spans` are [start, end) ranges to highlight. */
+export type Hit = { tier: number; own: boolean; spans: [number, number][] };
+
+const TOKEN = /[\p{L}\p{N}]+/gu;
+
+/** At most one letter added, dropped or changed between a and b. */
+function nearly(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && a[i] === b[i]) i++;
+  const [x, y] = [a.slice(i + 1), b.slice(i + 1)];
+  return x === y || a.slice(i) === y || x === b.slice(i);
+}
+
+/** One word against the folded text's words that start before `end`. */
+function wordHit(low: string, toks: { at: number; t: string }[], w: string, end: number): { tier: number; spans: [number, number][] } | null {
+  const mine = toks.filter((k) => k.at < end);
+  const exact = mine.filter((k) => k.t === w).map((k): [number, number] => [k.at, k.at + w.length]);
+  if (exact.length > 0) return { tier: 3, spans: exact };
+  if (/\d/.test(w)) return null; // PR and issue numbers match exactly, never partly
+  const prefix = mine.filter((k) => k.t.startsWith(w)).map((k): [number, number] => [k.at, k.at + w.length]);
+  if (prefix.length > 0) return { tier: 2, spans: prefix };
+  if (/^[a-z]$/.test(w)) return null; // one Latin letter: the start of a word or a whole word only
+  const inner: [number, number][] = [];
+  for (let i = low.indexOf(w); i >= 0 && i + w.length <= end; i = low.indexOf(w, i + w.length)) inner.push([i, i + w.length]);
+  if (inner.length > 0) return { tier: 1, spans: inner };
+  if (!/^\p{L}{5,}$/u.test(w)) return null; // typos are forgiven only in long words of letters
+  const near = mine.filter((k) => nearly(w, k.t) || nearly(w, k.t.slice(0, w.length))).map((k): [number, number] => [k.at, k.at + Math.min(k.t.length, w.length)]);
+  return near.length > 0 ? { tier: 1, spans: near } : null;
+}
+
+/** VIEW-038: every word has to land on the text; null when one does not. */
+export function scoreText(text: string, ownEnd: number, words: string[]): Hit | null {
+  const low = fold(text);
+  const toks = [...low.matchAll(TOKEN)].map((m) => ({ at: m.index ?? 0, t: m[0] }));
   const spans: [number, number][] = [];
+  let tier = 3;
+  let own = true;
   for (const w of words) {
-    let i = low.indexOf(w);
-    if (i < 0) return null;
-    for (; i >= 0; i = low.indexOf(w, i + w.length)) spans.push([i, i + w.length]);
+    let h = wordHit(low, toks, w, ownEnd);
+    if (!h) {
+      h = wordHit(low, toks, w, low.length);
+      own = false;
+    }
+    if (!h) return null;
+    tier = Math.min(tier, h.tier);
+    spans.push(...h.spans);
   }
   spans.sort((a, b) => a[0] - b[0]);
   const out: [number, number][] = [];
@@ -57,5 +119,5 @@ export function matchWords(text: string, words: string[]): [number, number][] | 
     if (last && s[0] <= last[1]) last[1] = Math.max(last[1], s[1]);
     else out.push([...s]);
   }
-  return out;
+  return { tier, own, spans: out };
 }

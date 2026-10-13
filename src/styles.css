@@ -920,6 +920,11 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 /* PROJ-057 / VIEW-037: the worktree palette's section headings and matched letters. */
 .palette-section { padding: 6px 10px 2px; font-size: 11px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.04em; }
 .palette mark { background: none; color: var(--fg); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+/* VIEW-041: the palette's filter chips; VIEW-042: an action that needs an open worktree. */
+.palette-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px; }
+.palette-chips select { font-size: 12px; color: var(--fg-muted); background: none; border: 1px solid var(--line-subtle); border-radius: 6px; padding: 1px 4px; }
+.palette-chip { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--row-selected); color: var(--fg); }
+.picker-list .menu-item.off { color: var(--fg-disabled); cursor: default; }
 .md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
 
 /* EDIT-027: the diff tab. Its body scrolls (both columns move together in side by side). */

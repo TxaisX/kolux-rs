@@ -34,6 +34,8 @@ pub struct Worktree {
     pub kind: String,
     /// For an external worktree, where its visibility comes from (`visibility.rs`).
     pub source: Option<String>,
+    /// VIEW-038: the issue or pull request number it is linked to, so the palette finds it by number.
+    pub number: Option<u64>,
 }
 
 /// GIT-063: what an unattended git is given, so it fails at once instead of waiting on a password
@@ -415,7 +417,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None, number: None });
         }
     }
     out
