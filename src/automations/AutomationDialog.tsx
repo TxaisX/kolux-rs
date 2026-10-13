@@ -97,6 +97,9 @@ export default function AutomationDialog({ projects, agents, editing, template, 
   const [precheck, setPrecheck] = useState(editing?.precheck ?? "");
   const [limit, setLimit] = useState(editing?.precheckTimeoutSeconds ?? 60);
   const [form, setForm] = useState<ScheduleForm>(editing?.form ?? start?.form ?? defaultForm);
+  // AUTO-004: a timetable or an event; only pull request opened is spotted so far (T-085-c).
+  const [starts, setStarts] = useState(editing?.trigger?.kind === "event" ? editing.trigger.event : "schedule");
+  const timed = starts === "schedule";
   // AUTO-002: what was typed into Custom, given back after a visit to a preset.
   const [typed, setTyped] = useState<string | null>(editing?.form?.preset === "custom" ? editing.form.custom : null);
   const [chooser, setChooser] = useState(false);
@@ -180,7 +183,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
     if (saving || !ready) return;
     setSaving(true);
     setSaveError(null);
-    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule };
+    const input = { id: editing?.id, requestId, name, prompt, provider, projectId, workspaceMode: mode, workspace: mode === "existing" ? workspace : null, baseBranch: mode === "new-per-run" ? base : "", missedRunGraceMinutes: grace, precheck, precheckTimeoutSeconds: limit, schedule, trigger: timed ? undefined : { kind: "event", event: starts } };
     invoke<Automation>("automation_save", { input })
       .then((a) => {
         onSaved(a);
@@ -289,86 +292,98 @@ export default function AutomationDialog({ projects, agents, editing, template, 
               {mode === "new-per-run" && <input className="field" aria-label="Base branch" value={base} onChange={(e) => setBase(e.target.value)} placeholder={`From ${project?.base || "the default branch"}`} />}
             </fieldset>
             <label className="auto-label">
-              Timetable
-              <select className="field" value={form.preset} onChange={(e) => setForm(toPreset(form, e.target.value as Preset, typed))}>
-                {presets.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
+              Starts
+              <select className="field" value={starts} onChange={(e) => setStarts(e.target.value)}>
+                <option value="schedule">On a timetable</option>
+                <option value="pr-opened">When a pull request opens</option>
               </select>
             </label>
-            {form.preset === "weekly" && (
+            {timed && (
+              <>
               <label className="auto-label">
-                Day
-                <select className="field" value={form.day ?? 1} onChange={(e) => setForm({ ...form, day: Number(e.target.value) })}>
-                  {weekdayNames(lang).map((d, i) => (
-                    <option key={d} value={i}>
-                      {d}
+                Timetable
+                <select className="field" value={form.preset} onChange={(e) => setForm(toPreset(form, e.target.value as Preset, typed))}>
+                  {presets.map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
                     </option>
                   ))}
                 </select>
               </label>
-            )}
-            {form.preset !== "custom" && (
-              <div className="auto-label">
-                <span>{form.preset === "hourly" ? "Minutes past the hour" : "Time"}</span>
-                <div className="auto-time">
-                  {form.preset !== "hourly" && (
-                    <>
-                      <TimeBox label="Hour" value={clock.hour} lo={1} hi={12} onValue={(h) => setClock(h, clock.minute, clock.pm)} />
-                      <span>:</span>
-                    </>
-                  )}
-                  <TimeBox label="Minute" value={clock.minute} lo={0} hi={59} twoDigits onValue={(m) => setClock(clock.hour, m, clock.pm)} />
-                  {form.preset !== "hourly" && (
-                    <select className="field" aria-label="AM or PM" value={clock.pm ? "PM" : "AM"} onChange={(e) => setClock(clock.hour, clock.minute, e.target.value === "PM")}>
-                      <option value="AM">AM</option>
-                      <option value="PM">PM</option>
-                    </select>
-                  )}
+              {form.preset === "weekly" && (
+                <label className="auto-label">
+                  Day
+                  <select className="field" value={form.day ?? 1} onChange={(e) => setForm({ ...form, day: Number(e.target.value) })}>
+                    {weekdayNames(lang).map((d, i) => (
+                      <option key={d} value={i}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {form.preset !== "custom" && (
+                <div className="auto-label">
+                  <span>{form.preset === "hourly" ? "Minutes past the hour" : "Time"}</span>
+                  <div className="auto-time">
+                    {form.preset !== "hourly" && (
+                      <>
+                        <TimeBox label="Hour" value={clock.hour} lo={1} hi={12} onValue={(h) => setClock(h, clock.minute, clock.pm)} />
+                        <span>:</span>
+                      </>
+                    )}
+                    <TimeBox label="Minute" value={clock.minute} lo={0} hi={59} twoDigits onValue={(m) => setClock(clock.hour, m, clock.pm)} />
+                    {form.preset !== "hourly" && (
+                      <select className="field" aria-label="AM or PM" value={clock.pm ? "PM" : "AM"} onChange={(e) => setClock(clock.hour, clock.minute, e.target.value === "PM")}>
+                        <option value="AM">AM</option>
+                        <option value="PM">PM</option>
+                      </select>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
-            {form.preset === "custom" && (
+              )}
+              {form.preset === "custom" && (
+                <label className="auto-label">
+                  Cron line or RRULE
+                  <input
+                    className="field mono"
+                    value={form.custom}
+                    onChange={(e) => {
+                      setTyped(e.target.value);
+                      setForm({ ...form, custom: e.target.value });
+                    }}
+                    placeholder="0 9 * * 1-5"
+                  />
+                  <span className="auto-chips">
+                    {fieldNames(lang).map((n) => (
+                      <span key={n} className="chip">
+                        {n}
+                      </span>
+                    ))}
+                  </span>
+                </label>
+              )}
               <label className="auto-label">
-                Cron line or RRULE
-                <input
-                  className="field mono"
-                  value={form.custom}
-                  onChange={(e) => {
-                    setTyped(e.target.value);
-                    setForm({ ...form, custom: e.target.value });
-                  }}
-                  placeholder="0 9 * * 1-5"
-                />
-                <span className="auto-chips">
-                  {fieldNames(lang).map((n) => (
-                    <span key={n} className="chip">
-                      {n}
-                    </span>
-                  ))}
-                </span>
+                Time zone
+                <input className="field" value={zone} onChange={(e) => setZone(e.target.value)} />
               </label>
+              <label className="auto-label">
+                If Kolux was away at the time
+                <select className="field" value={grace} onChange={(e) => setGrace(Number(e.target.value))}>
+                  {GRACE.map(([m, word]) => (
+                    <option key={m} value={m}>
+                      {word}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              </>
             )}
-            <label className="auto-label">
-              Time zone
-              <input className="field" value={zone} onChange={(e) => setZone(e.target.value)} />
-            </label>
-            <label className="auto-label">
-              If Kolux was away at the time
-              <select className="field" value={grace} onChange={(e) => setGrace(Number(e.target.value))}>
-                {GRACE.map(([m, word]) => (
-                  <option key={m} value={m}>
-                    {word}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {!timed && <span className="muted">A pull request opened from one of this project's worktrees starts a run, with a line about it on the end of the prompt. Kolux spots one within about 15 minutes while it is open; after a run it rests five minutes.</span>}
             <label className="auto-label">
               Precheck command
               <input className="field" value={precheck} placeholder="Optional, for example: git diff --quiet" onChange={(e) => setPrecheck(e.target.value)} />
-              <span className="muted">Runs in the run's folder ahead of a timed run, never ahead of Run now. Anything but exit code 0 skips the run.</span>
+              <span className="muted">Runs in the run's folder ahead of a timed or event-started run, never ahead of Run now. Anything but exit code 0 skips the run.</span>
             </label>
             <label className="auto-label">
               Precheck time limit
@@ -380,7 +395,7 @@ export default function AutomationDialog({ projects, agents, editing, template, 
                 ))}
               </select>
             </label>
-            {previewError ? (
+            {!timed ? null : previewError ? (
               <div className="note error" role="alert">
                 {form.preset === "custom" ? `Invalid: ${previewError}` : previewError}
               </div>
@@ -402,11 +417,11 @@ export default function AutomationDialog({ projects, agents, editing, template, 
           </div>
         )}
         <div className="auto-dialog-foot">
-          <span className="muted">Once saved, it keeps running on this timetable until you pause it.</span>
+          <span className="muted">{`Once saved, it keeps running ${timed ? "on this timetable" : "on each event"} until you pause it.`}</span>
           <button className="btn" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn primary" disabled={saving || !ready || previewError !== null} onClick={save} title={ready ? undefined : "Waiting for the project's worktrees"}>
+          <button className="btn primary" disabled={saving || !ready || (timed && previewError !== null)} onClick={save} title={ready ? undefined : "Waiting for the project's worktrees"}>
             {saving ? "Saving…" : "Save"}
           </button>
         </div>

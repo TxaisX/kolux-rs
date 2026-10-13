@@ -931,8 +931,15 @@ pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPo
 }
 
 #[tauri::command]
-pub async fn scm_prs_poll(items: Vec<PollItem>) -> Result<PrPoll, String> {
-    tauri::async_runtime::spawn_blocking(move || Ok(prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400)))).await.map_err(|e| e.to_string())?
+pub async fn scm_prs_poll(app: tauri::AppHandle, items: Vec<PollItem>) -> Result<PrPoll, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400));
+        // AUTO-004: each round is what pull-request-opened automations listen to.
+        crate::automations::on_poll(&app, &out.prs);
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work

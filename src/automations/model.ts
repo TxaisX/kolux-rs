@@ -39,7 +39,7 @@ export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", da
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
-export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number };
+export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string };
 
 export type SortKey = "name" | "trigger" | "agent" | "project" | "lastRun" | "nextRun";
 export type Filters = { state: "all" | "on" | "paused"; result: "all" | "never" | RunStatus; agents: string[] };
