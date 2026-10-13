@@ -347,7 +347,11 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-174 · ORCH-054 The command line reaches the open app through a local channel · ORCH-055 Prompts typed into agents land exactly once · ORCH-058 Removing a worktree stops its processes first
 - [ ] T-175 · AUTO-007 [compat] Grace window for runs missed while Kolux was away · AUTO-021 History keeps the newest 100 runs · AUTO-022 Runs refuse cleanly when the target is not ready
 - [ ] T-176 · GIT-027 PR status stays current without flooding GitHub · GIT-028 GitHub rate limits and outages are visible · GIT-039 Very large diffs are held back instead of freezing the app · GIT-063 Agents never stall on an unseen Git password prompt · GIT-065 Workspaces warn about unpushed commits
-- [ ] T-177 · EDIT-002 Autosave, off by default, writes edits after a short pause · EDIT-004 [compat] Open tabs and unsaved drafts come back after a quit or crash · EDIT-019 [compat] Rich editing leaves the untouched parts of a note byte-for-byte · EDIT-028 Very large diffs ask before they draw · EDIT-032 Renaming or moving a file keeps its tab and unsaved edits
+- [x] T-177-a · EDIT-002 Autosave, off by default, writes edits after a short pause (T-177 split)
+- [ ] T-177-b · EDIT-004 [compat] Open tabs and unsaved drafts come back after a quit or crash (T-177 split)
+- [ ] T-177-c · EDIT-019 [compat] Rich editing leaves the untouched parts of a note byte-for-byte (T-177 split)
+- [ ] T-177-d · EDIT-028 Very large diffs ask before they draw (T-177 split)
+- [ ] T-177-e · EDIT-032 Renaming or moving a file keeps its tab and unsaved edits (T-177 split)
 - [ ] T-178 · EDIT-046 Saves are all-or-nothing, and big or binary files are handled safely
 - [ ] T-179 · BROW-020 Browser tabs come back after a restart · BROW-021 [compat] Hidden worktrees give back browser memory
 - [ ] T-180 · SKILL-022 Delete skills safely from the Skills page

@@ -612,6 +612,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .notif-volume input { width: 180px; accent-color: var(--done); }
 .notif-volume output { width: 44px; text-align: right; color: var(--fg-muted); font-size: 12px; }
 .look-select select { height: 28px; padding: 0 8px; background: var(--input-bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.look-select input[type="number"] { width: 6rem; flex: none; }
 .pane-look .look-slider { grid-template-columns: 170px 1fr 56px; }
 .pane-colour { justify-content: flex-start; }
 .pane-colour > span:first-child { width: 170px; flex: none; }

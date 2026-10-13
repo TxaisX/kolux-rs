@@ -47,6 +47,7 @@ import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
 import { isMarkdown } from "./editor/markdown";
+import { autosaveOf } from "./editor/autosave";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
@@ -1652,6 +1653,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onClose={() => closePane(p.key)}
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
+                    autosave={autosaveOf(settings)}
                   />
                 ) : p.kind === "diff" && p.path ? (
                   <DiffPane
@@ -1665,6 +1667,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onClose={() => closePane(p.key)}
                     onDirty={(d) => setDirty((m) => (!!m[p.key] === d ? m : { ...m, [p.key]: d }))}
                     onToast={setToast}
+                    autosave={autosaveOf(settings)}
                   />
                 ) : p.kind === "changes" && p.cwd ? (
                   <AllChangesPane key={p.key} id={p.key} root={p.cwd} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />

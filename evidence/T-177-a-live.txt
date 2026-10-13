@@ -1,0 +1,25 @@
+T-177-a (EDIT-002, autosave) live proof, 2026-10-12, lane release, dev build on port 1422, CDP 9232, window on the second screen.
+Throwaway project G:/Temp/release-T-177/repo (one committed file, notes.txt: "line one / line two"). Lane profile backed up
+first and restored afterwards (settings.json, state.db, state.db-wal, state.db-shm, cli.json, agent-hooks-endpoint.txt: cmp same).
+
+1. Off by default. get_settings before any change: editorAutosave=undefined, editorAutosavePause=undefined.
+   notes.txt opened from the Explorer; typed "OFF-EDIT " -> unsaved dot on; 3.5 s later the disk still read "line one / line two"
+   and the dot stayed on.
+   Settings > General > Editor: Autosave switch unticked, "Pause before saving (seconds)" 1, greyed out (T-177-a-off.png).
+2. Switched on from the window; pause typed as 2 -> saved editorAutosave=true, editorAutosavePause=2000. Typed 99 -> saved 10000,
+   field showed 10 (held to ten seconds). Set back to 2 (T-177-a-on.png; the pause field was narrowed to 6rem after this shot).
+3. Back in the tab, typed "ON-EDIT " and pressed nothing: at ~1 s the disk was unchanged; the unsaved dot cleared 1841 ms after
+   the watch started (pause 2 s from the keystroke); disk then read "OFF-EDIT ON-EDIT line one / line two".
+4. Typed "MINE " and at once rewrote notes.txt from a shell ("written by another program"). 4.5 s later the disk still held
+   the outside text, the tab kept its unsaved dot and showed the banner
+   "notes.txt changed on disk while you have unsaved edits. [Reload] [Keep my edits] [Compare]" (T-177-a-banner.png).
+   Typed "MORE " while the banner was up: 3.5 s later the disk still held the outside text.
+5. Keep my edits: 3 s with no typing wrote nothing; the next edit ("AFTER-KEEP ") was written 2 s later, dot off, no banner.
+6. Unstaged diff tab (New tab -> Changed file diff... -> notes.txt, Unstaged): editor tab closed first; typed "DIFF-EDIT " in the
+   working side -> dot on, and 3.5 s later the file was written and the dot cleared (T-177-a-diff.png).
+
+Not exercised live: a staged diff tab (it is read-only, so it has no edits to save; DiffPane never starts autosave for it), and a
+disk copy that cannot be read at the moment of saving (unit test: nothing is written). All Changes, conflict views and
+read-only editor tabs do not exist in this build yet; none of them starts autosave.
+Unit tests: src/editor/autosave.test.ts (4): the setting and its 0.25..10 s hold, one write after typing stops, no write over an
+outside change and no write while the banner is up, no write when the disk read fails.

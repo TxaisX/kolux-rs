@@ -17,6 +17,7 @@ import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, Merg
 import { ChevronDown, Close, Dots, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, isDirty, relay, replaceAll, save, subscribe, textOf } from "./buffers";
 import { editors, look } from "./EditorPane";
+import { watchAutosave } from "./autosave";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
 export const diffNav = new Map<number, (dir: 1 | -1) => void>();
@@ -27,9 +28,9 @@ const squash = (s: string) => s.replace(/\s+/g, "");
 /** The diff with whitespace-only changes left out, which is how a diff tab starts. */
 export const withoutWhitespace = (a: string, b: string) => diff(a, b).filter((c) => squash(a.slice(c.fromA, c.toA)) !== squash(b.slice(c.fromB, c.toB)));
 
-type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
+type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null };
 
-export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
+export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [sides, setSides] = useState<Sides | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +152,20 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
       editors.delete(id);
     };
   }, [id, path, staged]);
+
+  // EDIT-002: an unstaged diff's right side is the working file, so autosave covers it; a staged
+  // diff is read-only and never autosaves.
+  useEffect(() => {
+    if (staged || !ready || autosave === null) return;
+    return watchAutosave(
+      path,
+      autosave,
+      (text) => invoke("file_write", { path, text }),
+      () => invoke<string>("file_read", { path }),
+      () => report.current.onToast?.(`${baseName(path)} changed on disk, so autosave left it alone. Save to keep your edits.`),
+      (err) => report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`),
+    );
+  }, [staged, ready, autosave, path]);
 
   useEffect(() => {
     diffNav.set(id, (dir) => {

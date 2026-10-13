@@ -20,6 +20,7 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
 import { attach, baseName, detach, diskNews, isDirty, keepMine, loadText, relay, replaceAll, save, subscribe } from "./buffers";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
+import { resumeAutosave, stopAutosave, watchAutosave } from "./autosave";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
 export const editors = new Map<number, () => Promise<void>>();
@@ -39,9 +40,9 @@ export const look = EditorView.theme(
   { dark: true },
 );
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
+type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null };
 
-export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
+export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +104,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       try {
         await save(path, (text) => invoke("file_write", { path, text }));
         setMoved(null); // saving over a moved disk copy is keeping the edits
+        resumeAutosave(path);
       } catch (err) {
         report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
       }
@@ -145,7 +147,10 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       if (!alive || text === null || seq !== reads.current) return;
       const news = diskNews(path, text);
       if (news === "take") replaceAll(path, text);
-      else if (news === "conflict") setMoved(text);
+      else if (news === "conflict") {
+        stopAutosave(path); // EDIT-002: autosave never writes over the outside edit
+        setMoved(text);
+      }
     };
     void peek();
     const t = window.setInterval(() => void peek(), 1500);
@@ -154,6 +159,19 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       window.clearInterval(t);
     };
   }, [ready, hidden, path]);
+
+  // EDIT-002: autosave, when it is switched on, while the file is open in this tab.
+  useEffect(() => {
+    if (!ready || autosave === null) return;
+    return watchAutosave(
+      path,
+      autosave,
+      (text) => invoke("file_write", { path, text }),
+      () => invoke<string>("file_read", { path }),
+      (disk) => setMoved(disk),
+      (err) => report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`),
+    );
+  }, [ready, autosave, path]);
 
   useEffect(() => {
     if (!undoOffer) return;
@@ -226,6 +244,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
       if (seq !== reads.current) return;
       replaceAll(path, text);
       setMoved(null);
+      resumeAutosave(path);
       setCompare(null);
       setUndoOffer(true);
     } catch (err) {
@@ -236,6 +255,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
     const disk = compare?.disk ?? moved;
     if (disk !== null) keepMine(path, disk);
     setMoved(null);
+    resumeAutosave(path);
     setCompare(null);
   };
   const openCompare = () =>
