@@ -133,8 +133,26 @@ fn read_opt(file: &Path) -> Result<Option<String>, String> {
 /// `prev`'s `.json` sibling, `null` for none; an older install kept only the command, in `prev`);
 /// with neither, the slot goes. When the result parses equal to the `.bak-kolux` copy, that copy's
 /// bytes are written, so the file is byte for byte the one from before the install (T-152 (6)).
-/// True when written.
+/// True when written. T-152-c (3): like an install, a file saved between Kolux's read and its write
+/// is read again once (`once_more`); a second change fails with nothing written.
 pub fn remove_claude(file: &Path, prev: &Path) -> Result<bool, String> {
+    once_more(|| remove_claude_once(file, prev))
+}
+
+/// T-152-b (5) / T-152-c (3): `step` again when the file changed between its read and its write
+/// (`CHANGED`), so a save by the agent itself is merged instead of failing; a second change fails.
+fn once_more<T>(step: impl Fn() -> Result<T, String>) -> Result<T, String> {
+    match step() {
+        Err(e) if e.ends_with(CHANGED) => {
+            eprintln!("kolux-rs: agent hooks: {e}; reading it again");
+            step()
+        }
+        done => done,
+    }
+}
+
+/// One read, check and write of `remove_claude`.
+fn remove_claude_once(file: &Path, prev: &Path) -> Result<bool, String> {
     let Some(text) = read_opt(file)? else { return Ok(false) };
     let mut s: Value = serde_json::from_str(&text).map_err(|e| format!("{} is not JSON ({e}); left alone", file.display()))?;
     let copy = kept(file);
@@ -234,6 +252,14 @@ pub fn back_up(file: &Path, record: &Path) -> Result<Option<(String, String)>, S
         return Ok(None);
     }
     let bytes = fs::read(file).map_err(|e| refuse(e.to_string()))?;
+    // T-152-c (4): a file that already holds Kolux's entries is not the user's own file; a copy of
+    // it would put those entries back on every later off, so none is made and the install stops.
+    if holds_mine(&bytes) {
+        return Err(format!(
+            "{} already holds Kolux's hook entries but has no {BACKUP_SUFFIX} copy, so no copy is made and hooks are not installed; switch the hooks off first to take Kolux's entries out",
+            file.display()
+        ));
+    }
     let tmp = copy.with_extension("bak-kolux.kolux-rs-tmp");
     let made = fs::File::create(&tmp).and_then(|mut f| f.write_all(&bytes).and_then(|_| f.sync_all())).map_err(|e| e.to_string()).and_then(|_| {
         let (a, b) = (sha256(file)?, sha256(&tmp)?);
@@ -250,11 +276,41 @@ pub fn back_up(file: &Path, record: &Path) -> Result<Option<(String, String)>, S
     made.map(Some).map_err(refuse)
 }
 
-/// The copy's hash as `record` holds it (`<sha256>  <path>` lines), `None` when it has no line for `copy`.
+/// T-152-c (4): Kolux's hooks (`names_mine`) or status line are in this settings text.
+fn holds_mine(bytes: &[u8]) -> bool {
+    let Ok(mut v) = serde_json::from_slice::<Value>(bytes) else { return false };
+    v.get("statusLine").and_then(|l| l.get("command")).and_then(Value::as_str).is_some_and(is_my_command) || remove_groups(&mut v, false)
+}
+
+/// The copy's hash as `record` holds it (`<sha256>  <path>` lines), `None` when it has no line for
+/// `copy`. T-152-c (1): paths are compared resolved, so another spelling of the same copy matches.
 fn recorded(record: &Path, copy: &Path) -> Option<String> {
     let text = fs::read_to_string(record).ok()?;
-    let name = copy.display().to_string();
-    text.lines().find_map(|l| l.split_once("  ").filter(|(h, p)| *p == name && h.len() == 64).map(|(h, _)| h.to_string()))
+    let want = resolved(copy);
+    text.lines().find_map(|l| l.split_once("  ").filter(|(h, p)| h.len() == 64 && resolved(Path::new(p)) == want).map(|(h, _)| h.to_string()))
+}
+
+/// T-152-c (1): the folder holding one Claude settings file's status line slot (`STATUS_PREV` and
+/// its `.json`) and its copy's record (`BACKUP_RECORD`): `<home>\.kolux-rs\agent-hooks\targets\<the
+/// first 16 hex of the sha256 of the file's resolved path>`. Two config folders in one home never
+/// share a slot or a record, and two spellings of one folder share one.
+pub fn target_dir(home: &Path, file: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let key = resolved(file).to_string_lossy().into_owned();
+    let hex: String = Sha256::digest(key.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
+    home.join(SCRIPT_DIR).join(TARGETS).join(hex)
+}
+
+/// `path` with `..`, links, letter case and slashes resolved; a file that does not exist yet has its
+/// folder resolved, and a folder that cannot be resolved is taken as given (made absolute).
+fn resolved(path: &Path) -> PathBuf {
+    if let Ok(p) = fs::canonicalize(path) {
+        return p;
+    }
+    match (path.parent().map(fs::canonicalize), path.file_name()) {
+        (Some(Ok(dir)), Some(name)) => dir.join(name),
+        _ => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+    }
 }
 
 /// Both hashes, written through a synced temp file and renamed over the record.
@@ -330,6 +386,8 @@ impl Drop for Lock {
 
 /// The record of the copy kept before the first install: the sha256 of the file and of the copy.
 pub const BACKUP_RECORD: &str = "claude-settings.sha256";
+/// The per-settings-file folders under Kolux's hook folder (`target_dir`).
+pub const TARGETS: &str = "targets";
 
 /// The production app's identifier (`tauri.conf.json`), which is also the name of its profile
 /// folder. A profile folder with any other name belongs to a lane, smoke or test run.
@@ -344,9 +402,19 @@ pub const SCRATCH_MARKER: &str = ".kolux-rs-scratch";
 /// `KOLUX_APP_DIR` a lane, smoke or evidence run sets) is not the production one. A production
 /// release build with the production identifier is NOT fenced: it is the product that writes the
 /// user's own file after his yes, and the status hooks switch, off by default, is the gate there.
+/// T-152-c (5): also fenced when `KOLUX_APP_DIR` or `KOLUX_USER_DATA_PATH` names any folder but
+/// the production profile (a release build started by a lane or evidence run that points those
+/// at scratch). The installed app sets them only in the panes it opens, and always to its own
+/// production profile, so a `kolux` command typed in one of its panes is not fenced.
 pub fn fenced(profile: &Path) -> bool {
-    let production = profile.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(PRODUCTION_ID));
-    cfg!(any(test, debug_assertions)) || !production
+    fenced_by(profile, cfg!(any(test, debug_assertions)), |n| std::env::var_os(n))
+}
+
+/// `fenced` with the build kind and the environment given.
+fn fenced_by(profile: &Path, test_or_debug: bool, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    let production = |p: &Path| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.eq_ignore_ascii_case(PRODUCTION_ID));
+    let lane = [crate::cli::APP_DIR_ENV, "KOLUX_USER_DATA_PATH"].into_iter().filter_map(var).filter(|v| !v.is_empty()).any(|v| !production(Path::new(&v)));
+    test_or_debug || !production(profile) || lane
 }
 
 /// T-152 (1): the only Claude settings file Kolux writes is the one `CLAUDE_CONFIG_DIR` (or the
@@ -356,23 +424,34 @@ pub fn fenced(profile: &Path) -> bool {
 pub fn claude_target(profile: &Path) -> Result<PathBuf, String> {
     let file = claude_settings_file();
     if fenced(profile) {
-        scratch_only(&file, &std::env::temp_dir())?;
+        scratch_only(&file, &std::env::temp_dir(), &home_dir())?;
     }
     Ok(file)
 }
 
-/// `file`'s folder lies inside `scratch` and it, or a folder above it that is still inside
-/// `scratch`, holds the scratch marker. Both sides are resolved, so `..`, links and letter case
-/// cannot slip past; anything that cannot be resolved is refused.
-pub fn scratch_only(file: &Path, scratch: &Path) -> Result<(), String> {
-    let inside = match (file.parent().map(fs::canonicalize), fs::canonicalize(scratch)) {
-        (Some(Ok(dir)), Ok(scratch)) => dir.starts_with(&scratch) && dir.ancestors().take_while(|a| a.starts_with(&scratch)).any(|a| a.join(SCRATCH_MARKER).is_file()),
-        _ => false,
-    };
+/// `file`'s folder lies inside `scratch` and it, or a folder above it that is still strictly below
+/// `scratch`, holds the scratch marker (a marker in `scratch` itself does not count). Both sides
+/// are resolved, so `..`, links and letter case cannot slip past; anything that cannot be resolved
+/// is refused. T-152-c (5): a `scratch` that is a drive root, or that is or holds `home` (the
+/// user's home folder), is too wide to be scratch and refuses everything.
+pub fn scratch_only(file: &Path, scratch: &Path, home: &Path) -> Result<(), String> {
+    let refuse = |why: &str| Err(format!("a test, dev or lane run writes agent settings only under {} below a {SCRATCH_MARKER} marker{why}; {} left alone", scratch.display(), file.display()));
+    let Ok(root) = fs::canonicalize(scratch) else { return refuse(" (the temp folder cannot be resolved)") };
+    if root.parent().is_none() {
+        return refuse(" (the temp folder is a drive root)");
+    }
+    match fs::canonicalize(home) {
+        Ok(h) if h.starts_with(&root) => return refuse(&format!(" (the temp folder holds the home folder {})", home.display())),
+        Ok(_) => {}
+        Err(_) => return refuse(&format!(" (the home folder {} cannot be resolved)", home.display())),
+    }
+    let inside = file.parent().map(fs::canonicalize).and_then(Result::ok).is_some_and(|dir| {
+        dir.starts_with(&root) && dir.ancestors().take_while(|a| a.starts_with(&root) && *a != root).any(|a| a.join(SCRATCH_MARKER).is_file())
+    });
     if inside {
         Ok(())
     } else {
-        Err(format!("a test, dev or lane run writes agent settings only under {} below a {SCRATCH_MARKER} marker; {} left alone", scratch.display(), file.display()))
+        refuse("")
     }
 }
 
@@ -384,19 +463,14 @@ fn install_claude_all(home: &Path, profile: &Path) -> Result<(), String> {
 pub fn install_claude_at(home: &Path, file: &Path) -> Result<(), String> {
     let path = write_claude_script(home)?;
     let status = write_status_script(home)?;
-    let dir = home.join(SCRIPT_DIR);
+    // T-152-c (1): the status line slot and the copy's record belong to this settings file.
+    let dir = target_dir(home, file);
     let prev = dir.join(STATUS_PREV);
     let status = status_command(&status, &prev.to_string_lossy().replace('\\', "/"));
     let command = format!("\"{path}\" || exit 0");
     // T-152-b (5): a file Claude Code saved between Kolux's read and its write is read again and
     // merged once more (the copy check and the status line save included); a second change fails.
-    match install_claude_once(file, &dir, &prev, &command, &status) {
-        Err(e) if e.ends_with(CHANGED) => {
-            eprintln!("kolux-rs: claude hooks: {e}; reading it again");
-            install_claude_once(file, &dir, &prev, &command, &status)
-        }
-        done => done,
-    }
+    once_more(|| install_claude_once(file, &dir, &prev, &command, &status))
 }
 
 /// One read, check and write of `install_claude_at`.
@@ -412,6 +486,7 @@ fn install_claude_once(file: &Path, dir: &Path, prev: &Path, hook: &str, status:
     // and its command, which keeps running from `prev` (STAT-040). Both are saved BEFORE the
     // settings file is touched, so a failed save never leaves his line replaced.
     if let Some(s) = &had {
+        fs::create_dir_all(dir).map_err(|e| format!("claude status line: {}: {e}", dir.display()))?;
         let slot = s.get("statusLine").cloned().unwrap_or(Value::Null);
         let command = slot.get("command").and_then(Value::as_str);
         if !command.is_some_and(is_my_command) {
@@ -437,10 +512,12 @@ fn managed_codex_homes(profile: &Path) -> Vec<PathBuf> {
 }
 
 fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static str, String> {
-    let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
     match (id, plan) {
         ("claude", Plan::Install) => install_claude_all(home, profile).map(|_| "installed"),
-        ("claude", Plan::Remove) => remove_claude(&claude_target(profile)?, &prev).map(|_| "removed"),
+        ("claude", Plan::Remove) => {
+            let file = claude_target(profile)?;
+            remove_claude(&file, &target_dir(home, &file).join(STATUS_PREV)).map(|_| "removed")
+        }
         // T-152 (6): the user's own Codex home is neither written nor cleared while T-025-e is off
         // the cutline, so on and off leave its bytes exactly as they were; only the managed homes a
         // pane starts in (Kolux's own folders) are cleared.
@@ -509,14 +586,23 @@ pub fn clear(profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)
     MANAGED.iter().map(|&id| (id, apply(&home, profile, id, Plan::Remove))).collect()
 }
 
-/// STAT-004: the Agents page switched an agent on or off; the hooks follow in the background.
+/// Each agent's outcome as `kolux agent hooks on|off` and the Agents page show it: `agent`, `done`
+/// (what was done) and `error` (why it failed), one of the two null.
+pub fn outcomes(all: Vec<(&'static str, Result<&'static str, String>)>) -> Vec<Value> {
+    all.into_iter().map(|(id, r)| json!({ "agent": id, "done": r.as_ref().ok(), "error": r.err() })).collect()
+}
+
+/// STAT-004: the Agents page switched an agent on or off; the hooks follow off the main thread.
 /// `clear` is the status hooks switch just turned off (STAT-002), which takes Kolux's entries out.
+/// T-152-c (3): the reply is each agent's outcome (`outcomes`), so a failed install or removal
+/// reaches the page instead of only stderr; an empty list means nothing ran (switch off, or the
+/// install lock could not be had, which stderr names).
 #[tauri::command]
-pub fn agent_hooks_sync(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, clear: Option<bool>) -> Result<(), String> {
+pub async fn agent_hooks_sync(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, clear: Option<bool>) -> Result<Vec<Value>, String> {
     let (settings, profile) = store.lock().map(|s| (s.settings(), s.dir())).map_err(|e| e.to_string())?;
     let off = clear == Some(true) && !switch::on(&settings);
-    std::thread::spawn(move || if off { self::clear(&profile) } else { sync(&settings, &profile) });
-    Ok(())
+    let all = tauri::async_runtime::spawn_blocking(move || if off { self::clear(&profile) } else { sync(&settings, &profile) }).await.map_err(|e| e.to_string())?;
+    Ok(outcomes(all))
 }
 
 /// T-152-gate: the Claude Code settings file the hooks go into, shown beside the switch.

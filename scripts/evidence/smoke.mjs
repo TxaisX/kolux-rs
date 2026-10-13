@@ -75,8 +75,11 @@ const required = (n) => n !== 5 || QUIT_REQUIRED;
 const repo = join(TEMP, "repo");
 const marks = join(TEMP, "marks");
 const standin = join(TEMP, "standin");
-const claudeConfig = join(TEMP, "claude-config");
-const codexHome = join(TEMP, "codex-home");
+// T-152-c (5): the app's own temp folder (TEMP/TMP) holds the scratch agent config folders but not
+// the scratch home below: a debug build refuses a temp folder that holds the home as scratch.
+const appTemp = join(TEMP, "tmp");
+const claudeConfig = join(appTemp, "claude-config");
+const codexHome = join(appTemp, "codex-home");
 // T-152-c (2): the app keeps its hook scripts, status line slot and backup record under the user's home
 // (USERPROFILE on Windows, HOME elsewhere), so a run gets a scratch home and never writes the real one.
 // Cargo and rustup find their own folders from the home too, so those stay pinned to the real ones.
@@ -286,7 +289,7 @@ const moveWindow = (pid) =>
      $h = [IntPtr]::Zero; for ($i = 0; $i -lt 20 -and $h -eq [IntPtr]::Zero; $i++) { $h = (Get-Process -Id ${pid}).MainWindowHandle; if ($h -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500 } }
      if ($h -eq [IntPtr]::Zero) { 'no window handle' } else { [U.W]::SetWindowPos($h,[IntPtr]::Zero,-1920,0,0,0,0x0005) | Out-Null; 'moved' }`,
   );
-const appEnv = () => ({ ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: codexHome, USERPROFILE: userHome, HOME: userHome, APPDATA: roaming, LOCALAPPDATA: local, CARGO_HOME: process.env.CARGO_HOME ?? join(realHome, ".cargo"), RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(realHome, ".rustup") });
+const appEnv = () => ({ ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: codexHome, TEMP: appTemp, TMP: appTemp, USERPROFILE: userHome, HOME: userHome, APPDATA: roaming, LOCALAPPDATA: local, CARGO_HOME: process.env.CARGO_HOME ?? join(realHome, ".cargo"), RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(realHome, ".rustup") });
 
 async function launch() {
   if (!IDENTIFIER.endsWith(".smoke")) throw new Error(`refusing to wipe the profile of ${IDENTIFIER}: use an identifier ending in ".smoke" or --attach`);
