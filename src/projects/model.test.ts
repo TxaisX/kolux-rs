@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, type PendingCreate } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, prItems, type PendingCreate, type PrHead } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -59,6 +59,19 @@ test("nesting keeps the order it is handed when the list is sorted elsewhere (PR
 test("New workspace with no project yet opens the add-project form instead of a dead name field (T-013-fix-a)", () => {
   expect(createOpens("")).toBe("add");
   expect(createOpens("app-1")).toBe("name");
+});
+
+test("the pull-request picker matches number, title or head branch (PROJ-030)", () => {
+  const prs: PrHead[] = [
+    { number: 12, title: "Fix the login page", url: "u12", headRefName: "feat/login", headRefOid: "a" },
+    { number: 130, title: "Docs", url: "u130", headRefName: "main", headRefOid: "b", isCrossRepository: true, headRepositoryOwner: { login: "someone" } },
+  ];
+  expect(prItems(prs, "").map((i) => i.key)).toEqual(["12", "130"]);
+  expect(prItems(prs, "#1").map((i) => i.key)).toEqual(["12", "130"]);
+  expect(prItems(prs, "13").map((i) => i.key)).toEqual(["130"]);
+  expect(prItems(prs, "LOGIN").map((i) => i.key)).toEqual(["12"]);
+  expect(prItems(prs, "docs")[0]).toEqual({ key: "130", label: "#130 Docs", hint: "someone:main" });
+  expect(prItems(prs, "nothing")).toEqual([]);
 });
 
 test("a newer create overtakes every running one not made with Create more (PROJ-020)", () => {

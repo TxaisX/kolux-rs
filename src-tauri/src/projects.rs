@@ -43,7 +43,7 @@ pub struct Created {
 }
 
 /// GIT-067: creations in one repository take turns; a failed one hands the turn on at once.
-fn repo_turn(repo: &Path) -> Arc<Mutex<()>> {
+pub(crate) fn repo_turn(repo: &Path) -> Arc<Mutex<()>> {
     static TURNS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
     let key = repo.to_string_lossy().to_lowercase();
     TURNS.get_or_init(Default::default).lock().unwrap_or_else(PoisonError::into_inner).entry(key).or_default().clone()
@@ -90,7 +90,7 @@ pub const REFRESH_BASE_SETTING: &str = "refreshBaseFirst";
 pub const MAX_USER_PREFIX: usize = 40;
 
 /// Compares two folders the way Windows does: same canonical path, letter case ignored.
-fn same_folder(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_lowercase();
     norm(a) == norm(b)
 }
@@ -859,6 +859,52 @@ pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project
     let store = store.lock().map_err(|e| e.to_string())?;
     set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
     note_seen(&store, &project, &made.worktree.path)?;
+    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+    Ok(made)
+}
+
+/// PROJ-030: the open pull requests of the project's repository, for the composer to pick from.
+#[tauri::command(async)]
+pub fn workspace_prs(store: StoreState<'_>, project_id: String) -> Result<Vec<crate::pr_checkout::PrHead>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    crate::pr_checkout::list(&crate::scm::gh_program()?, Path::new(&project.path))
+}
+
+/// PROJ-030: opens pull request `number` as a workspace, linked to it. A pull request from a
+/// fork is fetched through a remote for the fork, at the same kind of address as origin.
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, project_id: String, number: u64, folder: Option<String>, name: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+    let (project, place) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let project = find_project(&store, &project_id)?;
+        let place = place_for(&store, &project);
+        (project, place)
+    };
+    let repo = Path::new(&project.path);
+    let pr = crate::pr_checkout::view(&crate::scm::gh_program()?, repo, number)?;
+    let fork = if pr.is_cross_repository {
+        let origin = crate::git::run(&["remote", "get-url", "origin"], Some(repo)).map_err(|_| "this project has no origin remote to find the fork from".to_string())?;
+        let owner = pr.head_repository_owner.as_ref().map(|o| o.login.clone()).ok_or("gh did not say whose fork the pull request comes from")?;
+        let repo_name = pr.head_repository.as_ref().map(|r| r.name.clone()).ok_or("gh did not say which fork the pull request comes from")?;
+        Some(crate::pr_checkout::fork_url(&origin, &owner, &repo_name).ok_or("origin is not a GitHub address, so the fork's address is not known")?)
+    } else {
+        None
+    };
+    let opened = crate::pr_checkout::open(&git, &place, &project, &pr, fork.as_deref(), folder.as_deref(), &|| dropped(ticket));
+    if let Some(t) = ticket {
+        settle_create(t);
+    }
+    let (mut made, reused) = opened?;
+    let store = store.lock().map_err(|e| e.to_string())?;
+    set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": reused, "pr": pr.url })))?;
+    if crate::scm::link_printed(&store, &made.worktree.path, &pr.url) {
+        let _ = tauri::Emitter::emit(&app, "settings-saved", ()); // the window's copy of the links is stale otherwise
+    }
+    note_seen(&store, &project, &made.worktree.path)?;
+    let shown = name.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&pr.title).to_string();
+    set_name(&store, &made.worktree.path, Some(&shown))?;
+    made.worktree.name = Some(shown);
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
     Ok(made)
 }

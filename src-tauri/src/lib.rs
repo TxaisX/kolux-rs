@@ -28,6 +28,7 @@ mod procs;
 mod resources;
 mod projects;
 mod scm;
+mod pr_checkout;
 mod pty;
 mod routing;
 mod schedule;
@@ -214,6 +215,8 @@ pub fn run() {
             projects::workspace_preview,
             projects::workspace_create,
             projects::workspace_create_cancel,
+            projects::workspace_prs,
+            projects::workspace_open_pr,
             projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,

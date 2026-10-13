@@ -27,7 +27,8 @@ test("the title carries the repository only when several have agents; long repli
 });
 
 test("a stop names its cause and the reset time, never reads like a finish, and is one note per episode (STAT-022, STAT-023)", () => {
-  const at = new Date(2026, 9, 12, 15, 5).getTime();
+  const today = new Date(); // a reset today reads as a bare time, so the test date is today's
+  const at = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 15, 5).getTime();
   expect(turnNote("working", turn("blocked", { stop: { cause: "limit", resetsAt: at } }))).toEqual({ what: "stopped: limit reached", body: "Resets at 3:05 PM", stopped: true });
   expect(turnNote("working", turn("blocked", { stop: { cause: "signin", detail: "authentication_failed" } }))).toEqual({ what: "stopped: sign in again", body: "authentication_failed", stopped: true });
   expect(turnNote("blocked", turn("blocked", { stop: { cause: "signin" } }))).toBeNull();

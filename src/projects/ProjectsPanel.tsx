@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, type PendingCreate } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, type PendingCreate, type PrHead } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
@@ -166,6 +166,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [name, setName] = useState("");
   const [existing, setExisting] = useState(false); // PROJ-030: open a branch that already exists instead of making one
   const [branchList, setBranchList] = useState<string[]>([]);
+  const [prList, setPrList] = useState<PrHead[] | null>(null); // PROJ-030: the open pull requests, null when not opening one
+  const [prDraft, setPrDraft] = useState<PrHead | null>(null);
   const [branchDraft, setBranchDraft] = useState(""); // SESS-037: Advanced branch name (the branch to reuse with existing)
   const [parentDraft, setParentDraft] = useState<string | null>(null); // SESS-037: the parent worktree, none by default
   const [advanced, setAdvanced] = useState(false);
@@ -275,6 +277,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       live = false;
     };
   }, [name, creating, branchDraft, existing]);
+  useEffect(() => {
+    setPrList(null); // PROJ-030: another project's pull requests are not this one's
+    setPrDraft(null);
+  }, [creating]);
 
   useEffect(() => {
     // SESS-036: the name field suggests the project's branches too.
@@ -397,14 +403,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const branch = branchDraft.trim();
     // SESS-036: a name that is an existing branch opens that branch rather than making a new one.
     const reuse = existing ? branch : branchList.includes(name.trim()) ? name.trim() : "";
-    if (existing ? !reuse : !name.trim() || preview === null) return;
+    const pr = prList !== null ? prDraft : null; // PROJ-030: open a pull request's branch
+    if (prList !== null ? !pr : existing ? !reuse : !name.trim() || preview === null) return;
     const keepOpen = more; // SESS-038: Create more keeps the composer open for the next one
     const typed = name.trim();
     const parent = parentDraft;
     const from = shown.current;
     const prompt = promptDraft.trim();
     const agent = agentDraft ? (installed.find((a) => a.id === agentDraft) ?? null) : prompt ? fallbackAgent : null;
-    const mine: PendingCreate = { ticket: ++tickets.current, projectId: project.id, name: typed || reuse, more: keepOpen };
+    const mine: PendingCreate = { ticket: ++tickets.current, projectId: project.id, name: typed || (pr ? `#${pr.number}` : reuse), more: keepOpen };
     for (const t of overtakenBy(pendingNow.current, mine)) {
       overtaken.current.add(t);
       invoke("workspace_create_cancel", { ticket: t }).catch(() => {});
@@ -413,13 +420,16 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     setName("");
     setBranchDraft("");
     setPromptDraft("");
+    setPrDraft(null);
     if (!keepOpen) {
       setCreating(null);
       setBaseDraft("");
       setParentDraft(null);
     }
     try {
-      const wt = reuse
+      const wt = pr
+        ? await invoke<Created>("workspace_open_pr", { projectId: project.id, number: pr.number, folder: typed || null, name: typed || null, parent, ticket: mine.ticket })
+        : reuse
         ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket })
         : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket });
       const lost = overtaken.current.has(mine.ticket);
@@ -500,7 +510,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     if (e.key === "Enter" && p) create(p);
     else if (e.key === "Escape") setCreating(null);
   };
-  const reusing = !existing && branchList.includes(name.trim());
+  const reusing = !existing && prList === null && branchList.includes(name.trim());
+  const openPrs = (p: Project) => {
+    setExisting(false);
+    setPrList([]);
+    invoke<PrHead[]>("workspace_prs", { projectId: p.id }).then(setPrList).catch((err) => {
+      setPrList(null);
+      fail(err);
+    });
+  };
   const nameField = (p: Project | null) => (
     <div className="sb-form composer" data-create={p?.id ?? ""}>
       <Picker key={`project-${p?.id ?? ""}`} name="Project" value={p?.name ?? "pick a project"} items={projectItems} onPick={pickProject} startOpen={!p} />
@@ -516,7 +534,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         onKeyDown={submitKeys(p)}
       />
       <div className="preview">
-        {existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
+        {prList !== null ? (prDraft ? `checks out pull request #${prDraft.number} (${prDraft.headRefName}) at its latest commit, linked to it` : prList.length ? "Pick the pull request under Advanced." : "No open pull requests.") : existing ? (branchDraft.trim() ? `checks out ${branchDraft.trim()} as it is, its commits kept` : "Pick the branch to open under Advanced.") : reusing ? `uses the existing branch ${name.trim()} as it is, its commits kept` : previewSentence(name, preview, p)}
       </div>
       {p && <Picker key={`parent-${p.id}`} name="Parent" value={parentLabel(p)} items={parentItems(p)} onPick={(k) => setParentDraft(k || null)} onEmptyEnter={() => setParentDraft(null)} />}
       <select aria-label="agent" className="field" value={agentDraft} onChange={(e) => setAgentDraft(e.target.value)}>
@@ -528,10 +546,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         ))}
       </select>
       <textarea aria-label="note" className="field multi grow" placeholder="note: the first prompt for the agent (optional)" value={promptDraft} onChange={(e) => setPromptDraft(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setCreating(null)} />
-      <button className="link" aria-expanded={advanced || existing} onClick={() => setAdvanced(!(advanced || existing))}>
-        {advanced || existing ? "Hide advanced" : "Advanced…"}
+      <button className="link" aria-expanded={advanced || existing || prList !== null} onClick={() => setAdvanced(!(advanced || existing || prList !== null))}>
+        {advanced || existing || prList !== null ? "Hide advanced" : "Advanced…"}
       </button>
-      {(advanced || existing) && (
+      {(advanced || existing || prList !== null) && (
         <div className="composer-advanced" data-advanced>
           <label>Branch name</label>
           <input
@@ -544,10 +562,17 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
             onKeyDown={submitKeys(p)}
           />
           <label className="check">
-            <input type="checkbox" aria-label="reuse an existing branch" checked={existing} onChange={(e) => setExisting(e.target.checked)} />
+            <input type="checkbox" aria-label="reuse an existing branch" checked={existing} onChange={(e) => (setExisting(e.target.checked), setPrList(null), setPrDraft(null))} />
             Reuse an existing branch (check it out, make none)
           </label>
-          {!existing && (
+          <label className="check">
+            <input type="checkbox" aria-label="open a pull request" checked={prList !== null} onChange={(e) => (e.target.checked && p ? openPrs(p) : (setPrList(null), setPrDraft(null)))} />
+            Open a pull request (its branch, linked to it)
+          </label>
+          {prList !== null && (
+            <Picker key={`pr-${p?.id ?? ""}`} name="Pull request" value={prDraft ? `#${prDraft.number} ${prDraft.title}` : "pick a pull request"} items={(q) => prItems(prList, q)} onPick={(k) => setPrDraft(prList.find((x) => String(x.number) === k) ?? null)} startOpen={!prDraft} />
+          )}
+          {!existing && prList === null && (
             <input aria-label="start from" className="field" placeholder={p?.base ? `start from: ${p.base} (saved)` : "start from: the default branch"} value={baseDraft} onChange={(e) => setBaseDraft(e.target.value)} onKeyDown={submitKeys(p)} />
           )}
         </div>
@@ -558,7 +583,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
         ))}
       </datalist>
       <div className="btn-row">
-        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || !p || (existing ? !branchDraft.trim() : !name.trim() || preview === null)}>
+        <button className="btn" onClick={() => p && create(p)} disabled={busy !== "" || !p || (prList !== null ? !prDraft : existing ? !branchDraft.trim() : !name.trim() || preview === null)}>
           Create workspace
         </button>
         <button className="btn" onClick={() => setCreating(null)}>

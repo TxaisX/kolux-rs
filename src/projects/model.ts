@@ -114,6 +114,18 @@ export function createOpens(projectId: string): "name" | "add" {
   return projectId ? "name" : "add";
 }
 
+/** PROJ-030: an open pull request the composer can open as a workspace (gh's fields). */
+export type PrHead = { number: number; title: string; url: string; headRefName: string; headRefOid: string; isCrossRepository?: boolean; headRepositoryOwner?: { login: string } | null };
+
+/** PROJ-030: the pull requests matching the typed text by number (with or without #), title or
+ * head branch, in gh's order; the label is "#12 Title" and the hint the head branch. */
+export function prItems(list: PrHead[], query: string): { key: string; label: string; hint: string }[] {
+  const q = query.trim().toLowerCase().replace(/^#/, "");
+  return list
+    .filter((p) => !q || String(p.number).startsWith(q) || p.title.toLowerCase().includes(q) || p.headRefName.toLowerCase().includes(q))
+    .map((p) => ({ key: String(p.number), label: `#${p.number} ${p.title}`, hint: p.isCrossRepository && p.headRepositoryOwner ? `${p.headRepositoryOwner.login}:${p.headRefName}` : p.headRefName }));
+}
+
 /** PROJ-020: a create the window has handed to Git and not yet heard back from. */
 export type PendingCreate = { ticket: number; projectId: string; name: string; more: boolean };
 
