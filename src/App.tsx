@@ -62,6 +62,7 @@ import Explorer from "./editor/Explorer";
 import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount } from "./terminal/grid";
+import { gpuOn } from "./terminal/renderer";
 import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
@@ -305,6 +306,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     toastTimer.current = window.setTimeout(() => setToastText(null), 4000);
   };
   const nextKey = useRef(layout ? Math.max(1, ...layout.panes.map((p) => p.key)) + 1 : 2);
+  // TERM-106: the tabs that came back from the saved layout replay their saved output first.
+  const restoredKeys = useRef(new Set((layout?.panes ?? []).map((p) => p.key)));
   const runPanes = useRef<Record<string, number>>({});
 
   useEffect(() => {
@@ -1555,6 +1558,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   const dropPanes = (keys: number[]) => {
     const gone = new Set(keys);
     keys.forEach((k) => delete ptys.current[k]);
+    // TERM-106: a tab closed on purpose is not brought back after a restart.
+    keys.forEach((k) => void invoke("terminal_forget_history", { paneKey: k }).catch(() => {}));
     setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
     setRunning((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.has(Number(k)))));
     setDirty((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !gone.has(Number(k)))));
@@ -2364,6 +2369,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                   </div>
                 </div>
               )}
+              {/* TERM-017: cells are keyed by group and panes by key, and a split only inserts, so a
+                  pane's terminal is never remounted (never respawned) by a layout change. */}
               {cells.map((c) => {
                 // VIEW-015: on the Agents screen the picked session is the one shown, whatever tab its cell had in front.
                 const mine = agentsScreen && c.panes.some((p) => p.key === selected);
@@ -2488,6 +2495,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                   <TerminalPane
                     key={p.key}
                     hidden={!board && p.key !== active}
+                    restored={restoredKeys.current.has(p.key)}
+                    gpu={gpuOn(settings)}
                     card={board ? { expanded: expanded === p.key, onToggle: () => setExpanded((x) => toggleCard(x, p.key)), chip: chipFor(p), column: columnOf(p), onAnswer: (ok) => void answer(p, ok), meter: p.seats || p.kind ? null : meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) } : undefined}
                     cwd={p.cwd}
                     branch={p.branch}

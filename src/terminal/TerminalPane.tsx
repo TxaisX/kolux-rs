@@ -12,8 +12,11 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import { attachRenderer, type RendererMode } from "./renderer";
+import { attachRenderer, watchResume, type RendererMode } from "./renderer";
+import { copySelection } from "./copy";
+import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
+import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
@@ -45,6 +48,8 @@ export type PaneNotice = { title: string; body: string; primary: string; onPrima
 type Props = {
   /** Kept mounted but not shown: another workspace is in front (PROJ-066). */
   hidden?: boolean;
+  /** TERM-103: false draws plain; true tries the GPU path (six panes at most, the rest plain). */
+  gpu?: boolean;
   /** VIEW-024: the saved agent's name, shown in the header in place of the program word. */
   name?: string;
   cwd?: string | null;
@@ -80,6 +85,8 @@ type Props = {
   account?: string | null;
   /** ACCT-064: a question shown over the terminal (the Codex account changed); null for none. */
   notice?: PaneNotice | null;
+  /** TERM-106: the pane came back from the saved layout; what it printed before is shown first. */
+  restored?: boolean;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
@@ -131,7 +138,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null, restored = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
   const handleRef = useRef(findHandle);
@@ -149,8 +156,15 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
   const [glow, setGlow] = useState(false); // TERM-023: finished while not focused
   const [now, setNow] = useState(() => Date.now());
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
+  // TERM-065: a short line in the header when the clipboard refused a copy; the selection stays.
+  const [flash, setFlash] = useState<string | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 6000);
+    return () => clearTimeout(t);
+  }, [flash]);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
-  // TERM-027: the pane menu and the inline name field.
+  // TERM-027 / TERM-116: the pane menu and the inline name field.
   const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
   const [naming, setNaming] = useState(false);
   // The menu shows a shortcut only once one is assigned (both start with none).
@@ -160,6 +174,8 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
     if (renameAsk > 0 && onRename) setNaming(true);
   }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
   const idRef = useRef<number | null>(null);
+  const isHidden = useRef(hidden);
+  isHidden.current = hidden;
   const keymap = useKeymap();
   const keys = useRef(keymap);
   keys.current = keymap;
@@ -226,7 +242,7 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
         done(links.length > 0 ? links : undefined);
       },
     });
-    const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon());
+    const choice = attachRenderer<WebglAddon>(term, () => new WebglAddon(), gpu);
     setRenderer(choice.mode);
     choice.onFallback(() => setRenderer("dom"));
     fit.fit();
@@ -242,9 +258,17 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
       else if (id === idRef.current) run();
     };
     const unlisteners: UnlistenFn[] = [];
+    // TERM-115: keys typed while the shell is still starting are held and sent once it runs
+    // (capped); a write the program side refuses is said out loud rather than lost in silence.
+    const held = new HeldKeys();
     const write = (data: string) => {
       const id = idRef.current;
-      if (id !== null && !ended) invoke("terminal_write", { id, data }).catch(() => {});
+      if (ended) return;
+      if (id === null) {
+        if (!held.push(data)) setFlash("Keys typed before the shell started were dropped past 16 KB");
+        return;
+      }
+      invoke("terminal_write", { id, data }).catch((e) => setFlash(`Typing could not reach the program (${String(e)})`));
     };
     term.onData(write);
     term.onBell(() => bell.current?.());
@@ -264,8 +288,33 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
       }, 1500);
     };
     // TERM-068 lives in paste.ts (tested there); the paste chords are left to the browser instead of xterm.
-    const pasting = attachPaste(term.textarea, (text) => term.paste(text), () => pending !== null);
-    term.attachCustomKeyEventHandler((e) => !(e.type === "keydown" && matchEvent(keys.current, e, ["terminal"])?.id === "terminal.paste"));
+    const pasting = attachPaste(
+      term.textarea,
+      (text) => {
+        term.paste(text);
+        // TERM-103: a paste burst fills the glyph atlas with one-off runs; start it fresh afterwards.
+        if (text.length > 2048) choice.clearGlyphs();
+      },
+      () => pending !== null,
+    );
+    // TERM-065: the copy chord copies a selection and gives the keyboard back; Ctrl+C with nothing
+    // selected is the program's interrupt and goes through untouched. Nothing selected under
+    // Ctrl+Shift+C does nothing and says nothing.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      const id = matchEvent(keys.current, e, ["terminal"])?.id;
+      if (id === "terminal.paste") return false;
+      if (id === "terminal.selectAll") {
+        e.preventDefault();
+        term.selectAll();
+        return false;
+      }
+      if (id !== "terminal.copySelection") return true;
+      if (!term.hasSelection()) return !(e.shiftKey || e.metaKey);
+      e.preventDefault();
+      void copySelection(term, (text) => navigator.clipboard.writeText(text), setFlash);
+      return false;
+    });
 
     (async () => {
       unlisteners.push(
@@ -308,6 +357,30 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
         return;
       }
       try {
+        // TERM-106: a pane back from a restart shows what it printed before, then a fresh shell. The
+        // saved file is a transcript of everything this pane's terminal processed, so replaying it
+        // draws the same screen; what the pane writes next (reset, note, screen pushed up, cursor at
+        // the top) goes into the file too, before the shell starts, so the next restart replays true.
+        // The view keeps the old output and the note above the new prompt until the user types: the
+        // pty's first frames come after the spawn and move the prompt row, so the view follows each
+        // of them (an idle shell writes nothing more) and lets go at the first key. A key, not
+        // onData: the terminal's own answers to the shell's start-up questions go through onData.
+        let keepInView = false;
+        if (restored) {
+          const saved = await invoke<string>("terminal_history", { paneKey: number }).catch(() => "");
+          if (!alive) return;
+          const text = replay(saved);
+          if (text) {
+            await new Promise<void>((done) => term.write(text, done));
+            if (!alive) return;
+            const tail = restoreTail(term.buffer.normal, term.rows);
+            await new Promise<void>((done) => term.write(tail, done));
+            if (!alive) return;
+            await invoke("terminal_history_append", { paneKey: number, data: encodeHistory(tail) }).catch(() => {});
+            if (!alive) return;
+            keepInView = true;
+          }
+        }
         const { id, program: ran, account: used } = await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number, account: account ?? null });
         setStarted(ran);
         if (!alive) {
@@ -315,10 +388,19 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
           return;
         }
         idRef.current = id;
+        if (keepInView) {
+          const follow = term.onWriteParsed(() => term.scrollToLine(viewTop(term.buffer.active, term.rows)));
+          const stop = term.onKey(() => {
+            follow.dispose();
+            stop.dispose();
+          });
+        }
         setStatus({ kind: "running", id, account: used });
-        const held = early ?? [];
+        const queued = early ?? [];
         early = null;
-        for (const h of held) if (h.id === id) h.run();
+        for (const h of queued) if (h.id === id) h.run();
+        held.drain(write);
+        if (held.dropped > 0) setFlash(`${held.dropped} characters typed before the shell started were dropped`);
         if (isFocused.current) term.focus();
       } catch (err) {
         early = null;
@@ -347,12 +429,31 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
       mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
+    // TERM-103 / TERM-114: after the machine slept the GPU's glyph atlas may be stale and the
+    // program's size may be behind; a late heartbeat says so. A display scale change does the same.
+    const wake = () => {
+      choice.clearGlyphs();
+      resize();
+    };
+    const sleep = watchResume(wake);
+    const beat = setInterval(sleep.tick, 5000);
+    const scale = watchScale(wake);
+    // TERM-114: the window coming back puts typing in the pane that had it, unless the user
+    // clicked somewhere else meanwhile.
+    const refocus = () => {
+      if (!isHidden.current && shouldRefocus(isFocused.current, document.activeElement)) term.focus();
+    };
+    window.addEventListener("focus", refocus);
 
     return () => {
       alive = false;
       window.removeEventListener(DIVIDER_DONE, resize);
       window.removeEventListener(TERMINAL_EVENT, recolour);
       mode.dispose();
+      clearInterval(beat);
+      scale.dispose();
+      window.removeEventListener("focus", refocus);
+      termRef.current = null;
       clearTimeout(quiet);
       observer.disconnect();
       unlisteners.forEach((u) => u());
@@ -384,6 +485,31 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
     needs.current?.(needsYou);
   }, [needsYou]);
   const drawing = renderer === "webgl" ? "GPU renderer" : renderer === "dom" ? "plain renderer" : "";
+  // TERM-116: the last 60 lines on screen plus what Kolux knows, scrubbed on the Rust side, to the
+  // clipboard; every way it can fail says so in the header.
+  const copyDiagnostics = async () => {
+    const term = termRef.current;
+    const id = idRef.current;
+    if (!term || id === null) {
+      setFlash("No session to describe yet");
+      return;
+    }
+    const screen = screenLines(term.buffer.active);
+    let text: string;
+    try {
+      text = await invoke<string>("terminal_diagnostics", { id, cols: term.cols, rows: term.rows, renderer: drawing || "unknown", screen });
+    } catch (e) {
+      setFlash(`Diagnostics could not be built (${String(e)})`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setFlash("Diagnostics copied");
+    } catch (e) {
+      setFlash(`Diagnostics could not be copied (${e instanceof Error ? e.message : String(e)})`);
+    }
+    term.focus();
+  };
   // The seat's job title names the pane; else the workspace folder (an agent launch's creature
   // name); else "Terminal N" (SESS-024).
   const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
@@ -432,6 +558,11 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
         <span className={`status ${tone}`} data-tip={explain}>
           {word}
         </span>
+        {flash && (
+          <span className="status attention" role="status">
+            {flash}
+          </span>
+        )}
         {crew && crew.length > 0 && (
           <span className="crew" title={crew.map(crewLine).join("\n")}>
             {crewLabel(crew)}
@@ -462,7 +593,6 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
             title="Pane menu"
             aria-haspopup="menu"
             aria-expanded={menuAt !== null}
-            disabled={!onRename && !onCopyId}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
               setMenuAt({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
@@ -500,10 +630,10 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
           </button>
         </span>
       </header>
-      {menuAt && (onRename || onCopyId) && (
+      {menuAt && (
         <>
-          <div className="menu-backdrop" onClick={() => setMenuAt(null)} aria-hidden="true" />
-          <div className="menu" role="menu" aria-label="Pane" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
+          <div className="menu-backdrop" onClick={() => setMenuAt(null)} onContextMenu={(e) => (e.preventDefault(), setMenuAt(null))} aria-hidden="true" />
+          <div className="menu" role="menu" aria-label="Pane menu" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
             {onRename && (
               <button
                 role="menuitem"
@@ -544,6 +674,18 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
                   <span className="name">{label}</span>
                 </button>
               ))}
+            <button
+              role="menuitem"
+              className="menu-item"
+              title="A scrubbed snapshot of this pane for a bug report, to the clipboard"
+              onClick={() => {
+                setMenuAt(null);
+                void copyDiagnostics();
+              }}
+            >
+              <span className="agent-mark" />
+              <span className="name">Copy terminal diagnostics</span>
+            </button>
           </div>
         </>
       )}
