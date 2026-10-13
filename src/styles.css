@@ -950,6 +950,7 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .pane-head .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-faint); font: 11px var(--mono-font); }
 .unsaved { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--working-icon); }
 .notice.load-failed .btn { margin-left: auto; }
+.notice.save-stale .btn:first-of-type { margin-left: auto; }
 
 /* EDIT-012: markdown tabs have a Rich | Source switch; rich and preview share one document look. */
 .view-switch { flex: none; display: flex; gap: 1px; padding: 1px; border: 1px solid var(--line-subtle); border-radius: 6px; }

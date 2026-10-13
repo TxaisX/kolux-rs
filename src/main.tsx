@@ -27,7 +27,8 @@ async function start() {
   if (saved) applyAppearance(readAppearance(stamped || saved));
   // SET-017: the saved language is in force before the first frame draws.
   applyLanguage(saved?.[LANGUAGE_FIELD]);
-  // PROJ-067: the saved tabs come back, less those whose folder is gone.
+  // PROJ-067: the saved tabs come back, less those whose folder is gone. VIEW-107 (T-069-b): App is
+  // told whether the settings answered, so a slow start saves no layout over the saved tabs.
   let layout = restoreLayout((stamped || saved || {})[LAYOUT_FIELD]);
   if (layout) {
     const dirs = [...new Set([...layout.panes.map((p) => p.cwd), layout.activeDir].filter((d): d is string => d !== null))];
@@ -45,7 +46,7 @@ async function start() {
   }
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App initial={stamped || saved || {}} layout={layout} />
+      <App initial={stamped || saved || {}} layout={layout} read={saved !== null} />
     </React.StrictMode>,
   );
   requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));

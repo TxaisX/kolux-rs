@@ -32,7 +32,7 @@ import { closeSet, returnTab, type Which } from "./terminal/tabClose";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
-import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, stripOn } from "./settings/general";
+import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, readLook, saveLayout, startScreen, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, type PaletteItem } from "./projects/WorktreePalette";
@@ -152,10 +152,10 @@ type StartLine = { args: string[]; typed: string | null; program: string | null;
 
 /** Columns for a pane count: 1, side by side for 2, two rows for 3-4, then three across. */
 /** `initial`: the settings read before the first frame (main.tsx), so the first screen is right at once. */
-export default function App({ initial = {}, layout = null }: { initial?: Record<string, unknown>; layout?: SavedLayout | null }) {
+export default function App({ initial = {}, layout = null, read = true }: { initial?: Record<string, unknown>; layout?: SavedLayout | null; read?: boolean }) {
   return (
     <KeymapProvider>
-      <Window initial={initial} layout={layout} />
+      <Window initial={initial} layout={layout} read={read} />
     </KeymapProvider>
   );
 }
@@ -165,7 +165,7 @@ export function nextScreen(s: Screen): Screen {
   return screens[(screens.findIndex((x) => x.id === s) + 1) % screens.length].id;
 }
 
-function Window({ initial, layout }: { initial: Record<string, unknown>; layout: SavedLayout | null }) {
+function Window({ initial, layout, read }: { initial: Record<string, unknown>; layout: SavedLayout | null; read: boolean }) {
   const keymap = useKeymap();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [screen, setScreen] = useState<Screen>(() => startScreen(initial)); // SET-037
@@ -1183,9 +1183,15 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     return () => void off.then((f) => f()).catch(() => {});
   }, []);
   // PROJ-067: the tabs and layout are written down as they change, so they come back after a restart.
+  // VIEW-107 (T-069-b): not before a real read of the settings landed (a start that timed out has
+  // not seen the saved tabs, so writing its layout would drop them); a failed write is retried once,
+  // then only the durable part is written.
   useEffect(() => {
+    if (!read && !settingsRead) return;
     const l = layoutOf(panes, activeTab, focused, activeDir, stacked);
-    if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) !== JSON.stringify(l)) saveSetting(LAYOUT_FIELD, l);
+    if (JSON.stringify(settings[LAYOUT_FIELD] ?? null) === JSON.stringify(l)) return;
+    setSettings({ ...settings, [LAYOUT_FIELD]: l });
+    saveLayout(l, (v) => saveChanged({}, { [LAYOUT_FIELD]: v })).catch((err) => setNotice(String(err)));
   }, [panes, activeTab, focused, activeDir, stacked]);
 
   // PROJ-066: a click on a workspace row shows that workspace on the same click. Its panes were

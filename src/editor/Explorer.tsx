@@ -3,7 +3,9 @@
 // parent; Enter or a click opens a file; Mod-click and Shift-click select several rows. Only the rows
 // on screen are drawn, so a huge folder scrolls smoothly. A symlink opens as a folder only once
 // it is confirmed to point at one. Open folders and the scroll survive hiding the panel; App mounts
-// one explorer per worktree, so they reset when the worktree changes.
+// one explorer per worktree, so they reset when the worktree changes. With no watcher yet (T-444),
+// files made outside the app show up when the window gets the focus back or the panel is shown:
+// the root and every open folder are read again in place, keeping open folders and the scroll.
 // File operations (EDIT-034, part 1): New file and New folder in the header, F2 renames in place
 // (Enter or leaving the field commits, Escape cancels), Delete moves the selection to the trash after
 // one question, Mod+Z and Mod+Shift+Z (or Ctrl+Y) undo and redo those, and the path or the relative
@@ -130,7 +132,15 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
       },
       (err) => setFailed((f) => ({ ...f, [dir]: String(err) })),
     );
-  useEffect(() => void load(root), [root]);
+  const shownDirs = useRef<string[]>([]);
+  shownDirs.current = [root, ...open];
+  useEffect(() => {
+    if (hidden) return;
+    const again = () => shownDirs.current.forEach((d) => void load(d));
+    again();
+    window.addEventListener("focus", again);
+    return () => window.removeEventListener("focus", again);
+  }, [root, hidden]);
   const reloadAround = (paths: string[]) => new Set(paths.map(parentOf)).forEach((d) => void load(d));
 
   useEffect(() => {

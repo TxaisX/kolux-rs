@@ -1,5 +1,25 @@
 import { expect, test, vi } from "vitest";
-import { lastWriter, openPageAt, readLook, savedFirst, stampLook, startScreen } from "./general";
+import { durableOnly, lastWriter, openPageAt, readLook, saveLayout, savedFirst, stampLook, startScreen } from "./general";
+import type { SavedLayout } from "../terminal/layout";
+
+test("VIEW-107: a failed layout save is retried once, then only the durable part is saved", async () => {
+  const l: SavedLayout = { panes: [{ key: 1, cwd: "C:/a", branch: null, agent: "shell", program: null, args: [] }], activeTab: { 0: 1 }, focused: 1, activeDir: "C:/a", stacked: { "C:/a": true } };
+  const ok = vi.fn(async () => {});
+  expect(await saveLayout(l, ok, 0)).toBe("saved");
+  expect(ok).toHaveBeenCalledTimes(1);
+  const once = vi.fn().mockRejectedValueOnce(new Error("busy")).mockResolvedValue(undefined);
+  expect(await saveLayout(l, once, 0)).toBe("retried");
+  expect(once).toHaveBeenCalledTimes(2);
+  const twice = vi.fn().mockRejectedValueOnce(new Error("busy")).mockRejectedValueOnce(new Error("busy")).mockResolvedValue(undefined);
+  expect(await saveLayout(l, twice, 0)).toBe("durable");
+  expect(twice).toHaveBeenLastCalledWith(durableOnly(l));
+  expect(durableOnly(l)).toEqual({ panes: l.panes, activeTab: {}, focused: 0, activeDir: "C:/a", stacked: {} });
+  const never = vi.fn(async () => {
+    throw new Error("unreadable");
+  });
+  await expect(saveLayout(l, never, 0)).rejects.toThrow("unreadable");
+  expect(never).toHaveBeenCalledTimes(3);
+});
 
 test("a fresh profile is New, an existing one without the choice is Classic", () => {
   expect(readLook({})).toBe("new");

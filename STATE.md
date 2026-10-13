@@ -590,7 +590,12 @@ Inbox; Agents and Board only under New) with the page that was open, Tasks inclu
 first screen in General sets the next start's screen. A run of quick switches is written once, and
 a pending one before the window closes; an unreadable settings file opens on Board with no
 error. With no screen ever chosen a New profile opens on Board (T-049-a). Closing the window with unsaved editor text asks first (Keep working / Quit without
-saving). Workspaces and tabs coming back after a restart is T-069-b.
+saving). A slow start no longer drops the saved tabs (T-069-b): until settings.json has really been
+read, a change to the panes writes no layout, so the fallback shell shown while get_settings
+hangs never replaces the saved tabs; the next normal start shows them all. A layout write that
+fails is tried once more, then only the tabs and the workspace in front are written (focus,
+active tabs and stacking dropped). Rebuilding restored workspaces in session order in one pass
+is T-069-c.
 
 [orchestration] T-189-a adds the Automations title-bar button and asks an agent to resolve
 merge conflicts (VIEW-011, VIEW-069). Settings > Appearance has a Title bar card whose
@@ -1497,6 +1502,10 @@ filter, jump and tick files off as viewed; large files wait for a click, images 
 T-094-a brings the explorer (EDIT-033). Ctrl+Shift+E, or the right-panel button in the top bar,
 opens the worktree's files on the right; walk it with the arrow keys or the mouse and open a file with
 Enter or a click. Creating, renaming and deleting files from it come next (T-094-b).
+Files made outside the app (an agent, a terminal) show up when the Kolux window gets the focus back,
+when the explorer is shown again, or on a workspace switch (T-444): the tree and its open folders are
+read again in place. There is no watcher yet, so a file made while you look at the window waits for one
+of those.
 
 T-094-b adds file operations to the explorer (EDIT-034, part 1). The + and folder buttons in its header
 make a file or folder, F2 renames, Delete moves the selection to the Recycle Bin after one question, and
