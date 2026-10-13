@@ -571,7 +571,8 @@ foundations every later card stands on; the cards they touch are finished in the
 ### P2 · theme 11 · Orchestration and automations (8 cards)
 
 - [ ] T-288 · PROJ-036 Linked issues can start with a per-project issue command
-- [ ] T-289 · TERM-036 Copy session, terminal and pane IDs · TERM-096 Links to other terminals and orchestration tasks
+- [x] T-289 · TERM-036 Copy session, terminal and pane IDs · TERM-096 Links to other terminals and orchestration tasks (first part: Copy Session ID in the pane menu once the agent's hooks name its session, Copy Terminal ID and Copy Pane ID always, each with a success notice or a failure notice and never both; a whole-word term-N that names an open terminal is a link that opens its pane, and anything else stays plain text)
+- [ ] T-289-b · the rest of T-289's cards: printed orchestration task references (task-N) opening that task, once the window has a view of orchestration tasks
 - [x] T-290 · ORCH-043 Kolux checks whether each agent has the orchestration skill
 - [x] T-291-a · AUTO-023 Automations row in the sidebar, off by default · AUTO-024 Hide or tag worktrees made by automations
 - [x] T-291-b · the rest of T-291-a's cards: the View menu's Appearance tick for the row, and hiding or tagging worktrees made by automations (needs a made-by-automation marker on worktrees, the card properties chooser and View run) (first part: runs that make their own worktree mark it as made by an automation, the sidebar's Group and sort panel switch that hides those workspaces, and moving to one, for example through the worktree palette, turning the switch off; the View menu's Appearance tick for the Automations row is already on T-248's line)
