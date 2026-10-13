@@ -198,7 +198,13 @@ The column headings mean:
 | 21 | 45 | 0 (register area; covered by the Wave 2 audits) | n/a | 57 | 5 | +1 card (HID-045); 0 leaks, 1 similarity fix |
 | **Total** | **1,263** | | 2 areas | **650** | 234 (mixed units) | **+8 cards, 4 amended** |
 
-Every area ended its firewall pass at 0 token-check hits.
+Every area ended its firewall pass at 0 token-check hits. That held for the spec as committed
+(7dad8dd: spec/, SPEC.md and COMPAT.md re-checked 2026-10-13 with the unchanged allowlist, 0 hits),
+but it no longer describes the spec of today: 41 later builder commits added "(Kolux RS ...)" notes
+and amendments that carry 53 hits (Kolux RS's own file names, settings keys and public Claude Code
+status-line field names; no old-app identifier is known among them, but the check cannot tell them
+apart). Since T-541 those 53 are the recorded baseline in `scripts/firewall-baseline.txt`, and
+`scripts/firewall-check.ps1 -Baseline` (CI and the merge gate) fails on any hit beyond it.
 
 The cards by tier:
 
@@ -523,3 +529,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-064-b · The card APP-070, the Send Feedback card's Compat line and the app's own update, artifacts and CLI modules; GitHub's new-issue address parameters (title, body) as its public documentation shows them; the WebView2 flag from Tauri's config reference (additionalBrowserArgs); no outside source.
 > 2026-10-12 · T-065 · The card PROJ-067, DESIGN.md and the lane's own App.tsx/workspaces.ts; no outside source.
 > 2026-10-12 · T-066 · The card SESS-030, Claude Code's public CLI/hook docs (`claude --resume <id>`, hook `session_id`) and the Codex CLI's public `resume` subcommand, read through context7; the lane's own hooks.rs, layout.ts and agents.rs.
+> 2026-10-13 · T-541 · cargo-deny configuration docs (github.com/EmbarkStudios/cargo-deny, docs/src/checks: advisories ignore entries with a reason, bans, sources) and the public GitHub Action taiki-e/install-action, used by name with its tool input (installs cargo-deny on a Windows runner; nothing read from it); RustSec advisory RUSTSEC-2024-0370 as printed by cargo-deny; no code copied; no old Kolux source read

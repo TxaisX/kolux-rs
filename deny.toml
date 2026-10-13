@@ -1,5 +1,5 @@
 # cargo-deny policy. LOOP.md section 0: only these licenses may enter the Rust dependency tree.
-# Run: .tools/bin/cargo-deny check licenses   (CI runs the same)
+# Run from src-tauri: ../.tools/bin/cargo-deny check   (all four checks; CI runs the same, T-541)
 
 [licenses]
 # Our own crate is proprietary (see LICENSE) and never published; the policy is for dependencies.
@@ -17,3 +17,22 @@ allow = [
   "Unicode-DFS-2016",
 ]
 confidence-threshold = 0.8
+
+[advisories]
+# Every RustSec advisory fails the check (vulnerable, unmaintained, unsound, yanked) except the
+# entries below. Each names why it cannot be fixed here and when it was recorded; drop it the day an
+# upgrade exists. A new entry needs its own line in the commit body saying why.
+ignore = [
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unmaintained (not a vulnerability); it comes in only through tauri -> gtk 0.18 -> glib-macros, the Linux GTK stack, and the advisory lists no safe upgrade. Recorded 2026-10-13 by T-541." },
+]
+
+[bans]
+# Two versions of one crate are reported, not failed: they come from the tauri dependency tree.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# Crates come from crates.io only; a git or other-registry dependency fails the check.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
