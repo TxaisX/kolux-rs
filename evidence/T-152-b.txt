@@ -177,3 +177,37 @@ cargo test agent_hooks -- --nocapture --test-threads=1 (scratch env), t_152_b_5 
   kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152b-retry-51564\two\settings.json changed since it was read; nothing written; reading it again
   kolux-rs: claude hooks: G:\Temp\kolux-rs-agent-hooks-t152b-retry-51564\two\settings.json changed since it was read; nothing written
   test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 463 filtered out; finished in 3.01s
+
+== Item 6: batch gates on the lane tree at beb747a (CLAUDE_CONFIG_DIR / CODEX_HOME scratch under G:\Temp\hooks-t152b) ==
+cd src-tauri && cargo build:      Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.36s
+cargo clippy --all-targets -- -D warnings:      Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.97s
+cargo test (exit 0):
+  test result: ok. 494 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 75.17s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+  test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+pnpm test (VITEST_MAX_WORKERS=2):
+  FAIL  scripts/ship.test.mjs > ship (APP-058) > commits, lands a worktree branch on main and pushes both  (Error: Test timed out in 5000ms.)
+  Test Files  1 failed | 119 passed (120)
+       Tests  1 failed | 708 passed (709)
+pnpm exec vitest run scripts/ship.test.mjs --testTimeout=60000:
+  Test Files  1 passed (1)
+       Tests  4 passed (4)
+pnpm exec tsc --noEmit: exit 0, no output
+node scripts/plan-check.mjs --write-state: plan-check: OK
+duplicate-id grep: prints nothing
+grep -c '^## Last 10 passes' STATE.md: 1
+firewall-check -Baseline: 53 hit(s) in 22 file(s), 0 new, 0 baseline entr(ies) no longer present
+
+pnpm smoke -- --port 1419 --cdp 9245 --identifier com.txaisxiong.kolux-rs.hooks.smoke --temp G:/Temp/hooks-t152b
+(stand-in gh first on PATH, KOLUX_APP_DIR under the temp root; the smoke writes .kolux-rs-scratch into its scratch claude-config)
+run 1: output lost (the smoke's cleanup removes its --temp folder, where the output file was; rerun with output elsewhere)
+run 2: flow 1: FAIL: timed out after 30000 ms waiting for 2 shell panes; flows 2-5 PASS; smoke: 4/5 flows passed
+run 3:
+  flow 1: PASS: grid 4 -> 6 (3 shells + 1 empty -> 3 shells + 3 empty); all 3 shells echoed the marker set before the change (same PTY processes)
+  flow 2: PASS: Mod+S wrote notes.txt: disk now holds "typed by smoke 1791925707348" plus the original line (42 bytes)
+  flow 3: PASS: Discard asked first ("Discard changes to notes.txt?", buttons Cancel / Discard); after "Cancel" notes.txt and git status are unchanged
+  flow 4: PASS: Claude pane's dot reads "status: Working" after the stand-in posted SessionStart + UserPromptSubmit; hook installed into the scratch G:\Temp\hooks-t152b\claude-config\settings.json, script C:/Users/XiongT/.kolux-rs/agent-hooks/claude.cmd on disk
+  flow 5: PASS: live: 2 shells, 1 Claude stand-in pane, needsStrip=false; settings.json 1796 bytes · quit: window close over CDP, exited in 2.5 s; pre-close tree 17 (msedgewebview2.exe x6, conhost.exe x5, powershell.exe x4, cmd.exe x1, PING.EXE x1); survivors 0 (none) · come back: settings.json byte-identical; needsStrip=false holds; 2/2 shells restored, 2 echoed a marker; 1 Claude pane back · storm: 10 relaunches with 12 saved shell panes; shells seen [12 12 12 12 12 12 12 12 12 12]; stalled (ThreadCount <= 1 at 15 s) [0 0 0 0 0 0 0 0 0 0] = 0; survivors per close [0 0 0 0 0 0 0 0 0 0 0]
+  smoke: 5/5 flows passed
