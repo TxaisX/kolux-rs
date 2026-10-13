@@ -139,7 +139,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            procs::app_job_start(); // APP-053: everything the app starts from here on ends with it.
+            // APP-053: everything the app starts from here on ends with it; outside its own job (a job the
+            // launcher owns without breakaway, say) the children would outlive a crash, so that is logged.
+            if !procs::app_job_start() {
+                eprintln!("kolux-rs: the app could not be put in its own job object; child processes would survive a crash (APP-053)");
+            }
+            // The config homes this process resolved (defaults included), so a launch that inherited another
+            // app's environment shows up in the log.
+            eprintln!("kolux-rs: config: CLAUDE_CONFIG_DIR={} CODEX_HOME={}", hooks::claude_settings_file().parent().map(|d| d.display().to_string()).unwrap_or_default(), trust::codex_config_file().parent().map(|d| d.display().to_string()).unwrap_or_default());
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
