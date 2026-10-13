@@ -20,18 +20,22 @@ async function start() {
     invoke<Record<string, unknown>>("get_settings").catch(() => null),
     new Promise<null>((r) => setTimeout(() => r(null), 1500)),
   ]);
-  if (saved) applyAppearance(readAppearance(saved));
-  // SET-017: the saved language is in force before the first frame draws.
-  applyLanguage(saved?.[LANGUAGE_FIELD]);
-  // SET-037: the look is written down on the first start, so a fresh profile stays New.
+  // SET-037 / T-418: the look and a missing mode are written down on the first start (New, Dark),
+  // and only from settings really read: after the timeout (`saved` null) nothing is written.
   const stamped = saved && stampLook(saved);
   if (stamped) void saveChanged(saved, stamped).catch(() => {});
-  // PROJ-067: the saved tabs come back, less those whose folder is gone.
+  if (saved) applyAppearance(readAppearance(stamped || saved));
+  // SET-017: the saved language is in force before the first frame draws.
+  applyLanguage(saved?.[LANGUAGE_FIELD]);
+  // PROJ-067: the saved tabs come back, less those whose folder is gone. VIEW-107 (T-069-b): App is
+  // told whether the settings answered, so a slow start saves no layout over the saved tabs.
   let layout = restoreLayout((stamped || saved || {})[LAYOUT_FIELD]);
   if (layout) {
     const dirs = [...new Set([...layout.panes.map((p) => p.cwd), layout.activeDir].filter((d): d is string => d !== null))];
     const kinds = await Promise.all(dirs.map((d) => invoke<string>("path_kind", { path: d }).catch(() => "missing")));
     layout = stillThere(layout, (d) => kinds[dirs.indexOf(d)] !== "missing");
+    // TERM-106: the saved output of tabs no longer in the layout is cleaned up in the background.
+    void invoke("terminal_prune_history", { keep: layout.panes.map((p) => p.key) }).catch(() => {});
     // SESS-030: an agent tab starts again on its standing start line (permission mode, the user's own
     // arguments and environment) plus its own resume command; an agent no longer known keeps the bare line.
     for (const p of layout.panes) {
@@ -42,7 +46,7 @@ async function start() {
   }
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App initial={stamped || saved || {}} layout={layout} />
+      <App initial={stamped || saved || {}} layout={layout} read={saved !== null} />
     </React.StrictMode>,
   );
   requestAnimationFrame(() => requestAnimationFrame(() => void getCurrentWindow().show().catch(() => {})));

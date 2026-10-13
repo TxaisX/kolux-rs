@@ -34,6 +34,7 @@ mod newproject;
 mod notifications;
 mod onboarding;
 mod orchestration;
+mod foreground;
 mod procs;
 mod protected;
 mod resources;
@@ -157,6 +158,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            procs::app_job_start(); // APP-053: everything the app starts from here on ends with it.
             let dir = app.path().app_data_dir()?;
             diag::set_dir(&dir);
             #[cfg(debug_assertions)]
@@ -207,11 +209,20 @@ pub fn run() {
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
             automations::start_clock(app.handle().clone());
-            // Agents report their status through hooks (STAT-001): the listener, the script and
-            // Claude Code's settings entries. ponytail: always on; the switch is STAT-002 (T-120).
+            // Agents report their status through hooks (STAT-001): the listener, then the scripts
+            // and each found, switched-on agent's entries (STAT-004), off the launch path.
+            // STAT-006 / STAT-030: the last run's statuses, with what hooks held while Kolux was
+            // closed, are read before the listener opens.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                hooks::agent_hooks::saved::startup(&store, &dir);
+            }
             let hooks = hooks::serve(app.handle().clone(), &dir)?;
             app.manage(hooks);
-            hooks::install_all();
+            let settings = app.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default();
+            let profile = dir.clone();
+            std::thread::spawn(move || {
+                hooks::agent_hooks::sync(&settings, &profile);
+            });
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.
             let handle = app.handle().clone();
@@ -228,6 +239,12 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(15));
                 resume::tick(&handle, &log_dir);
+            });
+            // ACCT-050: an agent started by hand in a shell pane is recognised within a few seconds.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                foreground::poll(&handle);
             });
             // USAGE-011: changed activity counts are saved in batches.
             let handle = app.handle().clone();
@@ -250,7 +267,13 @@ pub fn run() {
             Ok(())
         })
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
-        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req))
+        // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
+        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
+            if ctx.webview_label() != "main" {
+                return tauri::http::Response::builder().status(403).body(b"not for this page".to_vec()).unwrap_or_default();
+            }
+            artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req)
+        })
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
             if let tauri::WindowEvent::Destroyed = event {
@@ -268,6 +291,10 @@ pub fn run() {
             get_settings,
             save_settings,
             settings_patch,
+            hooks::agent_hooks::agent_hooks_sync,
+            hooks::agent_hooks::agent_hooks_file,
+            hooks::agent_hooks::saved::agent_status_saved,
+            hooks::agent_hooks::saved::agent_resumable,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -327,7 +354,7 @@ pub fn run() {
             trust::trust_folders_cmd,
             scm::scm_status,
             scm::scm_ignore_heavy,
-            scm::scm_pushed, scm::scm_summary, scm::scm_abort,
+            scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
             scm::scm_merge_info,
             scm::scm_merge,
             scm::scm_gh_budget,
@@ -346,6 +373,11 @@ pub fn run() {
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             terminal::terminal_busy,
+            terminal::terminal_diagnostics,
+            terminal::terminal_history,
+            terminal::terminal_forget_history,
+            terminal::terminal_prune_history,
+            terminal::terminal_history_append,
             keybindings::keybindings_read,
             keybindings::keybindings_write,
             projects::workspaces_place_get,
@@ -465,6 +497,10 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 // USAGE-011: open turns end and the counts are written; no batched save follows.
                 activity::save(&app.state::<Mutex<Store>>(), true);
+                // STAT-037: the agents still mid-task are recorded before their terminals end.
+                if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                    hooks::agent_hooks::saved::at_quit(&store);
+                }
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
                 // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's,

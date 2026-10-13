@@ -16,6 +16,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+// STAT-004 / STAT-005: which agents get hooks, removal, the shared install lock (T-152).
+#[path = "agent_hooks/mod.rs"]
+pub mod agent_hooks;
+
 pub const EVENT: &str = "agent-status";
 pub const TOKEN_HEADER: &str = "x-kolux-token";
 pub const IDENTITY_HEADER: &str = "x-kolux-pane";
@@ -482,6 +486,7 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
             let (code, status) = answer(&req, token);
             if let Some(status) = status {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
+                agent_hooks::saved::note(app, &req.path, &req.body, &status);
                 // AUTO-012: an automation run in this pane completes on its agent's real finish.
                 crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), crate::automations::now_ms()));
                 let _ = app.emit(EVENT, status);
@@ -559,27 +564,64 @@ pub fn status_command(script: &str, prev: &str) -> String {
     format!("k=\"${{TMPDIR:-/tmp}}/kolux-rs-status-$$\"; cat >\"$k\"; \"{script}\" <\"$k\" >/dev/null 2>&1; [ -f \"{prev}\" ] && sh \"{prev}\" <\"$k\"; rm -f \"$k\"; exit 0")
 }
 
+/// STAT-006: outside a Kolux pane the script leaves before reading stdin; the address comes from
+/// the endpoint file (agents that strip the token variables included), else the variables; the
+/// event is posted with the system curl inside 1.5 s; one Kolux cannot take or answer it is
+/// appended, one whole line, to the holding file beside the endpoint file (`spool`), for the next
+/// start. Delayed expansion is off, the agent's home path loses quotes and a trailing backslash,
+/// and no parenthesised block holds a path, so `!`, `&` and `)` in paths change nothing.
+/// `prints` (SAFE-009): Kolux's answer goes to stdout for the agent to read instead of to NUL.
 fn script(agent: &str, route: &str, prints: bool) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
     let (out, after) = if prints { ("", "2>NUL") } else { ("-o NUL ", ">NUL 2>&1") };
-    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\" --data-binary @- {out}\"http://127.0.0.1:%KP%/{route}\" {after}");
-    [
+    let post = format!("%SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %KC%\" --data-binary \"@%KF%\" {out}\"http://127.0.0.1:%KP%/{route}\" {after}");
+    // A status-line reading is only worth its moment: it is never held for later.
+    let spool = route != "claude-status";
+    let record = format!("<nul set /p \"={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\" >\"%KF%.line\"");
+    let keep = format!("for %%d in (\"%KE%\") do set \"KS=%%~dpd{}\"", agent_hooks::saved::SPOOL_FILE);
+    let mut lines = vec![
         "@echo off",
         head.as_str(),
+        "setlocal DisableDelayedExpansion",
         "rem Outside a Kolux pane there is nothing to report: leave before reading stdin.",
         "if \"%KOLUX_PANE_KEY%\"==\"\" exit /b 0",
-        "if \"%KOLUX_AGENT_HOOK_PORT%\"==\"\" exit /b 0",
-        "if \"%KOLUX_AGENT_HOOK_TOKEN%\"==\"\" exit /b 0",
-        "setlocal",
+        "if \"%KOLUX_HOOK_IDENTITY%\"==\"\" exit /b 0",
         "set \"KP=%KOLUX_AGENT_HOOK_PORT%\"",
         "set \"KT=%KOLUX_AGENT_HOOK_TOKEN%\"",
+        "set \"KE=%KOLUX_HOOK_ENDPOINT%\"",
         "rem The endpoint file names the Kolux running now, so a pane outlives a Kolux restart.",
-        "if not \"%KOLUX_HOOK_ENDPOINT%\"==\"\" if exist \"%KOLUX_HOOK_ENDPOINT%\" for /f \"usebackq tokens=1,2\" %%a in (\"%KOLUX_HOOK_ENDPOINT%\") do (set \"KP=%%a\" & set \"KT=%%b\")",
+        "if defined KE if exist \"%KE%\" for /f \"usebackq tokens=1,2\" %%a in (\"%KE%\") do (set \"KP=%%a\" & set \"KT=%%b\")",
+        "set \"KC=%CLAUDE_CONFIG_DIR%\"",
+        "if defined KC set \"KC=%KC:\"=%\"",
+        "if defined KC if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        "set \"KN=%TIME::=%\"",
+        "set \"KN=%KN:.=%\"",
+        "set \"KN=%KN:,=%\"",
+        "set \"KN=%KN: =%\"",
+        ":name",
+        "set \"KF=%TEMP%\\kolux-rs-hook-%KOLUX_PANE_KEY%-%KN%-%RANDOM%.json\"",
+        "if exist \"%KF%\" goto name",
+        "%SystemRoot%\\System32\\more.com >\"%KF%\"",
+        "if not defined KP goto spool",
+        "if not defined KT goto spool",
         post.as_str(),
-        "exit /b 0",
-        "",
-    ]
-    .join("\r\n")
+        "if not errorlevel 1 goto done",
+        ":spool",
+    ];
+    if spool {
+        lines.extend([
+            "rem Kolux is closed or not answering: the event waits, one whole line, for the next start.",
+            "if not defined KE goto done",
+            "for %%z in (\"%KF%\") do if %%~zz==0 goto done",
+            keep.as_str(),
+            record.as_str(),
+            "type \"%KF%\" >>\"%KF%.line\"",
+            "echo(>>\"%KF%.line\"",
+            "type \"%KF%.line\" >>\"%KS%\"",
+        ]);
+    }
+    lines.extend([":done", "del \"%KF%\" \"%KF%.line\" >NUL 2>&1", "exit /b 0", ""]);
+    lines.join("\r\n")
 }
 
 /// Writes the script under `home` (only when it changed) and returns its path with forward slashes.
@@ -599,15 +641,24 @@ fn write_script(home: &Path, name: &str, script: &str) -> Result<String, String>
     let dir = home.join(SCRIPT_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join(name);
-    if std::fs::read_to_string(&file).ok().as_deref() != Some(script) {
+    let old = std::fs::read_to_string(&file).ok();
+    if old.as_deref() != Some(script) {
+        // STAT-005: a file of the user's under Kolux's name is never overwritten.
+        if old.is_some_and(|o| !o.contains("Written by Kolux RS")) {
+            return Err(format!("{} is not Kolux's own script; left alone", file.display()));
+        }
         std::fs::write(&file, script).map_err(|e| e.to_string())?;
     }
     Ok(file.to_string_lossy().replace('\\', "/"))
 }
 
-/// Claude Code's user settings: `settings.json` beside `.claude.json` (COMPAT 3.4).
+/// Claude Code's user settings: `~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`
+/// (COMPAT 3.4); without the override it is not beside `~/.claude.json`.
 pub fn claude_settings_file() -> PathBuf {
-    crate::trust::claude_config_file().with_file_name("settings.json")
+    match std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|d| !d.trim().is_empty()) {
+        Some(_) => crate::trust::claude_config_file().with_file_name("settings.json"),
+        None => home_dir().join(".claude").join("settings.json"),
+    }
 }
 
 fn is_my_command(command: &str) -> bool {
@@ -616,7 +667,7 @@ fn is_my_command(command: &str) -> bool {
 
 fn is_mine(group: &Value) -> bool {
     group.get("hooks").and_then(Value::as_array).is_some_and(|hs| {
-        hs.iter().any(|h| h.get("command").and_then(Value::as_str).is_some_and(is_my_command))
+        hs.iter().any(agent_hooks::names_mine)
     })
 }
 
@@ -673,12 +724,14 @@ fn install_groups(root: &mut Value, events: &[&str], matched: &[&str], command: 
         let mine = if matched.contains(event) { json!({ "matcher": "*", "hooks": hook }) } else { json!({ "hooks": hook }) };
         match groups.iter().position(is_mine) {
             Some(i) => {
-                groups.retain(|g| !is_mine(g));
+                // STAT-005: only Kolux's own hooks go; a user hook sharing their group stays.
+                agent_hooks::strip(groups);
                 groups.insert(i.min(groups.len()), mine);
             }
             None => groups.push(mine),
         }
     }
+    agent_hooks::clear_unused(hooks.as_object_mut().unwrap(), events);
     *root != before
 }
 
@@ -716,6 +769,10 @@ fn write_json(file: &Path, value: &Value, indent: usize) -> Result<(), String> {
     }
     let tmp = file.with_extension("json.kolux-rs-tmp");
     std::fs::write(&tmp, out).map_err(|e| e.to_string())?;
+    // STAT-005: the rewritten file keeps the permissions the user's had.
+    if let Ok(meta) = std::fs::metadata(file) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
     std::fs::rename(&tmp, file).map_err(|e| e.to_string())
 }
 
@@ -877,32 +934,6 @@ pub fn install_codex_home(home: &Path) {
 
 fn home_dir() -> PathBuf {
     std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_else(|_| std::env::temp_dir())
-}
-
-/// At start: the scripts, Claude's settings entries and the user's Codex home. Never stops the
-/// launch; problems go to stderr.
-pub fn install_all() {
-    let home = home_dir();
-    match write_claude_script(&home).and_then(|path| write_status_script(&home).map(|status| (path, status))) {
-        Ok((path, status)) => {
-            let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
-            let status = status_command(&status, &prev.to_string_lossy().replace('\\', "/"));
-            match install_claude(&claude_settings_file(), &format!("\"{path}\" || exit 0"), &status) {
-                // The status line the user had keeps running from this file (STAT-040).
-                Ok((_, Some(displaced))) => {
-                    if let Err(e) = std::fs::write(&prev, format!("{displaced}\n")) {
-                        eprintln!("kolux-rs: claude status line: {e}");
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => eprintln!("kolux-rs: claude hooks: {e}"),
-            }
-        }
-        Err(e) => eprintln!("kolux-rs: claude hook script: {e}"),
-    }
-    if let Some(codex_home) = crate::trust::codex_config_file().parent() {
-        install_codex_home(codex_home);
-    }
 }
 
 #[cfg(test)]
@@ -1186,7 +1217,8 @@ mod tests {
         let status = write_status_script(&dir).unwrap();
         assert!(status.ends_with(".kolux-rs/agent-hooks/claude-status.cmd"));
         let text = std::fs::read_to_string(&status).unwrap();
-        assert!(text.contains("%KP%/claude-status\"") && text.contains("-H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\""), "{text}");
+        assert!(text.contains("%KP%/claude-status\"") && text.contains("set \"KC=%CLAUDE_CONFIG_DIR%\"") && text.contains("-H \"X-Kolux-Config: %KC%\""), "{text}");
+        assert!(!text.contains(agent_hooks::saved::SPOOL_FILE), "a status-line reading is never held for later");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

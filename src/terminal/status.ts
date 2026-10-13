@@ -59,6 +59,10 @@ export function ageLabel(finishedAt: number, now: number): string {
 }
 
 /** The header is the vocabulary applied to what the pane knows; a shell keeps its own neutral words (TERM-020). */
+/** ACCT-050: the agent a shell pane's header shows for one the user started by hand; an agent the
+ *  header has no mark for, or an unclear answer, leaves the pane a shell. */
+export const foundAgent = (a: string | null): "claude" | "codex" | null => (a === "claude" || a === "codex" ? a : null);
+
 export function headerOf(agent: string, kind: Kind, code: number | null | undefined, needs: boolean, finishedAt: number | null, now: number, hook?: AgentState): Header {
   const h = (state: StatusKey, over: Partial<Header> = {}): Header => ({ ...VOCAB[state], state, age: "", needsYou: VOCAB[state].tone === "attention", ...over });
   const done = () => h("done", { age: finishedAt === null ? "" : ageLabel(finishedAt, now) });
@@ -79,4 +83,11 @@ export function headerOf(agent: string, kind: Kind, code: number | null | undefi
 export function nextNeedsYou(keys: number[], needs: Set<number>, focused: number): number | null {
   const i = keys.indexOf(focused);
   return [...keys.slice(i + 1), ...keys.slice(0, i + 1)].find((k) => needs.has(k)) ?? null;
+}
+
+/** TERM-022: the header chip: the branch, else the short commit of a detached HEAD; none outside git. */
+export function branchChip(git: { branch: string | null; head: string | null } | null): { text: string; tip: string } | null {
+  if (!git) return null;
+  if (git.branch) return { text: git.branch, tip: git.branch };
+  return git.head ? { text: git.head.slice(0, 7), tip: `Detached at ${git.head}` } : null;
 }

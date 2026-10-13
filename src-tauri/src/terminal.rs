@@ -42,6 +42,148 @@ struct Inner {
     ended: HashSet<u32>,
     /// CLI-024: what each session wrote, by line, for `kolux terminal read`.
     logs: HashMap<u32, OutputLog>,
+    /// TERM-132: which sessions a program holds (alternate screen, mouse): `ALT | MOUSE` bits.
+    owned: HashMap<u32, u8>,
+    /// TERM-106: each session's output file, by pane key, replayed when the pane comes back after a restart.
+    hist: HashMap<u32, History>,
+}
+
+/// TERM-106: past this many bytes a pane's saved output is rewritten down to `HISTORY_KEEP`.
+const HISTORY_CAP: u64 = 256 * 1024;
+/// TERM-106: what a rewrite keeps (the newest bytes, from a line boundary), and the most a restore replays.
+const HISTORY_KEEP: usize = 128 * 1024;
+
+/// TERM-106: what a pane printed, kept on disk by pane key (`<app data>/history/<key>.log`) so a
+/// reopened pane shows it above its new shell. Append-only, so a crash at any moment leaves a
+/// usable copy; the rewrite past the cap goes through a temp file and a rename for the same reason.
+/// ponytail: the file is opened per chunk; a kept handle only matters at thousands of chunks a second.
+struct History {
+    path: std::path::PathBuf,
+    size: u64,
+}
+
+impl History {
+    fn open(dir: &std::path::Path, key: u32) -> Option<History> {
+        std::fs::create_dir_all(dir.join("history")).ok()?;
+        let path = history_file(dir, key);
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        Some(History { path, size })
+    }
+
+    fn append(&mut self, chunk: &[u8]) {
+        use std::io::Write as _;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+            if f.write_all(chunk).is_ok() {
+                self.size += chunk.len() as u64;
+            }
+        }
+        if self.size > HISTORY_CAP {
+            self.compact();
+        }
+    }
+
+    fn compact(&mut self) {
+        let Ok(all) = std::fs::read(&self.path) else { return };
+        let kept = trim_history(&all, HISTORY_KEEP);
+        let tmp = self.path.with_extension("tmp");
+        if std::fs::write(&tmp, kept).is_ok() && std::fs::rename(&tmp, &self.path).is_ok() {
+            self.size = kept.len() as u64;
+        }
+    }
+}
+
+fn history_file(dir: &std::path::Path, key: u32) -> std::path::PathBuf {
+    dir.join("history").join(format!("{key}.log"))
+}
+
+/// The newest `keep` bytes of `all`, from the next line boundary so no escape sequence is cut in two.
+fn trim_history(all: &[u8], keep: usize) -> &[u8] {
+    if all.len() <= keep {
+        return all;
+    }
+    let from = all.len() - keep;
+    match all[from..].iter().position(|b| *b == b'\n') {
+        Some(i) => &all[from + i + 1..],
+        None => &all[from..],
+    }
+}
+
+/// TERM-106: removes the saved output of panes not in `keep`. A file not named by a pane key is
+/// left alone (its owner is uncertain) and an empty list prunes nothing (the layout could not be read).
+fn prune_history(dir: &std::path::Path, keep: &[u32]) {
+    if keep.is_empty() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir.join("history")) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(key) = name.to_str().and_then(|n| n.strip_suffix(".log")).and_then(|n| n.parse::<u32>().ok()) else { continue };
+        if !keep.contains(&key) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// TERM-132: the program in the pane took the alternate screen (vim, less, a full-screen agent view).
+pub const ALT: u8 = 1;
+/// TERM-132: the program in the pane captures the mouse.
+pub const MOUSE: u8 = 2;
+
+/// TERM-132: which DEC private modes in `chunk` hand the pane to a program (alternate screen
+/// 47/1047/1049, mouse 1000..1003) or back; the last one in the chunk wins.
+/// ponytail: a sequence split across two chunks is missed; the program's next full sequence or
+/// its exit sets the record straight.
+pub fn screen_owner(prev: u8, chunk: &[u8]) -> u8 {
+    let mut owned = prev;
+    let mut i = 0;
+    while i + 3 < chunk.len() {
+        if chunk[i] != 0x1b || chunk[i + 1] != b'[' || chunk[i + 2] != b'?' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 3;
+        let mut n: u32 = 0;
+        while j < chunk.len() && chunk[j].is_ascii_digit() {
+            n = n * 10 + u32::from(chunk[j] - b'0');
+            j += 1;
+        }
+        if j < chunk.len() && matches!(chunk[j], b'h' | b'l') {
+            let bit = match n {
+                47 | 1047 | 1049 => ALT,
+                1000..=1003 => MOUSE,
+                _ => 0,
+            };
+            if chunk[j] == b'h' {
+                owned |= bit;
+            } else {
+                owned &= !bit;
+            }
+        }
+        i = j;
+    }
+    owned
+}
+
+/// TERM-116: the snapshot text for a bug report. Every value and screen line goes through the
+/// diagnostics scrub (tokens, key=value secrets) and the home folder reads `~`.
+pub fn diagnostics_text(head: &[(&str, String)], screen: &[String], home: Option<&str>) -> String {
+    let mask = |s: &str| {
+        let s = match home.filter(|h| !h.is_empty()) {
+            Some(h) => s.replace(h, "~"),
+            None => s.to_string(),
+        };
+        crate::diag::scrub(&s)
+    };
+    let mut out = String::from("Kolux terminal diagnostics\n");
+    for (k, v) in head {
+        out.push_str(&format!("{k}: {}\n", mask(v)));
+    }
+    out.push_str("\nscreen:\n");
+    for line in screen {
+        out.push_str(&mask(line));
+        out.push('\n');
+    }
+    out
 }
 
 /// CLI-024: a terminal's output by line, each line numbered with a cursor that only grows, so a
@@ -292,6 +434,18 @@ impl Terminals {
     /// `claude`) it runs that program directly with `args`, in `cwd`.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(&self, app: AppHandle, cols: u16, rows: u16, cwd: Option<String>, program: Option<String>, args: Vec<String>, own_env: Vec<(String, String)>, env: Vec<(String, String)>, pane_key: Option<u32>) -> Result<u32, String> {
+        // TERM-115: a pane's Ctrl+C must reach its program. Windows hands "ignore Ctrl+C" down to
+        // every child a process starts, and this app is itself started with CREATE_NEW_PROCESS_GROUP
+        // (by `kolux-dev`, and by the dev runner), so its shells never saw the interrupt: the pty got
+        // the byte, the shell kept running. Cleared once, before the first shell starts.
+        #[cfg(windows)]
+        {
+            static CTRL_C: std::sync::Once = std::sync::Once::new();
+            // SAFETY: a documented call on this process's own console state; no pointers are passed.
+            CTRL_C.call_once(|| unsafe {
+                windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0);
+            });
+        }
         // ACCT-049: checked before the lock, so a drive that does not answer holds up only this pane.
         if let Some(dir) = cwd.as_deref() {
             check_start_dir(dir, program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty() && !is_shell_program(p)))?;
@@ -303,6 +457,7 @@ impl Terminals {
         // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
         let log_dir = app.path().app_data_dir().ok();
         let exit_dir = log_dir.clone();
+        let history = pane_key.and_then(|k| log_dir.as_deref().and_then(|d| History::open(d, k)));
         let label = program.clone().unwrap_or_else(|| "shell".to_string());
         let exit_app = app;
         let registry = self.inner.clone();
@@ -385,6 +540,16 @@ impl Terminals {
                 }
                 if let Ok(mut inner) = out_registry.lock() {
                     inner.logs.entry(id).or_default().push(chunk);
+                    if let Some(h) = inner.hist.get_mut(&id) {
+                        h.append(chunk);
+                    }
+                    if chunk.contains(&0x1b) {
+                        let prev = inner.owned.get(&id).copied().unwrap_or(0);
+                        let now = screen_owner(prev, chunk);
+                        if now != prev {
+                            inner.owned.insert(id, now);
+                        }
+                    }
                     if is_program {
                         if let Some(m) = inner.marks.get_mut(&id) {
                             m.last_output = Some(Instant::now());
@@ -403,6 +568,8 @@ impl Terminals {
                     inner.keys.remove(&id);
                     inner.ended.insert(id);
                     inner.logs.remove(&id);
+                    inner.owned.remove(&id);
+                    inner.hist.remove(&id);
                 }
                 crate::activity::terminal_ended(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
@@ -424,6 +591,9 @@ impl Terminals {
             crate::diag::write(d, &format!("terminal {id} started ({label})"));
         }
         inner.keys.insert(id, key);
+        if let Some(h) = history {
+            inner.hist.insert(id, h);
+        }
         if is_program {
             let agent = program.as_deref().and_then(crate::agents::credited_agent);
             inner.marks.insert(id, Mark { started: Instant::now(), last_output: None, program: program.unwrap_or_default().trim().to_string(), agent });
@@ -470,13 +640,44 @@ impl Terminals {
     pub fn busy(&self, id: u32) -> bool {
         let pid = match self.inner.lock() {
             Ok(inner) => match inner.sessions.get(&id) {
-                Some(_) if inner.marks.contains_key(&id) => return true,
+                // TERM-132: while a program holds the screen or the mouse the shell is never idle.
+                Some(_) if inner.marks.contains_key(&id) || inner.owned.get(&id).is_some_and(|o| *o != 0) => return true,
                 Some(s) => s.pid(),
                 None => return false,
             },
             Err(_) => return false,
         };
         pid.and_then(crate::procs::has_children).unwrap_or(false)
+    }
+
+
+    /// TERM-116: what Kolux knows about session `id`, as label/value pairs; `None` when it is gone.
+    pub fn describe(&self, id: u32) -> Option<Vec<(&'static str, String)>> {
+        let inner = self.inner.lock().ok()?;
+        let s = inner.sessions.get(&id)?;
+        let mut out = vec![("session", id.to_string()), ("pid", s.pid().map_or("unknown".to_string(), |p| p.to_string()))];
+        if let Some(d) = inner.dirs.get(&id) {
+            out.push(("folder", d.clone()));
+        }
+        match inner.marks.get(&id) {
+            Some(m) => {
+                out.push(("program", m.program.clone()));
+                out.push(("agent", m.agent.unwrap_or("none").to_string()));
+                out.push(("started", format!("{} s ago", m.started.elapsed().as_secs())));
+                out.push(("last output", m.last_output.map_or("never".to_string(), |t| format!("{} s ago", t.elapsed().as_secs()))));
+            }
+            None => out.push(("program", "shell".to_string())),
+        }
+        let owned = inner.owned.get(&id).copied().unwrap_or(0);
+        let screen = match (owned & ALT != 0, owned & MOUSE != 0) {
+            (true, true) => "full-screen program with the mouse",
+            (true, false) => "full-screen program",
+            (false, true) => "program with the mouse",
+            (false, false) => "shell",
+        };
+        out.push(("screen", screen.to_string()));
+        out.push(("lines logged", inner.logs.get(&id).map_or(0, |l| l.lines.len()).to_string()));
+        Some(out)
     }
 
     /// APP-054: every session with its process id and the folder it was started in.
@@ -493,6 +694,7 @@ impl Terminals {
         inner.dirs.remove(&id);
         inner.marks.remove(&id);
         inner.keys.remove(&id);
+        inner.hist.remove(&id);
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
@@ -511,7 +713,15 @@ impl Terminals {
     /// cannot be told), `Some(Some(agent))` for a program Kolux started (USAGE-007).
     pub fn program(&self, id: u32) -> Option<Option<&'static str>> {
         let inner = self.inner.lock().ok()?;
-        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent))
+        // ACCT-050: a shell credits the agent the user started in it by hand.
+        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent).or_else(|| crate::foreground::found(id)))
+    }
+
+    /// ACCT-050: every shell session (no program of Kolux's own) with its process id and
+    /// foreground process group.
+    pub fn shells(&self) -> Vec<(u32, Option<u32>, Option<i32>)> {
+        let Ok(inner) = self.inner.lock() else { return Vec::new() };
+        inner.sessions.iter().filter(|(id, _)| !inner.marks.contains_key(id)).map(|(id, s)| (*id, s.pid(), s.foreground_group())).collect()
     }
 
     /// How long the program in `id` has printed nothing (since it started, when it never has), for
@@ -626,6 +836,7 @@ impl Terminals {
         if let Ok(mut inner) = self.inner.lock() {
             inner.dirs.clear();
             inner.keys.clear();
+            inner.hist.clear();
             for (_, mut s) in inner.sessions.drain() {
                 s.kill();
             }
@@ -643,6 +854,8 @@ pub struct Spawned {
     pub account: Option<String>,
 }
 
+/// TERM-115: async for the same reason as `terminal_write`: starting a console host can take a
+/// while on a loaded machine and must not hold the window's thread.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminals>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, cols: u16, rows: u16, cwd: Option<String>, start: Option<String>, program: Option<String>, args: Option<Vec<String>>, env: Option<Vec<(String, String)>>, pane_key: Option<u32>, account: Option<String>) -> Result<Spawned, String> {
@@ -658,7 +871,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
     let pinned = resumed.is_some();
-    let (env, cap, account): (Vec<(String, String)>, bool, Option<String>) = {
+    let (env, cap, account, hooks_on): (Vec<(String, String)>, bool, Option<String>, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         let used = codex.then(|| account.clone().or_else(|| crate::codex_accounts::active_account(&store).map(|a| a.id))).flatten();
@@ -674,7 +887,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
-        (env, crate::cap::on(&settings), used)
+        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings))
     };
     // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
     if env.iter().any(|(k, _)| k == crate::claude_accounts::CONFIG_ENV) {
@@ -699,7 +912,8 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     if cap {
         crate::cap::apply(program.as_deref(), &mut args, &mut env, crate::cap::env_set());
     }
-    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it.
+    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it,
+    // unless the status hooks are switched off (STAT-002).
     if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
         // ACCT-021: the user's own Codex settings first; a failed copy never stops the launch.
         let user = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from);
@@ -709,7 +923,9 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
                 eprintln!("kolux-rs: codex settings: {e}");
             }
         }
-        crate::hooks::install_codex_home(std::path::Path::new(home));
+        if hooks_on {
+            crate::hooks::install_codex_home(std::path::Path::new(home));
+        }
     }
     let agent = program.as_deref().and_then(crate::agents::credited_agent);
     let dir = cwd.clone();
@@ -727,8 +943,10 @@ pub fn terminal_busy(terminals: tauri::State<'_, Terminals>, ids: Vec<u32>) -> V
     ids.into_iter().map(|id| terminals.busy(id)).collect()
 }
 
+/// TERM-115: async, so a pipe write that blocks (a program not reading its input) holds a
+/// runtime worker, never the window's thread; typing elsewhere stays responsive.
 #[tauri::command]
-pub fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
+pub async fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminals>, id: u32, data: String) -> Result<(), String> {
     // STAT-028: Ctrl+C or Escape on its own, while the agent works, marks the coming Stop interrupted.
     if data == "\x03" || data == "\x1b" {
         crate::status::cancel(id);
@@ -736,6 +954,17 @@ pub fn terminal_write(app: AppHandle, terminals: tauri::State<'_, Terminals>, id
     // USAGE-007: the user's own typing after a limit stop cancels the resume.
     crate::resume::user_typed(&app, id);
     terminals.write(id, &data)
+}
+
+
+/// TERM-116: a snapshot of one session for a bug report, secrets and the home folder masked.
+#[tauri::command]
+pub fn terminal_diagnostics(app: AppHandle, terminals: tauri::State<'_, Terminals>, id: u32, cols: u16, rows: u16, renderer: String, screen: Vec<String>) -> Result<String, String> {
+    let mut head = terminals.describe(id).ok_or_else(|| format!("terminal {id} is not running"))?;
+    head.push(("app", app.package_info().version.to_string()));
+    head.push(("size", format!("{cols}x{rows}, {renderer}")));
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+    Ok(diagnostics_text(&head, &screen, home.as_deref()))
 }
 
 #[tauri::command]
@@ -746,6 +975,67 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn term_106_saved_output_keeps_the_newest_lines_within_the_cap_and_prunes_only_known_keys() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-t068-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut h = History::open(&dir, 7).expect("history folder");
+        let line = vec![b'x'; 1023];
+        for _ in 0..300 {
+            h.append(&line);
+            h.append(b"\n");
+        }
+        let bytes = std::fs::read(history_file(&dir, 7)).unwrap();
+        assert!(bytes.len() as u64 <= HISTORY_CAP, "capped: {}", bytes.len());
+        assert!(bytes.len() >= HISTORY_KEEP / 2, "kept the newest half: {}", bytes.len());
+        assert!(bytes.ends_with(b"xxx\n"));
+        // The cut lands on a line boundary, never inside an escape sequence.
+        assert_eq!(bytes[0], b'x');
+        assert_eq!(trim_history(b"ab\ncd\nef", 4), b"ef");
+        assert_eq!(trim_history(b"abc", 10), b"abc");
+        // Panes gone from the layout lose their saved output; a name that is not a pane key and an
+        // empty keep-list (the layout could not be read) prune nothing.
+        std::fs::write(history_file(&dir, 8), b"old").unwrap();
+        std::fs::write(dir.join("history").join("notes.log"), b"keep").unwrap();
+        prune_history(&dir, &[]);
+        assert!(history_file(&dir, 8).exists());
+        prune_history(&dir, &[7]);
+        assert!(!history_file(&dir, 8).exists());
+        assert!(history_file(&dir, 7).exists());
+        assert!(dir.join("history").join("notes.log").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn term_132_a_program_that_takes_the_screen_or_the_mouse_owns_the_pane_until_it_gives_it_back() {
+        // vim enters the alternate screen; the shell is not idle until vim leaves it.
+        let on = screen_owner(0, b"\x1b[?1049h\x1b[22;0;0t\x1b[?1h\x1b=");
+        assert_eq!(on, ALT);
+        assert_eq!(screen_owner(on, b"some drawing"), ALT);
+        assert_eq!(screen_owner(on, b"\x1b[?1049l\x1b[23;0;0t"), 0);
+        // less uses the older 47/1047 pair; a mouse capture counts on its own.
+        assert_eq!(screen_owner(0, b"\x1b[?47h"), ALT);
+        assert_eq!(screen_owner(ALT, b"\x1b[?1047l"), 0);
+        assert_eq!(screen_owner(0, b"\x1b[?1000h\x1b[?1006h"), MOUSE);
+        assert_eq!(screen_owner(ALT | MOUSE, b"\x1b[?1000l"), ALT);
+        // The last word in a chunk wins: enter then leave in one burst is free again.
+        assert_eq!(screen_owner(0, b"\x1b[?1049h...\x1b[?1049l$ "), 0);
+    }
+
+    #[test]
+    fn term_116_diagnostics_carry_no_token_and_no_home_path() {
+        let text = diagnostics_text(
+            &[("session", "7".to_string()), ("folder", r"C:\Users\pat\code\app".to_string())],
+            &["$ curl -H 'Authorization: Bearer sk-live-1234567890abcdef' https://api.example.com".to_string(), r"C:\Users\pat\code\app> ".to_string()],
+            Some(r"C:\Users\pat"),
+        );
+        assert!(!text.contains("sk-live-1234567890abcdef"), "{text}");
+        assert!(!text.contains(r"C:\Users\pat"), "{text}");
+        assert!(text.contains("folder: ~\\code\\app"), "{text}");
+        assert!(text.contains("~\\code\\app> "), "{text}");
+        assert!(text.contains("session: 7"), "{text}");
+    }
 
     fn cursors(r: &Read) -> Vec<u64> {
         r.lines.iter().map(|l| l.cursor).collect()
@@ -875,4 +1165,40 @@ pub fn terminal_layout(terminals: tauri::State<'_, Terminals>, rows: Vec<serde_j
 #[tauri::command]
 pub fn terminal_kill(terminals: tauri::State<'_, Terminals>, id: u32) -> Result<(), String> {
     terminals.kill(id)
+}
+
+/// TERM-106: what pane `pane_key` printed before the last restart, base64 (empty when nothing was saved).
+#[tauri::command]
+pub fn terminal_history(app: AppHandle, pane_key: u32) -> Result<String, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let bytes = std::fs::read(history_file(&dir, pane_key)).unwrap_or_default();
+    Ok(base64::engine::general_purpose::STANDARD.encode(trim_history(&bytes, HISTORY_KEEP)))
+}
+
+/// TERM-106: a tab closed on purpose is not brought back, so its saved output goes with it.
+#[tauri::command]
+pub fn terminal_forget_history(app: AppHandle, pane_key: u32) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(history_file(&dir, pane_key));
+    Ok(())
+}
+
+/// TERM-106: after a start, the saved output of panes no longer in the layout is removed in the background.
+#[tauri::command]
+pub fn terminal_prune_history(app: AppHandle, keep: Vec<u32>) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::thread::spawn(move || prune_history(&dir, &keep));
+    Ok(())
+}
+
+/// TERM-106: what the pane itself wrote around the replay (the reset, the note, the push) goes into
+/// the file too, so the file stays a transcript of what the terminal processed and replays true.
+#[tauri::command]
+pub fn terminal_history_append(app: AppHandle, pane_key: u32, data: String) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| e.to_string())?;
+    if let Some(mut h) = History::open(&dir, pane_key) {
+        h.append(&bytes);
+    }
+    Ok(())
 }

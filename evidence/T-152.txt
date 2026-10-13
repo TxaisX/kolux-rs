@@ -1,0 +1,47 @@
+T-152 (STAT-004 which agents get hooks, STAT-005 removal, lock, backup) - text proof, 2026-10-13
+Lane hooks dev app (com.txaisxiong.kolux-rs.hooks), window on the second screen (X=-1920),
+started with every inherited KOLUX_* variable unset and USERPROFILE, CLAUDE_CONFIG_DIR and
+CODEX_HOME pointed at the throwaway folder G:\Temp\hooks-T-152\home (no real agent config touched).
+
+Throwaway home before launch:
+  .claude\settings.json  user file, 4-space layout: model, statusLine my-line.sh (padding 1),
+                         a user Stop hook notify.cmd
+  .codex\hooks.json      a user Stop hook notify.cmd
+
+1. Startup sync (dev.log):
+     kolux-rs: claude hooks: installed
+     kolux-rs: codex hooks: Codex listed 0 of 8 Kolux hooks in ...\.codex\hooks.json; the file is back as it was
+   (the Codex trust check of STAT-008 refused in the throwaway home and rolled back, as designed)
+   .claude\settings.json.bak-kolux written BEFORE the install: identical to the user's file
+   (model, statusLine my-line.sh, Stop notify.cmd, 4-space layout).
+   .claude\settings.json after: 12 Kolux events; Stop keeps the user's notify.cmd group first,
+   then one Kolux group "G:/Temp/hooks-T-152/home/.kolux-rs/agent-hooks/claude.cmd" || exit 0.
+
+2. Pane status from a fake hook event, posted the way Claude Code posts it (stdin JSON piped
+   into the installed hook script inside a Claude pane; a stand-in program held the pane):
+     before:   status: Working
+     type ev-ask.json  (PreToolUse AskUserQuestion) | "%USERPROFILE%\.kolux-rs\agent-hooks\claude.cmd"
+     after:    status: Needs you
+     type ev-stop.json (Stop) | ...\claude.cmd
+     after:    status: Done
+   The script printed nothing and exited 0.
+
+3. Settings > Agents, Codex switched off (planted Kolux entries in Stop and SessionStart first):
+     before: {"hooks":{"Stop":[{"hooks":[{"command":"notify.cmd"}]},{"hooks":[{"type":"command","command":"\"G:/Temp/hooks-T-152/home/.kolux-rs/agent-hooks/codex.cmd\""}]}],"SessionStart":[{"hooks":[{"type":"command","command":"\"G:/Temp/hooks-T-152/home/.kolux-rs/agent-hooks/codex.cmd\""}]}]}}
+     after:  {"hooks":{"Stop":[{"hooks":[{"command":"notify.cmd"}]}]}}
+     dev.log: kolux-rs: claude hooks: installed / kolux-rs: codex hooks: removed
+   Switches read back: Claude Code=true | Codex=false
+
+4. Claude Code switched off, then on again:
+     off: "claude off: settings.json is byte-identical to the backup" (cmp), status line
+          my-line.sh restored, claude-status-prev.sh removed; dev.log "claude hooks: removed"
+     on:  "claude on again: events 12 user Stop hook kept {"hooks":[{"type":"command","command":"notify.cmd"}]}"
+          dev.log "claude hooks: installed"; the backup was not replaced.
+
+Tests: cargo test --lib agent_hooks 7 passed (detection plan, every entry form, nested user hook
+kept + leftovers cleared, exact-string removal round trip, backup once + refusal, cross-process
+lock with stale clear and no foreign release, user file under a Kolux script name kept;
+permissions test is cfg(unix)). cargo test --lib hooks 17 passed, --lib agents 18 passed.
+
+Note: after step 4 a mistyped proof command re-ran the setup script, which wiped the throwaway
+home while the app was open; every reading above was taken before that. Only G:\Temp was touched.

@@ -370,4 +370,4 @@ and the difference goes under "Needs Txais" in STATE.md.
 12. **Dependencies:** a later card moves forward only when an earlier card cannot pass its
     acceptance without it; note the move in PLAN.md.
 
-Cutline: T-152, T-167-a, T-025-d, T-166, T-166-b, T-184, T-067, T-047, T-069-a, T-441, T-442, T-443, T-418  (the tasks between Txais and his first workday in Kolux RS, set 2026-10-13 after the council; T-025-e left it because Txais does not use Codex daily; plan-check counts what is left)
+Cutline: T-152-gate, T-152, T-167-a, T-025-d, T-166, T-067, T-184, T-441, T-442, T-442-b, T-443, T-073-a, T-047, T-069-a, T-069-b, T-418, T-500 (set by council C2 2026-10-13; plan-check exits 1 on an id with no PLAN line once T-540-b lands at the freeze)

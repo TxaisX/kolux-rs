@@ -268,6 +268,26 @@ pub async fn scm_pushed(worktrees: Vec<String>) -> Vec<Pushed> {
     tauri::async_runtime::spawn_blocking(move || worktrees.iter().filter_map(|w| pushed(Path::new(w))).collect()).await.unwrap_or_default()
 }
 
+/// TERM-022: what the pane header's branch chip reads: the branch, else the commit a detached
+/// HEAD is on (None before the first commit). None for a folder outside git.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Head {
+    pub branch: Option<String>,
+    pub head: Option<String>,
+}
+
+pub fn head_of(dir: &Path) -> Option<Head> {
+    run(&["rev-parse", "--git-dir"], Some(dir)).ok()?;
+    let branch = run(&["symbolic-ref", "-q", "--short", "HEAD"], Some(dir)).ok().filter(|b| !b.is_empty());
+    Some(Head { branch, head: run(&["rev-parse", "-q", "--verify", "HEAD"], Some(dir)).ok().filter(|h| !h.is_empty()) })
+}
+
+/// TERM-022: read off the UI thread; every pane asks when it shows and when it takes focus.
+#[tauri::command]
+pub async fn scm_head(dir: String) -> Option<Head> {
+    tauri::async_runtime::spawn_blocking(move || head_of(Path::new(&dir))).await.ok().flatten()
+}
+
 /// Lines added and removed in one row of the branch summary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Lines {
@@ -2591,6 +2611,16 @@ mod tests {
 
         run(&["switch", "-q", "--detach"], Some(&dir)).unwrap();
         assert_eq!(state(&dir), None, "a detached HEAD has no branch to push");
+        // TERM-022: the header chip shows the commit a detached HEAD is on, and a branch by name.
+        let head = head_of(&dir).unwrap();
+        assert_eq!(head.branch, None);
+        assert_eq!(head.head.as_deref().map(str::len), Some(40));
+        run(&["switch", "-q", "feature"], Some(&dir)).unwrap();
+        assert_eq!(head_of(&dir).unwrap().branch.as_deref(), Some("feature"));
+        let plain = std::env::temp_dir().join(format!("kolux-rs-scm-plain-{}", std::process::id()));
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(head_of(&plain), None, "a plain folder has no chip");
+        let _ = fs::remove_dir_all(&plain);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&bare);
     }

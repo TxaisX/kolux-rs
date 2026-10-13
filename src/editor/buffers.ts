@@ -78,13 +78,27 @@ export function isDirty(path: string): boolean {
   return !!v && !sameText(v.state.sliceDoc(), b.disk);
 }
 
-/** Writes the file once, from the buffer's text; every view of it is clean afterwards. */
-export async function save(path: string, write: (text: string) => Promise<void>): Promise<void> {
+/** EDIT-003 (T-073-a): lowercase hex SHA-256 of a text's UTF-8 bytes. file_read returns the file's
+ *  bytes unchanged, so this is the hash of the disk copy the buffer holds; file_write's optional
+ *  `loaded_hash` is compared with the file's bytes before writing. */
+export async function hashOf(text: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return Array.from(d, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** file_write's typed refusal when the file changed on disk since it was loaded: error kind
+ *  `stale`, as an object's `kind` or as the start of the error text. */
+export const isStale = (e: unknown): boolean => (typeof e === "object" && e !== null && (e as { kind?: unknown }).kind === "stale") || String(e).startsWith("stale");
+
+/** Writes the file once, from the buffer's text; every view of it is clean afterwards. The write
+ *  gets the hash of the disk copy the buffer was loaded from, so a file changed meanwhile is
+ *  refused; `force` (Keep mine) leaves the hash out and overwrites. */
+export async function save(path: string, write: (text: string, loadedHash?: string) => Promise<void>, force = false): Promise<void> {
   const b = buf(path);
   const v = [...b.views][0];
   if (!v) return;
   const text = v.state.sliceDoc();
-  await write(text);
+  await write(text, force ? undefined : await hashOf(b.disk));
   b.disk = text;
   tell(b);
 }

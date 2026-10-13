@@ -1,6 +1,6 @@
 // The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040, VIEW-026), pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { blocking, cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, freeCell, PANE_COUNTS, seedCount } from "./grid";
+import { blocking, cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, freeCell, PANE_COUNTS, seedCount, canExpand, toggleZoom, zoomedGroup } from "./grid";
 
 const started = (key: number) => ({ key, started: true });
 const empty = (key: number) => ({ key, started: false });
@@ -115,6 +115,31 @@ test("VIEW-026: expanding a Board card shows its terminal, expanding it again or
   expect(toggleCard(2, 5)).toBe(5);
 });
 
+// TERM-017 (T-067): a split never touches an existing pane. The window keys each cell by its group and
+// each pane by its key, so the same pane object in the same cell means React keeps the same terminal.
+test("TERM-017: ten random splits keep every pane object in its own cell, in order", () => {
+  let seed = 17;
+  const rnd = (n: number) => (seed = (seed * 48271) % 2147483647) % n;
+  let panes = [{ key: 1, cwd: "C:\a" }, { key: 2, cwd: "C:\a" }];
+  let next = 3;
+  for (let i = 0; i < 10; i++) {
+    const before = cellsOf(panes).map((c) => ({ group: c.group, panes: [...c.panes] }));
+    const src = panes[rnd(panes.length)];
+    const dir = rnd(2) ? "right" : "down";
+    const shown = cellsOf(panes);
+    const at = splitIndex(shown.map((c) => c.group), src.key, dir, columnsFor(shown.length + 1));
+    panes = insertBefore(panes, shown[at]?.panes[0], { key: next++, cwd: "C:\a" });
+    const after = cellsOf(panes);
+    for (const cell of before) {
+      const same = after.find((c) => c.group === cell.group);
+      expect(same, `cell ${cell.group} survives split ${i}`).toBeDefined();
+      expect(same!.panes.length).toBe(cell.panes.length);
+      cell.panes.forEach((p, k) => expect(same!.panes[k]).toBe(p));
+    }
+  }
+  expect(panes).toHaveLength(12);
+});
+
 test("TERM-005: a new workspace starts with the saved pane count, 1 when unset or in the classic look", () => {
   expect(PANE_COUNTS).toEqual([1, 2, 4, 6, 9, 12]);
   expect(seedCount(undefined, false)).toBe(1);
@@ -131,4 +156,25 @@ test("TERM-007: a new session fills the first empty pane, and none when every ce
   expect(freeCell(cellsOf([shell, chooser]))).toBe(chooser);
   expect(freeCell(cellsOf([shell, ...tabbed]))).toBeUndefined();
   expect(freeCell(cellsOf([shell]))).toBeUndefined();
+});
+
+test("TERM-013: expanding a cell fills the grid, the same cell again restores, one per workspace", () => {
+  let z = toggleZoom({}, "C:/w", 4, 3);
+  expect(zoomedGroup(z, [1, 4, 7])).toBe(4);
+  z = toggleZoom(z, "C:/w", 7, 3);
+  expect(zoomedGroup(z, [1, 4, 7])).toBe(7);
+  expect(toggleZoom(z, "C:/w", 7, 3)).toEqual({});
+  // Another workspace keeps its own expanded cell.
+  z = toggleZoom(toggleZoom({}, "C:/w", 4, 3), "C:/v", 9, 2);
+  expect(zoomedGroup(z, [9, 10])).toBe(9);
+  expect(zoomedGroup(z, [1, 4, 7])).toBe(4);
+  // A pane added or closed since restores the layout; expanding again expands rather than restores.
+  expect(zoomedGroup(z, [1, 4, 7, 8])).toBeNull();
+  expect(zoomedGroup(toggleZoom(z, "C:/w", 4, 4), [1, 4, 7, 8])).toBe(4);
+});
+
+test("TERM-025: a lone pane cannot expand in the classic look; the clean look expands its window", () => {
+  expect(canExpand(1, true)).toBe(false);
+  expect(canExpand(1, false)).toBe(true);
+  expect(canExpand(2, true)).toBe(true);
 });

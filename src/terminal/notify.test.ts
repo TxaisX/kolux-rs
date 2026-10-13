@@ -1,7 +1,9 @@
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { noteTitle, preview, stopLine, turnNote } from "./notify";
 
 const turn = (state: string, extra: object = {}) => ({ state, interrupted: false, boundary: false, ...extra }) as Parameters<typeof turnNote>[1];
+
+afterEach(() => void vi.useRealTimers());
 
 test("a finish, a permission request and a block are notes; boundaries, replays and plain progress are not (STAT-041)", () => {
   expect(turnNote("working", turn("done", { reply: "All tests pass.\n\nNext: ship it." }))).toEqual({ what: "finished", body: "All tests pass. Next: ship it." });
