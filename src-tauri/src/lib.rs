@@ -243,6 +243,7 @@ pub fn run() {
             // APP-002: the hook scripts and the agents' settings entries are written alongside the
             // window's start, not ahead of it (the listener above is already up).
             std::thread::spawn(hooks::install_all);
+            terminal::read_login_env();
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.
             let handle = app.handle().clone();
