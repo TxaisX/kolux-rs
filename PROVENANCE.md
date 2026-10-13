@@ -504,3 +504,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-137-b / T-139-c · source check only: docs.x.ai/build/cli/reference and docs.x.ai/build/features/status-line read; neither documents Grok credit figures or a session-file format; nothing built or copied
 
 > 2026-10-12 · T-339 · rules from SET-020, VIEW-011, VIEW-116, USAGE-010, ORCH-031 and ACCT-001 cards and DT-A6; no outside source used; no old Kolux source read
+
+> 2026-10-13 · T-500 · council r1-security finding 4 answered with a live probe (`evidence/T-500-isolation.txt`); the rule for what a tab may open came from reading tauri 2.12.1's own source in the cargo registry (src/webview/mod.rs on_message, src/manager/mod.rs is_local_url, src/manager/webview.rs main_frame_script) and tauri-utils 2.10.1 config docs for csp/devCsp; nothing copied; no old Kolux source read

@@ -211,7 +211,13 @@ pub fn run() {
             Ok(())
         })
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
-        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req))
+        // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
+        .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
+            if ctx.webview_label() != "main" {
+                return tauri::http::Response::builder().status(403).body(b"not for this page".to_vec()).unwrap_or_default();
+            }
+            artifacts::serve(&ctx.app_handle().state::<artifacts::Library>(), &req)
+        })
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
             if let tauri::WindowEvent::Destroyed = event {
