@@ -31,6 +31,36 @@ pub fn write(dir: &Path, line: &str) {
     write_capped(dir, line, FILE_CAP, TOTAL_CAP);
 }
 
+/// APP-003: where `catch_panics` and `fatal` write; set once the profile folder is known.
+static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_dir(dir: &Path) {
+    let _ = DIR.set(dir.to_path_buf());
+}
+
+/// APP-003: a panic is written to the log as well as stderr. One on a background thread ends only
+/// that thread and the app keeps going; one on the main thread is fatal and says so.
+pub fn catch_panics() {
+    let before = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        before(info);
+        if let Some(dir) = DIR.get() {
+            let main = std::thread::current().name() == Some("main");
+            write(dir, &format!("{}: {info}", if main { "fatal error" } else { "error in background work, the app keeps going" }));
+        }
+    }));
+}
+
+/// APP-003: a failure before the window is up ends the process with its reason in the log, so no
+/// invisible copy is left holding on.
+pub fn fatal(reason: &str) -> ! {
+    eprintln!("Kolux could not start: {reason}");
+    if let Some(dir) = DIR.get() {
+        write(dir, &format!("could not start: {reason}"));
+    }
+    std::process::exit(1)
+}
+
 fn write_capped(dir: &Path, line: &str, file_cap: u64, total_cap: u64) {
     let logs = dir.join("logs");
     if fs::create_dir_all(&logs).is_err() {
@@ -241,6 +271,17 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn app003_a_background_panic_is_logged_and_the_rest_keeps_going() {
+        let dir = temp_dir("app003");
+        set_dir(&dir);
+        catch_panics();
+        let joined = std::thread::spawn(|| panic!("injected background failure")).join();
+        assert!(joined.is_err());
+        let log = fs::read_to_string(dir.join("logs").join(LIVE)).unwrap();
+        assert!(log.contains("error in background work, the app keeps going") && log.contains("injected background failure"), "{log}");
     }
 
     #[test]

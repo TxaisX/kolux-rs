@@ -27,6 +27,9 @@ pub struct Usage {
 #[derive(Serialize)]
 pub struct SessionUsage {
     pub id: u32,
+    /// USAGE-028: the shell's process id, so a terminal still running after a window reload is
+    /// listed with its pid like any other local terminal (None once it has no process).
+    pub pid: Option<u32>,
     pub dir: Option<String>,
     #[serde(flatten)]
     pub usage: Usage,
@@ -114,11 +117,16 @@ pub async fn resources(terminals: tauri::State<'_, crate::terminal::Terminals>, 
         Some((at, times)) => (now.duration_since(at).as_secs_f64(), times),
         None => (0.0, HashMap::new()),
     };
-    let (app, mut each) = total(&procs, &owner, &before, secs, cores, app_pid, crate::sysmem::working_set_bytes());
+    let (app, each) = total(&procs, &owner, &before, secs, cores, app_pid, crate::sysmem::working_set_bytes());
     *last = Some((now, procs.iter().filter(|p| owner.contains_key(&p.pid)).map(|p| (p.pid, p.cpu)).collect()));
     let (free, total) = imp::memory();
-    let sessions = sessions.into_iter().map(|(id, _, dir)| SessionUsage { id, dir, usage: each.remove(&id).unwrap_or_default() }).collect();
-    Ok(Resources { app, sessions, free, total })
+    Ok(Resources { app, sessions: rows(sessions, each), free, total })
+}
+
+/// One row per session `Terminals::list` reports, in its order, with its pid and measured usage.
+/// Every session the backend holds is listed, whether a pane shows it or it outlived a reload.
+pub fn rows(sessions: Vec<(u32, Option<u32>, Option<String>)>, mut each: HashMap<u32, Usage>) -> Vec<SessionUsage> {
+    sessions.into_iter().map(|(id, pid, dir)| SessionUsage { id, pid, dir, usage: each.remove(&id).unwrap_or_default() }).collect()
 }
 
 #[cfg(windows)]
@@ -256,6 +264,19 @@ mod tests {
         // the app's own row missing: its working set stands in
         let (app, _) = total(&procs[1..], &owner, &HashMap::new(), 2.0, 4, 1, Some(64));
         assert_eq!(app.bytes, 50 + 64);
+    }
+
+    #[test]
+    fn usage028_every_session_is_listed_with_its_pid_whether_or_not_a_pane_shows_it() {
+        // Session 1 outlived a window reload (no pane), session 2 was opened after it, 3 has exited.
+        let procs = [p(10, 0, 100, 0), p(41, 10, 1000, 0), p(42, 10, 2000, 0)];
+        let owner = owners(&procs, &[(1, 41), (2, 42)], 10);
+        let (_, each) = total(&procs, &owner, &HashMap::new(), 0.0, 1, 10, None);
+        let list = rows(vec![(1, Some(41), Some("C:/w".into())), (2, Some(42), None), (3, None, None)], each);
+        let seen: Vec<_> = list.iter().map(|s| (s.id, s.pid, s.usage.bytes)).collect();
+        assert_eq!(seen, [(1, Some(41), 1000), (2, Some(42), 2000), (3, None, 0)]);
+        let json = serde_json::to_value(&list[0]).unwrap();
+        assert_eq!((json["pid"].as_u64(), json["bytes"].as_u64(), json.get("remote")), (Some(41), Some(1000), None));
     }
 
     #[test]

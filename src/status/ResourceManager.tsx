@@ -86,6 +86,7 @@ export default function ResourceManager({ names, workspaces, onClose }: Props) {
                 <div key={r.id} className="res-row" data-session={r.id}>
                   <span className="res-name" title={`${r.processes} process${r.processes === 1 ? "" : "es"}${r.dir ? ` in ${r.dir}` : ""}`}>
                     {r.name}
+                    {r.pid !== null && <span className="res-pid"> · pid {r.pid}</span>}
                   </span>
                   <span className="res-fig">{formatMemory(r.bytes)}</span>
                   <span className="res-fig">{formatCpu(r.cpu)}</span>
