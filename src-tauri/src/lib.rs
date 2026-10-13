@@ -22,6 +22,7 @@ mod names;
 mod notifications;
 mod orchestration;
 mod procs;
+mod protected;
 mod resources;
 mod projects;
 mod scm;

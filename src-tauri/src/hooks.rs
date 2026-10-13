@@ -239,6 +239,25 @@ pub fn answer(req: &Request, token: &str) -> (u16, Option<crate::status::Status>
     (200, crate::status::report(pane_key, terminal, agent, &event))
 }
 
+/// SAFE-009: what the hook prints back to Claude. A Bash or PowerShell command that trips a
+/// protected rule gets the PreToolUse ask block naming the rule; everything else (another tool or
+/// event, Codex, a body that cannot be read) gets `{}`, no opinion, so Claude's own permission
+/// flow carries on and Kolux never blocks by itself.
+pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
+    let ask = || {
+        if path != "/claude" {
+            return None;
+        }
+        let event: Value = serde_json::from_slice(body).ok()?;
+        if event.get("hook_event_name")?.as_str()? != "PreToolUse" || !matches!(event.get("tool_name")?.as_str()?, "Bash" | "PowerShell") {
+            return None;
+        }
+        let rule = crate::protected::check(event.get("tool_input")?.get("command")?.as_str()?, settings)?;
+        Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": crate::protected::reason(rule.name) } }).to_string())
+    };
+    ask().unwrap_or_else(|| "{}".into())
+}
+
 /// One rate-limit window as Claude Code's status line reports it (STAT-040), reset in ms.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -404,6 +423,7 @@ pub fn claude_usage(store: tauri::State<'_, Mutex<crate::state::Store>>) -> Resu
 fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
     stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
     let mut reader = BufReader::new(&stream);
+    let mut body = String::from("{}");
     let code = match parse_request(&mut reader) {
         Some(req) if req.path == "/claude-status" => match usage(&req, token) {
             // USAGE-021: a report from another config folder than the active account's is dropped.
@@ -420,11 +440,16 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
                 let _ = app.emit(EVENT, status);
             }
+            if code == 200 {
+                // SAFE-009: the settings are read now, so a rule switched off applies to this command.
+                let settings = app.try_state::<Mutex<crate::state::Store>>().and_then(|s| s.lock().ok().map(|s| s.settings())).unwrap_or_default();
+                body = reply_body(&req.path, &req.body, &settings);
+            }
             code
         }
         None => 400,
     };
-    let _ = write!(stream, "HTTP/1.1 {code} OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}");
+    let _ = write!(stream, "HTTP/1.1 {code} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = stream.flush();
 }
 
@@ -461,19 +486,20 @@ impl Hooks {
 }
 
 /// The Claude hook script (COMPAT 3.2): guards first, reads the endpoint file, posts stdin with the
-/// system curl inside 1.5 s, always exits 0.
+/// system curl inside 1.5 s, always exits 0. It prints Kolux's answer, which is `{}` or the
+/// PreToolUse ask of a protected command (SAFE-009); nothing when Kolux cannot be reached.
 pub fn claude_script() -> String {
-    script("Claude Code (STAT-001, STAT-007)", "claude")
+    script("Claude Code (STAT-001, STAT-007, SAFE-009)", "claude", true)
 }
 
-/// The Codex hook script (STAT-008): the same, posting to Kolux's Codex path.
+/// The Codex hook script (STAT-008): the same, posting to Kolux's Codex path, answer discarded.
 pub fn codex_script() -> String {
-    script("Codex (STAT-008)", "codex")
+    script("Codex (STAT-008)", "codex", false)
 }
 
 /// The status-line script (STAT-040): the same guards and post, to the status route.
 pub fn status_script() -> String {
-    script("Claude Code's status line (STAT-040)", "claude-status")
+    script("Claude Code's status line (STAT-040)", "claude-status", false)
 }
 
 /// The `statusLine` command (STAT-040). Claude Code runs it through a POSIX shell on Windows
@@ -484,9 +510,10 @@ pub fn status_command(script: &str, prev: &str) -> String {
     format!("k=\"${{TMPDIR:-/tmp}}/kolux-rs-status-$$\"; cat >\"$k\"; \"{script}\" <\"$k\" >/dev/null 2>&1; [ -f \"{prev}\" ] && sh \"{prev}\" <\"$k\"; rm -f \"$k\"; exit 0")
 }
 
-fn script(agent: &str, route: &str) -> String {
+fn script(agent: &str, route: &str, prints: bool) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
-    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\" --data-binary @- -o NUL \"http://127.0.0.1:%KP%/{route}\" >NUL 2>&1");
+    let (out, after) = if prints { ("", "2>NUL") } else { ("-o NUL ", ">NUL 2>&1") };
+    let post = format!("%SystemRoot%\\System32\\more.com | %SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %CLAUDE_CONFIG_DIR%\" --data-binary @- {out}\"http://127.0.0.1:%KP%/{route}\" {after}");
     [
         "@echo off",
         head.as_str(),
@@ -900,6 +927,30 @@ mod tests {
         assert!(c(r#"{"hook_event_name":"SubagentStart","agent_id":""}"#).is_none());
         assert!(c(r#"{"hook_event_name":"SubagentStop"}"#).is_none());
         assert!(codex_script().contains("%KP%/codex\" >NUL") && !codex_script().contains("/claude"));
+    }
+
+    /// SAFE-009: a protected shell command makes the hook answer Claude's PreToolUse with an ask;
+    /// everything else, a garbled body included, gets the neutral `{}` so Claude carries on.
+    #[test]
+    fn safe009_a_protected_command_asks_and_everything_else_is_neutral() {
+        let s = json!({});
+        let pre = |tool: &str, cmd: &str| format!(r#"{{"hook_event_name":"PreToolUse","tool_name":"{tool}","tool_input":{{"command":"{cmd}"}}}}"#);
+        let ask = reply_body("/claude", pre("Bash", "git push --force origin main").as_bytes(), &s);
+        let v: Value = serde_json::from_str(&ask).unwrap();
+        let out = &v["hookSpecificOutput"];
+        assert_eq!((out["hookEventName"].as_str(), out["permissionDecision"].as_str()), (Some("PreToolUse"), Some("ask")));
+        assert!(out["permissionDecisionReason"].as_str().unwrap().contains("Force-push to main"));
+        assert_ne!(reply_body("/claude", pre("PowerShell", "git reset --hard").as_bytes(), &s), "{}", "PowerShell is read too");
+        assert_eq!(reply_body("/claude", pre("Bash", "git status").as_bytes(), &s), "{}");
+        assert_eq!(reply_body("/claude", pre("Write", "git push -f").as_bytes(), &s), "{}", "only shells are inspected");
+        assert_eq!(reply_body("/claude", br#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git push -f"}}"#, &s), "{}");
+        assert_eq!(reply_body("/claude", b"not json {", &s), "{}", "a garbled body fails open");
+        assert_eq!(reply_body("/codex", pre("Bash", "git push -f").as_bytes(), &s), "{}", "Codex is not guarded");
+        let off = json!({ "protectedOff": ["force-push"] });
+        assert_eq!(reply_body("/claude", pre("Bash", "git push -f").as_bytes(), &off), "{}", "a switched-off rule asks no more");
+        // The Claude script prints the answer for Claude to read; Codex's still discards it.
+        assert!(claude_script().contains("%KP%/claude\" 2>NUL") && !claude_script().contains("-o NUL"));
+        assert!(codex_script().contains("-o NUL"));
     }
 
     #[test]

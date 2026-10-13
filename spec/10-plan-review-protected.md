@@ -168,6 +168,9 @@ Rules: only Claude Code is guarded, through its PreToolUse hook, and the Safety 
   rules treat the pane's worktree folder as the workspace, not merely the current directory, and the
   pane's project decides which per-project rules apply; switching a rule off takes effect on the
   very next command, with no restart.
+  (Kolux RS, T-058: the Claude hook script prints Kolux's answer and `hooks::reply_body` builds the
+  ask from `protected::check`; the master switch is `protectedAsk`, the off list `protectedOff`,
+  both read from settings.json on every command; the proof through a signed-in Claude is T-058-b.)
 Acceptance:
   - [ ] Claude force-pushes main → Claude's permission prompt shows the Kolux reason; refuse →
         nothing is pushed.
@@ -196,6 +199,8 @@ Rules: force means any force flag, including the lease and mirror variants and s
   subcommand (changing directory, passing config, pointing at a git directory) are skipped over; the
   discard rule asks for a hard reset or a clean carrying the force flag, but not for a reset without
   hard or a dry-run clean.
+  (Kolux RS, T-058: rules `force-push` and `discard` in `src-tauri/src/protected.rs`; a command is
+  split on its plain chain operators, the rest of the chain and wrapper handling is the SAFE-014 task.)
 Acceptance:
   - [ ] git push -f, git push origin :main, and git push --force origin main → each asks.
   - [ ] git push -f origin @:main, and git push --force origin @ → each asks.
@@ -214,6 +219,8 @@ Rules: only database clients count: the Postgres, MySQL, SQLite, SQL Server and 
   and the like; destructive means dropping a table, database, schema, view, index, user or role, or
   truncating; the whole command line is inspected, so SQL piped in or supplied through a heredoc is
   still seen; the dedicated drop-database tool always asks.
+  (Kolux RS, T-058: rule `db-drop`; a shell `.drop(`, `dropDatabase(` or `dropCollection(` counts as
+  a drop for the Mongo shell.)
 Acceptance:
   - [ ] The Postgres client given a drop-table statement on its command line → asks; a truncate
         statement piped into the Postgres client → asks; dropdb on a production database → asks.
@@ -238,6 +245,8 @@ Rules: Stripe: a live secret key or live restricted key anywhere in the command 
   verb; a deploy without a production marker, and a package install with a production flag, do not
   ask. All three rules are kept deliberately tight so the user does not learn to click allow without
   reading.
+  (Kolux RS, T-058: rules `stripe`, `infra` and `prod-deploy`; a production marker is the word prod or
+  production on its own, after a dash, or as the value of a flag or assignment on the command.)
 Acceptance:
   - [ ] Cancelling a subscription with the Stripe CLI → asks; stripe listen, and listing customers →
         run; a text search of the source folder for the live-key prefix → runs.
