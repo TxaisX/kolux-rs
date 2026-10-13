@@ -65,7 +65,19 @@ pub fn list(store: &Store) -> Result<Value, String> {
         })
         .collect();
     Ok(match load(store, RUNS_KEY) {
-        Ok(runs) => json!({ "automations": autos, "runs": runs }),
+        Ok(runs) => {
+            // AUTO-013: a run whose worktree folder is gone opens its saved output instead.
+            let runs: Vec<Value> = runs
+                .into_iter()
+                .map(|mut r| {
+                    if r["worktree"].as_str().is_some_and(|w| !Path::new(w).exists()) {
+                        r["worktreeGone"] = json!(true);
+                    }
+                    r
+                })
+                .collect();
+            json!({ "automations": autos, "runs": runs })
+        }
         Err(e) => json!({ "automations": autos, "runs": [], "runsError": e.replace("automations", "runs") }),
     })
 }
@@ -523,7 +535,7 @@ fn run_with(l: &Launch, id: &str, trigger: &str, event: Option<&str>) -> Result<
     }
     let run_id = run["id"].as_str().unwrap_or_default().to_string();
     (l.notify)(EVENT, json!({ "runId": run_id }));
-    let outcome = place_and_start(l, &auto);
+    let outcome = place_and_start(l, &auto, &run_id);
     let fields = match outcome {
         Ok((wt, project_id)) => json!({ "status": "dispatched", "worktree": wt.path, "worktreeName": wt.name.clone().or(wt.branch.clone()).unwrap_or_else(|| folder_name(&wt.path)), "projectId": project_id }),
         Err(Stop::Skipped(why)) => json!({ "status": "skipped", "cause": "unavailable", "detail": why }),
@@ -622,7 +634,7 @@ fn folder_name(path: &str) -> String {
 }
 
 /// Finds or makes the run's workspace and asks the window to start the agent there.
-fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop> {
+fn place_and_start(l: &Launch, auto: &Value, run_id: &str) -> Result<(Worktree, String), Stop> {
     let agent = auto["provider"].as_str().unwrap_or_default().to_string();
     if !(l.installed)(&agent) {
         return Err(Stop::Failed(format!("{agent} is not installed")));
@@ -655,7 +667,7 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
     if new_per_run {
         (l.notify)(crate::cli::EVENT, json!({ "kind": "created", "projectId": project.id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false }));
     }
-    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"] }));
+    (l.notify)(crate::cli::EVENT, json!({ "kind": "start", "path": wt.path, "branch": wt.branch, "agent": agent, "prompt": auto["prompt"], "extra": [], "title": auto["name"], "runId": run_id }));
     Ok((wt, project.id))
 }
 
@@ -812,6 +824,8 @@ mod tests {
         assert_eq!((started[0]["trigger"].as_str(), started[0]["status"].as_str(), started[0]["eventDetail"].as_str()), (Some("event"), Some("dispatched"), Some(line)));
         let start = said.borrow().iter().find(|(e, v)| e == crate::cli::EVENT && v["kind"] == "start").cloned().expect("a start");
         assert!(start.1["prompt"].as_str().unwrap().ends_with(line), "{}", start.1["prompt"]);
+        // AUTO-013: the window learns which run the pane belongs to, so View run finds it.
+        assert_eq!(start.1["runId"], started[0]["id"]);
         assert!(start.1["prompt"].as_str().unwrap().starts_with("review it"));
         // Another event inside five minutes is ignored; after that it runs again.
         assert!(on_event(&l, "pr-opened", &path, line, FRI_NOON + 4 * 60_000).unwrap().is_empty());
@@ -860,6 +874,11 @@ mod tests {
         let out = list(&store).unwrap();
         assert_eq!((out["automations"].clone(), out["runs"].clone()), (json!([]), json!([])));
         assert!(out["runsError"].as_str().unwrap().contains("could not be read"));
+        // AUTO-013: a run whose worktree folder is gone says so, so the page opens its saved output.
+        let here = dir.to_string_lossy().to_string();
+        store.set(RUNS_KEY, &json!([{ "id": "r1", "worktree": here }, { "id": "r2", "worktree": dir.join("gone").to_string_lossy() }, { "id": "r3" }]).to_string()).unwrap();
+        let runs = list(&store).unwrap()["runs"].clone();
+        assert_eq!((runs[0].get("worktreeGone"), &runs[1]["worktreeGone"], runs[2].get("worktreeGone")), (None, &json!(true), None));
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }

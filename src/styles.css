@@ -526,6 +526,11 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .autos-runs .auto-output { flex-basis: 100%; min-width: 0; max-height: 120px; overflow: auto; margin: 0 0 6px 44px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--fg-faint); white-space: pre-wrap; overflow-wrap: anywhere; }
 .autos-runs .num { width: 34px; color: var(--fg-label); }
 .autos-runs .muted, .autos-none { color: var(--fg-faint); font-size: 12px; }
+.autos-runs:focus-visible { outline: 1px solid var(--line-focus); outline-offset: 2px; }
+.autos-runs li[aria-selected="true"] { background: var(--row-selected); color: var(--fg); }
+.autos-runs li .btn { height: 22px; padding: 0 8px; font-size: 11px; }
+.autos-snapshot { flex-basis: 100%; min-width: 0; margin: 0 0 6px 44px; }
+.autos-snapshot .auto-output { margin-left: 0; }
 /* AUTO-015: the Runs dashboard and a run's own page. */
 .runs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .runs[hidden] { display: none; }

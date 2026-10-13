@@ -39,7 +39,7 @@ export const defaultForm: ScheduleForm = { preset: "weekdays", time: "09:00", da
 
 /** AUTO-012's states; `cause` says why a run was skipped. */
 export type RunStatus = "pending" | "dispatching" | "dispatched" | "completed" | "skipped" | "failed";
-export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string };
+export type Run = { id: string; automationId: string; number: number; trigger: "manual" | "schedule" | "event"; status: RunStatus; at: number; cause?: string; detail?: string; exitCode?: number | null; timedOut?: boolean; output?: string; worktree?: string; worktreeName?: string; repeats?: number; lastAt?: number; eventDetail?: string; worktreeGone?: boolean };
 
 export type SortKey = "name" | "trigger" | "agent" | "project" | "lastRun" | "nextRun";
 export type Filters = { state: "all" | "on" | "paused"; result: "all" | "never" | RunStatus; agents: string[] };
@@ -256,3 +256,24 @@ export function pageKey(e: { key: string; mods: boolean; control: boolean; searc
 /** AUTO-017: the selection stays put; when its row is gone it moves to the row now at its place. */
 export const keepSelection = (rows: string[], selected: string | null, lastIndex: number): string | null =>
   rows.length === 0 ? null : selected !== null && rows.includes(selected) ? selected : rows[Math.min(lastIndex, rows.length - 1)];
+
+/** AUTO-013: what a run in an automation's Runs tab offers. A run that never got a workspace
+ *  (skipped ones included) shows its details only; Rerun is for a failed run of an automation
+ *  that still exists. The first action is what Enter does. */
+export type RunAction = "view" | "resume" | "snapshot" | "rerun";
+export function runActions(r: Run, o: { live: boolean; exists: boolean }): RunAction[] {
+  const out: RunAction[] = [];
+  if (r.worktree) out.push(r.worktreeGone ? "snapshot" : o.live ? "view" : "resume");
+  if (r.status === "failed" && o.exists) out.push("rerun");
+  return out;
+}
+
+/** AUTO-013: Up and Down step through `count` runs (Down with none selected picks the first),
+ *  Enter opens the selected one; a key with a modifier held or mid-composition does nothing. */
+export function runStep(e: { key: string; mods: boolean; composing: boolean }, at: number | null, count: number): number | "open" | null {
+  if (e.mods || e.composing || count === 0) return null;
+  if (e.key === "ArrowDown") return at === null ? 0 : Math.min(count - 1, at + 1);
+  if (e.key === "ArrowUp") return at === null ? 0 : Math.max(0, at - 1);
+  if (e.key === "Enter") return at === null ? null : "open";
+  return null;
+}

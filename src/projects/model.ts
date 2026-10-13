@@ -125,7 +125,7 @@ export function previewSentence(typed: string, preview: Preview | null, project:
 /** What the command line tells the window after `worktree create` or `worktree rm` (PROJ-077). */
 export type CliWorkspace =
   | { kind: "created"; projectId: string; worktree: Created; agent: string | null; prompt: string; activate: boolean }
-  | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null }
+  | { kind: "start"; path: string; branch: string | null; agent: string; prompt: string; extra: string[]; title: string | null; runId?: string }
   | { kind: "removed"; path: string }
   // CLI-026, CLI-027: the terminal commands; ask is the request the window answers through its layout.
   | { kind: "terminal-create"; path: string; branch: string | null; command: string | null; title: string | null; focus: boolean; ask: string }

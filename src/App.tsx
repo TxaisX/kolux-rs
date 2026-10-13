@@ -253,6 +253,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     toastTimer.current = window.setTimeout(() => setToastText(null), 4000);
   };
   const nextKey = useRef(2);
+  const runPanes = useRef<Record<string, number>>({});
 
   useEffect(() => {
     invoke<AppInfo>("app_info").then(setInfo).catch(() => setInfo(null));
@@ -1082,7 +1083,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       // ORCH-016: a worker starts as a background tab in its worktree, named after its task.
       if (p.kind === "start") {
         const a = agents.find((x) => x.id === p.agent);
-        if (a) void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined);
+        if (a)
+          void cli.current.startIn(a, p.path, p.branch, p.prompt, false, p.extra, p.title ?? undefined).then((key) => {
+            // AUTO-013: an automation run remembers its pane, so View run opens that terminal.
+            if (key !== null && p.runId) runPanes.current[p.runId] = key;
+          });
         return;
       }
       const a = p.agent ? agents.find((x) => x.id === p.agent) : undefined;
@@ -1431,6 +1436,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       const m = stamp[p.key];
       return { key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, state, interrupted: m?.interrupted ?? false, running: running[p.key] !== false, changed: m?.at ?? 0, finishedAt: state === "done" ? (m?.at ?? null) : null };
     });
+  // AUTO-013: a run's terminal counts as live only while its pane is still open in the run's worktree.
+  const runPane = (id: string, worktree?: string) => {
+    const key = runPanes.current[id];
+    return panes.find((x) => x.key === key && !!worktree && sameDir(x.cwd, worktree));
+  };
   const openPane = (key: number) => {
     const p = panes.find((x) => x.key === key);
     if (!p) return;
@@ -1681,6 +1691,14 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           {terminals && page === "automations" && (
             <AutomationsPage
               onClose={() => setPage(null)}
+              liveRun={(r) => !!runPane(r.id, r.worktree)}
+              onViewRun={(r) => {
+                const p = runPane(r.id, r.worktree);
+                if (!p) return;
+                setPage(null);
+                openPane(p.key);
+              }}
+              onResume={(r) => r.worktree && select(r.worktree, null)}
               projects={projects}
               agents={agents}
               settings={settings}
