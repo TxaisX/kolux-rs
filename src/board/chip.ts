@@ -31,6 +31,8 @@ export type Signal = {
   wrote?: string;
   /** When the state last moved; 0 when unknown. */
   since: number;
+  /** STAT-024: the turn is over and Kolux is watching the agent's background tasks. */
+  monitoring?: boolean;
 };
 export type Chip = { lane: Lane; word: string; line: string; file?: string; answer: boolean };
 
@@ -76,6 +78,7 @@ export function chipOf(s: Signal, now: number): Chip | null {
     default:
       // A stale working signal never shows Working.
       if (s.stale) return chip("working", "No recent update", since ? `${since} without output` : "");
+      if (s.monitoring) return chip("working", "Working", "Watching background tasks");
       return chip("working", "Working", [since, step].filter(Boolean).join(" · "));
   }
 }

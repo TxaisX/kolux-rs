@@ -69,7 +69,7 @@ type Props = {
   /** TERM-030: true while this pane waits on the user, so the window can cycle to it. */
   onNeedsYou?: (needs: boolean) => void;
   /** STAT-001: the pane's last hook-fed state; wins over the title guess while the program runs. */
-  hook?: AgentState;
+  hook?: AgentState | "background";
   /** STAT-026: the sub-agents and teammates under this session, shown beside the status word. */
   crew?: Crew;
   /** STAT-022: why the agent halted while `hook` is blocked; the header's tooltip says it. */

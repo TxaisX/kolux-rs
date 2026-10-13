@@ -252,6 +252,10 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 foreground::poll(&handle);
+                // STAT-028: a cancelled turn that never sends its Stop reads interrupted.
+                for status in status::settle_cancels() {
+                    let _ = tauri::Emitter::emit(&handle, hooks::EVENT, status);
+                }
             });
             // USAGE-011: changed activity counts are saved in batches.
             let handle = app.handle().clone();

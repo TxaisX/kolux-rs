@@ -220,7 +220,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const [stamp, setStamp] = useState<Record<number, { at: number; interrupted: boolean }>>({});
   // VIEW-023: what each pane's last event said it was doing, and the newest file it wrote this session.
   // TERM-036: the agent's own session id per pane, from its hooks.
-  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean }>>({});
+  const [turn, setTurn] = useState<Record<number, { tool?: string; detail?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean }>>({});
   // SAFE-002..004: the pane whose plan is open for review, and each plan's unsent comments.
   // SAFE-007: the sheet holds the plan it opened with, so it can tell when the pane moved on.
   const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean } | null>(null);
@@ -2045,11 +2045,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string } & Turn>("agent-status", (e) => {
-      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, plan, planCut, session } = e.payload;
+      const { paneKey, state, children, tool, detail, reply, wrote, boundary, stop, plan, planCut, session, monitoring } = e.payload;
       // SESS-030: the newest session id is what a restart resumes (a /clear or a resume brings a new one).
       if (session) setPanes((ps) => (ps.some((p) => p.key === paneKey && p.session !== session) ? ps.map((p) => (p.key === paneKey ? { ...p, session } : p)) : ps));
       setCrew((c) => (children.length === 0 && !(paneKey in c) ? c : { ...c, [paneKey]: children }));
-      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, plan, planCut, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
+      setTurn((t) => ({ ...t, [paneKey]: { tool, detail, reply, stop, plan, planCut, monitoring, wrote: boundary ? undefined : (wrote ?? t[paneKey]?.wrote) } }));
       setStale((m) => (m[paneKey] ? { ...m, [paneKey]: false } : m));
       const prev = hookRef.current[paneKey];
       // STAT-041: a finish, a permission request, a block, an interrupt or a sub-agent's turn is a note.
@@ -2063,7 +2063,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
       if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check").catch(() => {});
       if (prev !== state) {
         setHook((h) => ({ ...h, [paneKey]: state }));
-        setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted } }));
+        // STAT-029: a start, resume, clear or manual compact settles quietly, out of done today.
+        setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted || boundary } }));
       }
     });
     // STAT-045: the quiet alert comes from the terminal's own silence, judged in Rust.
@@ -2658,7 +2659,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                         then();
                       }
                     }}
-                    hook={hook[p.key]}
+                    hook={hook[p.key] === "working" && turn[p.key]?.monitoring ? "background" : hook[p.key]}
                     crew={crew[p.key]}
                     onNeedsYou={(on) => setNeeds((r) => (r[p.key] === on ? r : { ...r, [p.key]: on }))}
                     onBell={() => noticed(p, "rang the bell")}

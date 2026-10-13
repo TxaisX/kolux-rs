@@ -63,7 +63,7 @@ export function ageLabel(finishedAt: number, now: number): string {
  *  header has no mark for, or an unclear answer, leaves the pane a shell. */
 export const foundAgent = (a: string | null): "claude" | "codex" | null => (a === "claude" || a === "codex" ? a : null);
 
-export function headerOf(agent: string, kind: Kind, code: number | null | undefined, needs: boolean, finishedAt: number | null, now: number, hook?: AgentState): Header {
+export function headerOf(agent: string, kind: Kind, code: number | null | undefined, needs: boolean, finishedAt: number | null, now: number, hook?: AgentState | "background"): Header {
   const h = (state: StatusKey, over: Partial<Header> = {}): Header => ({ ...VOCAB[state], state, age: "", needsYou: VOCAB[state].tone === "attention", ...over });
   const done = () => h("done", { age: finishedAt === null ? "" : ageLabel(finishedAt, now) });
   if (kind === "failed") return h("failed");
@@ -73,6 +73,8 @@ export function headerOf(agent: string, kind: Kind, code: number | null | undefi
     if (hook === "blocked" || hook === "interrupted" || hook === "waiting") return h(hook);
     if (needs || hook === "permission") return h("permission");
     if (hook === "done") return done();
+    // STAT-024: the turn is over but its background tasks run on; Kolux keeps watching.
+    if (hook === "background") return h("background");
     return h("working");
   }
   if (agent !== "shell" && !code) return done();

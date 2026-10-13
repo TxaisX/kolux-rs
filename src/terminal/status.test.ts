@@ -101,3 +101,14 @@ test("TERM-022: the chip names the branch, a detached HEAD shows its short commi
   expect(branchChip(null)).toBeNull();
   expect(branchChip({ branch: null, head: null })).toBeNull();
 });
+
+test("a turn that ended with background tasks still running reads as watched, not done (STAT-024)", () => {
+  const h = headerOf("claude", "running", undefined, false, null, 0, "background");
+  expect([h.state, h.word, h.tone, h.needsYou]).toEqual(["background", "Working", "working", false]);
+  expect(h.explain).toMatch(/background tasks/);
+  // A permission still wins over the watch.
+  expect(headerOf("claude", "running", undefined, true, null, 0, "background").state).toBe("permission");
+  // A title change while the tasks run (the agent the title names, its finish time) does not end the watch.
+  expect(headerOf(foundAgent("codex") ?? "shell", "running", undefined, false, 0, 90_000, "background").state).toBe("background");
+  expect(headerOf("claude", "running", undefined, false, 0, 90_000, "background").word).toBe("Working");
+});
