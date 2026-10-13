@@ -129,6 +129,10 @@ test("AUTO-007 grace choices and why a run was skipped read in words", () => {
   // AUTO-012: the same refusal again and again is one entry with a count.
   expect(statusWord({ ...r, cause: "unavailable", repeats: 12 })).toBe("Skipped (unavailable) · 12 times");
   expect(statusWord({ ...r, cause: "unavailable", repeats: 1 })).toBe("Skipped (unavailable)");
+  // AUTO-012 (T-072-b): a run handed to its agent that then stopped failed; it did not fail to start.
+  expect(statusWord({ ...r, status: "failed" })).toBe("Failed to start");
+  expect(statusWord({ ...r, status: "failed", dispatchedAt: 5 })).toBe("Failed");
+  expect(statusWord({ ...r, status: "completed", dispatchedAt: 5 })).toBe("Completed");
 });
 
 test("AUTO-008 the precheck's limits and its skip read in words", () => {

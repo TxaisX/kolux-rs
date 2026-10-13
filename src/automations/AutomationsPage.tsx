@@ -49,7 +49,7 @@ const results: Array<{ value: Filters["result"]; label: string }> = [
   { value: "dispatched", label: "Running" },
   { value: "pending", label: "Queued" },
   { value: "skipped", label: "Skipped" },
-  { value: "failed", label: "Failed to start" },
+  { value: "failed", label: "Failed" },
 ];
 
 export default function AutomationsPage({ projects, agents, settings, onSettings, onClose, initial }: Props) {

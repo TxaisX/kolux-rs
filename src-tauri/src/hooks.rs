@@ -418,6 +418,8 @@ fn handle(mut stream: TcpStream, app: &AppHandle, token: &str) {
             let (code, status) = answer(&req, token);
             if let Some(status) = status {
                 crate::resume::on_stop(app, status.pane_key, status.stop.as_ref());
+                // AUTO-012: an automation run in this pane completes on its agent's real finish.
+                crate::automations::follow(app, |s| crate::automations::on_status(s, status.terminal, status.pane_key, status.change.state, status.change.boundary, status.child.is_some(), crate::automations::now_ms()));
                 let _ = app.emit(EVENT, status);
             }
             code
