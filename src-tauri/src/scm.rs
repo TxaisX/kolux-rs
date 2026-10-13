@@ -601,6 +601,191 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
 
+/// GIT-017: the most diff text a commit-message prompt carries.
+pub const MESSAGE_BUDGET: usize = 24_000;
+
+/// GIT-017: `diff` cut to about `budget` bytes, shared fairly across its files (a small file keeps
+/// all of its share's worth, the rest goes to the big ones), each cut at a line end and marked.
+pub fn trim_diff(diff: &str, budget: usize) -> String {
+    if diff.len() <= budget {
+        return diff.to_string();
+    }
+    let mut files: Vec<&str> = Vec::new();
+    let mut rest = diff;
+    while let Some(i) = rest.get(1..).and_then(|r| r.find("\ndiff --git ")).map(|i| i + 2) {
+        files.push(&rest[..i]);
+        rest = &rest[i..];
+    }
+    files.push(rest);
+    let mut order: Vec<usize> = (0..files.len()).collect();
+    order.sort_by_key(|&i| files[i].len());
+    let mut share = vec![0usize; files.len()];
+    let mut left = budget;
+    for (n, &i) in order.iter().enumerate() {
+        let give = files[i].len().min(left / (files.len() - n));
+        share[i] = give;
+        left -= give;
+    }
+    let mut out = String::new();
+    for (i, f) in files.iter().enumerate() {
+        if share[i] >= f.len() {
+            out.push_str(f);
+            continue;
+        }
+        let keep = f.as_bytes()[..share[i]].iter().rposition(|&b| b == b'\n').map_or(0, |e| e + 1);
+        out.push_str(&f[..keep]);
+        out.push_str(&format!("[{} more lines of this file left out]\n", f[keep..].lines().count()));
+    }
+    out
+}
+
+/// GIT-017: an agent's answer as a commit message: code fences, an opening line that announces the
+/// message, and list bullets are stripped.
+pub fn clean_message(text: &str) -> String {
+    let mut lines: Vec<&str> = text.lines().filter(|l| !l.trim_start().starts_with("```")).collect();
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    if let Some(first) = lines.first() {
+        let low = first.trim().to_lowercase();
+        if low.ends_with(':') && (low.starts_with("here") || low.contains("commit message")) {
+            lines.remove(0);
+        }
+    }
+    let bare = |l: &&str| {
+        let t = l.trim_start();
+        ["- ", "* ", "\u{2022} "].iter().find_map(|b| t.strip_prefix(b)).unwrap_or(l).to_string()
+    };
+    lines.iter().map(bare).collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+/// GIT-017: what the agent is asked, with the (trimmed) staged diff at the end.
+pub fn message_prompt(diff: &str) -> String {
+    format!("Write a git commit message for the staged changes below. Reply with the commit message only: a summary line under 72 characters, then, when it helps, a blank line and a few plain sentences on what changed and why. No code fences, no bullets, no preamble.\n\n{diff}")
+}
+
+/// GIT-017: runs whose stop was asked for, by key (the worktree).
+static STOPS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// GIT-017: stops the message run for `key`, if one is going.
+pub fn stop_message(key: &str) {
+    STOPS.lock().unwrap_or_else(|e| e.into_inner()).push(key.to_string());
+}
+
+fn stop_asked(key: &str) -> bool {
+    let mut stops = STOPS.lock().unwrap_or_else(|e| e.into_inner());
+    let had = stops.iter().any(|k| k == key);
+    stops.retain(|k| k != key);
+    had
+}
+
+/// GIT-017: the end of an agent's output for an error notice, keys masked.
+fn excerpt(text: &str) -> String {
+    let t = text.trim();
+    let cut = t.char_indices().rev().nth(399).map_or(0, |(i, _)| i);
+    crate::secrets::mask(&t[cut..])
+}
+
+/// GIT-017: runs an agent CLI in `dir` with `prompt` on its standard input and returns its answer
+/// as a commit message. `stop_message(key)` ends the run early with the error "stopped".
+pub fn write_message(program: &Path, args: &[&str], dir: &Path, prompt: &str, key: &str, limit: std::time::Duration) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    stop_asked(key);
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args).current_dir(dir).env("NO_COLOR", "1").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Could not start the agent: {e}"))?;
+    if let Some(mut pipe) = child.stdin.take() {
+        let text = prompt.to_string();
+        std::thread::spawn(move || {
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut text);
+            }
+            let _ = tx.send(text);
+        });
+        rx
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let deadline = std::time::Instant::now() + limit;
+    let end = |child: &mut std::process::Child| {
+        // A .cmd shim runs the agent as its child, so the whole tree goes.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill").args(["/T", "/F", "/PID", &child.id().to_string()]).creation_flags(0x0800_0000).output();
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    };
+    let code = loop {
+        if let Some(code) = child.try_wait().map_err(|e| format!("The agent did not finish: {e}"))? {
+            break code;
+        }
+        if stop_asked(key) {
+            end(&mut child);
+            return Err("stopped".into());
+        }
+        if std::time::Instant::now() >= deadline {
+            end(&mut child);
+            return Err(format!("The agent did not finish within {} seconds", limit.as_secs()));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let out = stdout.recv().unwrap_or_default();
+    let err = stderr.recv().unwrap_or_default();
+    if !code.success() {
+        return Err(format!("The agent failed: {}", excerpt(if err.trim().is_empty() { &out } else { &err })));
+    }
+    let message = clean_message(&out);
+    if message.is_empty() {
+        let said = excerpt(&err);
+        return Err(if said.is_empty() { "The agent wrote nothing".to_string() } else { format!("The agent wrote nothing: {said}") });
+    }
+    Ok(message)
+}
+
+/// GIT-017: a commit message for what is staged in `worktree`, written by Claude Code.
+// ponytail: Claude Code only, with its default writing model; choosing the agent, model, effort or a
+// custom command is GIT-018 (T-228-c).
+#[tauri::command]
+pub async fn scm_commit_message(worktree: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = Path::new(&worktree);
+        let diff = run(&["diff", "--cached", "--no-color", "--no-ext-diff"], Some(dir))?;
+        if diff.is_empty() {
+            return Err("Nothing is staged to describe".into());
+        }
+        // Development builds only: KOLUX_DEV_WRITER names a stand-in agent for live proofs (as KOLUX_DEV_GH).
+        #[cfg(debug_assertions)]
+        let stand_in = std::env::var_os("KOLUX_DEV_WRITER").map(std::path::PathBuf::from);
+        #[cfg(not(debug_assertions))]
+        let stand_in: Option<std::path::PathBuf> = None;
+        let program = stand_in.or_else(|| crate::agents::find_program("claude")).ok_or("Claude Code was not found on this computer")?;
+        write_message(&program, &["-p", "--model", "sonnet"], dir, &message_prompt(&trim_diff(&diff, MESSAGE_BUDGET)), &worktree, std::time::Duration::from_secs(180))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// GIT-017: stops the commit-message run for `worktree`.
+#[tauri::command]
+pub fn scm_commit_message_stop(worktree: String) {
+    stop_message(&worktree);
+}
+
 /// GIT-027: one workspace the background poll looks up, with its hand-linked pull request if any.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct PollItem {
@@ -2345,6 +2530,64 @@ mod tests {
         assert!(task_detail(&gh, "bad host", "o/r", 3).is_err());
         assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
         let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git017_commit_message_from_the_staged_diff_is_trimmed_cleaned_and_stoppable() {
+        // A large diff is cut to the budget, shared fairly: the small file stays whole.
+        let small = "diff --git a/s b/s\n+one\n+two\n";
+        let big: String = format!("diff --git a/b b/b\n{}", (0..2000).map(|i| format!("+line {i}\n")).collect::<String>());
+        let cut = trim_diff(&format!("{small}{big}"), 600);
+        assert!(cut.len() <= 600 + 200, "{}", cut.len());
+        assert!(cut.starts_with(small), "{cut}");
+        assert!(cut.contains("+line 0\n") && !cut.contains("+line 1999"), "{cut}");
+        assert!(cut.lines().all(|l| l.starts_with('+') || l.starts_with("diff ") || l.starts_with("[")), "cut mid-line: {cut}");
+        assert_eq!(trim_diff(small, 600), small);
+        // Fences, an announcing first line and bullets are stripped.
+        assert_eq!(clean_message("Here is the commit message:\n```\n- Add the poll\n- Fix the row\n```\n"), "Add the poll\nFix the row");
+        assert_eq!(clean_message("Add the poll\n\n* keeps state\n"), "Add the poll\n\nkeeps state");
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git017-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, win: &str, sh: &str| {
+            if cfg!(windows) {
+                let f = root.join(format!("{name}.cmd"));
+                fs::write(&f, format!("@echo off\r\n{win}\r\n")).unwrap();
+                f
+            } else {
+                let f = root.join(name);
+                fs::write(&f, format!("#!/bin/sh\n{sh}\n")).unwrap();
+                std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+                f
+            }
+        };
+        let limit = std::time::Duration::from_secs(20);
+        // The prompt arrives on standard input and the answer comes back cleaned.
+        let echo = script("echo", "findstr /c:\"STAGED\" >nul && echo - Wrote the message", "grep -q STAGED && echo '- Wrote the message'");
+        assert_eq!(write_message(&echo, &[], &root, "STAGED diff", "k1", limit), Ok("Wrote the message".to_string()));
+        // A clean exit with nothing printed is an empty result, with the error stream's excerpt.
+        let empty = script("empty", "echo warming up 1>&2", "echo 'warming up' >&2");
+        let e = write_message(&empty, &[], &root, "x", "k2", limit).unwrap_err();
+        assert!(e.contains("wrote nothing") && e.contains("warming up"), "{e}");
+        // A failure favours the error stream and masks keys.
+        let fail = script("fail", "echo partial\r\necho bad key sk-ant-abc123 1>&2\r\nexit /b 3", "echo partial; echo 'bad key sk-ant-abc123' >&2; exit 3");
+        let e = write_message(&fail, &[], &root, "x", "k3", limit).unwrap_err();
+        assert!(e.contains("bad key sk-ant-[masked]") && !e.contains("abc123") && !e.contains("partial"), "{e}");
+        // Stopping a run ends it at once and leaves no message.
+        let slow = script("slow", "ping -n 30 127.0.0.1 >nul\r\necho late", "sleep 30; echo late");
+        let started = std::time::Instant::now();
+        let stopper = std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            stop_message("k4");
+        });
+        let e = write_message(&slow, &[], &root, "x", "k4", limit).unwrap_err();
+        stopper.join().unwrap();
+        assert_eq!(e, "stopped");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        // The prompt names the job and carries the diff.
+        let p = message_prompt("diff --git a/x b/x\n+y\n");
+        assert!(p.contains("commit message") && p.ends_with("diff --git a/x b/x\n+y\n"), "{p}");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

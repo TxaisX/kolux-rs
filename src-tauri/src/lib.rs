@@ -248,6 +248,8 @@ pub fn run() {
             scm::scm_tasks_search,
             scm::scm_gh_account,
             scm::scm_prs_poll,
+            scm::scm_commit_message,
+            scm::scm_commit_message_stop,
             scm::scm_task_detail,
             scm::scm_repo_labels,
             scm::scm_task_labels,

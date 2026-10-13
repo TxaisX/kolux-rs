@@ -235,6 +235,9 @@ input { font: inherit; }
 .scm-head .count { margin-left: 8px; font-size: 11px; color: var(--fg); }
 .scm-commit { display: flex; flex-direction: column; gap: 6px; margin: 8px 8px 0; }
 .scm-commit .field.multi { min-height: 56px; }
+.scm-msg { position: relative; display: flex; flex-direction: column; }
+.scm-msg .field.multi { padding-right: 28px; }
+.scm-gen { position: absolute; right: 4px; top: 4px; }
 .scm-main { display: flex; gap: 6px; }
 .scm-main .btn.primary { flex: 1; min-width: 0; }
 .scm-main .btn.primary span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

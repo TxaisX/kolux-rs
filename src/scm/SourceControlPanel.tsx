@@ -13,10 +13,11 @@
 // ponytail: the list refreshes after each action and every 4 s while the panel is open; the
 // watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033). GIT-021 / GIT-023: the pull-request step looks the
 // branch's pull request up through gh once it is published, and Create pull request opens a composer.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
-import { ChevronDown, Close, Minus, Plus, Refresh, Undo } from "../chrome/icons";
+import { ChevronDown, Close, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
+import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import { openInBrowser } from "../browser/BrowserPane";
@@ -26,7 +27,7 @@ type Props = {
   /** The workspace in front; null outside any workspace. */
   dir: string | null;
   draft: string;
-  onDraft: (text: string) => void;
+  onDraft: (text: string, dir?: string) => void;
   onClose: () => void;
   /** GIT-004: starts an agent primed with what git and its hooks printed. */
   onFix: (output: string) => void;
@@ -106,6 +107,10 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
       .then(setGhRepo)
       .catch(() => setGhRepo(null));
   }, [dir]);
+  // GIT-017: Claude Code writes the message from what is staged; the run belongs to this worktree.
+  useSyncExternalStore(genSubscribe, genVersion);
+  const gen = dir === null ? null : genState(dir);
+  const canGenerate = agents.some((a) => a.id === "claude" && a.installed);
   // GIT-036: Explain changes starts an agent with a prompt about the commit.
   const explain = (c: Commit) => {
     const prompt = explainPrompt(c);
@@ -574,7 +579,29 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
               </details>
             )}
             <div className="scm-commit">
-              <textarea className="field multi" placeholder={status?.branch ? `Message (Ctrl+Enter to commit on ${status.branch})` : "Message (Ctrl+Enter to commit)"} value={draft} onChange={(e) => onDraft(e.target.value)} />
+              <div className="scm-msg">
+                <textarea className="field multi" placeholder={status?.branch ? `Message (Ctrl+Enter to commit on ${status.branch})` : "Message (Ctrl+Enter to commit)"} value={draft} onChange={(e) => onDraft(e.target.value)} />
+                {gen === "running" ? (
+                  <button className="ib scm-gen" title="Stop writing the message" aria-label="Stop writing the message" onClick={() => dir !== null && void stopGenerate(dir)}>
+                    <Stop />
+                  </button>
+                ) : (
+                  canGenerate &&
+                  (status?.staged.length ?? 0) > 0 && (
+                    <button className="ib scm-gen" title="Write the message from what is staged with Claude Code" aria-label="Write the message with AI" onClick={() => dir !== null && generate(dir, onDraft)}>
+                      <Spark />
+                    </button>
+                  )
+                )}
+              </div>
+              {gen !== null && gen !== "running" && (
+                <div className="note warn" role="status">
+                  {gen}{" "}
+                  <button className="link" onClick={() => dir !== null && dismissGenerate(dir)}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
               <div className="scm-main">
                 <button className="btn primary" title={step.reason ?? step.label} disabled={busy || step.reason !== null} onClick={() => void mainAction()}>
                   <span>{step.label}</span>
