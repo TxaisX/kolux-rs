@@ -30,6 +30,7 @@ import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen } from "./settings/general";
+import { cacheDue, cacheMinutes } from "./projects/cache";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
@@ -1430,10 +1431,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // STAT-001: a hook-fed state wins over the guess from the program's state.
   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
   const rowStates: Record<string, RowInfo> = {};
+  const cacheFor = cacheMinutes(settings); // SET-059
   for (const [dir, states] of Object.entries(byDir)) {
     const state = strongest(states);
     const prev = rowRef.current[dir];
-    rowStates[dir] = prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null };
+    const cache = cacheDue(panes.filter((p) => p.cwd === dir).map((p) => ({ agent: p.agent, state: hook[p.key], since: stamp[p.key]?.at ?? 0 })), cacheFor);
+    rowStates[dir] = { ...(prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null }), cache };
   }
   rowRef.current = rowStates;
   const cells = cellsOf(panes);

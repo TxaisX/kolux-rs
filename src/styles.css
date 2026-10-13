@@ -167,6 +167,10 @@ input { font: inherit; }
 .sess .fold.shut svg { transform: rotate(-90deg); }
 .sb-form .check { display: flex; align-items: center; gap: 8px; }
 .sess .hint { font-size: 11px; color: var(--fg-muted); }
+/* SET-059: the prompt-cache countdown; yellow in the final minute, a red icon once it runs out. */
+.sess .cache-timer { font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; }
+.sess .cache-timer.last { color: var(--warn); }
+.sess .cache-timer.gone { color: var(--danger); }
 /* GIT-065: the badge sits where the row buttons appear on hover, so it never squeezes the name. */
 .sess .hint.push { position: absolute; right: 8px; white-space: nowrap; pointer-events: none; }
 .sess:hover .hint.push,

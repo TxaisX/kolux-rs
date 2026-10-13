@@ -518,7 +518,8 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-263-b · USAGE 019 rest: the usage card as a picture (drawn on a canvas, copied to the clipboard as an image) and Share on X, which opens the post in the browser
 - [ ] T-263-c · USAGE 026 / USAGE 027 rest: Gemini and Antigravity quota, Kimi and MiniMax quota; waits on OD-01 (Kolux does not call providers' usage services) and on public docs for each
 - [ ] T-264 · ACCT-022 Choose which Codex folder past sessions come from · ACCT-028 [compat] MiniMax credentials for usage tracking · ACCT-029 [compat] Use Gemini CLI credentials (experimental)
-- [ ] T-265 · SET-059 Optional prompt-cache countdown once a Claude agent goes idle
+- [x] T-265 · SET-059 Optional prompt-cache countdown once a Claude agent goes idle
+- [ ] T-265-b · SET 059 rest: the live proof of the worktree card countdown with a real Claude agent going idle (5:00 down, yellow under a minute, the red icon and its tooltip at zero, two tabs showing the shorter time, switching off clearing them); the code and tests are in `src/projects/cache.ts` and `CacheTimer.tsx`
 
 ### P2 · theme 7 · Redesign and the new look (10 cards)
 

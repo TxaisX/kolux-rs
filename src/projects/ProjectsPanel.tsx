@@ -17,6 +17,7 @@
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useRef, useState } from "react";
+import CacheTimer from "./CacheTimer";
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -833,6 +834,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
           <span className="name">{worktreeLabel(w)}</span>
+          {info.cache != null && <CacheTimer due={info.cache} />}
           {w.kind === "external" && (
             <span className="hint" title="Made outside Kolux (plain Git or another tool); Kolux has no record of making it">
               external
