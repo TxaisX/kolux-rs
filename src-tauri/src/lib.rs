@@ -464,6 +464,7 @@ pub fn run() {
             onboarding::onboarding_milestone,
             files::file_read,
             files::file_write,
+            files::file_stamps,
             files::file_pick,
             files::md_list,
             artifacts::artifacts_list,
