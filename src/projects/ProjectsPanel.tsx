@@ -39,7 +39,7 @@ import { requestUpdateCheck } from "../update/UpdateCenter";
 import { GLOSSARY } from "../glossary";
 
 /** The pages that open over the content column from the sidebar footer. */
-export type Page = "automations" | "routing";
+export type Page = "automations" | "routing" | "tasks";
 
 type Props = {
   /** Folders a pane is open in: those workspace rows show a live dot and a count. */
@@ -942,7 +942,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       <aside className="sidebar" aria-label="Sidebar">
         <nav className="sb-nav">
           {chromeShown(settings, "tasksButton") && (
-            <button className="row" title="Tasks (not built yet)">
+            <button className={`row${page === "tasks" ? " on" : ""}`} aria-current={page === "tasks" ? "page" : undefined} onClick={() => onPage("tasks")}>
               <span className="ic">
                 <List />
               </span>

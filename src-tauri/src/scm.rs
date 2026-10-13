@@ -494,6 +494,12 @@ pub fn gh_login() -> Option<String> {
 }
 
 fn gh_program() -> Result<std::path::PathBuf, String> {
+    // Development builds only: KOLUX_DEV_GH names a stand-in gh for live proofs, since the
+    // registry's search path (which finds the real gh) comes before the process PATH.
+    #[cfg(debug_assertions)]
+    if let Some(p) = std::env::var_os("KOLUX_DEV_GH") {
+        return Ok(p.into());
+    }
     crate::agents::find_program("gh").ok_or_else(|| "The GitHub CLI (gh) is not installed; install it, then run gh auth login".to_string())
 }
 
@@ -729,6 +735,42 @@ pub fn gh_budget(gh: &Path) -> Result<Vec<Budget>, String> {
 #[tauri::command]
 pub async fn scm_gh_budget() -> Result<Vec<Budget>, String> {
     tauri::async_runtime::spawn_blocking(|| gh_budget(&gh_program()?)).await.map_err(|e| e.to_string())?
+}
+
+/// VIEW-010: one row of the Tasks page, an issue or a pull request.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Task {
+    #[serde(default)]
+    pub kind: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    #[serde(alias = "updatedAt", default)]
+    pub updated: String,
+    #[serde(alias = "isDraft", default)]
+    pub draft: bool,
+}
+
+/// VIEW-010: the default preset, every open issue and pull request of the repository, newest first.
+// ponytail: the first 50 of each; presets, search and paging are T-231-b.
+pub fn tasks_list(gh: &Path, worktree: &Path) -> Result<Vec<Task>, String> {
+    let mut all = Vec::new();
+    for (kind, fields) in [("issue", "number,title,url,state,updatedAt"), ("pr", "number,title,url,state,updatedAt,isDraft")] {
+        let text = gh_run(gh, worktree, &[kind, "list", "--state", "open", "--limit", "50", "--json", fields], None).map_err(|e| gh_words(&e))?;
+        let mut got: Vec<Task> = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+        for t in &mut got {
+            t.kind = kind.into();
+        }
+        all.extend(got);
+    }
+    all.sort_by(|a, b| b.updated.cmp(&a.updated));
+    Ok(all)
+}
+
+#[tauri::command]
+pub async fn scm_tasks(worktree: String) -> Result<Vec<Task>, String> {
+    tauri::async_runtime::spawn_blocking(move || tasks_list(&gh_program()?, Path::new(&worktree))).await.map_err(|e| e.to_string())?
 }
 
 /// GIT-033: what the merge box needs, read in one GraphQL call when the box is opened.
@@ -1848,6 +1890,35 @@ mod tests {
         assert_eq!(s["uiLook"], "classic");
         drop(store);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn view010_tasks_lists_open_issues_and_pull_requests_newest_first() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-view010-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        fs::write(tools.join("issue.json"), r#"[{"number":3,"title":"Crash on start","url":"https://github.com/o/r/issues/3","state":"OPEN","updatedAt":"2026-10-10T08:00:00Z"}]"#).unwrap();
+        fs::write(tools.join("pr.json"), r#"[{"number":9,"title":"Fix crash","url":"https://github.com/o/r/pull/9","state":"OPEN","updatedAt":"2026-10-11T08:00:00Z","isDraft":true}]"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\ntype \"%~dp0%1.json\"\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\ncat \"$(dirname \"$0\")/$1.json\"\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let got = tasks_list(&gh, &tools).unwrap();
+        let seen: Vec<(String, u64, bool)> = got.iter().map(|t| (t.kind.clone(), t.number, t.draft)).collect();
+        assert_eq!(seen, vec![("pr".to_string(), 9, true), ("issue".to_string(), 3, false)]);
+        assert_eq!(got[1].title, "Crash on start");
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap();
+        assert!(calls.contains("issue list --state open"), "{calls}");
+        assert!(calls.contains("pr list --state open"), "{calls}");
+        fs::write(tools.join("issue.json"), "not json").unwrap();
+        assert!(tasks_list(&gh, &tools).unwrap_err().contains("cannot read"));
+        let _ = fs::remove_dir_all(&tools);
     }
 
     #[test]

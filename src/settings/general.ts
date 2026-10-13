@@ -34,5 +34,5 @@ export const titleBarButton = (s: Record<string, unknown>, which: keyof typeof T
 export const OPEN_PAGE_FIELD = "openPage";
 export function openPageAt(s: Record<string, unknown>): Page | null {
   const v = s[OPEN_PAGE_FIELD];
-  return v === "automations" || v === "routing" ? v : null;
+  return v === "automations" || v === "routing" || v === "tasks" ? v : null;
 }

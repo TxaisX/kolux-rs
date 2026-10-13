@@ -63,6 +63,8 @@ import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
+import TasksPage from "./tasks/TasksPage";
+import { tasksRepo } from "./tasks/model";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SCM_GROUP_ORDER_KEY, SCM_LINKED_PR_KEY, SUMMARY_UPSTREAM_KEY, linkedPrs, withLink } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
@@ -510,6 +512,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           break;
         case "view.cycleWorkspaceView":
           if (!classic) setScreen((s) => nextScreen(s));
+          break;
+        case "view.tasks":
+          setScreen("terminals");
+          setPage((p) => (terminals && p === "tasks" ? null : "tasks"));
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
@@ -1520,6 +1526,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               }}
             />
           )}
+          {terminals && page === "tasks" && <TasksPage repo={tasksRepo(projects, activeDir)} />}
           {terminals && page === "routing" && (
             <RoutingPage
               agents={agents}

@@ -245,6 +245,7 @@ pub fn run() {
             scm::scm_merge_info,
             scm::scm_merge,
             scm::scm_gh_budget,
+            scm::scm_tasks,
             scm::scm_stage,
             scm::scm_discard,
             scm::scm_commit, scm::scm_remote,

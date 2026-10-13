@@ -21,6 +21,7 @@ test("the first screen counts only under New", () => {
 });
 
 test("VIEW-011: the Automations title-bar button is off by default and the page open at quit comes back", () => {
+  expect(openPageAt({ openPage: "tasks" })).toBe("tasks");
   expect(titleBarButton({}, "automations")).toBe(false);
   expect(titleBarButton({ titleBarAutomations: true }, "automations")).toBe(true);
   expect(titleBarButton({ titleBarAutomations: "yes" }, "automations")).toBe(false);
