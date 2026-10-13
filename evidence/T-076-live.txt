@@ -1,0 +1,73 @@
+T-076 (CLI-012 kolux status) live proof, 2026-10-12, lane release, dev build, the CLI is target/debug/kolux-dev.exe
+with KOLUX_USER_DATA_PATH pointed at the lane profile. The profile was backed up first and restored afterwards
+(settings.json, state.db, state.db-wal, state.db-shm: cmp same; the left-behind cli.json and agent-hooks-endpoint.txt
+were put back as they were; no log line was added).
+
+== 1. app closed, cli.json left behind by the coordinator's earlier kill
+{"port":63082,"token":"685fd3ef42d2328bb1045a050c6e24b3","pid":18748}
+17:21:19.219
+stale: Kolux's startup file C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.release\cli.json was left behind but nothing answers (No connection could be made because the target machine actively refused it. (os error 10061)); `kolux-dev open` starts it again
+exit 0
+{
+  "requestId": "77ec-18ddeee2072a4df0",
+  "success": true,
+  "result": {
+    "state": "stale",
+    "detail": "No connection could be made because the target machine actively refused it. (os error 10061)",
+    "file": "C:\\Users\\XiongT\\AppData\\Roaming\\com.txaisxiong.kolux-rs.release\\cli.json",
+    "pid": 18748
+  },
+  "meta": {
+    "runtimeId": ""
+  }
+}
+exit 0
+17:21:23.384
+== 2. app closed, no startup file
+not running: Kolux is closed
+exit 0
+{
+  "requestId": "3534-18ddeee28998ab24",
+  "success": true,
+  "result": {
+    "state": "not running"
+  },
+  "meta": {
+    "runtimeId": ""
+  }
+}
+exit 0
+
+== 3. app started (pnpm tauri dev), status polled every ~150 ms; each change of answer with its time:
+17:21:30.749 not running
+17:21:49.922 graph not ready
+17:21:51.816 running
+   (T-076-running.png: the window at that moment, its workspace list loaded)
+
+== 4. hard kill of process 42848 (taskkill /F, no quit runs, so the startup files stay)
+17:22:10.770
+SUCCESS: The process with PID 42848 has been terminated.
+agent-hooks-endpoint.txt
+cli.json
+stale: Kolux's startup file C:\Users\XiongT\AppData\Roaming\com.txaisxiong.kolux-rs.release\cli.json was left behind but nothing answers (No connection could be made because the target machine actively refused it. (os error 10061)); `kolux-dev open` starts it again
+exit 0
+{
+  "requestId": "ab4c-18ddeeee17c9ad84",
+  "success": true,
+  "result": {
+    "state": "stale",
+    "detail": "No connection could be made because the target machine actively refused it. (os error 10061)",
+    "file": "C:\\Users\\XiongT\\AppData\\Roaming\\com.txaisxiong.kolux-rs.release\\cli.json",
+    "pid": 42848
+  },
+  "meta": {
+    "runtimeId": ""
+  }
+}
+exit 0
+
+Every answer exits 0: the command worked; the state is in the text and in result.state.
+A refused connection takes about 2 s on Windows, so stale answers in about 2 s; an app that holds the port
+but does not answer is given 5 s, then counts as stale.
+Unit test cli::tests::status_tells_not_running_stale_graph_not_ready_and_running: no file, a file whose port
+is closed, a file cut short, a live app before and after its window loads, a token that does not match.

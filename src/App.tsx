@@ -1300,6 +1300,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const report = useRef(reportLayout);
   report.current = reportLayout;
   useEffect(() => report.current());
+  // CLI-012: kolux status says running once the window has its workspaces, or has no list to load.
+  const [indexed, setIndexed] = useState(false);
+  const graphSent = useRef(false);
+  const listing = (terminals || screen === "artifacts") && sidebarOpen;
+  useEffect(() => {
+    if (graphSent.current || (listing && !indexed)) return;
+    graphSent.current = true;
+    void invoke("workspace_ready").catch(() => undefined);
+  });
   // STAT-041: the note names the repository when more than one has agents running.
   const repoOf = (p: Pane): string | null => {
     const repos = new Set(panes.filter((x) => x.agent !== "shell" && x.cwd !== null).map((x) => folderName(x.cwd as string)));
@@ -1464,6 +1473,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
             onIndex={(list, dirs, typed) => {
+              setIndexed(true);
               setProjects(list);
               setOwner(dirs);
               setNames(typed);

@@ -205,6 +205,7 @@ pub fn run() {
             terminal::terminal_resize,
             terminal::terminal_kill,
             terminal::terminal_layout,
+            cli::workspace_ready,
             projects::git_version,
             projects::project_list,
             projects::project_add,

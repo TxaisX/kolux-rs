@@ -165,7 +165,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-074 · BROW-008 Pages that fail to load get a recovery overlay · BROW-009 Crashed pages recover by themselves
 - [x] T-075-a · APP-048 [compat] Everything the user set up is saved as they go and survives quits and updates · APP-050 Quitting writes one final save without freezing (the store rules and the final save; the layout and sessions coming back are T-075-b)
 - [ ] T-075-b · APP-052 Terminals survive app restarts and a replaced terminal service · also the layout and sessions coming back at the next launch (the rest of the card built in T-075-a) · also from T-093-a: keep each worktree's open editor tabs so they come back after a restart · also from T-097: when only the background terminal service is running with no window, kolux open waits for it to show the desktop window, and fails with a clear reason when it cannot safely become the desktop app
-- [ ] T-076 · CLI-012 [compat] kolux status tells whether the app is up
+- [x] T-076 · CLI-012 [compat] kolux status tells whether the app is up
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 

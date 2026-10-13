@@ -23,6 +23,7 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("account add", "Sign in to a Claude or Codex account with the agent's own login, and add it to Kolux."),
     ("account list", "List the Claude and Codex accounts Kolux holds."),
     ("open", "Start Kolux, or bring its window to the front, and wait until it answers."),
+    ("status", "Say whether Kolux is running, not running, stale or still loading its workspaces (graph not ready)."),
     ("repo list", "List the repos Kolux knows."),
     ("repo add", "Add a folder as a repo."),
     ("repo show", "Show one repo."),
