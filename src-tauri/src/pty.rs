@@ -240,6 +240,9 @@ pub struct PtySession {
     pid: Option<u32>,
     /// The program that started (ACCT-046: an automatic shell may be a fallback).
     program: String,
+    /// APP-053 / ACCT-051: the job that holds the program and everything it starts; closed last,
+    /// after the PTY, so the pane's whole tree ends with it and no other pane's.
+    job: Option<crate::procs::Job>,
 }
 
 impl PtySession {
@@ -288,6 +291,7 @@ impl PtySession {
         drop(pair.slave);
         let killer = child.clone_killer();
         let pid = child.process_id();
+        let job = crate::procs::pane_job(&*child);
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
@@ -311,7 +315,7 @@ impl PtySession {
             })
             .map_err(|e| e.to_string())?;
 
-        Ok(Self { master: Some(pair.master), writer: Some(writer), killer, pid, program })
+        Ok(Self { master: Some(pair.master), writer: Some(writer), killer, pid, program, job })
     }
 
     /// Sends keystrokes (already encoded as the terminal would) to the program.
@@ -343,11 +347,12 @@ impl PtySession {
     }
 
     /// Ends the program: closes its input, forces it to stop, releases the PTY so the reader
-    /// thread can finish.
+    /// thread can finish, then closes the pane's job so everything the program started goes too.
     pub fn kill(&mut self) {
         self.writer.take();
         let _ = self.killer.kill();
         self.master.take();
+        self.job.take();
     }
 }
 
