@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { CONFIRM_DELETE_FIELD, asksBeforeDelete } from "../projects/deleting";
 import { prefixSample, type PrefixCheck } from "../projects/model";
-import { SCM_GROUP_ORDERS, SCM_GROUP_ORDER_KEY, scmGroups, SUMMARY_UPSTREAM_KEY } from "../scm/model";
+import { budgetLine, budgetLow, type Budget, SCM_GROUP_ORDERS, SCM_GROUP_ORDER_KEY, scmGroups, SUMMARY_UPSTREAM_KEY } from "../scm/model";
 import { useSettings } from "./useSettings";
 
 const REFRESH_FIELD = "refreshBaseFirst";
@@ -27,6 +27,13 @@ export default function GitPage() {
     };
   }, [settings, mode, custom]);
   const sample = prefixSample(mode, custom, check);
+  // GIT-066 / GIT-028: the GitHub API budget, read when the page opens and on request.
+  const [budget, setBudget] = useState<{ rows: Budget[] | null; error: string | null; at: number }>({ rows: null, error: null, at: 0 });
+  const readBudget = () =>
+    invoke<Budget[]>("scm_gh_budget")
+      .then((rows) => setBudget({ rows, error: null, at: Date.now() / 1000 }))
+      .catch((err) => setBudget({ rows: null, error: String(err), at: Date.now() / 1000 }));
+  useEffect(() => void readBudget(), []);
   return (
     <>
       {error && <p className="conn-detail warn">{error}</p>}
@@ -93,6 +100,21 @@ export default function GitPage() {
             <p className="conn-detail" data-group-order>
               The list reads {scmGroups(settings[SCM_GROUP_ORDER_KEY]).map((g) => g[0].toUpperCase() + g.slice(1)).join(", then ")}. Conflicts always come first, since they hold up a commit.
             </p>
+          </section>
+          <section className="conn-card" data-section="gh-budget">
+            <h2 className="conn-name">GitHub API budget</h2>
+            {budget.rows === null && budget.error === null && <p className="conn-detail">Reading the budget{"\u2026"}</p>}
+            {budget.error && <p className="conn-detail warn">{budget.error}</p>}
+            {budget.rows?.map((b) => (
+              <p key={b.name} className={budgetLow(b) ? "conn-detail warn" : "conn-detail"} data-budget={b.name}>
+                {budgetLine(b, budget.at)}
+              </p>
+            ))}
+            <div className="btn-row">
+              <button className="btn" data-budget-refresh onClick={() => void readBudget()}>
+                Check again
+              </button>
+            </div>
           </section>
           <section className="conn-card" data-section="deleting">
             <h2 className="conn-name">Deleting workspaces</h2>

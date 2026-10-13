@@ -371,3 +371,15 @@ export function mergeActions(m: MergeInfo): MergeAction[] {
   if (m.autoAllowed && !unstable) return [...methods.map((x): MergeAction => ({ action: "auto", method: x, label: `${METHOD_WORDS[x]} when ready` })), close];
   return [close];
 }
+
+/** GIT-028: one GitHub API budget (`scm_gh_budget`); `reset` is in Unix seconds. */
+export type Budget = { name: string; limit: number; remaining: number; reset: number };
+
+export function budgetLine(b: Budget, nowSec: number): string {
+  const mins = Math.max(1, Math.ceil((b.reset - nowSec) / 60));
+  const n = (x: number) => x.toLocaleString("en-US");
+  return `${b.name}: ${b.remaining === 0 ? "used up" : `${n(b.remaining)} of ${n(b.limit)} left`}, resets in ${mins} min`;
+}
+
+/** Under a tenth left. */
+export const budgetLow = (b: Budget): boolean => b.remaining * 10 < b.limit;

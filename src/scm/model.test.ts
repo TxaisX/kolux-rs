@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
+import { budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -294,4 +294,14 @@ test("GIT-033: the merge label names what holds the pull request back and only p
   expect(acts({ ...m, state: "CLOSED" })).toEqual(["reopen:"]);
   expect(mergeLabel({ ...m, state: "MERGED" })).toBe("Merged");
   expect(acts({ ...m, state: "MERGED" })).toEqual([]);
+});
+
+test("GIT-028: each GitHub budget reads what is left and when it resets", () => {
+  const now = 1760000000;
+  expect(budgetLine({ name: "REST", limit: 5000, remaining: 4980, reset: now + 42 * 60 }, now)).toBe("REST: 4,980 of 5,000 left, resets in 42 min");
+  expect(budgetLine({ name: "Search", limit: 30, remaining: 0, reset: now + 20 }, now)).toBe("Search: used up, resets in 1 min");
+  expect(budgetLine({ name: "GraphQL", limit: 5000, remaining: 5000, reset: now - 5 }, now)).toBe("GraphQL: 5,000 of 5,000 left, resets in 1 min");
+  expect(budgetLow({ name: "REST", limit: 5000, remaining: 499, reset: now })).toBe(true);
+  expect(budgetLow({ name: "REST", limit: 5000, remaining: 500, reset: now })).toBe(false);
+  expect(budgetLow({ name: "Search", limit: 30, remaining: 0, reset: now })).toBe(true);
 });

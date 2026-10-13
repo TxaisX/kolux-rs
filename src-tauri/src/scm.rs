@@ -705,6 +705,32 @@ pub fn link_printed(store: &crate::state::Store, dir: &str, url: &str) -> bool {
     store.save_settings(&settings).is_ok()
 }
 
+/// GIT-028: one of GitHub's API budgets as `gh api rate_limit` gives it; `reset` is in Unix seconds.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Budget {
+    pub name: String,
+    pub limit: u64,
+    pub remaining: u64,
+    pub reset: u64,
+}
+
+/// GIT-028: the REST, search and GraphQL budgets left. Reading them costs no budget.
+// ponytail: github.com's budget only; an Enterprise host would need its own --hostname read.
+pub fn gh_budget(gh: &Path) -> Result<Vec<Budget>, String> {
+    let text = gh_run(gh, &std::env::temp_dir(), &["api", "rate_limit"], None).map_err(|e| gh_words(&e))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
+    let read = |key: &str, name: &str| {
+        let r = &v["resources"][key];
+        Some(Budget { name: name.into(), limit: r["limit"].as_u64()?, remaining: r["remaining"].as_u64()?, reset: r["reset"].as_u64()? })
+    };
+    Ok([("core", "REST"), ("search", "Search"), ("graphql", "GraphQL")].iter().filter_map(|(k, n)| read(k, n)).collect())
+}
+
+#[tauri::command]
+pub async fn scm_gh_budget() -> Result<Vec<Budget>, String> {
+    tauri::async_runtime::spawn_blocking(|| gh_budget(&gh_program()?)).await.map_err(|e| e.to_string())?
+}
+
 /// GIT-033: what the merge box needs, read in one GraphQL call when the box is opened.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1801,6 +1827,33 @@ mod tests {
                 format!("pr reopen {url}"),
             ]
         );
+        let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git028_the_github_budget_reads_rest_search_and_graphql_from_gh() {
+        let tools = std::env::temp_dir().join(format!("kolux-rs-scm-git028-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tools);
+        fs::create_dir_all(&tools).unwrap();
+        let answer = r#"{"resources":{"core":{"limit":5000,"used":20,"remaining":4980,"reset":1760000000},"search":{"limit":30,"used":30,"remaining":0,"reset":1760000060},"graphql":{"limit":5000,"used":1,"remaining":4999,"reset":1760003600},"code_search":{"limit":10,"remaining":10,"reset":1}},"rate":{"limit":5000}}"#;
+        fs::write(tools.join("answer.json"), answer).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\ntype \"%~dp0answer.json\"\r\n").unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\ncat \"$(dirname \"$0\")/answer.json\"\n").unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let b = gh_budget(&gh).unwrap();
+        let rows: Vec<(&str, u64, u64, u64)> = b.iter().map(|x| (x.name.as_str(), x.limit, x.remaining, x.reset)).collect();
+        assert_eq!(rows, [("REST", 5000, 4980, 1760000000), ("Search", 30, 0, 1760000060), ("GraphQL", 5000, 4999, 1760003600)]);
+        assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().trim(), "api rate_limit");
+        // A budget gh leaves out is left out, not shown as zero.
+        fs::write(tools.join("answer.json"), r#"{"resources":{"core":{"limit":60,"remaining":59,"reset":5}}}"#).unwrap();
+        assert_eq!(gh_budget(&gh).unwrap().len(), 1);
         let _ = fs::remove_dir_all(&tools);
     }
 

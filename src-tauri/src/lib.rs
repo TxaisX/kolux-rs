@@ -169,6 +169,7 @@ pub fn run() {
             scm::scm_pushed, scm::scm_summary, scm::scm_abort,
             scm::scm_merge_info,
             scm::scm_merge,
+            scm::scm_gh_budget,
             scm::scm_stage,
             scm::scm_commit, scm::scm_remote,
             scm::scm_pr, scm::scm_pr_create, scm::scm_open_pr,
