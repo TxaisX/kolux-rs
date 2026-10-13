@@ -639,9 +639,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           // with none waiting, focus stays where it is.
           const k = nextNeedsYou(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)), focused);
           if (k === null) return;
-          const p = panes.find((x) => x.key === k);
-          if (p && !sameDir(p.cwd, activeDir)) setActiveDir(p.cwd);
-          setFocused(k);
+          openPane(k); // EDIT-041: the same jump as Open in Code
           break;
         }
         case "terminal.focusNextPane":
@@ -1476,12 +1474,16 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const key = runPanes.current[id];
     return panes.find((x) => x.key === key && !!worktree && sameDir(x.cwd, worktree));
   };
+  // EDIT-041: Open in Code goes to the Code view, the pane's workspace (its sidebar row scrolled
+  // into sight by ProjectsPanel) and the pane itself, its tab brought to the top.
+  const [reveal, setReveal] = useState(0);
   const openPane = (key: number) => {
     const p = panes.find((x) => x.key === key);
     if (!p) return;
     setScreen("terminals");
-    if (p.cwd) setActiveDir(p.cwd);
+    if (!sameDir(p.cwd, activeDir)) setActiveDir(p.cwd);
     setFocused(key);
+    setReveal((n) => n + 1);
   };
   const live = panes.filter((p) => running[p.key]);
   const openDirs = panes.map((p) => p.cwd).filter((d): d is string => d !== null);
@@ -1720,6 +1722,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
         {(terminals || screen === "artifacts") && sidebarOpen && (
           <ProjectsPanel
+            reveal={reveal}
             openDirs={openDirs}
             states={rowStates}
             unread={unreadDirs}
