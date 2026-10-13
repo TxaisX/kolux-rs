@@ -51,3 +51,20 @@ export function feedbackMessage(comments: PlanComment[], note: string): string {
 /** SAFE-001: the review button is up only while Claude waits on its exit-plan step and sent the plan. */
 export const showsReview = (state: AgentState | undefined, turn: { tool?: string; plan?: string } | undefined) =>
   (state === "waiting" || state === "permission") && turn?.tool === "ExitPlanMode" && !!turn.plan?.trim();
+
+/** SAFE-005: at most this many unsent drafts are held in memory. */
+export const MAX_DRAFTS = 128;
+
+/** SAFE-005: one draft per pane and per exact plan text, so a revised plan starts empty. */
+export const draftKey = (pane: number, plan: string) => `${pane}\n${plan}`;
+
+/** SAFE-005: stores a draft; a held draft keeps its place, and a new one past the limit drops the oldest. */
+export function keepDraft(drafts: Record<string, PlanDraft>, key: string, d: PlanDraft): Record<string, PlanDraft> {
+  const next = { ...drafts, [key]: d };
+  const keys = Object.keys(next);
+  return keys.length <= MAX_DRAFTS ? next : Object.fromEntries(keys.slice(-MAX_DRAFTS).map((k) => [k, next[k]]));
+}
+
+/** SAFE-007: the sheet's plan can still be answered only while the pane waits on that exact plan. */
+export const stillPending = (state: AgentState | undefined, turn: { tool?: string; plan?: string } | undefined, plan: string) =>
+  showsReview(state, turn) && turn?.plan === plan;

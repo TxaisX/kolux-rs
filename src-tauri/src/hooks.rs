@@ -81,6 +81,9 @@ pub struct Change {
     /// SAFE-001: the whole plan Claude asks to leave plan mode with; only on its exit-plan step.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// SAFE-006: the plan was trimmed to fit its status update; the whole plan is in the terminal.
+    #[serde(rename = "planCut", skip_serializing_if = "std::ops::Not::not")]
+    pub plan_cut: bool,
 }
 
 /// STAT-022's three causes for Claude Code's failure kinds (the StopFailure `error` values): a
