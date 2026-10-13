@@ -355,6 +355,7 @@ pub fn run() {
             onboarding::guide_get,
             onboarding::guide_mark,
             onboarding::cli_status,
+            onboarding::tours_get,
             files::file_read,
             files::file_write,
             files::file_pick,

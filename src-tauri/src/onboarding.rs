@@ -138,19 +138,54 @@ pub struct Guide {
     pub visited: Vec<String>,
     #[serde(default)]
     pub tried: Vec<String>,
+    /// ONB-032: the contextual tours skipped or finished (COMPAT: the importer brings it across).
+    #[serde(default)]
+    pub tours_seen: Vec<String>,
+    /// ONB-032: whether this profile gets tours by itself, decided once (tours_get) and never again.
+    #[serde(default)]
+    pub tours_auto: Option<bool>,
+}
+
+/// ONB-033: every contextual tour id, built or planned; a seen entry for any other id (one an older
+/// version saved) is dropped on load.
+pub const TOURS: &[&str] = &["tasks", "automations", "parallel", "browser", "board", "floating", "create", "grid"];
+
+/// Keeps the known ids of `v` once each, in order.
+fn known(v: Vec<String>, ids: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in v {
+        if ids.contains(&t.as_str()) && !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out
 }
 
 /// The stored record; tips this build no longer knows are dropped and each tip counts once.
 fn guide_load(store: &Store) -> Guide {
     let mut g: Guide = store.get(GUIDE).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let mut seen = Vec::new();
-    for t in g.tips_seen.drain(..) {
-        if TIPS.contains(&t.as_str()) && !seen.contains(&t) {
-            seen.push(t);
-        }
-    }
-    g.tips_seen = seen;
+    g.tips_seen = known(std::mem::take(&mut g.tips_seen), TIPS);
+    g.tours_seen = known(std::mem::take(&mut g.tours_seen), TOURS);
     g
+}
+
+/// ONB-032: the profile qualifies for automatic tours only when the first-run wizard is showing the
+/// first time this is asked (a new profile); an existing profile never does. Decided once.
+fn tours_decided(mut g: Guide, onboarding_open: bool) -> (Guide, bool) {
+    let fresh = g.tours_auto.is_none();
+    g.tours_auto.get_or_insert(onboarding_open);
+    (g, fresh)
+}
+
+#[tauri::command]
+pub fn tours_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let open = load(&store).is_some_and(|r| r.closed_at.is_none());
+    let (g, fresh) = tours_decided(guide_load(&store), open);
+    if fresh {
+        store.set(GUIDE, &serde_json::to_string(&g).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    }
+    Ok(g)
 }
 
 /// `id` added once to `list` (tipsSeen, visited or tried).
@@ -161,6 +196,8 @@ fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
     let v = match list {
         "tipsSeen" if TIPS.contains(&id) => &mut g.tips_seen,
         "tipsSeen" => return Err(format!("{id} is not a startup tip")),
+        "toursSeen" if TOURS.contains(&id) => &mut g.tours_seen,
+        "toursSeen" => return Err(format!("{id} is not a tour")),
         "visited" => &mut g.visited,
         "tried" => &mut g.tried,
         _ => return Err(format!("{list} is not a guide list")),
@@ -242,6 +279,23 @@ mod tests {
         assert_eq!(marked(g, "tried", "usage").unwrap().tried, ["usage"]);
         drop(s);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn automatic_tours_are_decided_once_and_old_tour_entries_drop() {
+        let (g, fresh) = tours_decided(Guide::default(), false);
+        assert!(fresh && g.tours_auto == Some(false), "an existing profile (no wizard showing) never gets automatic tours");
+        let (g, fresh) = tours_decided(g, true);
+        assert!(!fresh && g.tours_auto == Some(false), "the decision is not taken again later");
+        assert_eq!(tours_decided(Guide::default(), true).0.tours_auto, Some(true), "a new profile qualifies");
+        let (s, dir) = store("tours");
+        s.set(GUIDE, r#"{"toursSeen":["retired-tour","tasks","tasks"]}"#).unwrap();
+        assert_eq!(guide_load(&s).tours_seen, ["tasks"]);
+        let g = marked(guide_load(&s), "toursSeen", "parallel").unwrap();
+        assert_eq!(g.tours_seen, ["tasks", "parallel"]);
+        assert!(marked(g, "toursSeen", "nope").is_err());
+        drop(s);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

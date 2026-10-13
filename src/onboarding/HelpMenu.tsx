@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Help } from "../chrome/icons";
 import { milestonesShown, openExplore, openGuide, ring } from "./guide";
 import { Ring, useGuideState } from "./Guides";
+import { replayTour, TOURS } from "./tour";
 
 export default function HelpMenu() {
   const [at, setAt] = useState<{ bottom: number; left: number } | null>(null);
@@ -46,6 +47,13 @@ export default function HelpMenu() {
                 </span>
               </button>
             )}
+            {/* ONB-032: replay any tour, seen or not, whatever this launch already showed. */}
+            <div className="menu-title">Tours</div>
+            {TOURS.map((t) => (
+              <button key={t.id} role="menuitem" className="menu-item" title="Runs once its screen is showing" onClick={() => pick(() => replayTour(t.id))}>
+                {t.name}
+              </button>
+            ))}
           </div>
         </>
       )}

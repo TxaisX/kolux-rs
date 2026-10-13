@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Close, EyeOff } from "../chrome/icons";
 import { Kbd } from "../keys/KeymapContext";
 import { useSettings } from "../settings/useSettings";
+import Tours from "./Tours";
 import {
   caps, completed, firstOpen, forward, markGuide, moveOn, nextTip, OPEN_EXPLORE, OPEN_GUIDE, railKey, ring, startTicked, STEPS, stopOf, words, WORKFLOWS,
   type At, type Cap, type CapId, type CliStatus, type GuideRecord, type StepId, type TipId,
@@ -336,6 +337,7 @@ export default function Guides() {
       <SetupGuide open={guide.open} ask={guide.ask} onClose={() => setGuide((g) => ({ ...g, open: false }))} />
       {explore && <Explore onClose={() => setExplore(false)} />}
       <StartupTip />
+      <Tours />
     </>
   );
 }

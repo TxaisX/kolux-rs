@@ -158,6 +158,6 @@ export const openGuide = (step?: StepId) => window.dispatchEvent(new CustomEvent
 export const openExplore = () => window.dispatchEvent(new CustomEvent(OPEN_EXPLORE));
 
 /** What the guides remember on this profile (onboarding.rs guide_get). */
-export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[] };
+export type GuideRecord = { tipsSeen: string[]; visited: string[]; tried: string[]; toursSeen: string[]; toursAuto: boolean | null };
 /** Adds the id once to one of the record's lists; the stored record comes back. */
-export const markGuide = (list: "tipsSeen" | "visited" | "tried", id: string) => invoke<GuideRecord>("guide_mark", { list, id });
+export const markGuide = (list: "tipsSeen" | "visited" | "tried" | "toursSeen", id: string) => invoke<GuideRecord>("guide_mark", { list, id });
