@@ -119,7 +119,8 @@ pub struct Notes {
     capped: bool,
 }
 
-#[tauri::command]
+// TERM-115: async, so listing a big worktree through git never holds typing in another pane.
+#[tauri::command(async)]
 pub fn md_list(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Notes, String> {
     let (files, capped) = git.markdown_files(&fence.allow(&root, &store, &git, false)?, 2000)?;
     Ok(Notes { files, capped })
