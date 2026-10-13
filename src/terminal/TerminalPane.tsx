@@ -18,6 +18,7 @@ import { copySelection } from "./copy";
 import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
+import { batchAcks, memoryProfile } from "./flow";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
@@ -269,6 +270,16 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     fit.fit();
 
     let alive = true;
+    // ACCT-059: scrollback sized to the machine's memory profile, the same every start.
+    memoryProfile().then((p) => {
+      if (alive) term.options.scrollback = p.scrollback;
+    });
+    // ACCT-054: output is acknowledged as drawn, in running totals, so the reader pauses the
+    // program when this pane falls behind rather than letting the app fall behind with it.
+    const acks = batchAcks((bytes) => {
+      const id = idRef.current;
+      if (id !== null) invoke("terminal_ack", { id, bytes }).catch(() => {});
+    });
     let ended = false;
     // Output can arrive before terminal_spawn hands back this pane's id (several panes starting at
     // once); it is held and replayed, else the console's opening cursor query goes unanswered and
@@ -346,7 +357,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         // anything else that arrives first is held until the id is known and replayed then.
         await listen<OutputEvent>("terminal-output", (e) => {
           const draw = () => {
-            term.write(decodeOutput(e.payload.data));
+            const bytes = decodeOutput(e.payload.data);
+            term.write(bytes, () => acks.drew(bytes.length));
             sawOutput();
           };
           if (idRef.current === null && forPane(e.payload, null, number)) draw();
@@ -488,6 +500,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       if (id !== null) invoke("terminal_kill", { id }).catch(() => {});
       choice.dispose();
       pasting.detach();
+      acks.stop();
       term.dispose();
     };
   }, []);

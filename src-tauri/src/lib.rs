@@ -289,6 +289,8 @@ pub fn run() {
             activity::activity_counts,
             status::agent_answer,
             terminal::terminal_resize,
+            terminal::terminal_ack,
+            terminal::terminal_memory_profile,
             terminal::terminal_kill,
             terminal::terminal_layout,
             projects::git_version,

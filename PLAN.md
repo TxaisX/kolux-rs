@@ -611,7 +611,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-275 · STAT-031 Agents that are gone stop reporting
 - [ ] T-276 · VIEW-090 Scan notices in the session list · VIEW-092 Session scans run in the background and survive restarts · VIEW-115 The shell avoids needless redraws
 - [ ] T-277 · USAGE-028 Resource Manager lists terminals picked up after a reload
-- [ ] T-278 · ACCT-054 Fast output never freezes a pane · ACCT-059 Memory caps scale with the machine
+- [x] T-278 · ACCT-054 Fast output never freezes a pane · ACCT-059 Memory caps scale with the machine · evidence/T-278.txt (100 MB flood: pane finished, second shell answered in 261-490 ms; page blocked 3 s: reader paused twice, flood finished; profile large/10000 lines on 32 GB)
 - [ ] T-279 · ORCH-035 A task that keeps failing is no longer handed out · ORCH-057 Many viewers follow one terminal without drifting apart · ORCH-059 Closing a terminal retires it everywhere
 - [ ] T-280 · SAFE-028 Saved settings come back valid after a restart
 - [ ] T-281 · GIT-012 Huge change sets are capped, with an offer to ignore heavy folders · GIT-045 Tasks explains empty lists, missing sources and sign-in trouble · GIT-048 Edits in Tasks appear at once and do not flip back · GIT-070 Git stays quick across many worktrees

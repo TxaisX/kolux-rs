@@ -46,6 +46,103 @@ struct Inner {
     owned: HashMap<u32, u8>,
     /// TERM-106: each session's output file, by pane key, replayed when the pane comes back after a restart.
     hist: HashMap<u32, History>,
+    /// ACCT-054: how far each session's output has run ahead of its pane.
+    flow: HashMap<u32, Arc<Flow>>,
+}
+
+/// ACCT-054: how far a session's output has run ahead of what its pane has drawn. Past
+/// `FLOW_HIGH` unacknowledged bytes the reader thread stops reading the PTY (so the program blocks
+/// on its own write) and goes on once the pane is down to `FLOW_LOW`; a pane that stops answering
+/// (its webview busy, say) holds it `FLOW_WAIT` at most, so no program is ever stuck for good.
+#[derive(Default)]
+struct Flow {
+    unacked: Mutex<u64>,
+    drawn: Condvar,
+    pauses: std::sync::atomic::AtomicU32,
+}
+
+const FLOW_HIGH: u64 = 512 * 1024;
+const FLOW_LOW: u64 = 128 * 1024;
+const FLOW_WAIT: Duration = Duration::from_secs(2);
+
+impl Flow {
+    /// Counts `bytes` just sent to the pane and, past the high mark, waits for it to catch up.
+    fn sent(&self, bytes: u64) {
+        self.sent_within(bytes, FLOW_WAIT);
+    }
+
+    fn sent_within(&self, bytes: u64, wait: Duration) {
+        let Ok(mut n) = self.unacked.lock() else { return };
+        *n += bytes;
+        if *n < FLOW_HIGH {
+            return;
+        }
+        self.pauses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let deadline = Instant::now() + wait;
+        while *n > FLOW_LOW {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                // ponytail: a pane that never answers is taken as caught up; the next flood pauses again.
+                *n = 0;
+                break;
+            }
+            n = match self.drawn.wait_timeout(n, left) {
+                Ok((guard, _)) => guard,
+                Err(_) => return,
+            };
+        }
+    }
+
+    /// The pane drew `bytes` more.
+    fn ack(&self, bytes: u64) {
+        if let Ok(mut n) = self.unacked.lock() {
+            *n = n.saturating_sub(bytes);
+            if *n <= FLOW_LOW {
+                self.drawn.notify_all();
+            }
+        }
+    }
+
+    /// The session is ending: a paused reader goes on at once.
+    fn release(&self) {
+        if let Ok(mut n) = self.unacked.lock() {
+            *n = 0;
+        }
+        self.drawn.notify_all();
+    }
+
+    fn pauses(&self) -> u32 {
+        self.pauses.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// ACCT-059: the memory profile for a machine with `total` bytes of memory, and the scrollback
+/// lines each pane keeps under it. Pure, so the same machine gets the same caps every start.
+pub fn profile_for(total: Option<u64>) -> (&'static str, u32) {
+    const GIB: u64 = 1 << 30;
+    match total {
+        Some(t) if t < 8 * GIB => ("small", 2000),
+        Some(t) if t >= 16 * GIB => ("large", 10000),
+        _ => ("medium", 5000),
+    }
+}
+
+/// ACCT-059: the machine's physical memory, in bytes.
+fn total_memory() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        // SAFETY: the struct is zeroed with dwLength set, as GlobalMemoryStatusEx requires.
+        unsafe {
+            let mut m: MEMORYSTATUSEX = std::mem::zeroed();
+            m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+            (GlobalMemoryStatusEx(&mut m) != 0).then_some(m.ullTotalPhys)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 /// TERM-106: past this many bytes a pane's saved output is rewritten down to `HISTORY_KEEP`.
@@ -523,6 +620,8 @@ impl Terminals {
                 command.env(k, v);
             }
         }
+        let flow = Arc::new(Flow::default());
+        let out_flow = flow.clone();
         let session = PtySession::spawn_first(
             commands,
             cols.max(2),
@@ -556,6 +655,8 @@ impl Terminals {
                         }
                     }
                 }
+                // ACCT-054: after the bookkeeping, so no lock is held while the pane catches up.
+                out_flow.sent(chunk.len() as u64);
             },
             move |code| {
                 // Drop the session so the PTY closes and the reader thread can finish. A session
@@ -570,6 +671,9 @@ impl Terminals {
                     inner.logs.remove(&id);
                     inner.owned.remove(&id);
                     inner.hist.remove(&id);
+                    if let Some(f) = inner.flow.remove(&id) {
+                        f.release();
+                    }
                 }
                 crate::activity::terminal_ended(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
@@ -587,6 +691,7 @@ impl Terminals {
             },
         )?;
         inner.sessions.insert(id, session);
+        inner.flow.insert(id, flow);
         if let Some(d) = &log_dir {
             crate::diag::write(d, &format!("terminal {id} started ({label})"));
         }
@@ -677,6 +782,7 @@ impl Terminals {
         };
         out.push(("screen", screen.to_string()));
         out.push(("lines logged", inner.logs.get(&id).map_or(0, |l| l.lines.len()).to_string()));
+        out.push(("output paused", inner.flow.get(&id).map_or(0, |f| f.pauses()).to_string()));
         Some(out)
     }
 
@@ -695,10 +801,21 @@ impl Terminals {
         inner.marks.remove(&id);
         inner.keys.remove(&id);
         inner.hist.remove(&id);
+        if let Some(f) = inner.flow.remove(&id) {
+            f.release();
+        }
         if let Some(mut s) = inner.sessions.remove(&id) {
             s.kill();
         }
         Ok(())
+    }
+
+    /// ACCT-054: the pane drew `bytes` more of session `id`'s output.
+    pub fn ack(&self, id: u32, bytes: u64) {
+        let flow = self.inner.lock().ok().and_then(|i| i.flow.get(&id).cloned());
+        if let Some(f) = flow {
+            f.ack(bytes);
+        }
     }
 
     /// The program session started in `dir` itself since `since`, with when it last wrote, so a
@@ -837,6 +954,9 @@ impl Terminals {
             inner.dirs.clear();
             inner.keys.clear();
             inner.hist.clear();
+            for (_, f) in inner.flow.drain() {
+                f.release();
+            }
             for (_, mut s) in inner.sessions.drain() {
                 s.kill();
             }
@@ -972,9 +1092,83 @@ pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u1
     terminals.resize(id, cols, rows)
 }
 
+/// ACCT-054: the pane drew `bytes` more of session `id`'s output.
+#[tauri::command]
+pub fn terminal_ack(terminals: tauri::State<'_, Terminals>, id: u32, bytes: u64) {
+    terminals.ack(id, bytes)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryProfile {
+    pub profile: &'static str,
+    pub total_mb: u64,
+    pub scrollback: u32,
+}
+
+/// ACCT-059: the memory profile this machine gets, and the scrollback each pane keeps under it.
+#[tauri::command]
+pub fn terminal_memory_profile() -> MemoryProfile {
+    let total = total_memory();
+    let (profile, scrollback) = profile_for(total);
+    MemoryProfile { profile, total_mb: total.unwrap_or(0) >> 20, scrollback }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acct_054_a_flood_pauses_the_reader_until_the_pane_acknowledges_and_a_silent_pane_only_for_the_wait() {
+        let flow = Arc::new(Flow::default());
+        // Below the high mark nothing waits.
+        let t = Instant::now();
+        flow.sent_within(FLOW_HIGH - 1, Duration::from_secs(5));
+        assert!(t.elapsed() < Duration::from_millis(500));
+        assert_eq!(flow.pauses(), 0);
+        // Over it the reader waits until the pane has drawn down to the low mark.
+        let acker = flow.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            acker.ack(FLOW_HIGH);
+        });
+        let t = Instant::now();
+        flow.sent_within(1, Duration::from_secs(5));
+        let took = t.elapsed();
+        h.join().unwrap();
+        assert!(took >= Duration::from_millis(90) && took < Duration::from_secs(4), "{took:?}");
+        assert_eq!(flow.pauses(), 1);
+        assert_eq!(*flow.unacked.lock().unwrap(), 0);
+        // A pane that never answers holds the reader for the wait only, then counts as caught up.
+        let t = Instant::now();
+        flow.sent_within(FLOW_HIGH, Duration::from_millis(100));
+        assert!(t.elapsed() >= Duration::from_millis(90));
+        assert_eq!(*flow.unacked.lock().unwrap(), 0);
+        assert_eq!(flow.pauses(), 2);
+        // release() lets a paused reader go at once.
+        let releaser = flow.clone();
+        let h = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            releaser.release();
+        });
+        let t = Instant::now();
+        flow.sent_within(FLOW_HIGH, Duration::from_secs(5));
+        h.join().unwrap();
+        assert!(t.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn acct_059_the_memory_profile_scales_with_the_machine_and_is_the_same_for_the_same_machine() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(profile_for(Some(4 * GIB)), ("small", 2000));
+        assert_eq!(profile_for(Some(8 * GIB)), ("medium", 5000));
+        assert_eq!(profile_for(Some(15 * GIB)), ("medium", 5000));
+        assert_eq!(profile_for(Some(16 * GIB)), ("large", 10000));
+        assert_eq!(profile_for(Some(64 * GIB)), ("large", 10000));
+        assert_eq!(profile_for(None), ("medium", 5000));
+        assert!(profile_for(Some(4 * GIB)).1 < profile_for(Some(64 * GIB)).1);
+        assert_eq!(profile_for(total_memory()), profile_for(total_memory()));
+    }
 
     #[test]
     fn term_106_saved_output_keeps_the_newest_lines_within_the_cap_and_prunes_only_known_keys() {
