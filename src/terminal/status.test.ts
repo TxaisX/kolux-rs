@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { VOCAB, ageLabel, foundAgent, headerOf, nextNeedsYou, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
+import { VOCAB, ageLabel, branchChip, foundAgent, headerOf, nextNeedsYou, crewLabel, crewLine, stoppedLabel, type Crew, type StatusKey } from "./status";
 
 test("a plain shell reads as a terminal with a neutral status; an agent's word is tinted (TERM-020, TERM-021)", () => {
   expect(headerOf("shell", "running", undefined, false, null, 0)).toMatchObject({ word: "Ready", tone: "", needsYou: false });
@@ -93,4 +93,11 @@ test("a shell pane takes the header of an agent started in it by hand, and only 
   // Once found, the pane reads as the agent: its hook state shows, not "Ready".
   expect(headerOf(foundAgent("claude") ?? "shell", "running", undefined, false, null, 0, "waiting").state).toBe("waiting");
   expect(headerOf(foundAgent(null) ?? "shell", "running", undefined, false, null, 0, "waiting").word).toBe("Ready");
+});
+
+test("TERM-022: the chip names the branch, a detached HEAD shows its short commit, a plain folder shows none", () => {
+  expect(branchChip({ branch: "feature/x", head: "0123456789abcdef0123456789abcdef01234567" })).toEqual({ text: "feature/x", tip: "feature/x" });
+  expect(branchChip({ branch: null, head: "0123456789abcdef0123456789abcdef01234567" })).toEqual({ text: "0123456", tip: "Detached at 0123456789abcdef0123456789abcdef01234567" });
+  expect(branchChip(null)).toBeNull();
+  expect(branchChip({ branch: null, head: null })).toBeNull();
 });

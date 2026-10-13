@@ -68,14 +68,14 @@ input { font: inherit; }
 
 /* ---- body ---- */
 .body { flex: 1; min-height: 0; display: flex; }
-.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--fg-muted); }
 .empty h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
 .empty p { margin: 0; font-size: 12px; }
 
 /* ---- 5. sidebar card: x 8, y 44, 289 wide ---- */
 .sidebar-wrap { flex: none; display: flex; padding: 8px 0 8px 8px; }
-.sidebar { width: 289px; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
+.sidebar { width: var(--sidebar-w, 289px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
 /* EDIT-033: the explorer, a card on the right matching the sidebar; rows are fixed 22px and virtualized. */
 .explorer { flex: none; width: 280px; margin: 8px 8px 8px 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
 .explorer-head { flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
@@ -138,7 +138,9 @@ input { font: inherit; }
 .proj:hover .ib, .proj .ib.on { opacity: 1; }
 .branch { display: flex; align-items: center; height: 32px; padding: 0 12px 0 8px; gap: 8px; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
 .branch .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.branch .count { font-size: 11px; color: var(--fg); }
+.branch .count, .sess .count { font-size: 11px; color: var(--fg); }
+.sess.pane-row { height: 26px; gap: 8px; font-size: 12px; }
+.sess.pane-row .name { overflow: hidden; text-overflow: ellipsis; }
 .branch .dot { margin-right: 2px; }
 .branch .chev { color: #797979; display: inline-flex; }
 .branch:hover { background: #1f1f1f; }
@@ -345,18 +347,23 @@ input { font: inherit; }
 .layouts button:hover:not([aria-pressed="true"]):not(:disabled) { background: var(--row-selected); }
 
 /* ---- 7. pane grid and pane cards ---- */
-.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: var(--divider-width, 6px); grid-template-columns: 1fr; background: var(--divider, transparent); border-radius: 12px; }
+.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: var(--divider-width, 6px); grid-template-columns: 1fr; background: var(--divider, transparent); border-radius: 14px; }
 /* SET-023: panes not in focus fade to the chosen opacity (100% = no dim, the default). The content fades
    over the pane's own ground, so a divider colour behind the grid never shows through. */
 .grid .pane > * { transition: opacity 140ms ease; }
 .grid .pane:not(.focused) > * { opacity: var(--pane-dim, 1); }
 .strip .newtab { margin-left: auto; margin-right: 12px; height: 28px; }
-/* a cell holds tabs (TERM-040); the tab strip shows only for two tabs or more (TERM-028 clean look) */
+/* a cell holds tabs (TERM-040); on the New (clean) look the tab strip shows only for two tabs or more,
+   on Classic always (TERM-028) */
 .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 4px; }
 .cell[hidden] { display: none; }
 /* VIEW-026: the Board is the same cells as cards, one per pane; the panes never move in the DOM,
    so an expanded card shows the live terminal and a collapsed one only its header. */
 .grid[hidden], .board[hidden], .board .tabs { display: none; }
+/* TERM-013: an expanded pane fills the whole workspace area, edge to edge. TERM-028: Classic keeps the
+   older flat chrome, square panes edge to edge with only the dividers between them. */
+.grid.zoomed, .grid.classic { margin: 0; border-radius: 0; }
+.grid.zoomed .pane, .grid.classic .pane { border-radius: 0; }
 /* VIEW-023: the Board is one column per status lane; cards stack in their lane in session order. */
 .board { flex: 1; min-height: 0; margin: 8px; overflow-y: auto; display: grid; grid-auto-flow: row dense; grid-auto-rows: max-content; align-items: start; gap: 8px; }
 .board .lane { grid-row: 1; margin: 0; padding: 2px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
@@ -418,6 +425,7 @@ input { font: inherit; }
 .tab .tab-x { width: 18px; height: 18px; border-radius: 4px; color: var(--fg-muted); line-height: 1; }
 .tab .tab-x:hover { background: var(--row-selected); color: var(--fg); }
 .pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 14px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
 .pane.focused { border-color: var(--line-focus); }
 /* TERM-023: a soft, static green glow on a pane whose agent finished while it was not focused. */
 .pane.glow { border-color: var(--done); box-shadow: inset 0 0 0 1px var(--line-inner), 0 0 18px rgba(1, 200, 143, 0.3); }
@@ -1093,7 +1101,9 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
    and Source Control cards fill it. */
 .rside { flex: none; position: relative; display: flex; flex-direction: column; min-width: 0; padding: 8px 8px 8px 0; }
 .rside-grip { position: absolute; left: -4px; top: 8px; bottom: 8px; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
-.rside-grip:hover { background: linear-gradient(to right, transparent 3px, var(--line-focus) 3px, var(--line-focus) 5px, transparent 5px); }
+/* VIEW-050: the left sidebar's drag edge sits over the gap between it and the workspace, taking no room. */
+.lside-grip { flex: none; width: 8px; margin: 8px -4px; cursor: col-resize; z-index: 2; touch-action: none; }
+.rside-grip:hover, .lside-grip:hover { background: linear-gradient(to right, transparent 3px, var(--line-focus) 3px, var(--line-focus) 5px, transparent 5px); }
 .rside-tabs { flex: none; display: flex; gap: 2px; padding: 0 2px 6px; overflow: hidden; }
 .rside-tab { flex: none; height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .rside-tab:hover { color: var(--fg); }
@@ -1221,6 +1231,18 @@ button.pick-item:hover, button.pick-item:focus-visible { background: var(--input
 .task-x { margin-left: 2px; color: var(--fg-faint); font-size: 12px; line-height: 1; }
 .task-x:hover:not(:disabled) { color: var(--fg); }
 
+/* SESS-018: the New session page fills the workspace area (8 px gutter, like the grid). */
+.sheet-wrap { position: absolute; inset: 8px; z-index: 20; display: flex; }
+.pane.chooser.sheet { flex: 1; border-radius: 12px; }
+.pane.chooser.sheet .chooser-body { padding: 16px 24px; font-size: 13px; max-width: 1080px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+.pane.chooser.sheet .chooser-foot { padding: 10px 24px; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.sheet-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line-subtle); }
+.sheet-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sheet-title h2 { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); }
+.sheet-project { font-size: 13px; color: var(--fg); }
+.sheet-path { font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sheet-keys { margin-left: 8px; gap: 4px; }
+.chooser-count.warn { color: var(--warn); }
 /* VIEW-015: the Agents rail, a 268px card in the New look, a flat 240px rail under Classic. */
 .rail { width: 268px; padding: 4px; overflow-y: auto; }
 .rail.classic { width: 240px; border-radius: 0; border-width: 0 1px 0 0; }

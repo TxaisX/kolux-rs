@@ -139,6 +139,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            procs::app_job_start(); // APP-053: everything the app starts from here on ends with it.
             let dir = app.path().app_data_dir()?;
             let store = Store::open(&dir)?;
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
@@ -322,7 +323,7 @@ pub fn run() {
             agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status,
-            scm::scm_pushed, scm::scm_summary, scm::scm_abort,
+            scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
             scm::scm_merge_info,
             scm::scm_merge,
             scm::scm_gh_budget,
@@ -341,6 +342,11 @@ pub fn run() {
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             terminal::terminal_busy,
+            terminal::terminal_diagnostics,
+            terminal::terminal_history,
+            terminal::terminal_forget_history,
+            terminal::terminal_prune_history,
+            terminal::terminal_history_append,
             keybindings::keybindings_read,
             keybindings::keybindings_write,
             projects::workspaces_place_get,

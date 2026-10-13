@@ -84,15 +84,18 @@ test("terminal colours follow the app hue only on Match", () => {
   expect(Object.keys(sky)).toEqual(expect.arrayContaining(["black", "red", "brightCyan", "brightWhite"]));
 });
 
-test("SET-005: System by default, saved modes kept, light turns the greys over", () => {
-  expect(look().mode).toBe("system");
+test("SET-005 with T-418: Dark when nothing is saved, saved modes kept, light turns the greys over", () => {
+  const system = look({ appearanceMode: "system" });
+  expect(look().mode).toBe("dark");
+  expect(system.mode).toBe("system");
   expect(look({ appearanceMode: "light" }).mode).toBe("light");
-  expect(look({ appearanceMode: "dim" }).mode).toBe("system");
+  expect(look({ appearanceMode: "dim" }).mode).toBe("dark");
   expect(writeAppearance({}, look({ appearanceMode: "dark" }))).toMatchObject({ appearanceMode: "dark", terminalLightScheme: true });
-  expect(isDark(look(), false)).toBe(false);
-  expect(isDark(look(), true)).toBe(true);
+  expect(isDark(look(), false)).toBe(true);
+  expect(isDark(system, false)).toBe(false);
+  expect(isDark(system, true)).toBe(true);
   expect(isDark(look({ appearanceMode: "light" }), true)).toBe(false);
-  const light = buildTheme(look(), false);
+  const light = buildTheme(system, false);
   const lum = (h: string) => parseInt(h.slice(1, 3), 16);
   expect(lum(light["app-bg"])).toBeGreaterThan(240);
   expect(lum(light.fg)).toBeLessThan(16);
