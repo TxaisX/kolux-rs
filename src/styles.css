@@ -831,6 +831,12 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 /* APP-054 Resource Manager */
 .statusbar .res-open { color: inherit; font: inherit; padding: 0 4px; border-radius: 4px; }
 .statusbar .res-open:hover, .statusbar .res-open[aria-expanded="true"] { background: var(--row-selected); color: var(--fg); }
+/* VIEW-100: the app update item; green dot when ready, red when it failed. */
+.statusbar .upd-item { color: var(--fg); font: inherit; padding: 0 4px; border-radius: 4px; }
+.statusbar .upd-item:hover { background: var(--row-selected); }
+.statusbar .upd-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
+.statusbar .upd-item.error { color: var(--danger); }
+.statusbar .upd-item.error .dot { background: var(--meter-danger); }
 .res-pop { right: 16px; bottom: 32px; width: min(460px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow-y: auto; }
 .res-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-right: 8px; }
 .res-free { font-size: 12px; color: var(--fg-muted); }
