@@ -707,7 +707,8 @@ fn place_and_start(l: &Launch, auto: &Value) -> Result<(Worktree, String), Stop>
         }
         Worktree { name: None, branch: None, head: String::new(), is_main: path == project.path, path, parent: None, locked: None, hidden: false, kind: String::new(), source: None, made_by: None }
     };
-    let _ = crate::trust::trust_folders(&l.claude_config, &agent, &[PathBuf::from(&wt.path), PathBuf::from(&project.path)]);
+    // SAFE-023 (T-443): only a worktree Kolux made is trusted ahead of time, never the main checkout.
+    let _ = crate::trust::trust_folders(&l.claude_config, &agent, &crate::trust::made_by_kolux(l.store, &[PathBuf::from(&wt.path)]));
     if new_per_run {
         (l.notify)(crate::cli::EVENT, json!({ "kind": "created", "projectId": project.id, "worktree": { "path": wt.path, "branch": wt.branch, "name": wt.name, "isMain": false }, "agent": Value::Null, "prompt": "", "activate": false }));
     }

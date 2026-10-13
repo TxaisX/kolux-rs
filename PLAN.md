@@ -554,7 +554,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [ ] T-287 · CLI-041 [compat] kolux diagnostics memory
 - [x] T-441 · Kolux settings cannot be wiped (no card; data-loss guard, council 2026-10-13): a failed read of settings.json is an error, never an empty set; saving refuses after a failed read; settings.json.bak is kept from the last good read and the file is synced to disk before the rename (a test plants a corrupt settings.json and proves nothing is overwritten)
 - [x] T-442 · Typing never waits behind git (follow-up to T-166's "typing and output never get stuck" card, council 2026-10-13): the workspace list, unseen marks, source-control status, change entries, diff sides and Resource Manager commands run off the window's thread and let go of the state store before any git call, so a terminal's output never queues behind a slow git (a test with a slow stand-in git proves terminal writes are not held up)
-- [ ] T-443 · Only worktrees Kolux created are pre-trusted (follow-up to T-017-a's pre-trust card, council 2026-10-13): the trust command refuses any folder that is not a Kolux worktree, and the command line and automations stop passing the project's own folder
+- [x] T-443 · Only worktrees Kolux created are pre-trusted (follow-up to T-017-a's pre-trust card, council 2026-10-13): the trust command refuses any folder that is not a Kolux worktree, and the command line and automations stop passing the project's own folder
 
 ### P2 · theme 11 · Orchestration and automations (8 cards)
 
