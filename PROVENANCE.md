@@ -492,3 +492,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-201-b · rules from the SESS-017 and SESS-019 cards; no outside sources; no old Kolux source read
 
 > 2026-10-12 · T-153-b · rules from the VIEW-089 and VIEW-099 cards; no outside sources; no old Kolux source read
+
+> 2026-10-12 · T-154-b · rules from the ACCT-055 card; tauri-plugin-dialog 2.8.1 Rust API (FileDialogBuilder::blocking_pick_file, set_directory, set_title) read from its public crate source in the local cargo registry; no old Kolux source read

@@ -11,6 +11,7 @@ mod claude_key;
 mod codex_accounts;
 mod codex_usage;
 mod creatures;
+mod fence;
 mod files;
 mod fsops;
 mod fonts;
@@ -143,6 +144,7 @@ pub fn run() {
             // Git the app still opens, and the landing screen says so (APP-023).
             app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
             app.manage(tools::Cache::default());
+            app.manage(fence::Fence::default());
             app.manage(token_usage::Flights::default());
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
@@ -310,6 +312,7 @@ pub fn run() {
             onboarding::onboarding_close,
             files::file_read,
             files::file_write,
+            files::file_pick,
             files::md_list,
             artifacts::artifacts_list,
             artifacts::artifact_add,

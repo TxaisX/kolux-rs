@@ -51,7 +51,6 @@ import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
 import RightSidebar, { clampWidth, readRight, RIGHT_KEYS, type RightTab } from "./chrome/RightSidebar";
 import { isMarkdown } from "./editor/markdown";
-import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking, DEFAULT_PANES_FIELD, freeCell, seedCount } from "./terminal/grid";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
@@ -680,7 +679,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       return;
     }
     if (what === "file") {
-      const path = await open({ multiple: false, directory: false, defaultPath: activeDir ?? undefined, title: "Open a file" }).catch(() => null);
+      // ACCT-055: Kolux shows the picker itself, so only the chosen file is granted to the window.
+      const path = await invoke<string | null>("file_pick", { defaultPath: activeDir }).catch((err) => (setToast(String(err)), null));
       if (typeof path === "string") openFile(path);
       return;
     }

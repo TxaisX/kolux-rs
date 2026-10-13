@@ -1435,6 +1435,11 @@ session that has already ended drops from the list with no question, and a faile
 asks, so nothing is ended unasked. The past-session files (VIEW-089) wait for the Agents tab
 (T-153-d) and Manage Sessions waits for the background host (T-153-e).
 
+[accounts] T-154-b: the app window now reads, saves and lists files only inside your projects
+and their worktrees. Open a file shows Kolux's own picker, and the one file you pick opens even
+outside a project, but nothing else in its folder does. Network shares, a whole drive and links
+that point out of a project are turned down with a plain message.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2588,7 +2593,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-153-b · End skips its question only when a fresh read no longer lists the session; a failed read asks. Kolux RS sessions belong to the panes that opened them and end with the window, so the card's "nothing shown attached until the window has loaded its workspaces" and "sessions no window owns" only apply once T-067's background host exists (T-153-e). The per-row End stays the user's own explicit choice for every session, agent-owned ones included; the never-offered rule is about Manage Sessions' cleanup (T-153-e).
 
+- [accounts] T-154-b · The fence (fence.rs) covers file_read, file_write, dir_list, file_list, md_list, md_new, diff_sides, diff_image, git_changes and change_entries. Roots are the stored projects, then, on a miss, every worktree Git lists for them (re-read at most every 3 s). Every path is resolved through its links before the check, a path that does not exist yet through its folder; the command then uses the caller's own spelling. A network share, a drive root and a folder are never a root or a grant. Picked files are granted exactly, newest 100 kept, in memory only for now (a restored tab for a picked file is refused after a restart; T-154-c). Open a file moved from the window's dialog to a Kolux command (file_pick) so the window cannot grant itself a file; the other pickers (project folders, kit inputs, artifacts) still use the window's dialog, since they grant nothing. A project added at a drive root gives no file access, by the card's drive-root rule.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-154-b · done: `src-tauri/src/fence.rs` (projects, worktrees and exact grants; shares, drive roots and links refused); file commands fenced; Open a file uses file_pick · evidence/T-154-b.txt, T-154-b-1-picker.png
 - 2026-10-12 · [accounts] T-153-c · skipped this batch, left open: VIEW-054 is built or marked SKIPPED only after Txais clicks through the installed app (DT-37), which the clean-room rule bars the builder from
 - 2026-10-12 · [accounts] T-153-b · done: `src/status/resources.ts` endNeedsAsk; Resource Manager End reads again before asking · evidence/T-153-b.txt, T-153-b-*.png
 - 2026-10-12 · [accounts] T-201-b · done: kit row, Advanced fold, kit roles and Set up kit in `src/launch/ChooserPane.tsx`; `seatGap` in seats.ts; `openKits(kit, chooser)` opens one kit's setup and App closes the chooser once it starts; Grok docs link · evidence/T-201-b.txt, T-201-b-*.png
