@@ -42,6 +42,15 @@ impl Store {
         Ok(())
     }
 
+    /// Several keys in one transaction: all of them land, or none do.
+    pub fn set_all(&self, pairs: &[(&str, &str)]) -> rusqlite::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (k, v) in pairs {
+            tx.execute("INSERT INTO kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![k, v])?;
+        }
+        tx.commit()
+    }
+
     /// User settings as JSON; an absent or unreadable file reads as an empty object.
     pub fn settings(&self) -> serde_json::Value {
         fs::read(&self.settings_path)
