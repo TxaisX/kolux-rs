@@ -1704,6 +1704,40 @@ mod tests {
     }
 
     #[test]
+    fn proj044_a_worktree_gsd_marked_counts_as_made_by_gsd() {
+        let git = Git::detect().unwrap();
+        let profile = temp("gsd");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("gsd-r");
+        let p = |d: &Path| d.to_string_lossy().to_string();
+        let project = add_project(&git, &store, &repo).unwrap();
+        let cc = repo.join(".claude").join("worktrees");
+        let (gsd, plain) = (cc.join("agent-a1"), cc.join("agent-b2"));
+        git_in(&repo, &["worktree", "add", "-q", "-b", "worktree-agent-a1", &p(&gsd)]);
+        git_in(&repo, &["worktree", "add", "-q", "-b", "worktree-agent-b2", &p(&plain)]);
+        // GSD's executor leaves `gsd-spawn-toplevel` in the worktree's own Git folder.
+        let link = fs::read_to_string(gsd.join(".git")).unwrap();
+        let admin = PathBuf::from(link.trim().strip_prefix("gitdir:").unwrap().trim());
+        fs::write(admin.join("gsd-spawn-toplevel"), p(&gsd)).unwrap();
+        let rows: Vec<_> = list_workspaces(&git, &store, &project).unwrap().into_iter().map(|w| (w.branch.unwrap_or_default(), w.source, w.hidden)).collect();
+        assert!(rows.contains(&("worktree-agent-a1".into(), Some("gsd".into()), true)), "{rows:?}");
+        assert!(rows.contains(&("worktree-agent-b2".into(), Some("claude".into()), true)), "{rows:?}");
+        let src = crate::visibility::sources(&store, Some(&project));
+        assert_eq!(src.iter().map(|s| s.label.as_str()).take(3).collect::<Vec<_>>(), ["Made by Claude Code", "Made by GSD", "Elsewhere on disk"]);
+        crate::visibility::set_choice(&store, None, "gsd", Some(true)).unwrap();
+        let shown = list_workspaces(&git, &store, &project).unwrap();
+        assert!(!shown.iter().find(|w| w.branch.as_deref() == Some("worktree-agent-a1")).unwrap().hidden, "its own choice shows it");
+        assert!(shown.iter().find(|w| w.branch.as_deref() == Some("worktree-agent-b2")).unwrap().hidden, "Claude Code's stay hidden");
+        drop(store);
+        for d in [&gsd, &plain] {
+            let _ = git.worktree_remove(&repo, d, None);
+        }
+        for d in [profile, repo] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
     fn worktrees_made_outside_kolux_are_noticed_once_and_can_be_hidden() {
         let git = Git::detect().unwrap();
         let profile = temp("unseen");
