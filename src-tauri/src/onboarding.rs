@@ -120,9 +120,146 @@ pub fn onboarding_close(store: State<'_, Mutex<Store>>, outcome: String) -> Resu
     }
 }
 
+/// ONB-027 / ONB-022 / USAGE 012: what the guides remember on this profile: the startup tips
+/// already shown, the Explore Kolux stops visited and the features tried. COMPAT (ONB-027): the
+/// seen tips are data an importer brings across, so they keep their own plain list.
+const GUIDE: &str = "guide";
+/// The startup tips this build knows, newest first (ONB-027: newer tips come first).
+pub const TIPS: &[&str] = &["cli", "palette"];
+/// No list grows past this; an id past it is ignored.
+const MAX_IDS: usize = 64;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Guide {
+    #[serde(default)]
+    pub tips_seen: Vec<String>,
+    #[serde(default)]
+    pub visited: Vec<String>,
+    #[serde(default)]
+    pub tried: Vec<String>,
+}
+
+/// The stored record; tips this build no longer knows are dropped and each tip counts once.
+fn guide_load(store: &Store) -> Guide {
+    let mut g: Guide = store.get(GUIDE).ok().flatten().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let mut seen = Vec::new();
+    for t in g.tips_seen.drain(..) {
+        if TIPS.contains(&t.as_str()) && !seen.contains(&t) {
+            seen.push(t);
+        }
+    }
+    g.tips_seen = seen;
+    g
+}
+
+/// `id` added once to `list` (tipsSeen, visited or tried).
+fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
+    if id.is_empty() || id.len() > 40 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(format!("{id:?} is not a guide id"));
+    }
+    let v = match list {
+        "tipsSeen" if TIPS.contains(&id) => &mut g.tips_seen,
+        "tipsSeen" => return Err(format!("{id} is not a startup tip")),
+        "visited" => &mut g.visited,
+        "tried" => &mut g.tried,
+        _ => return Err(format!("{list} is not a guide list")),
+    };
+    if !v.iter().any(|x| x == id) && v.len() < MAX_IDS {
+        v.push(id.into());
+    }
+    Ok(g)
+}
+
+#[tauri::command]
+pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    Ok(guide_load(&store))
+}
+
+#[tauri::command]
+pub fn guide_mark(store: State<'_, Mutex<Store>>, list: String, id: String) -> Result<Guide, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let g = marked(guide_load(&store), &list, &id)?;
+    store.set(GUIDE, &serde_json::to_string(&g).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    Ok(g)
+}
+
+/// ONB-027 / ONB-028: whether this build's `kolux` launcher sits beside the app, and whether a
+/// terminal outside Kolux finds it (its folder is on PATH). Another program called kolux on PATH
+/// does not count.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliStatus {
+    pub installed: bool,
+    pub on_path: bool,
+}
+
+fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let norm = |p: &std::path::Path| {
+        let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        let s = p.to_string_lossy().trim_end_matches(['\\', '/']).to_string();
+        if cfg!(windows) {
+            s.to_lowercase()
+        } else {
+            s
+        }
+    };
+    norm(a) == norm(b)
+}
+
+fn cli_status_in(dir: &std::path::Path, path: &std::ffi::OsStr) -> CliStatus {
+    let names: &[&str] = if cfg!(windows) { &["kolux.exe", "kolux.cmd"] } else { &["kolux"] };
+    let installed = names.iter().any(|n| dir.join(n).is_file());
+    let on_path = installed && std::env::split_paths(path).any(|p| same_dir(&p, dir));
+    CliStatus { installed, on_path }
+}
+
+#[tauri::command]
+pub fn cli_status() -> Result<CliStatus, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().ok_or("the app has no folder")?;
+    Ok(cli_status_in(dir, &std::env::var_os("PATH").unwrap_or_default()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guide_lists_keep_each_id_once_and_drop_unknown_tips() {
+        let (s, dir) = store("guide");
+        s.set(GUIDE, r#"{"tipsSeen":["old-tip","cli","cli"],"visited":["agents"]}"#).unwrap();
+        let g = guide_load(&s);
+        assert_eq!(g.tips_seen, ["cli"], "an unknown tip from older data is dropped on load, a repeat counts once");
+        assert_eq!(g.visited, ["agents"]);
+        let g = marked(g, "tipsSeen", "palette").unwrap();
+        let g = marked(g, "tipsSeen", "palette").unwrap();
+        assert_eq!(g.tips_seen, ["cli", "palette"]);
+        assert!(marked(g.clone(), "tipsSeen", "nope").is_err());
+        assert!(marked(g.clone(), "other", "x").is_err());
+        assert!(marked(g.clone(), "tried", "../x").is_err());
+        assert_eq!(marked(g, "tried", "usage").unwrap().tried, ["usage"]);
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_cli_counts_on_path_only_when_its_own_folder_is_there() {
+        let dir = std::env::temp_dir().join(format!("kolux-rs-onb-cli-{}", std::process::id()));
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let launcher = if cfg!(windows) { "kolux.exe" } else { "kolux" };
+        let path = |ps: &[&std::path::Path]| std::env::join_paths(ps).unwrap();
+        assert_eq!(cli_status_in(&dir, &path(&[&dir])), CliStatus { installed: false, on_path: false });
+        std::fs::write(other.join(launcher), "").unwrap();
+        assert_eq!(cli_status_in(&dir, &path(&[&other])), CliStatus { installed: false, on_path: false }, "another kolux on PATH is not this build's");
+        std::fs::write(dir.join(launcher), "").unwrap();
+        assert_eq!(cli_status_in(&dir, &path(&[&other])), CliStatus { installed: true, on_path: false }, "installed but missing from PATH");
+        let spelled = std::path::PathBuf::from(format!("{}{}", dir.display(), std::path::MAIN_SEPARATOR));
+        assert_eq!(cli_status_in(&dir, &path(&[&other, &spelled])), CliStatus { installed: true, on_path: true });
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn store(tag: &str) -> (Store, std::path::PathBuf) {
         let dir = std::env::temp_dir().join(format!("kolux-rs-onb-{tag}-{}", std::process::id()));

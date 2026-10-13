@@ -1193,3 +1193,54 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .skills-row .none { font-style: italic; color: var(--fg-faint); }
 .skills-row .path { margin-top: 2px; font-size: 11px; color: var(--fg-faint); font-family: var(--mono-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .skills-tag { flex: none; padding: 0 6px; border-radius: 4px; font-size: 10.5px; color: var(--fg-faint); border: 1px solid var(--line-strong); }
+
+/* ONB-014 Setup Guide, ONB-022 Explore Kolux, ONB-027 tips (src/onboarding/Guides.tsx) */
+.ask-backdrop.closing { animation: guide-out 160ms ease forwards; pointer-events: none; }
+@keyframes guide-out { to { opacity: 0; } }
+.guide, .explore { display: flex; width: min(860px, calc(100vw - 32px)); height: min(560px, 85vh); box-sizing: border-box; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); overflow: hidden; }
+.guide-side, .explore-rail { flex: 0 0 280px; display: flex; flex-direction: column; gap: 2px; padding: 16px 10px; border-right: 1px solid var(--line-subtle); overflow: auto; }
+.guide-head { display: flex; align-items: center; gap: 10px; padding: 0 6px 10px; }
+.guide-head h2 { margin: 0; font-size: 15px; }
+.guide-head p { margin: 2px 0 0; font-size: 12px; color: var(--fg-muted); }
+.guide-head .spacer, .guide-panel .spacer, .explore-main .spacer, .tip .spacer { flex: 1; }
+.guide-ring { flex: none; }
+.guide-ring circle { fill: none; stroke-width: 3; }
+.guide-ring .track { stroke: var(--line-subtle); }
+.guide-ring .fill { stroke: var(--done); stroke-linecap: round; transition: stroke-dashoffset 300ms ease; }
+.guide-group { margin: 10px 6px 4px; font-size: 11px; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.guide-step, .explore-wf { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px; border-radius: 6px; color: var(--fg); text-align: left; }
+.guide-step:hover, .explore-wf:hover { background: var(--chip-bg); }
+.guide-step.on, .explore-wf.on { background: var(--row-selected); }
+.guide-step .tick { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border: 1px solid var(--line-focus); border-radius: 50%; font-size: 10px; color: var(--fg-muted); }
+.guide-step.done .tick { background: var(--done); border-color: var(--done); color: var(--pane-bg); }
+.guide-step .name, .explore-wf .name { flex: 1; min-width: 0; }
+.opt { font-size: 11px; color: var(--fg-faint); }
+.mark.ok { font-size: 11px; color: var(--done); }
+.guide-panel, .explore-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 16px 20px; overflow: auto; }
+.guide-panel header, .explore-main header { display: flex; align-items: center; gap: 8px; }
+.guide-panel h3, .explore-main h3 { flex: 1; margin: 0; font-size: 16px; }
+.guide-panel p, .explore-main p { margin: 0; line-height: 1.5; color: var(--fg-muted); }
+.guide-note.dim { font-size: 12px; color: var(--fg-faint); }
+.guide-caps { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.guide-caps li { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line-subtle); border-radius: 8px; }
+.guide-caps label { display: flex; align-items: center; gap: 8px; }
+.guide-caps .name { flex: 1; color: var(--fg); }
+.guide-caps .state { font-size: 11px; color: var(--warn); }
+.guide-caps .state.ok { color: var(--done); }
+.guide-caps .about { padding-left: 24px; font-size: 12px; color: var(--fg-faint); }
+.guide-done { color: var(--done) !important; }
+.explore-pic { display: flex; align-items: flex-end; height: 180px; padding: 14px; border-radius: 10px; background: linear-gradient(135deg, var(--chip-bg), var(--surface)); border: 1px solid var(--line-subtle); font-size: 20px; font-weight: 600; color: var(--fg); }
+.explore-stops { display: flex; flex-wrap: wrap; gap: 6px; }
+.explore-stops .chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border: 1px solid var(--line-subtle); border-radius: 13px; color: var(--fg); font-size: 12px; }
+.explore-stops .chip.on { background: var(--row-selected); border-color: var(--line-focus); }
+.explore-main .btn-row { margin-top: auto; align-items: center; }
+.explore-main .hint { font-size: 11px; color: var(--fg-faint); }
+.tip { position: relative; width: min(420px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.tip-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; background: var(--chip-bg); font-size: 11px; color: var(--fg-muted); }
+.tip h3 { margin: 10px 0 8px; font-size: 16px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tip ul { margin: 0 0 12px; padding-left: 18px; line-height: 1.6; color: var(--fg-muted); }
+.tip p { margin: 0 0 12px; line-height: 1.5; color: var(--fg-muted); }
+.tip .tip-warn { color: var(--warn); }
+.tip .btn-row { justify-content: flex-end; }
+.menu-hint-inline { margin-left: auto; font-size: 11px; color: var(--fg-faint); }
+@media (max-width: 640px) { .guide, .explore { flex-direction: column; height: 85vh; } .guide-side, .explore-rail { flex: none; max-height: 40%; border-right: 0; border-bottom: 1px solid var(--line-subtle); } }

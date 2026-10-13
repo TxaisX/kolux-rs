@@ -24,7 +24,7 @@ import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, SORT_SETTING, jumpUnhides, with
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
-import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
+import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
@@ -40,6 +40,7 @@ import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 import { GLOSSARY } from "../glossary";
+import HelpMenu from "../onboarding/HelpMenu";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing" | "tasks";
@@ -1304,9 +1305,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />
           </button>
-          <button className="ib" title="Help (not built yet)">
-            <Help />
-          </button>
+          <HelpMenu />
           <button className="upd" title="Check for a newer version of Kolux RS" onClick={requestUpdateCheck}>
             <Refresh size={13} />
             Check for updates

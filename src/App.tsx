@@ -48,6 +48,7 @@ import SkillsPage from "./skills/SkillsPage";
 import { closeSkills, toggleSkills } from "./skills/nav";
 import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
+import Guides from "./onboarding/Guides";
 import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, openAt, type Outcome } from "./onboarding/firstRun";
 import { KITS, VENDORS, RECALL_KEY, assignRoles, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
@@ -2040,6 +2041,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           />
         );
       })()}
+      <Guides />
       {wizard !== null && (
         <Wizard
           start={wizard}

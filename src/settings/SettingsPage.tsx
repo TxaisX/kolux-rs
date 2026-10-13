@@ -17,6 +17,7 @@ import GrokCard from "./GrokCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
+import { markGuide } from "../onboarding/guide";
 
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
 const AppearancePage = lazy(() => import("./AppearancePage"));
@@ -207,6 +208,8 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
     if (target) setPage(target.page);
   }, [target, n]);
   useEffect(() => rememberPage(page), [page]);
+  // USAGE 012: opening the Usage page counts as having tried the usage feature (Explore Kolux).
+  useEffect(() => void (page === "usage" && markGuide("tried", "usage").catch(() => {})), [page]);
   useScrollTo(target?.section, page, n);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
