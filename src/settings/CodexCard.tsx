@@ -1,15 +1,11 @@
 // The Codex card on Settings > AI connections (ACCT-007): Connect signs a ChatGPT account in
 // through the browser, "Sign in with a code" shows a link and a one-time code to enter on any
 // device. Each account Kolux adds runs in a private Codex home; the user's own Codex folder is
-// never touched. A System default row reports Codex's own login as it is, re-read whenever Kolux
-// gets focus (ACCT-020); managed rows can be picked, re-signed or removed (ACCT-019, T-138). The
-// full Connect-card states are T-092; T-138-b: the user names accounts, and two on one email ask
-// to be named, since OpenAI does not document where a sign-in says personal or business. The card
-// is in one state at a time (ACCT-002); the accounts list moving under Manage accounts is T-138.
+// never touched. The card is in one state at a time (ACCT-002); the accounts list itself is under
+// Manage accounts (advanced), in CodexAccounts.tsx (ACCT-001, ACCT-019, T-138-c).
 // Once connected the card shows Manage and Disconnect (ACCT-015): Disconnect removes only an
 // account Kolux made, and for Codex's own login only explains how to sign out in Codex.
 import { useCallback, useEffect, useState } from "react";
-import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
 import { AttentionNote, fixDoes, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
@@ -18,9 +14,9 @@ import { liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
 import Ask, { type Question } from "../chrome/Ask";
 import { CONNECT } from "../glossary";
+import { who } from "./CodexAccounts";
 
 export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean; label?: string };
-const NAME_MAX = 40;
 export type CodexView = {
   accounts: CodexAccount[];
   active: string | null;
@@ -37,7 +33,7 @@ export type CodexView = {
   /** ACCT-021: why the user's Codex settings cannot be copied into the accounts, if they cannot. */
   settingsWarning: string | null;
 };
-export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "activate"; id: string | null } | { kind: "ask-remove"; id: string } | { kind: "remove"; id: string } | { kind: "keep" } | { kind: "name"; id: string } | { kind: "label"; id: string; label: string } | { kind: "again"; id: string } | { kind: "install" } | { kind: "disconnect" };
+export type CodexAction = { kind: "connect" } | { kind: "code" } | { kind: "cancel" } | { kind: "remove"; id: string } | { kind: "install" } | { kind: "disconnect" };
 
 const systemLabel: Record<CodexView["systemDefault"], string> = {
   chatgpt: "a ChatGPT sign-in",
@@ -45,25 +41,6 @@ const systemLabel: Record<CodexView["systemDefault"], string> = {
   "custom-provider": "an API key with a custom provider",
   "signed-out": "",
 };
-const systemRow: Record<CodexView["systemDefault"], string> = {
-  chatgpt: "Signed in with ChatGPT",
-  "api-key": "Running on an API key",
-  "custom-provider": "Running on an API key with a custom provider",
-  "signed-out": "Signed out",
-};
-
-const who = (a: CodexAccount) => a.email ?? "ChatGPT account";
-/** ACCT-019: another listed account signs in with the same email. */
-export const sharesEmail = (v: CodexView, a: CodexAccount) => !!a.email && v.accounts.some((b) => b.id !== a.id && b.email?.toLowerCase() === a.email?.toLowerCase());
-
-/** SET-030: what is wrong with one account, if anything. */
-export function codexTrouble(v: CodexView, a: CodexAccount): string | null {
-  if (v.missing.includes(a.id)) return "Needs sign-in";
-  if (a.signInError) return "Needs re-auth";
-  if (v.drifted.includes(a.id)) return "Settings changed";
-  return null;
-}
-
 export function codexHeadline(v: CodexView): string {
   if (v.signingIn === "device") return v.deviceCode ? "Enter the code on any device" : "Asking for a sign-in code…";
   if (v.signingIn) return v.inBrowser ? "Finish signing in in the browser" : "Starting Codex's sign-in…";
@@ -93,7 +70,7 @@ export function codexState(v: CodexView): CodexState {
 }
 const codexChip: Record<CodexState, string> = { connecting: "Connecting", connected: "Connected", attention: "Needs attention", disconnected: "Not connected" };
 
-export function CodexCardView({ view, error, confirming = null, pending = false, naming = null, onAction }: { view: CodexView | null; error?: string | null; confirming?: string | null; pending?: boolean; naming?: string | null; onAction: (a: CodexAction) => void }) {
+export function CodexCardView({ view, error, pending = false, onAction }: { view: CodexView | null; error?: string | null; pending?: boolean; onAction: (a: CodexAction) => void }) {
   if (!view) return null;
   const state = codexState(view);
   const busy = state === "connecting";
@@ -115,63 +92,6 @@ export function CodexCardView({ view, error, confirming = null, pending = false,
         </div>
       )}
       {view.signingIn === "browser" && view.inBrowser && <p className="conn-detail">Sign in on the ChatGPT page that opened. Kolux keeps the sign-in in a Codex home of its own.</p>}
-      {!busy && (
-        <div className="acct-list">
-          <AccountRow
-            title="System default"
-            detail={`Codex's own login · ${systemRow[view.systemDefault]}`}
-            active={view.active === null}
-            busy={busy}
-            onPick={() => onAction({ kind: "activate", id: null })}
-          />
-          {view.accounts.map((a) => (
-            <AccountRow
-              key={a.id}
-              title={a.label ? `${a.label} · ${who(a)}` : who(a)}
-              detail={!a.label && sharesEmail(view, a) ? "Same email as another account: name it, e.g. Work" : `Last signed in ${signedInAt(a.lastSignIn)}`}
-              active={view.active === a.id}
-              busy={busy}
-              trouble={codexTrouble(view, a)}
-              onPick={() => onAction({ kind: "activate", id: a.id })}
-              manage={{
-                againLabel: codexTrouble(view, a) ? "Sign in again" : null,
-                onAgain: () => onAction({ kind: "again", id: a.id }),
-                confirming: confirming === a.id,
-                activeGoes: view.active === a.id,
-                onAsk: () => onAction({ kind: "ask-remove", id: a.id }),
-                onRemove: () => onAction({ kind: "remove", id: a.id }),
-                onKeep: () => onAction({ kind: "keep" }),
-                nameLabel: a.label ? "Rename" : "Name",
-                onName: () => onAction({ kind: "name", id: a.id }),
-              }}
-              below={
-                naming === a.id && (
-                  <input
-                    className="field acct-name"
-                    aria-label={`Name for ${who(a)}`}
-                    placeholder="Personal, Work…"
-                    maxLength={NAME_MAX}
-                    defaultValue={a.label ?? ""}
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") e.currentTarget.blur();
-                      if (e.key === "Escape") {
-                        e.stopPropagation();
-                        onAction({ kind: "keep" });
-                      }
-                    }}
-                    onBlur={(e) => onAction({ kind: "label", id: a.id, label: e.currentTarget.value })}
-                  />
-                )
-              }
-            />
-          ))}
-          {view.accounts.some((a) => view.drifted.includes(a.id)) && (
-            <p className="conn-detail warn">Codex's settings file for a marked account was changed, so Codex may keep its sign-in where Kolux cannot see it. Sign in again puts Kolux's settings back.</p>
-          )}
-          {view.settingsWarning && <p className="conn-detail warn">{view.settingsWarning}</p>}
-        </div>
-      )}
       {!busy && view.accounts.length === 0 && view.systemDefault !== "signed-out" && <p className="conn-detail">{CONNECT.codex}</p>}
       <AttentionNote attention={view.attention} route="codex" busy={pending} onFix={(f) => onAction({ kind: fixDoes(f) === "install-page" ? "install" : fixDoes(f) === "check" ? "cancel" : "connect" })} />
       {error && (
@@ -222,9 +142,7 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
   const on = !!view && codexState(view) === "connected";
   useEffect(() => onConnected(on), [onConnected, on]);
   const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [naming, setNaming] = useState<string | null>(null);
   const read = useCallback(() => {
     invoke<CodexView>("codex_accounts")
       .then(setView)
@@ -243,22 +161,15 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
   const [ask, setAsk] = useState<Question | null>(null);
   const act = (a: CodexAction) => {
     setError(null);
-    setConfirming(a.kind === "ask-remove" ? a.id : null);
-    setNaming(a.kind === "name" ? a.id : null);
-    if (a.kind === "ask-remove" || a.kind === "keep" || a.kind === "name") return;
     if (a.kind === "disconnect") return view && setAsk(codexDisconnect(view));
     const call =
       a.kind === "cancel"
         ? invoke("codex_account_cancel")
         : a.kind === "remove"
           ? invoke("codex_account_remove", { id: a.id })
-          : a.kind === "activate"
-          ? invoke("codex_account_activate", { id: a.id })
-          : a.kind === "label"
-            ? invoke("codex_account_label", { id: a.id, label: a.label })
           : a.kind === "install"
             ? openInstallPage("codex")
-            : invoke("codex_account_sign_in", { device: a.kind === "code", again: a.kind === "again" ? a.id : null });
+            : invoke("codex_account_sign_in", { device: a.kind === "code", again: null });
     if (a.kind !== "cancel") setPending(true);
     call.catch((e) => setError(String(e)));
     // ACCT-002: a choice comes back after 30 seconds even if no answer arrives.
@@ -269,7 +180,7 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
   };
   return (
     <>
-      <CodexCardView view={view} error={error} confirming={confirming} pending={pending} naming={naming} onAction={act} />
+      <CodexCardView view={view} error={error} pending={pending} onAction={act} />
       {ask && (
         <Ask
           {...ask}

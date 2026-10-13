@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
 import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
+import CodexAccounts from "./CodexAccounts";
 import CodexCard from "./CodexCard";
 import { ConnectGrid, liveCheck, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
@@ -255,6 +256,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
               <div className="conn-advanced" data-section="accounts-advanced">
                 <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
                 <ClaudeAccounts />
+                <CodexAccounts />
               </div>
             </>
           )}

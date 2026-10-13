@@ -1627,6 +1627,8 @@ you picked with Open a file stays readable after Kolux restarts, so a reopened t
 
 [accounts] T-136-d: Pull requests created on the Usage page now goes up by one each time Kolux makes a pull request from Source Control. Linking a pull request the branch already has, or a create that fails, does not count. The count is kept with the other activity numbers across restarts.
 
+[accounts] T-138-c: the list of Codex accounts now sits under Manage accounts (advanced), below the Claude accounts list, with its own Add Account button. The Codex card above just says whether Codex is connected and offers Manage and Disconnect. Switching or renaming an account in the list shows on the card straight away.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2851,6 +2853,7 @@ recorded default until told otherwise; nothing here blocks a pass.
 - [accounts] T-154-c · ACCT-055: every Explorer file command takes each path through the fence (exact=false: projects and worktrees; a picked-file grant opens that file to read and save, not to rename, trash or move). A refusal fails the whole call (trash, restore, move), except a copy, where each outside source is refused on its own line so the rest still land. A copy source from outside is allowed only when it is one of the paths of the latest drop, which the Rust side notes from the window's own drop event (WindowEvent::DragDrop), so the page cannot name an outside file and copy it in; a new drop replaces the list, shares never count. scm_stage/scm_discard take the worktree through the fence; kit_check goes through the same kit-folder guard as the other kit commands (projects and the samples folder), giving no result elsewhere. Grants are saved as one kv row (file_grants, a JSON list) on each pick; on load every entry is resolved again and a share, drive root, folder or missing file is dropped, a damaged row grants nothing, and the cap of 100 holds. ponytail: the list is rewritten on each pick; it is at most 100 lines.
 
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-13 · [accounts] T-138-c · done: src/settings/CodexAccounts.tsx (list, naming, remove, sign in again, Add Account) under Manage accounts (advanced); CodexCard.tsx list removed; SettingsPage.tsx renders it after ClaudeAccounts · evidence/T-138-c.txt, T-138-c-1-codex-accounts-under-manage-accounts.png, T-138-c-2-after-naming-and-switching.png
 - 2026-10-13 · [accounts] T-136-d · done: activity::pr_created counted from scm.rs pr_create on the new-PR path only; lost connection to T-067, importer to T-075, tried-usage to T-244; live create refused by the installed gh (local remote), count stays 0 · evidence/T-136-d.txt, T-136-d-1-usage-after-a-refused-create.png
 - 2026-10-13 · [accounts] T-153-e · not started, left open: Manage Sessions lists the sessions the background terminal host holds, which is T-067 TERM-105 (not built yet; terminal host work); build it after T-067
 - 2026-10-13 · [accounts] T-153-d · not started, left open: delete, reveal and open act on rows of the Agents tab past-sessions list, which is T-146-b (not built yet); build it after T-146-b
