@@ -293,6 +293,8 @@ pub fn run() {
             terminal::terminal_busy,
             keybindings::keybindings_read,
             keybindings::keybindings_write,
+            keybindings::keybindings_reload,
+            keybindings::keybindings_show,
             projects::workspaces_place_get,
             projects::workspaces_place_set,
             browser::browser_open,

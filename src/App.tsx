@@ -95,6 +95,8 @@ import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
+import { heldByTerminal } from "./keys/terminalPolicy";
+import { stepZoom } from "./settings/zoom";
 import { useUsageAlerts } from "./usage/alerts";
 import ToolNotices from "./launch/ToolNotices";
 
@@ -455,8 +457,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     };
   }, []);
 
-  // Global-scope shortcuts are pressed here, wherever focus is (the terminal policy comes with
-  // SET-014). Only actions that exist today do something; the rest are matched and left alone.
+  // Global-scope shortcuts are pressed here, wherever focus is; with Terminal first (SET-014) a
+  // focused terminal keeps every chord that is not marked safe for terminals. Only actions that exist today do something; the rest are matched and left alone.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // SET-009: while Settings > Shortcuts records a chord, the press is the recorder's alone.
@@ -470,7 +472,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         matchEvent(keymap, e, inTree ? ["global"] : kind === "editor" || kind === "diff" ? ["editor", "global", "tabs"] : kind === "preview" ? ["global", "tabs"] : screen === "terminals" ? ["global", "terminal", "tabs"] : ["global"]) ||
         // GIT-042: a preview tab takes the one editor shortcut that applies to it.
         (kind === "preview" && [matchEvent(keymap, e, ["editor"])].find((h) => h?.id === "editor.addReviewNote"));
-      if (!hit) return;
+      if (!hit || heldByTerminal(hit.id, settings)) return;
       const inFront = panesIn(panes, activeDir).some((p) => p.key === focused);
       switch (hit.id) {
         case "browser.focusAddressBar":
@@ -478,6 +480,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "browser.forward":
         case "browser.reload":
           browserAction(focused, hit.id.slice("browser.".length));
+          break;
+        case "zoom.in":
+        case "zoom.out":
+        case "zoom.reset":
+          void stepZoom(hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset").catch(() => {});
           break;
         case "app.settings":
           if (!settingsOpen) setSettingsAt((a) => ({ target: null, n: a.n }));

@@ -589,6 +589,14 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .settings { position: absolute; inset: 0; z-index: 40; display: flex; gap: 8px; padding: 8px; background: var(--app-bg); }
 .settings-nav { flex: none; width: 288px; display: flex; flex-direction: column; gap: 2px; padding: 12px 8px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; }
 .settings-title { padding: 0 9px 10px; font-size: 13px; font-weight: 600; color: var(--fg-label); }
+/* SET-007: the search box over the page list; the pages a search found, one after another. */
+.settings-search { margin: 0 0 8px; }
+.settings-found + .settings-found { margin-top: 20px; }
+.settings-found-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--fg-label); }
+.look-fold > summary[aria-disabled] { cursor: default; }
+/* SET-019: the zoom control. */
+.zoom-row { display: flex; align-items: center; gap: 6px; }
+.zoom-level { min-width: 4.5em; text-align: center; font-variant-numeric: tabular-nums; }
 .settings-link { height: 32px; padding: 0 9px; border-radius: 6px; text-align: left; font-size: 13px; color: var(--fg-row); }
 .settings-link[aria-current="page"] { background: var(--row-selected); color: var(--fg); font-weight: 600; }
 .settings-main { flex: 1; min-width: 0; overflow: auto; padding: 20px 28px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 12px; }
