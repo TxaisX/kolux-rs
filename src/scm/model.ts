@@ -1,5 +1,5 @@
-// The Source Control panel's data (GIT-002 / GIT-004): a worktree's status as the back end
-// reports it, and the two rules the panel applies before it commits.
+// The Source Control panel's data (GIT-002 / GIT-003 / GIT-004): a worktree's status as the back
+// end reports it, the two rules the panel applies before it commits, and the discard question.
 
 /** One changed file; `status` is one letter (M A D R C T U untracked, X unmerged). */
 export type Change = { path: string; status: string; from: string | null };
@@ -171,3 +171,33 @@ export const SCM_AGENT_KEY = "scmAgent";
 /** VIEW-069: the agent saved for Source Control's agent actions, while it is still installed. */
 export const savedFixAgent = <A extends { id: string; installed: boolean }>(agents: A[], saved: unknown): A | null =>
   typeof saved === "string" ? (agents.find((a) => a.id === saved && a.installed) ?? null) : null;
+
+/** GIT-003: the question before uncommitted work is thrown away, worded for what the rows are. */
+export type DiscardPlan = { title: string; body: string; button: "Delete" | "Restore" | "Discard" };
+
+const NO_UNDO = "There is no undo.";
+
+/** GIT-003: a new file (untracked or only staged) is removed for good, a deleted one comes back,
+ *  anything else loses its edits; several rows get the counts of each kind. */
+export const discardPlan = (rows: Change[]): DiscardPlan => {
+  const isNew = (c: Change) => c.status === "U" || c.status === "A";
+  const fresh = rows.filter(isNew).length;
+  const gone = rows.filter((c) => c.status === "D").length;
+  const edited = rows.length - fresh - gone;
+  if (rows.length === 1) {
+    const [c] = rows;
+    if (isNew(c)) return { title: `Delete ${c.path}?`, body: `This file is in no commit, so it is removed for good. ${NO_UNDO}`, button: "Delete" };
+    if (c.status === "D") return { title: `Restore ${c.path}?`, body: `The file comes back as it was in the last commit. ${NO_UNDO}`, button: "Restore" };
+    return { title: `Discard changes to ${c.path}?`, body: `Its edits since the last commit are lost. ${NO_UNDO}`, button: "Discard" };
+  }
+  const n = rows.length;
+  const parts = [
+    fresh > 0 && `${fresh} new ${fresh === 1 ? "file is" : "files are"} removed for good`,
+    gone > 0 && `${gone} deleted ${gone === 1 ? "file comes" : "files come"} back from the last commit`,
+    edited > 0 && `${edited} ${edited === 1 ? "file loses its" : "files lose their"} edits`,
+  ].filter((p): p is string => typeof p === "string");
+  const body = `${parts.join(", ")}. ${NO_UNDO}`;
+  if (fresh === n) return { title: `Delete ${n} new files?`, body, button: "Delete" };
+  if (gone === n) return { title: `Restore ${n} files?`, body, button: "Restore" };
+  return { title: `Discard ${n} changes?`, body, button: "Discard" };
+};

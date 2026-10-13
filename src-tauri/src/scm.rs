@@ -1,11 +1,12 @@
-//! GIT-002 / GIT-004 / GIT-006 / GIT-007: the Source Control panel's back end: what one worktree
-//! has changed, staging and unstaging by path, committing, and the remote actions (push, pull,
+//! GIT-002 / GIT-003 / GIT-004 / GIT-006 / GIT-007: the Source Control panel's back end: what one
+//! worktree has changed, staging and unstaging by path, discarding work, committing, and the remote actions (push, pull,
 //! sync, fetch, fast-forward, force push with lease, publish, rebase from base). Every call names
 //! the worktree it acts on, so one workspace's index is never touched from another's panel.
 //! Reading status never touches the network: the ahead / behind counts come from the refs git
 //! already has, so an unpublished branch is not checked against the remote over and over.
 
 use crate::git::{command, native, run, Git};
+use std::fs;
 use std::io::Write;
 use std::path::{Component, Path};
 
@@ -298,8 +299,63 @@ fn check_paths(paths: &[String]) -> Result<(), String> {
 /// holding `*` or `[` matches only itself.
 pub fn stage(worktree: &Path, paths: &[String], on: bool) -> Result<(), String> {
     check_paths(paths)?;
-    let args: &[&str] = if on { &["--literal-pathspecs", "add", "--pathspec-from-file=-", "--pathspec-file-nul"] } else { &["--literal-pathspecs", "restore", "--staged", "--pathspec-from-file=-", "--pathspec-file-nul"] };
-    let mut child = command(args, Some(worktree)).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
+    with_paths(worktree, if on { &["add"] } else { &["restore", "--staged"] }, paths)
+}
+
+/// GIT-003: throws away the uncommitted work on `paths`. A new file (untracked, or only staged)
+/// is removed for good, a deleted file comes back from the last commit, a modified or renamed
+/// file is put back as the last commit had it; staged work is unstaged first. A link is only ever
+/// removed or rewritten as a link: what it points at is never followed, so nothing outside the
+/// repository is touched. An untracked folder (`box/`) goes with everything in it.
+pub fn discard(worktree: &Path, paths: &[String]) -> Result<(), String> {
+    check_paths(paths)?;
+    let st = status(worktree)?;
+    let (mut staged, mut tracked, mut remove) = (Vec::new(), Vec::new(), Vec::new());
+    for p in paths {
+        let p = p.trim_end_matches('/');
+        let index = st.staged.iter().find(|c| c.path == p);
+        if let Some(c) = index {
+            staged.push(c.path.clone());
+            if let Some(from) = &c.from {
+                staged.push(from.clone());
+                tracked.push(from.clone());
+            }
+        }
+        if st.untracked.iter().any(|c| c.path.trim_end_matches('/') == p) || index.is_some_and(|c| c.status == "A" || c.from.is_some()) {
+            remove.push(p.to_string());
+        } else {
+            tracked.push(p.to_string());
+        }
+    }
+    if !staged.is_empty() {
+        with_paths(worktree, &["reset", "-q"], &staged)?;
+    }
+    for p in &tracked {
+        // A link is removed before git rewrites it, so git never writes through it.
+        let full = worktree.join(native(p));
+        if fs::symlink_metadata(&full).is_ok_and(|m| m.is_symlink()) {
+            fs::remove_file(&full).or_else(|_| fs::remove_dir(&full)).map_err(|e| format!("{p}: {e}"))?;
+        }
+    }
+    if !tracked.is_empty() {
+        with_paths(worktree, &["checkout", "-q", "HEAD"], &tracked)?;
+    }
+    for p in &remove {
+        let full = worktree.join(native(p));
+        let Ok(meta) = fs::symlink_metadata(&full) else { continue };
+        let done = if meta.is_dir() { fs::remove_dir_all(&full) } else { fs::remove_file(&full).or_else(|_| fs::remove_dir(&full)) };
+        done.map_err(|e| format!("{p}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Runs `git <args>` over `paths` handed on stdin, NUL-separated and literal, so no name is
+/// read as a pattern.
+fn with_paths(worktree: &Path, args: &[&str], paths: &[String]) -> Result<(), String> {
+    let mut all = vec!["--literal-pathspecs"];
+    all.extend_from_slice(args);
+    all.extend_from_slice(&["--pathspec-from-file=-", "--pathspec-file-nul"]);
+    let mut child = command(&all, Some(worktree)).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(|e| format!("could not run git: {e}"))?;
     let input = paths.iter().map(|p| format!("{p}\0")).collect::<String>();
     child.stdin.take().ok_or("git has no input")?.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
@@ -350,6 +406,11 @@ pub fn scm_stage(worktree: String, paths: Vec<String>, on: bool) -> Result<(), S
 }
 
 #[tauri::command]
+pub fn scm_discard(worktree: String, paths: Vec<String>) -> Result<(), String> {
+    discard(Path::new(&worktree), &paths)
+}
+
+#[tauri::command]
 pub fn scm_commit(worktree: String, message: String) -> Result<CommitOutcome, String> {
     commit(Path::new(&worktree), &message)
 }
@@ -362,7 +423,6 @@ pub fn scm_remote(worktree: String, action: String) -> Result<ActionOutcome, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::path::PathBuf;
 
     fn temp_repo(name: &str) -> PathBuf {
@@ -603,6 +663,60 @@ mod tests {
         assert_eq!((s.against.as_str(), s.ahead, s.behind, s.source), ("origin/feat", 1, 0, Lines { added: 1, removed: 3 }));
         assert_eq!(status(&repo).unwrap().head, Some(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap().trim().to_string()));
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git003_discard_deletes_new_files_restores_deleted_ones_and_never_follows_a_link_out() {
+        let dir = temp_repo("discard");
+        run(&["config", "core.symlinks", "true"], Some(&dir)).unwrap();
+        let target = std::env::temp_dir().join(format!("kolux-rs-scm-target-{}", std::process::id()));
+        fs::write(&target, "keep me\n").unwrap();
+        let link = |name: &str, to: &Path| {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(to, dir.join(name)).unwrap();
+            #[cfg(windows)]
+            std::os::windows::fs::symlink_file(to, dir.join(name)).unwrap();
+        };
+        commit_file(&dir, "gone.txt", "g\n");
+        commit_file(&dir, "edit.txt", "e\n");
+        commit_file(&dir, "old.txt", "o\n");
+        link("tracked-link", Path::new("README.md"));
+        run(&["add", "tracked-link"], Some(&dir)).unwrap();
+        run(&["commit", "-q", "-m", "link"], Some(&dir)).unwrap();
+
+        fs::remove_file(dir.join("gone.txt")).unwrap();
+        fs::write(dir.join("edit.txt"), "changed\n").unwrap();
+        fs::write(dir.join("new.txt"), "n\n").unwrap();
+        fs::write(dir.join("added.txt"), "a\n").unwrap();
+        run(&["add", "added.txt"], Some(&dir)).unwrap();
+        run(&["mv", "old.txt", "moved.txt"], Some(&dir)).unwrap();
+        // The committed link re-aimed outside the repository, and an untracked link and an
+        // untracked folder holding a link, all pointing at the outside file.
+        fs::remove_file(dir.join("tracked-link")).unwrap();
+        link("tracked-link", &target);
+        link("loose-link", &target);
+        fs::create_dir(dir.join("box")).unwrap();
+        link("box/inner-link", &target);
+        let st = status(&dir).unwrap();
+        assert_eq!(paths(&st.untracked), ["box/inner-link", "loose-link", "new.txt"]);
+        assert_eq!(paths(&st.staged), ["added.txt", "moved.txt"]);
+        assert_eq!(paths(&st.changed), ["edit.txt", "gone.txt", "tracked-link"]);
+
+        assert!(discard(&dir, &["../outside.txt".to_string()]).unwrap_err().contains("outside"));
+        let all: Vec<String> = ["gone.txt", "edit.txt", "new.txt", "added.txt", "moved.txt", "tracked-link", "loose-link", "box/inner-link"].iter().map(|s| s.to_string()).collect();
+        discard(&dir, &all).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("gone.txt")).unwrap(), "g\n", "a deleted file comes back from the last commit");
+        assert_eq!(fs::read_to_string(dir.join("edit.txt")).unwrap(), "e\n", "a modified file loses its edits");
+        assert_eq!(fs::read_to_string(dir.join("old.txt")).unwrap(), "o\n", "a rename is undone");
+        for new in ["new.txt", "added.txt", "moved.txt", "loose-link", "box/inner-link"] {
+            assert!(fs::symlink_metadata(dir.join(new)).is_err(), "{new} is removed for good");
+        }
+        assert_eq!(fs::read_link(dir.join("tracked-link")).unwrap(), Path::new("README.md"), "the link is rewritten as the commit had it");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "keep me\n", "no link's target is ever touched");
+        let st = status(&dir).unwrap();
+        assert!(st.staged.is_empty() && st.changed.is_empty() && st.untracked.is_empty(), "{st:?}");
+        let _ = fs::remove_file(&target);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

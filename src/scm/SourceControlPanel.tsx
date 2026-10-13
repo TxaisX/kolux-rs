@@ -1,6 +1,8 @@
-// The Source Control card on the right of the content (spec 11; GIT-002 / GIT-004 / GIT-006 /
-// GIT-007): the changes of the workspace in front under conflicts, staged, changes and untracked,
-// each section with its count and a stage-all / unstage-all control, plus or minus on every row,
+// The Source Control card on the right of the content (spec 11; GIT-002 / GIT-003 / GIT-004 /
+// GIT-006 / GIT-007): the changes of the workspace in front under conflicts, staged, changes and
+// untracked, each section with its count, a stage-all / unstage-all control and a discard-all
+// control, plus or minus and a discard arrow on every row (GIT-003: discarding asks first, worded
+// for what goes, with the untracked list scrolling inside the question),
 // a commit box (Ctrl+Enter commits while focus is in here), the main button that always proposes
 // the next step, a remote menu whose labels carry counts and whose disabled items say why, and a
 // notice when an action fails or a hook refuses a commit, with a Fix with AI action. The draft
@@ -14,10 +16,11 @@
 // pull-request step (create, merged, loading) with GIT-021 (T-228).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronDown, Close, Minus, Plus, Refresh } from "../chrome/icons";
+import { ChevronDown, Close, Minus, Plus, Refresh, Undo } from "../chrome/icons";
+import CloseAsk from "../terminal/CloseAsk";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, discardPlan, rowOrder, select } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -49,6 +52,8 @@ type Failure = { title: string; output: string };
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
 export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix, pinnedBase, againstUpstream, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
+  // GIT-003: the rows waiting for a yes before their work is thrown away.
+  const [discarding, setDiscarding] = useState<Change[] | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
   const [busyAgent, setBusyAgent] = useState(false);
@@ -141,6 +146,12 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     }
   };
   const stage = (paths: string[], on: boolean) => paths.length > 0 && guarded(() => invoke("scm_stage", { worktree: dir, paths, on }));
+  const discard = (rows: Change[]) => rows.length > 0 && !busy && setDiscarding(rows);
+  const confirmDiscard = () => {
+    const rows = discarding ?? [];
+    setDiscarding(null);
+    void guarded(() => invoke("scm_discard", { worktree: dir, paths: rows.map((r) => r.path) }));
+  };
   const commit = () =>
     canCommit(status, draft) &&
     guarded(async () => {
@@ -190,6 +201,11 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     if (!e.shiftKey) setAnchor(path);
   };
   const chosen = status ? bulk(status, selected) : { present: [], stage: [], unstage: [] };
+  const plan = discarding && discardPlan(discarding);
+  const rowsOf = (paths: string[]): Change[] => {
+    const all = status ? [...status.conflicts, ...status.staged, ...status.changed, ...status.untracked] : [];
+    return paths.flatMap((p) => all.find((c) => c.path === p) ?? []);
+  };
 
   const section = (name: string, rows: Change[], on: boolean) =>
     rows.length > 0 && (
@@ -197,6 +213,9 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
         <div className="scm-sec">
           <span>{name}</span>
           <span className="count">{rows.length}</span>
+          <button className="ib" title={`Discard all ${rows.length}`} disabled={busy} onClick={() => discard(rows)}>
+            <Undo />
+          </button>
           <button className="ib" title={on ? `Stage all ${rows.length}` : `Unstage all ${rows.length}`} disabled={busy} onClick={() => void stage(rows.map((r) => r.path), on)}>
             {on ? <Plus /> : <Minus />}
           </button>
@@ -205,6 +224,17 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
           <div key={r.path} className="scm-row" aria-selected={selected.includes(r.path)} title={r.from ? `${r.from} → ${r.path}` : r.path} onClick={(e) => pick(r.path, e)}>
             <span className="letter">{r.status}</span>
             <span className="path">{r.from ? `${r.from} → ${r.path}` : r.path}</span>
+            <button
+              className="ib"
+              title="Discard"
+              disabled={busy}
+              onClick={(e) => {
+                e.stopPropagation();
+                discard([r]);
+              }}
+            >
+              <Undo />
+            </button>
             <button
               className="ib"
               title={on ? "Stage" : "Unstage"}
@@ -378,6 +408,9 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                 <button className="btn" disabled={busy || chosen.unstage.length === 0} title={`Unstage the ${chosen.unstage.length} selected staged rows`} onClick={() => void stage(chosen.unstage, false)}>
                   Unstage {chosen.unstage.length}
                 </button>
+                <button className="btn" disabled={busy} title={`Discard the ${chosen.present.length} selected rows`} onClick={() => discard(rowsOf(chosen.present))}>
+                  Discard {chosen.present.length}
+                </button>
                 <button className="ib" title="Clear selection (Esc)" onClick={() => setSelected([])}>
                   <Close />
                 </button>
@@ -394,6 +427,17 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
           </>
         )}
       </div>
+      {discarding && plan && (
+        <CloseAsk title={plan.title} body={plan.body} confirm={plan.button} onConfirm={confirmDiscard} onCancel={() => setDiscarding(null)}>
+          {discarding.length > 1 && (
+            <ul className="ask-list" aria-label="files affected">
+              {discarding.map((r) => (
+                <li key={r.path}>{r.from ? `${r.from} → ${r.path}` : r.path}</li>
+              ))}
+            </ul>
+          )}
+        </CloseAsk>
+      )}
     </aside>
   );
 }

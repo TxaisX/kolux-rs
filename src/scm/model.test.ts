@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { expect, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select } from "./model";
+import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, discardPlan, rowOrder, select } from "./model";
 
 const staged: Status = { ...emptyStatus, staged: [{ path: "a.txt", status: "M", from: null }] };
 
@@ -139,4 +139,19 @@ test("GIT-002: the bulk bar counts the selected rows each action covers, in disp
   expect(b.stage).toEqual(["x1", "c1", "u1"]);
   expect(b.unstage).toEqual(["s1"]);
   expect(bulk(s, []).present).toEqual([]);
+});
+
+test("GIT-003: the discard question is worded per case and names the button, every version warning there is no undo", () => {
+  const c = (path: string, status: string, from: string | null = null) => ({ path, status, from });
+  expect(discardPlan([c("notes.txt", "U")])).toEqual({ title: "Delete notes.txt?", body: "This file is in no commit, so it is removed for good. There is no undo.", button: "Delete" });
+  expect(discardPlan([c("added.txt", "A")]).button).toBe("Delete");
+  expect(discardPlan([c("gone.txt", "D")])).toEqual({ title: "Restore gone.txt?", body: "The file comes back as it was in the last commit. There is no undo.", button: "Restore" });
+  expect(discardPlan([c("src/a.ts", "M")])).toEqual({ title: "Discard changes to src/a.ts?", body: "Its edits since the last commit are lost. There is no undo.", button: "Discard" });
+  // A whole section of untracked files says how many go.
+  const forty = Array.from({ length: 40 }, (_, i) => c(`u${i}.txt`, "U"));
+  expect(discardPlan(forty)).toEqual({ title: "Delete 40 new files?", body: "40 new files are removed for good. There is no undo.", button: "Delete" });
+  // Mixed rows: each kind is counted, and the button is the general Discard.
+  const mixed = discardPlan([c("a.txt", "U"), c("b.txt", "D"), c("c.txt", "M"), c("d.txt", "R", "old.txt"), c("e.txt", "D")]);
+  expect(mixed).toEqual({ title: "Discard 5 changes?", body: "1 new file is removed for good, 2 deleted files come back from the last commit, 2 files lose their edits. There is no undo.", button: "Discard" });
+  expect(discardPlan([c("a.txt", "D"), c("b.txt", "D")]).button).toBe("Restore");
 });

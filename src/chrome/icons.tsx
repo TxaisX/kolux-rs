@@ -131,6 +131,11 @@ export const Minus = (p: P) => (
     <path d="M3 8h10" />
   </Glyph>
 );
+export const Undo = (p: P) => (
+  <Glyph {...p}>
+    <path d="M3 6h7a3 3 0 0 1 0 6H6M5.5 3.5 3 6l2.5 2.5" />
+  </Glyph>
+);
 export const Plus = (p: P) => (
   <Glyph {...p}>
     <path d="M8 3v10M3 8h10" />
