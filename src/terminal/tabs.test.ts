@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { handlesIn, marksUnread, nameKey, newName, waitingInGrid, tabBadge } from "./tabs";
+import { handlesIn, marksUnread, nameKey, newName, tabMenu, waitingInGrid, tabBadge } from "./tabs";
 import { NEEDS_STRIP_FIELD, stripOn } from "../settings/general";
 
 test("a tab shows one badge: spinner, question mark, bell or check; an idle shell shows none (TERM-055)", () => {
@@ -61,4 +61,11 @@ test("only a whole-word term-N handle is a link, with its place in the line (TER
   // Text that only looks like a handle is not one.
   expect(handlesIn("TERM=xterm-256color term-x term3 term-3a my-term-4 term-5-b")).toEqual([]);
   expect(handlesIn("(term-7)")).toEqual([{ start: 1, end: 7, handle: "term-7" }]);
+});
+
+test("a tab's menu offers Rename for a terminal or agent tab and Close for every tab (TERM-048)", () => {
+  expect(tabMenu(undefined).map((i) => i.id)).toEqual(["rename", "close"]);
+  expect(tabMenu("editor").map((i) => i.id)).toEqual(["close"]);
+  expect(tabMenu("browser").map((i) => i.id)).toEqual(["close"]);
+  expect(tabMenu(undefined)[0]).toMatchObject({ label: "Rename tab", keys: "tab.rename" });
 });

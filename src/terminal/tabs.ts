@@ -50,3 +50,9 @@ export const waitingInGrid = (keys: number[], hook: Partial<Record<number, Agent
  * ponytail: string offsets, so a line with wide characters before a handle puts the link a little off. */
 export const handlesIn = (text: string): { start: number; end: number; handle: string }[] =>
   [...text.matchAll(/(?<![\w-])term-\d+(?![\w-])/g)].map((m) => ({ start: m.index, end: m.index + m[0].length, handle: m[0] }));
+
+/** TERM-048: a tab's right-click menu. Only terminal and agent tabs (no kind) take a name. */
+export const tabMenu = (kind: string | undefined): { id: "rename" | "close"; label: string; keys?: string }[] => [
+  ...(kind ? [] : [{ id: "rename" as const, label: "Rename tab", keys: "tab.rename" }]),
+  { id: "close", label: "Close tab" },
+];

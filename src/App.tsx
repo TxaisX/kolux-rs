@@ -80,7 +80,8 @@ import { paneState, strongest, type AgentState, type RowInfo } from "./projects/
 import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
 import { FINISH_FIELD, STOPPED_FIELD } from "./settings/NotificationSwitches";
-import { marksUnread, tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
+import { Kbd } from "./keys/KeymapContext";
+import { marksUnread, tabBadge, tabMenu, waitingInGrid, type Badge } from "./terminal/tabs";
 import NameField from "./terminal/NameField";
 import { Bell, Globe, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
@@ -264,6 +265,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [askName, setAskName] = useState<Record<number, number>>({});
   // TERM-048: the tab whose name is being edited in the tab strip.
   const [renamingTab, setRenamingTab] = useState<number | null>(null);
+  // TERM-048: the tab right-click menu, at the pointer.
+  const [tabMenuAt, setTabMenuAt] = useState<{ key: number; kind?: string; left: number; top: number } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const setToast = (text: string) => {
     setToastText(text);
@@ -1847,6 +1850,28 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           <SignInNotice />
           <KeyLostNotice />
           {terminals && page === null && <ToolNotices projects={projects.map((p) => p.id).join(",")} />}
+          {tabMenuAt && (
+            <>
+              <div className="menu-backdrop" onClick={() => setTabMenuAt(null)} onContextMenu={(e) => (e.preventDefault(), setTabMenuAt(null))} aria-hidden="true" />
+              <div className="menu" role="menu" aria-label="Tab" style={{ left: tabMenuAt.left, top: tabMenuAt.top }}>
+                {tabMenu(tabMenuAt.kind).map((i) => (
+                  <button
+                    key={i.id}
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      setTabMenuAt(null);
+                      if (i.id === "rename") setRenamingTab(tabMenuAt.key);
+                      else closePane(tabMenuAt.key);
+                    }}
+                  >
+                    <span className="name">{i.label}</span>
+                    {i.keys && <Kbd id={i.keys} />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           {terminals && reviewPane && reviewing && (
             <PlanSheet
               title={nameOf(names, reviewPane.cwd) ?? (reviewPane.cwd ? folderName(reviewPane.cwd) : tabName(reviewPane, titles))}
@@ -2027,7 +2052,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     {c.panes.length > 1 && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
-                          <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)} onDoubleClick={() => !p.kind && setRenamingTab(p.key)}>
+                          <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)} onDoubleClick={() => !p.kind && setRenamingTab(p.key)} onContextMenu={(e) => (e.preventDefault(), setTabMenuAt({ key: p.key, kind: p.kind, left: Math.min(e.clientX, window.innerWidth - 240), top: Math.min(e.clientY, window.innerHeight - 100) }))}>
                             {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
