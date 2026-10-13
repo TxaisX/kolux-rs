@@ -45,7 +45,7 @@ import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, openAt, type Outcome } from "./onboarding/firstRun";
-import { KITS, VENDORS, RECALL_KEY, assignRoles, remember, type Kit, type Vendor } from "./kits/catalog";
+import { KITS, RECALL_KEY, assignRoles, readyVendors, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
 import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
@@ -339,7 +339,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     return () => window.removeEventListener(OPEN_KITS, show);
   }, []);
   // SKILL-003: Claude, Codex and Grok, when found and not switched off, can take kit roles.
-  const kitAIs = useMemo(() => VENDORS.filter((v) => agents.some((a) => a.id === v && a.installed)), [agents]) as Vendor[];
+  // ONB-005 / SKILL-003: `agents` is already the switched-on set, so a kit never counts or casts an AI turned off on the Agents page.
+  const kitAIs = useMemo(() => readyVendors(agents), [agents]);
   const pickKit = (id: string) => {
     setKitConflict(null);
     setKits({ kit: id, sampleDir: null });

@@ -5,6 +5,8 @@
 
 export type Vendor = "claude" | "codex" | "grok";
 export const VENDORS: Vendor[] = ["claude", "codex", "grok"]; // SKILL-003's fixed rotation order
+/** The kit vendors among `agents` that are installed; pass the switched-on ones (offeredAgents), so a kit never counts or casts an AI switched off on the Agents page (ONB-005). */
+export const readyVendors = (agents: { id: string; installed: boolean }[]): Vendor[] => VENDORS.filter((v) => agents.some((a) => a.id === v && a.installed));
 export const VENDOR_NAME: Record<Vendor, string> = { claude: "Claude", codex: "Codex", grok: "Grok" };
 
 export type Category = "data" | "marketing" | "research" | "sales" | "operations";
