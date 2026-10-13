@@ -242,4 +242,32 @@ mod tests {
         drop(s);
         fs::remove_dir_all(&dir).unwrap();
     }
+
+    /// T-441-b for lib.rs write_settings, which reads with settings() and saves under one store
+    /// lock: the read that fell back to defaults sets read_failed on that same Store, so the save
+    /// built on the defaults is refused even after the file reads again, and no other read can
+    /// clear the flag in between while the lock is held.
+    #[test]
+    fn t441b_write_settings_shape_a_failed_read_then_a_good_one_saves_nothing() {
+        let dir = temp_dir("t441b-write");
+        let store = std::sync::Mutex::new(Store::open(&dir).unwrap());
+        store.lock().unwrap().save_settings(&serde_json::json!({ "theme": "classic", "apiKey": "sealed" })).unwrap();
+        let good = fs::read(dir.join("settings.json")).unwrap();
+        fs::write(dir.join("settings.json"), b"{ half a file").unwrap();
+        let set = serde_json::Map::from_iter([("uiLook".into(), serde_json::json!("new"))]);
+        let s = store.lock().unwrap();
+        let old = s.settings();
+        fs::write(dir.join("settings.json"), &good).unwrap();
+        let value = crate::secrets::keep_stored_secrets(&old, patched(old.clone(), &set, &[]));
+        assert!(s.save_settings(&value).is_err(), "the save built on defaults is refused");
+        assert_eq!(fs::read(dir.join("settings.json")).unwrap(), good, "the real file is kept");
+        // The next write_settings reads the mended file and keeps every key.
+        let old = s.settings();
+        s.save_settings(&crate::secrets::keep_stored_secrets(&old, patched(old.clone(), &set, &[]))).unwrap();
+        let now = s.settings();
+        assert_eq!((now["theme"].as_str(), now["uiLook"].as_str()), (Some("classic"), Some("new")));
+        drop(s);
+        drop(store);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 }

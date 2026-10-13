@@ -1503,12 +1503,20 @@ fn forget_record(repo: &Path, path: &str) -> Result<(), String> {
     Err(format!("no record of {path}"))
 }
 
-/// APP-051 at launch, off the startup path: every project's gone worktrees are forgotten.
+/// T-441-c: the worktrees among `all` that Kolux RS made itself, by the origin record it keeps for
+/// each one it creates (the same test as trust::made_by_kolux). Txais, 2026-10-13: "Only Kolux's
+/// own": a worktree made by Claude Code or any other tool is never forgotten, folder gone or not.
+fn kolux_made(origins: &serde_json::Map<String, serde_json::Value>, all: Vec<Worktree>) -> Vec<Worktree> {
+    all.into_iter().filter(|w| origins.contains_key(&name_key(&w.path))).collect()
+}
+
+/// APP-051 at launch, off the startup path: every project's gone worktrees that Kolux RS made are
+/// forgotten.
 pub fn forget_gone_at_start(app: tauri::AppHandle) {
     use tauri::Manager;
     std::thread::spawn(move || {
-        let projects = match app.state::<Mutex<Store>>().lock() {
-            Ok(store) => load_projects(&store),
+        let (projects, origins) = match app.state::<Mutex<Store>>().lock() {
+            Ok(store) => (load_projects(&store), load_origins(&store)),
             Err(_) => return,
         };
         let busy: Vec<String> = app.state::<crate::terminal::Terminals>().list().into_iter().filter_map(|(_, _, dir)| dir).collect();
@@ -1516,7 +1524,7 @@ pub fn forget_gone_at_start(app: tauri::AppHandle) {
         for p in projects {
             let repo = Path::new(&p.path);
             if let Ok(all) = git.worktrees(repo) {
-                for path in forget_gone(repo, &all, &busy) {
+                for path in forget_gone(repo, &kolux_made(&origins, all), &busy) {
                     if let Ok(dir) = app.path().app_data_dir() {
                         crate::diag::write(&dir, &format!("forgot the worktree {path}: its folder is gone and no session uses it"));
                     }
@@ -1558,6 +1566,30 @@ mod tests {
         assert!(!left.iter().any(|p| p.ends_with("gone")), "{left:?}");
         assert!(base.join("here").join("a.txt").exists());
         git_in(&repo, &["rev-parse", "--verify", "refs/heads/gone"]);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn t441c_the_launch_sweep_forgets_only_worktrees_kolux_made() {
+        let base = temp("t441c-sweep");
+        let repo = base.join("r");
+        init_repo(&repo);
+        for w in ["ours", "theirs"] {
+            git_in(&repo, &["worktree", "add", "-q", &base.join(w).to_string_lossy(), "-b", w]);
+        }
+        let store = Store::open(&base.join("db")).unwrap();
+        set_origin(&store, &base.join("ours").to_string_lossy(), Some(&serde_json::json!({ "madeBy": "app" }))).unwrap();
+        fs::remove_dir_all(base.join("ours")).unwrap();
+        fs::remove_dir_all(base.join("theirs")).unwrap();
+        let git = Git::detect().unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let forgot = forget_gone(&repo, &kolux_made(&load_origins(&store), all), &[]);
+        assert_eq!(forgot.len(), 1, "{forgot:?}");
+        assert!(name_key(&forgot[0]).ends_with("ours"));
+        let left: Vec<String> = git.worktrees(&repo).unwrap().iter().map(|w| name_key(&w.path)).collect();
+        assert!(left.iter().any(|p| p.ends_with("theirs")), "the record another tool made is untouched: {left:?}");
+        assert!(!left.iter().any(|p| p.ends_with("ours")), "{left:?}");
+        drop(store);
         let _ = fs::remove_dir_all(&base);
     }
 
