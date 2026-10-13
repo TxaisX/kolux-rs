@@ -25,6 +25,7 @@ import TopBar, { screens, type Screen } from "./chrome/TopBar";
 import SettingsPage from "./settings/SettingsPage";
 import CloseAsk from "./terminal/CloseAsk";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
+import { closeSet, returnTab, type Which } from "./terminal/tabClose";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, titleBarButton } from "./settings/general";
@@ -41,7 +42,7 @@ import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
-import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking } from "./terminal/grid";
+import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, resizePlan, rowsFor, splitIndex, toggleCard, blocking } from "./terminal/grid";
 import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
@@ -77,7 +78,7 @@ import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, modelArgs, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
-import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
+import { Kbd, KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
 import { useUsageAlerts } from "./usage/alerts";
@@ -165,6 +166,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const p = panes.find((x) => x.key === focused);
     if (p) setActiveTab((m) => (m[groupOf(p)] === focused ? m : { ...m, [groupOf(p)]: focused }));
   }, [focused, panes]);
+  useEffect(() => {
+    recentTabs.current = [focused, ...recentTabs.current.filter((k) => k !== focused)].slice(0, 50);
+  }, [focused]);
   // The workspace the grid shows; null is the home group (panes opened in no workspace).
   const [activeDir, setActiveDir] = useState<string | null>(null);
   const [running, setRunning] = useState<Record<number, boolean>>({});
@@ -210,6 +214,14 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const rowRef = useRef<Record<string, RowInfo>>({}); // PROJ-063: each folder's last row state, to keep its `changed` time
   const ptys = useRef<Record<number, number>>({}); // TERM-045: each pane's session id
   const [asking, setAsking] = useState<{ keys: number[]; title: string; body: string } | null>(null);
+  const [tabMenu, setTabMenu] = useState<{ key: number; top: number; left: number } | null>(null); // TERM-049: the right-clicked tab
+  const recentTabs = useRef<number[]>([]); // TERM-044: panes focused, newest first, so a closed tab returns to the one used before it
+  useEffect(() => {
+    if (!tabMenu) return;
+    const h = (e: KeyboardEvent) => e.key === "Escape" && setTabMenu(null);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [tabMenu]);
   const [titles, setTitles] = useState<Record<number, string>>({}); // browser tabs' page titles
   const [allAgents, setAgents] = useState<AgentInfo[]>([]);
   const [settings, setSettings] = useState<Record<string, unknown>>(initial);
@@ -431,6 +443,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         case "terminal.closePane":
           if (!inFront) return;
           closePane(focused);
+          break;
+        case "tab.closeAll":
+          // TERM-044: every tab of the focused pane's strip, through one close question.
+          if (!inFront) return;
+          void closeTab(closeSet(orderOf(focused), focused, "all"));
           break;
         case "terminals.focusNextNeedsYou": {
           // TERM-030: cycle through the panes waiting on the user in grid order, across workspaces;
@@ -841,21 +858,25 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     };
   };
 
-  const dropPane = (key: number) => {
-    delete ptys.current[key];
-    setPanes((ps) => ps.filter((p) => p.key !== key));
-    setRunning((r) => {
-      const { [key]: _gone, ...rest } = r;
-      return rest;
+  /** TERM-044: the tab strip's order for the cell holding pane `key`. */
+  const orderOf = (key: number) => {
+    const p = panes.find((x) => x.key === key);
+    return p ? panes.filter((x) => groupOf(x) === groupOf(p)).map((x) => x.key) : [];
+  };
+  // TERM-044: the closed tabs leave together; focus returns to the tab used before the active one,
+  // else its right neighbour (left if it was last), never to a tab that is closing.
+  const dropPanes = (keys: number[]) => {
+    const gone = new Set(keys);
+    keys.forEach((k) => delete ptys.current[k]);
+    setPanes((ps) => ps.filter((p) => !gone.has(p.key)));
+    setRunning((r) => Object.fromEntries(Object.entries(r).filter(([k]) => !gone.has(Number(k)))));
+    setDirty((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !gone.has(Number(k)))));
+    const rest = panes.filter((p) => !gone.has(p.key));
+    setFocused((f) => {
+      if (!gone.has(f)) return f;
+      const next = returnTab(orderOf(f), [f, ...keys.filter((k) => k !== f)], recentTabs.current);
+      return next ?? focusIn(rest, activeDir, f);
     });
-    setDirty((d) => {
-      const { [key]: _gone, ...rest } = d;
-      return rest;
-    });
-    const gone = panes.find((p) => p.key === key);
-    const rest = panes.filter((p) => p.key !== key);
-    const next = gone ? neighbourTab(rest.filter((p) => groupOf(p) === groupOf(gone)).map((p) => p.key).concat(key), key) : null;
-    setFocused((f) => (f === key ? (next ?? focusIn(rest, activeDir, f)) : f));
   };
 
   // TERM-045: every close (keyboard, a tab's x, the pane header) asks first when a program would
@@ -865,7 +886,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const first = panes.find((p) => p.key === keys[0]);
     const ids = keys.map((k) => ptys.current[k]).filter((id): id is number => id !== undefined);
     const busy = asksBeforeClose(settings) ? await busyCount(ids, (ids) => invoke<boolean[]>("terminal_busy", { ids })) : 0;
-    if (busy === 0 || !first) return keys.forEach(dropPane);
+    if (busy === 0 || !first) return dropPanes(keys);
     setAsking({ keys, ...closeQuestion(tabName(first, titles), busy, keys.length) });
   };
   const closePane = (key: number) => void closeTab([key]);
@@ -1106,10 +1127,53 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             body={asking.body}
             onCancel={() => setAsking(null)}
             onConfirm={() => {
-              asking.keys.forEach(dropPane);
+              dropPanes(asking.keys);
               setAsking(null);
             }}
           />
+        )}
+        {tabMenu && (
+          // TERM-049 / TERM-044: close items only; the close question (TERM-045) covers the whole set at once.
+          <>
+            <div
+              className="menu-backdrop"
+              aria-hidden="true"
+              onClick={() => setTabMenu(null)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTabMenu(null);
+              }}
+            />
+            <div className="menu" role="menu" aria-label="Tab" style={{ top: tabMenu.top, left: tabMenu.left }}>
+              {(
+                [
+                  ["Close", "one"],
+                  ["Close others", "others"],
+                  ["Close to the right", "right"],
+                  ["Close to the left", "left"],
+                  ["Close all", "all"],
+                ] as [string, Which][]
+              ).map(([label, which]) => {
+                const keys = closeSet(orderOf(tabMenu.key), tabMenu.key, which);
+                return (
+                  <button
+                    key={which}
+                    role="menuitem"
+                    className="menu-item"
+                    disabled={keys.length === 0}
+                    onClick={() => {
+                      setTabMenu(null);
+                      void closeTab(keys);
+                    }}
+                  >
+                    <span className="name">{label}</span>
+                    {which === "one" && <Kbd id="tab.close" />}
+                    {which === "all" && <Kbd id="tab.closeAll" />}
+                  </button>
+                );
+              })}
+            </div>
+          </>
         )}
         {settingsOpen && <SettingsPage onClose={() => setSettingsOpen(false)} target={settingsAt.target} n={settingsAt.n} />}
         {(terminals || screen === "artifacts") && sidebarOpen && (
@@ -1303,7 +1367,26 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     {c.panes.length > 1 && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
-                          <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
+                          <div
+                            key={p.key}
+                            role="tab"
+                            aria-selected={p.key === active}
+                            className="tab"
+                            tabIndex={0}
+                            onMouseDown={() => setFocused(p.key)}
+                            onContextMenu={(e) => {
+                              // TERM-049: the tab menu opens where the pointer is; this click never closes it.
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setTabMenu({ key: p.key, top: e.clientY, left: e.clientX });
+                            }}
+                            onAuxClick={(e) => {
+                              // TERM-049: middle-click closes the tab (pinned tabs, once they exist, are exempt).
+                              if (e.button !== 1) return;
+                              e.preventDefault();
+                              closePane(p.key);
+                            }}
+                          >
                             {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}

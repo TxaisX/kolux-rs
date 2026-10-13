@@ -485,6 +485,9 @@ Rules: close tab Cmd/Ctrl+W (closes the focused pane when the tab is split); clo
   worktree open; Close to the left is also in the tab menu; closing the active tab returns to the
   tab used before it, otherwise to its right neighbour (left if it was last); when nothing is left
   open, the workspace shows its empty start view.
+  (Kolux RS, T-102-a: the five close items live in the tab's right-click menu, a bulk close is one
+  TERM-045 question for the whole set, and `tab.closeAll` on Ctrl+Alt+W closes the focused strip;
+  pinned tabs do not exist yet, so nothing is spared until the pin task lands.)
 Acceptance:
   - [ ] Close to the right on the last tab is disabled.
   - [ ] Closing the active tab returns to the tab that was used just before it.
@@ -499,6 +502,8 @@ User sees: pin or unpin, Change Title, Tab Color, split, close, close others, cl
   close to the left.
 Rules: directional close items are disabled when there is nothing to close; split actions move the
   tab into a split view; middle-click closes an unpinned tab.
+  (Kolux RS, T-102-a: the close items and middle-click are in; pin, title, colour and split items
+  follow with the rest of the menu.)
 Acceptance:
   - [ ] The first tab has close-to-the-left (if present) disabled.
   - [ ] Middle-clicking an unpinned tab closes it.
