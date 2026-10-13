@@ -516,7 +516,7 @@ Rules: stale panes are matched by account identity, not by label; sign-in errors
   account's home is in place; if the original account's sign-in is still unavailable after about two
   seconds, the resume fails with a try-again message rather than carrying on as another account.
   (Kolux RS, T-139-b: a pane keeps the account id it started on and a restart hands it back to
-  `terminal_spawn`, which waits up to 2 s for that account's home; an account no longer listed
+  the pane start, which waits up to 2 s for that account's home; an account no longer listed
   refuses the start with a try-again message. Panes are not yet restored across a Kolux restart
   and sign-in errors printed in a pane are not scanned, T-139-d.)
 Acceptance:

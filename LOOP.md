@@ -59,7 +59,7 @@ page, a public doc), append a dated line. This file is the evidence that the wor
 Keep it honest.
 
 **Licenses of dependencies:** only MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0 or Unicode. Enforce with
-`cargo deny check licenses` and a JS license check in CI. Third-party libraries are fine; they keep
+`cargo deny check` and a JS license check in CI. Third-party libraries are fine; they keep
 their own notices inside their packages and do not change who owns this code.
 
 `LICENSE` at the repo root reads exactly:
@@ -138,7 +138,7 @@ Then build `BEYOND.md` items one per pass, same rules as Phase 3.
 3. Take the next unchecked task. Read only the files it needs (grep first, then read with offset/limit).
 4. Write the failing test or acceptance check first, then the code.
 5. **Prove it**, fresh, this pass: `cargo build`, `cargo clippy -- -D warnings`, `cargo test`,
-   `pnpm test`, `cargo deny check licenses`, and for anything visible, launch the app and take a
+   `pnpm test`, `cargo deny check`, and for anything visible, launch the app and take a
    screenshot into `evidence/<task-id>.png`. "Should work" is not proof. If a check fails, fix it
    or revert, never skip or weaken a test.
 6. Commit locally with a message saying what the user can now do. End the message with:
