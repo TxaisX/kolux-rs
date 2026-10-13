@@ -278,7 +278,7 @@ fn nearest<'a>(typed: &str, from: impl IntoIterator<Item = &'a str>) -> Option<&
 /// The words as one line to run again, quoting any word with a space in it.
 fn line(words: &[String]) -> String {
     let quoted: Vec<String> = words.iter().map(|w| if w.contains(char::is_whitespace) { format!("\"{w}\"") } else { w.clone() }).collect();
-    format!("kolux-dev {}", quoted.join(" "))
+    format!("{} {}", crate::orchestration::CLI, quoted.join(" "))
 }
 
 /// CLI-003: a command path nothing answers to. A wrong group is matched against group names, a
@@ -305,11 +305,11 @@ fn command_typo(words: &[String], path: &[String], at: &[usize], all: &[Command]
         (&path[0], fix)
     } else if path.len() == 1 {
         let mut f = Fail::args(format!("`{joined}` needs a command after it: {}", verbs(&path[0]).join(", ")));
-        f.data = json!({ "unknown": joined, "command": joined, "suggestions": [], "nextSteps": ["kolux-dev --help"] });
+        f.data = json!({ "unknown": joined, "command": joined, "suggestions": [], "nextSteps": [format!("{} --help", crate::orchestration::CLI)] });
         return f;
     } else if verbs(&path[0]).contains(&path[1].as_str()) {
         let mut f = Fail::args(format!("unknown command `{joined}`: `{}` is not part of {} {}", path[2], path[0], path[1]));
-        f.data = json!({ "unknown": path[2], "command": joined, "suggestions": [], "nextSteps": ["kolux-dev --help"] });
+        f.data = json!({ "unknown": path[2], "command": joined, "suggestions": [], "nextSteps": [format!("{} --help", crate::orchestration::CLI)] });
         return f;
     } else {
         (&path[1], nearest(&path[1], verbs(&path[0])).map(|v| vec![path[0].clone(), v.to_string()]))
@@ -325,9 +325,9 @@ fn command_typo(words: &[String], path: &[String], at: &[usize], all: &[Command]
             }
             vec![line(&w)]
         }
-        _ => vec!["kolux-dev --help".to_string()],
+        _ => vec![format!("{} --help", crate::orchestration::CLI)],
     };
-    let tail = said.as_ref().map(|p| format!("; did you mean {p}?")).unwrap_or_else(|| "; run kolux-dev --help".into());
+    let tail = said.as_ref().map(|p| format!("; did you mean {p}?")).unwrap_or_else(|| format!("; run {} --help", crate::orchestration::CLI));
     let mut f = Fail::args(format!("unknown command `{joined}`: `{unknown}` is not a command word here{tail}"));
     f.data = json!({ "unknown": unknown, "command": joined, "suggestions": said.into_iter().collect::<Vec<_>>(), "nextSteps": next });
     f
@@ -1403,7 +1403,7 @@ const GLOBAL: &str = "Global options (every command): --help or -h prints help f
 /// CLI-001: help for a group or a command, cut from the usage list (an entry is a usage line and
 /// the indented lines under it). An alias shows the command it stands for. A path nothing answers
 /// to gets the closest help there is, a suggestion and exit status 1.
-fn help(path: &[String]) -> (String, i32) {
+fn help_raw(path: &[String]) -> (String, i32) {
     let (title, rest) = HELP.split_once("\n\n").unwrap_or((HELP, ""));
     let (body, footer) = rest.rsplit_once("\n\n").unwrap_or((rest, ""));
     let mut entries: Vec<String> = Vec::new();
@@ -1443,9 +1443,20 @@ fn help(path: &[String]) -> (String, i32) {
         (false, Some(verb)) => nearest(verb, in_group.iter().copied()).map(|v| format!("{group} {v}")),
         _ => nearest(group, tops.iter().copied()).map(String::from),
     };
-    let base = guess.as_deref().and_then(|g| page(g.split(' ').next().unwrap_or(g))).or_else(|| page(group)).unwrap_or_else(|| help(&[]).0);
+    let base = guess.as_deref().and_then(|g| page(g.split(' ').next().unwrap_or(g))).or_else(|| page(group)).unwrap_or_else(|| help_raw(&[]).0);
     let tip = guess.map_or(String::new(), |g| format!("; did you mean kolux-dev {g}?"));
     (format!("no command or group is called kolux-dev {typed}{tip}\n\n{base}"), 1)
+}
+
+/// CLI-001 help under the name this build answers to: `kolux` in a release build, `kolux-dev`
+/// in a development one (`orchestration::CLI`). The usage list is written once, as `kolux-dev`.
+fn help(path: &[String]) -> (String, i32) {
+    let (text, code) = help_raw(path);
+    (named(&text, crate::orchestration::CLI), code)
+}
+
+fn named(text: &str, cli: &str) -> String {
+    text.replace("kolux-dev", cli)
 }
 
 /// The `kolux-dev` program: parses, talks to the app, prints, and returns the exit status.
@@ -1494,7 +1505,7 @@ pub fn main(words: Vec<String>) -> i32 {
                     eprintln!("{h}");
                 }
                 if f.code == "invalid_arguments" {
-                    eprintln!("run kolux-dev --help for the usage");
+                    eprintln!("run {} --help for the usage", crate::orchestration::CLI);
                 }
                 1
             }
@@ -4854,5 +4865,21 @@ mod tests {
         let p = parse(&words("status --json"));
         assert_eq!((p.0, p.1.unwrap().unwrap().command), (true, STATUS.to_string()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn usage_text_names_the_program_this_build_answers_to() {
+        let (all, code) = help(&[]);
+        assert_eq!(code, 0);
+        assert!(all.starts_with(&format!("{}: drive Kolux", crate::orchestration::CLI)), "{all}");
+        assert!(all.contains(&format!("  {} status [--json]", crate::orchestration::CLI)), "{all}");
+        // A release build answers to `kolux`: not one help line may tell the user to type kolux-dev.
+        let release = named(&help_raw(&[]).0, "kolux");
+        assert!(release.contains("  kolux --version") && release.contains("  kolux status [--json]"), "{release}");
+        assert!(!release.contains("kolux-dev"), "{release}");
+        let scoped = named(&help_raw(&words("worktree")).0, "kolux");
+        assert!(scoped.starts_with("kolux worktree") && !scoped.contains("kolux-dev"), "{scoped}");
+        let typo = named(&help_raw(&words("wrktree")).0, "kolux");
+        assert!(typo.contains("did you mean kolux worktree") && !typo.contains("kolux-dev"), "{typo}");
     }
 }
