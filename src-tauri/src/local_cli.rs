@@ -154,6 +154,8 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("orchestration task-update", "Move a task to another state; its worker is settled with it."),
     ("orchestration worker-abandon", "Give up on a worker; its task goes back to ready."),
     ("orchestration worker-stop", "End a worker's agent terminal and keep its worktree."),
+    ("orchestration worker-list", "List workers with what is left of their terminals and the next command to run."),
+    ("orchestration worker-retain", "Keep a settled worker's terminal open on purpose, across restarts."),
     ("automations list", "List the automations."),
     ("automations show", "Show one automation."),
     ("automations runs", "List an automation's runs, newest first."),
