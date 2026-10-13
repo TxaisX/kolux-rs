@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { capOn, contextFill, meterOf, meterText, planOf, shortTokens, tone } from "./meter";
+import { capOn, contextFill, percentMode, shownPercent, meterOf, meterText, planOf, shortTokens, tone } from "./meter";
 import Ring from "./Ring";
 import type { ClaudeLimit } from "./claude";
 import type { CodexUsage } from "./codex";
@@ -52,4 +52,16 @@ test("the ring fills with the percentage and turns with it (USAGE-003)", () => {
   expect(html).toContain("<title>Context 84k / 200k (42%)</title>");
   expect(html).not.toContain("42%<");
   expect(renderToString(createElement(Ring, { percent: 95 }))).toContain('class="ring danger"');
+});
+
+test("T-263 USAGE-025: usage percentages read as used or left; missing or unknown means used, a broken value reads 0", () => {
+  expect(percentMode(undefined)).toBe("used");
+  expect(percentMode("left-ish")).toBe("used");
+  expect(percentMode("remaining")).toBe("remaining");
+  expect(shownPercent(30, "remaining")).toBe(70);
+  expect(shownPercent(30, "used")).toBe(30);
+  expect(shownPercent(29.6, "used")).toBe(30);
+  expect(shownPercent(140, "remaining")).toBe(0);
+  expect(shownPercent(-5, "used")).toBe(0);
+  expect(shownPercent(Number.NaN, "remaining")).toBe(0);
 });

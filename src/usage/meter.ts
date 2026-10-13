@@ -31,6 +31,18 @@ export function shortTokens(n: number): string {
 /** USAGE-002: yellow at 70%, red past 90%, the same scale on the card bar and the pane header. */
 export const tone = (percent: number): "" | "warn" | "danger" => (percent > 90 ? "danger" : percent >= 70 ? "warn" : "");
 
+/** USAGE-025: the Appearance choice of how plan percentages read; missing or unknown means used. */
+export const PERCENT_FIELD = "usagePercentages";
+export type PercentMode = "used" | "remaining";
+export const percentMode = (v: unknown): PercentMode => (v === "remaining" ? "remaining" : "used");
+/** A used percentage as the choice reads it: rounded, held to 0..100, a broken value 0. Only the
+ *  Agents screen's usage footer (T-040-b) follows it; the top pill always reads left. */
+export function shownPercent(used: number, mode: PercentMode): number {
+  if (!Number.isFinite(used)) return 0;
+  const u = Math.min(100, Math.max(0, Math.round(used)));
+  return mode === "remaining" ? 100 - u : u;
+}
+
 const pct = (n: number | undefined) => (n === undefined || !Number.isFinite(n) ? null : Math.min(100, Math.max(0, Math.round(n))));
 
 /** The plan figures for a session's agent: Claude to the Claude account, Codex to Codex, none for the rest or when the read failed. */

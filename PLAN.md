@@ -514,7 +514,9 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 4 · Accounts, sign-in and usage limits (9 cards)
 
-- [ ] T-263 · USAGE-019 Share a usage card as a picture or a post · USAGE-024 Reset times count down live · USAGE-025 Choose whether usage reads as used or left · USAGE-026 [compat] Gemini and Antigravity quota reading · USAGE-027 [compat] Kimi and MiniMax quota reading
+- [x] T-263 · USAGE-019 Share a usage card as a picture or a post · USAGE-024 Reset times count down live · USAGE-025 Choose whether usage reads as used or left · USAGE-026 [compat] Gemini and Antigravity quota reading · USAGE-027 [compat] Kimi and MiniMax quota reading (built: USAGE 024 and USAGE 025; the share card is T-263-b and the other providers' quota is T-263-c)
+- [ ] T-263-b · USAGE 019 rest: the usage card as a picture (drawn on a canvas, copied to the clipboard as an image) and Share on X, which opens the post in the browser
+- [ ] T-263-c · USAGE 026 / USAGE 027 rest: Gemini and Antigravity quota, Kimi and MiniMax quota; waits on OD-01 (Kolux does not call providers' usage services) and on public docs for each
 - [ ] T-264 · ACCT-022 Choose which Codex folder past sessions come from · ACCT-028 [compat] MiniMax credentials for usage tracking · ACCT-029 [compat] Use Gemini CLI credentials (experimental)
 - [ ] T-265 · SET-059 Optional prompt-cache countdown once a Claude agent goes idle
 
