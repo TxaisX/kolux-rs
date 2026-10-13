@@ -184,6 +184,10 @@ input { font: inherit; }
 .note { font-size: 12px; padding: 4px 9px; word-break: break-all; line-height: 1.4; }
 .note.ok { color: var(--done); }
 .note.warn { color: #e2c06a; }
+.note .git-output summary { cursor: pointer; margin-top: 3px; }
+.note .git-output pre { max-height: 10em; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 3px 0 0; font: 11px/1.4 var(--mono, ui-monospace, monospace); }
+.hint.push { flex: none; font-size: 11px; font-weight: 400; color: var(--fg-muted); }
+.hint.push.synced { opacity: 0.6; }
 .note.error { color: #f0a07a; }
 .field.multi { height: auto; min-height: 44px; padding: 4px 8px; resize: vertical; font: inherit; font-size: 12px; }
 .preview { color: var(--fg-label); word-break: break-all; line-height: 1.4; }

@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { SUMMARY_UPSTREAM_KEY } from "../scm/model";
-import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
+import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, failureOf, pushLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
 import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
@@ -112,6 +112,16 @@ const noteRecent = (id: string) => {
   }
 };
 
+/** PROJ-064: the row's "2 ahead", "in sync" or "unpublished" hint. */
+function pushHint(w: Worktree) {
+  const pushed = pushLabel(w.push);
+  return pushed && (
+    <span className={`hint push${w.push?.upstream && !w.push.ahead ? " synced" : ""}`} title={pushed.title}>
+      {pushed.text}
+    </span>
+  );
+}
+
 export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
@@ -155,7 +165,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
-  const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string; detail?: string | null } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
   const indexed = useRef(""); // the last project list and owner map handed to the window
   const [filterOpen, setFilterOpen] = useState(false);
@@ -197,7 +207,11 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   }, [states, activeDir, onUnread]);
 
   const say = (kind: "ok" | "warn" | "error", text: string) => setMessage({ kind, text });
-  const fail = (err: unknown) => say("error", String(err));
+  // PROJ-031: a failed create carries Git's full output, which the note can open.
+  const fail = (err: unknown) => {
+    const f = failureOf(err);
+    setMessage({ kind: "error", text: f.text, detail: f.detail });
+  };
 
   const scanned = useRef<Record<string, Worktree[]>>({}); // ACCT-056: the last list each scan gave
   const refreshWorktrees = useCallback(async (list: Project[]) => {
@@ -210,7 +224,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
       } catch (err) {
         // ACCT-056: a failed scan removes nothing; the worktrees already known stay listed.
         next[p.id] = afterScan(scanned.current[p.id], null);
-        say("warn", `Could not list the worktrees of ${p.name}, so the last known list stays: ${String(err)}`);
+        // PROJ-031: the 5 s refresh never covers an error the user has not read yet.
+        const text = `Could not list the worktrees of ${p.name}, so the last known list stays: ${String(err)}`;
+        setMessage((m) => (m?.kind === "error" ? m : { kind: "warn", text }));
       }
     }
     scanned.current = next;
@@ -823,6 +839,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           )}
           <span className={`dot ${info.state}${isActive(w) ? " live" : ""}`} role="img" aria-label={isActive(w) || info.state !== "idle" ? info.state : "idle"} data-tip={VOCAB[info.state].explain} />
           <span className="name">{worktreeLabel(w)}</span>
+          {pushHint(w)}
           {w.kind === "external" && (
             <span className="hint" title="Made outside Kolux (plain Git or another tool); Kolux has no record of making it">
               external
@@ -1098,6 +1115,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                     <button className={`branch${isSelected(main) ? " sel" : ""}`} onClick={() => show(main)} title={`Show ${main.path}`}>
                       <span className={`dot ${infoOf(main).state}${isActive(main) ? " live" : ""}`} role="img" aria-label={infoOf(main).state} data-tip={VOCAB[infoOf(main).state].explain} />
                       <span className="name">{worktreeLabel(main)}</span>
+                      {pushHint(main)}
                       {isActive(main) && <span className="count">{openCount(main)}</span>}
                       <span className="chev">
                         <ChevronDown size={12} />
@@ -1176,7 +1194,17 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               </div>
             ))}
 
-          {message && <div className={`note ${message.kind}`}>{message.text}</div>}
+          {message && (
+            <div className={`note ${message.kind}`}>
+              {message.text}
+              {message.detail && (
+                <details className="git-output">
+                  <summary>Git's output</summary>
+                  <pre>{message.detail}</pre>
+                </details>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="sb-divider" />

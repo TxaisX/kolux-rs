@@ -327,7 +327,8 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P1 · theme 9 · Reliability and no lost work (93 cards)
 
-- [ ] T-161 · PROJ-027 [compat] Worktree work on cloud-synced folders fails fast instead of hanging · PROJ-031 Workspace-creation errors say what kind of problem it was · PROJ-064 Rows show commits not yet pushed · PROJ-068 Workspace records survive refreshes, renames and re-adds · PROJ-072 Recover from a failed delete
+- [x] T-161-a · PROJ-027 [compat] Worktree work on cloud-synced folders fails fast instead of hanging · PROJ-031 Workspace-creation errors say what kind of problem it was · PROJ-064 Rows show commits not yet pushed
+- [ ] T-161-b · PROJ-068 Workspace records survive refreshes, renames and re-adds · PROJ-072 Recover from a failed delete (T-161 split; the rest of it built in T-161-a)
 - [ ] T-162 · PROJ-073 Branches stay when a workspace was opened on an existing branch · PROJ-074 Deleted folders go to a hidden trash and are cleared in the background · PROJ-080 Workspace cleanup: scan for stale and merged workspaces
 - [ ] T-163 · SESS-005 The user hears about an agent that will not start · SESS-032 The opening prompt reaches the agent exactly once, or the user is told
 - [ ] T-164 · TERM-047 [compat] Reopen a closed tab · TERM-071 Large pastes stay responsive · TERM-090 Scroll position: follow output or stay put · TERM-107 Restored-session banner · TERM-108 Background host updates without losing sessions

@@ -1,0 +1,36 @@
+T-161-a live proof, lane release dev app (port 1422), lane profile backed up and restored (cmp: all same).
+Repos in G:/Temp/release-T-161: stall (a post-checkout hook that sleeps 240 s stands in for a synced folder that stalls Git),
+push (a local bare remote, main 2 commits ahead). KOLUX_WORKTREE_ADD_TIMEOUT_MS unset, so the add limit is 3 min.
+Run 1 (first build, taskkill /T only): the error came at 180.6 s and the window kept answering, but the hook's sleep.exe
+outlived the stop (a hook's shell starts programs outside git's Windows process tree), so git now runs in a job object.
+Run 2 (job-object build): the error came at 180.5 s, every probe answered in about 110 ms, and the hook was gone.
+The two 'no note' lines: the sidebar's 5 s refresh covered the create error with the stale 'repo' project's warning;
+fixed (an error stays until read), and the last block is the same create after the fix.
+17:37:38
+"started 5:37:38 PM"
+"{\"at\":\"15s\",\"listMs\":144,\"settingsMs\":2,\"stall\":null,\"rows\":1}"
+"{\"at\":\"31s\",\"listMs\":110,\"settingsMs\":2,\"stall\":null,\"rows\":1}"
+"{\"at\":\"46s\",\"listMs\":109,\"settingsMs\":2,\"stall\":null,\"rows\":1}"
+"{\"at\":\"185s\",\"stall\":{\"err\":{\"kind\":\"git\",\"message\":\"Git could not make the workspace (git worktree add did not finish within 3 min and was stopped. A folder kept in sync by OneDrive or a similar service can stall Git; try again, or use a folder outside it). Git's full output is below.\",\"detail\":\"git worktree add did not finish within 3 min and was stopped. A folder kept in sync by OneDrive or a similar service can stall Git; try again, or use a folder outside it\"},\"ms\":180615}}"
+--- rebuilt with the job-object stop 17:48:37
+{"result":{"type":"object","subtype":"error","className":"SyntaxError","description":"SyntaxError: missing ) after argument list","objectId":"6564250207386393243.2.1"},"exceptionDetails":{"exceptionId":1,"text":"Uncaught","lineNumber":0,"columnNumber":124,"scriptId":"209","exception":{"type":"object","subtype":"error","className":"SyntaxError","description":"SyntaxError: missing ) after argument list","objectId":"6564250207386393243.2.2"}}}
+"{\"stall\":\"stall-1791851851439\",\"push\":\"push-1791851851591\"} started 5:48:43 PM"
+"{\"at\":\"29s\",\"workspaceListMs\":110,\"projectListMs\":3,\"stall\":null,\"push\":[[\"main\",{\"ahead\":2,\"upstream\":true}]]}"
+"{\"at\":\"50s\",\"workspaceListMs\":109,\"projectListMs\":2,\"stall\":null,\"push\":[[\"main\",{\"ahead\":2,\"upstream\":true}]]}"
+"{\"at\":\"194s\",\"stall\":{\"err\":{\"kind\":\"git\",\"message\":\"git worktree add did not finish within 3 min and was stopped. A folder kept in sync by OneDrive or a similar service can stall Git; try again, or use a folder outside it.\",\"detail\":\"git worktree add did not finish within 3 min and was stopped. A folder kept in sync by OneDrive or a similar service can stall Git; try again, or use a folder outside it\"},\"ms\":180545}}"
+
+ProcessId CommandLine                               
+--------- -----------                               
+    44464 "C:\Program Files\Git\usr\bin\sleep.exe" 5
+
+
+
+(sleep 240 hook gone after the stop: only another lane's sleep 5 is listed)
+--- push proof 17:52:39
+"2 ahead ; unpublished · 1"
+git push done 17:52:39
+"in sync | Every commit is pushed ; unpublished · 1 | This branch has no upstream yet; 1 commit on no remote"
+"no note"
+"no note"
+--- name in use, through the create form 18:04:46
+"That name is in use ('main' is already used by worktree at 'G:/Temp/release-T-161/push'). Pick another name, or open the branch where it is already checked out.\nGit's output\nPreparing worktree (checking out 'main')\nfatal: 'main' is already used by worktree at 'G:/Temp/release-T-161/push'"

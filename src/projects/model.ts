@@ -15,7 +15,30 @@ export function placeFieldAction(key: string, composing: boolean): "save" | "rev
   return key === "Enter" ? "save" : key === "Escape" ? "revert" : null;
 }
 /** `parent` is the workspace it was made from (PROJ-047); gone or main means it sits at the top level. */
-export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null; hidden?: boolean; kind?: "main" | "managed" | "external" | ""; source?: string | null };
+export type Worktree = { path: string; branch: string | null; head: string; isMain: boolean; name?: string | null; parent?: string | null; hidden?: boolean; kind?: "main" | "managed" | "external" | ""; source?: string | null; push?: Push | null };
+
+/** PROJ-064: commits not pushed; without an upstream, the commits on no remote. */
+export type Push = { ahead: number; upstream: boolean };
+
+/** PROJ-064: what a row says about its branch against the remote. */
+export function pushLabel(p: Push | null | undefined): { text: string; title: string } | null {
+  if (!p) return null;
+  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  if (!p.upstream) return { text: p.ahead ? `unpublished · ${p.ahead}` : "unpublished", title: `This branch has no upstream yet${p.ahead ? `; ${commits(p.ahead)} on no remote` : ""}` };
+  if (p.ahead) return { text: `${p.ahead} ahead`, title: `${commits(p.ahead)} not pushed yet` };
+  return { text: "in sync", title: "Every commit is pushed" };
+}
+
+/** PROJ-031: an error as the sidebar shows it: its words, and Git's full output when it carries it. */
+export function failureOf(err: unknown): { text: string; detail: string | null } {
+  if (err !== null && typeof err === "object" && "message" in err) {
+    const e = err as { message?: unknown; detail?: unknown };
+    const text = String(e.message ?? "");
+    const detail = typeof e.detail === "string" && e.detail.trim() !== "" && !text.includes(e.detail.trim()) ? e.detail : null;
+    return { text, detail };
+  }
+  return { text: String(err), detail: null };
+}
 
 /** SET-032 / PROJ-042: one visibility source; `own` is the project's choice over the global one. */
 export type VisSource = { key: string; label: string; global: boolean; own: boolean | null; root: string | null };

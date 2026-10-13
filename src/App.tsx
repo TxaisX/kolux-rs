@@ -78,7 +78,7 @@ import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./u
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+import { failureOf, folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
@@ -838,7 +838,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       setRefresh((n) => n + 1);
       setNotice(null);
     } catch (err) {
-      setNotice(String(err));
+      setNotice(failureOf(err).text);
     } finally {
       setLaunching(false);
     }
@@ -1064,7 +1064,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       setRefresh((n) => n + 1);
       setNotice(null);
     } catch (err) {
-      setNotice(String(err));
+      setNotice(failureOf(err).text);
     } finally {
       setLaunching(false);
     }

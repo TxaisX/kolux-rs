@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, failureOf, pushLabel } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -147,4 +147,19 @@ test("PROJ-048: a new parent is never the workspace itself, its parent, its desc
   expect(names(all[6])).toEqual(["p", "a", "kid", "grand", "b"]);
   // a parent that is no longer listed is not "the current parent"
   expect(names(w("lost", "gone"))).toEqual(["p", "a", "kid", "grand", "b", "loop1", "loop2"]);
+});
+
+test("PROJ-031: a failed create shows its words, and Git's output only when it adds something", () => {
+  expect(failureOf({ kind: "name", message: "That name is in use.", detail: "fatal: x already exists" })).toEqual({ text: "That name is in use.", detail: "fatal: x already exists" });
+  expect(failureOf({ kind: "other", message: "Gone.", detail: "Gone" })).toEqual({ text: "Gone.", detail: null });
+  expect(failureOf("plain words")).toEqual({ text: "plain words", detail: null });
+  expect(failureOf(new Error("boom")).text).toBe("boom");
+});
+
+test("PROJ-064: a row says how many commits are not pushed", () => {
+  expect(pushLabel(null)).toBeNull();
+  expect(pushLabel({ ahead: 2, upstream: true })).toEqual({ text: "2 ahead", title: "2 commits not pushed yet" });
+  expect(pushLabel({ ahead: 0, upstream: true })?.text).toBe("in sync");
+  expect(pushLabel({ ahead: 1, upstream: false })).toEqual({ text: "unpublished · 1", title: "This branch has no upstream yet; 1 commit on no remote" });
+  expect(pushLabel({ ahead: 0, upstream: false })?.text).toBe("unpublished");
 });

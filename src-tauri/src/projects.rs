@@ -308,7 +308,47 @@ pub fn workspace_set_parent(git: State<'_, Git>, store: StoreState<'_>, project_
 }
 
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
-    decorate(store, project, git.worktrees(Path::new(&project.path))?)
+    let repo = Path::new(&project.path);
+    let mut all = git.worktrees(repo)?;
+    // PROJ-064: each row says how its branch stands against the remote.
+    let branches: Vec<&str> = all.iter().filter_map(|w| w.branch.as_deref()).collect();
+    let push = git.push_states(repo, &branches);
+    for w in &mut all {
+        w.push = w.branch.as_ref().and_then(|b| push.get(b).cloned());
+    }
+    decorate(store, project, all)
+}
+
+/// PROJ-031: a create that failed, as the sidebar shows it: the kind of problem (name, base, git,
+/// permissions or other), what to try next, and Git's own output in full.
+#[derive(Debug, serde::Serialize)]
+pub struct CreateFailure {
+    pub kind: &'static str,
+    pub message: String,
+    pub detail: String,
+}
+
+pub fn create_failure(err: String) -> CreateFailure {
+    let low = err.to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| low.contains(w));
+    // Git's progress lines come first; the line that says what went wrong starts with fatal: or error:.
+    let lines = || err.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines().find(|l| l.starts_with("fatal: ") || l.starts_with("error: ")).or_else(|| lines().next()).unwrap_or_default();
+    let first = first.strip_prefix("fatal: ").or_else(|| first.strip_prefix("error: ")).unwrap_or(first).trim_end_matches('.');
+    let (kind, message) = if has(&["already exists", "already used by worktree", "already checked out", "is already registered", "cannot lock ref"]) {
+        ("name", format!("That name is in use ({first}). Pick another name, or open the branch where it is already checked out."))
+    } else if has(&["is not a branch, tag or commit", "no default branch", "invalid reference", "not a valid object name", "unknown revision"]) {
+        ("base", format!("The base to start from is missing ({first}). Pick another base, or fetch the repository and try again."))
+    } else if has(&["permission denied", "access is denied", "os error 5)", "operation not permitted", "read-only file system"]) {
+        ("permissions", format!("Kolux was not allowed to write there ({first}). Check the folder's permissions, or choose another workspaces folder in Settings."))
+    } else if has(&["did not finish within"]) {
+        ("git", format!("{first}."))
+    } else if has(&["fatal:", "error:", "git "]) {
+        ("git", format!("Git could not make the workspace ({first}). Git's full output is below."))
+    } else {
+        ("other", format!("The workspace was not made ({first})."))
+    };
+    CreateFailure { kind, message, detail: err }
 }
 
 /// A repo's scanned worktrees with what Kolux keeps about them: visibility, names and parents.
@@ -649,6 +689,7 @@ pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> 
 /// A workspace an agent launch makes for itself: a creature name nobody uses, branched from the
 /// main checkout, or from `base` when given (AUTO-005). The clock seeds the pick so launches do
 /// not always start at the same pair.
+#[cfg(test)]
 pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects: &[Project], project: &Project, base: Option<&str>) -> Result<Worktree, String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let name = fresh_name(git, store, projects, seed);
@@ -703,7 +744,7 @@ pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo))?;
+    git.worktree_add_existing(repo, &dest, branch)?;
     let warnings = crate::include::bring_along(repo, &dest);
     let worktree = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), &dest)).ok_or_else(|| "the worktree was created but Git does not list it".to_string())?;
     Ok(Created { worktree, base: branch.to_string(), note: None, warnings })
@@ -722,20 +763,23 @@ pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<V
     branches(Path::new(&project.path))
 }
 
-#[tauri::command]
-pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>) -> Result<Created, String> {
-    let (project, place) = {
+#[tauri::command(async)]
+pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>) -> Result<Created, CreateFailure> {
+    (|| {
+        let (project, place) = {
+            let store = store.lock().map_err(|e| e.to_string())?;
+            let project = find_project(&store, &project_id)?;
+            let place = place_for(&store, &project);
+            (project, place)
+        };
+        let mut made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
         let store = store.lock().map_err(|e| e.to_string())?;
-        let project = find_project(&store, &project_id)?;
-        let place = place_for(&store, &project);
-        (project, place)
-    };
-    let mut made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
-    let store = store.lock().map_err(|e| e.to_string())?;
-    set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
-    note_seen(&store, &project, &made.worktree.path)?;
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
-    Ok(made)
+        set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
+        note_seen(&store, &project, &made.worktree.path)?;
+        nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+        Ok(made)
+    })()
+    .map_err(create_failure)
 }
 
 /// PROJ-070: what deleting a workspace would lose or run into, read when the question opens.
@@ -811,7 +855,7 @@ pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> 
 }
 
 /// PROJ-041: the new worktrees made outside Kolux, for the sidebar's count line.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = find_project(&store, &project_id)?;
@@ -855,7 +899,7 @@ pub fn workspace_hide(store: StoreState<'_>, path: String, hidden: bool) -> Resu
     set_hidden(&*store.lock().map_err(|e| e.to_string())?, &path, hidden)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = find_project(&store, &project_id)?;
@@ -908,14 +952,17 @@ pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &st
     Ok(made)
 }
 
-#[tauri::command]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>) -> Result<Created, String> {
-    let mut made = create_named(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref())?;
-    // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
-    Ok(made)
+#[tauri::command(async)]
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>) -> Result<Created, CreateFailure> {
+    (|| {
+        let mut made = create_named(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref())?;
+        // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let project = find_project(&store, &project_id)?;
+        nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
+        Ok(made)
+    })()
+    .map_err(create_failure)
 }
 
 /// A fresh creature-named workspace in project `project_id`. The store stays locked while Git
@@ -926,15 +973,25 @@ pub fn create_fresh(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result
 
 /// As `create_fresh`, cut from `base` (a ref) when given, else the project's base (AUTO-005).
 pub fn create_fresh_from(git: &Git, store: &Mutex<Store>, project_id: &str, base: Option<&str>) -> Result<Worktree, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, project_id)?;
-    let place = place_for(&store, &project);
-    create_fresh_workspace(git, &store, &place, &load_projects(&store), &project, base)
+    // PROJ-027: the name is picked and kept under the store lock, but Git runs without it, so a
+    // worktree add stalled by a synced folder never holds up the settings or the sidebar.
+    let (project, place, name) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        let project = find_project(&store, project_id)?;
+        let place = place_for(&store, &project);
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let name = fresh_name(git, &store, &load_projects(&store), seed);
+        remember_retired(&store, &name)?;
+        (project, place, name)
+    };
+    let made = create_workspace(git, &place, &project, &name, base)?.worktree;
+    note_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &made.path)?;
+    Ok(made)
 }
 
-#[tauri::command]
-pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Worktree, String> {
-    create_fresh(&git, &store, &project_id)
+#[tauri::command(async)]
+pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Worktree, CreateFailure> {
+    create_fresh(&git, &store, &project_id).map_err(create_failure)
 }
 
 /// PROJ-028 / CLI-015: saves the ref new workspaces of project `id` start from; None goes back to
@@ -963,7 +1020,7 @@ pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: St
     Ok(project)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String) -> Result<RemoveCheck, String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
@@ -974,7 +1031,7 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 
 /// PROJ-070: deletes the workspace only when the check made just now still matches `stamp` (what
 /// the question showed) and nothing refuses it; `force` loses uncommitted changes.
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String) -> Result<(), String> {
     let project = {
@@ -1722,6 +1779,32 @@ mod tests {
         for d in [profile, repo, root] {
             fs::remove_dir_all(d).unwrap();
         }
+    }
+
+    /// PROJ-031: a failed create says which kind of problem it was and what to try, and keeps Git's text.
+    #[test]
+    fn proj031_a_failed_create_names_its_kind_and_keeps_gits_output() {
+        let cases = [
+            ("fatal: 'main' is already used by worktree at 'G:/repo'", "name"),
+            ("fatal: a branch named 'x' already exists", "name"),
+            ("nope is not a branch, tag or commit in G:/repo", "base"),
+            ("no default branch was found in G:/repo", "base"),
+            ("fatal: could not create directory 'G:/ws': Permission denied", "permissions"),
+            ("could not write the file (os error 5)", "permissions"),
+            ("fatal: unable to read tree abc", "git"),
+            ("git worktree add did not finish within 3 min and was stopped. A folder kept in sync", "git"),
+            ("the project is no longer in the list", "other"),
+        ];
+        for (err, kind) in cases {
+            let f = create_failure(err.into());
+            assert_eq!(f.kind, kind, "{err}");
+            assert_eq!(f.detail, err);
+            assert!(!f.message.starts_with("fatal:") && f.message.ends_with('.'), "{}", f.message);
+        }
+        let f = create_failure("Preparing worktree (checking out 'main')\nfatal: 'main' is already used by worktree at 'G:/repo'\nmore".into());
+        assert_eq!(f.message, "That name is in use ('main' is already used by worktree at 'G:/repo'). Pick another name, or open the branch where it is already checked out.");
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!((v["kind"].as_str(), v["detail"].as_str().map(|d| d.ends_with("more"))), (Some("name"), Some(true)));
     }
 
     #[test]

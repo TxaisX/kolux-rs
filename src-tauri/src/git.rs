@@ -6,8 +6,33 @@
 //! go through `git worktree move` so Git's records stay right; a base ref that is not a plain
 //! ref spelling (leading dash, blanks, `..`) is never handed to git.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
+
+/// PROJ-027: how long a worktree list, or a check made before a removal, may take before it is stopped.
+pub const LIST_LIMIT: Duration = Duration::from_secs(30);
+/// PROJ-027 (COMPAT): lengthens the worktree-add limit, in milliseconds.
+pub const ADD_LIMIT_ENV: &str = "KOLUX_WORKTREE_ADD_TIMEOUT_MS";
+
+/// PROJ-027: three minutes, or the variable's value held between three and thirty minutes.
+pub fn add_limit_of(value: Option<&str>) -> Duration {
+    let (least, most) = (180_000, 1_800_000);
+    Duration::from_millis(value.and_then(|v| v.trim().parse::<u64>().ok()).map_or(least, |ms| ms.clamp(least, most)))
+}
+
+pub fn add_limit() -> Duration {
+    add_limit_of(std::env::var(ADD_LIMIT_ENV).ok().as_deref())
+}
+
+/// PROJ-064: how a branch stands against its remote. With an upstream, `ahead` is the commits not
+/// pushed to it; without one (or when it is gone), the commits on no remote at all.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Push {
+    pub ahead: u32,
+    pub upstream: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct Git {
@@ -28,6 +53,8 @@ pub struct Worktree {
     pub parent: Option<String>,
     /// PROJ-070: set when Git has the worktree locked; the reason, empty when none was given.
     pub locked: Option<String>,
+    /// PROJ-064: commits not pushed; set by the sidebar's list, None elsewhere.
+    pub push: Option<Push>,
     /// The user hid it from the sidebar (PROJ-042); the main checkout never is.
     pub hidden: bool,
     /// PROJ-044: "main", "managed" (Kolux made it) or "external"; empty until the project's list sets it.
@@ -54,12 +81,119 @@ pub(crate) fn command(args: &[&str], cwd: Option<&Path>) -> Command {
 /// Runs git and returns its stdout byte for byte; a non-zero exit becomes an error carrying stderr.
 pub(crate) fn output(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
     let out = command(args, cwd).output().map_err(|e| format!("could not run git: {e}"))?;
-    if out.status.success() {
-        Ok(out.stdout)
+    finished(args, out.status, out.stdout, &out.stderr)
+}
+
+fn finished(args: &[&str], status: std::process::ExitStatus, stdout: Vec<u8>, stderr: &[u8]) -> Result<Vec<u8>, String> {
+    if status.success() {
+        Ok(stdout)
     } else {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() { format!("git {} failed ({})", args.join(" "), out.status) } else { err })
+        let err = String::from_utf8_lossy(stderr).trim().to_string();
+        Err(if err.is_empty() { format!("git {} failed ({status})", args.join(" ")) } else { err })
     }
+}
+
+/// `output`, but git and whatever it started (a hook, a credential helper) are stopped once
+/// `limit` has passed, so a step stalled on a cloud-synced folder ends with an error (PROJ-027).
+pub(crate) fn output_within(args: &[&str], cwd: Option<&Path>, limit: Duration) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut cmd = command(args, cwd);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("could not run git: {e}"))?;
+    #[cfg(windows)]
+    let job = Job::holding(&child);
+    // Each pipe is drained on its own thread, so a full pipe never stalls git.
+    fn drain(pipe: Option<impl Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        if let Some(mut pipe) = pipe {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = pipe.read_to_end(&mut bytes);
+                let _ = tx.send(bytes);
+            });
+        }
+        rx
+    }
+    let (out, err) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    let until = Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| format!("could not run git: {e}"))? {
+            break status;
+        }
+        if Instant::now() >= until {
+            #[cfg(windows)]
+            if let Some(job) = &job {
+                job.stop();
+            }
+            stop_tree(&mut child);
+            let what = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
+            return Err(format!("git {what} did not finish within {} and was stopped. A folder kept in sync by OneDrive or a similar service can stall Git; try again, or use a folder outside it", spoken(limit)));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // A program git left running may hold a pipe open; its output is not waited for past a second.
+    let rest = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| rx.recv_timeout(Duration::from_secs(1)).unwrap_or_default();
+    finished(args, status, rest(&out), &rest(&err))
+}
+
+/// `run` with a limit (PROJ-027).
+pub(crate) fn run_within(args: &[&str], cwd: Option<&Path>, limit: Duration) -> Result<String, String> {
+    output_within(args, cwd, limit).map(|o| String::from_utf8_lossy(&o).trim().to_string())
+}
+
+/// "3 min" or "30 s".
+fn spoken(d: Duration) -> String {
+    let s = d.as_secs();
+    if s >= 60 && s.is_multiple_of(60) { format!("{} min", s / 60) } else { format!("{s} s") }
+}
+
+/// Windows: git and everything it starts share one job, so a stall ends them all. A hook's shell
+/// starts its programs outside git's process tree, where taskkill /T cannot find them.
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Job {
+    fn holding(child: &std::process::Child) -> Option<Job> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        // SAFETY: a new unnamed job, and the child's own process handle, which outlives this call.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let job = Job(job);
+            (AssignProcessToJobObject(job.0, child.as_raw_handle() as _) != 0).then_some(job)
+        }
+    }
+
+    fn stop(&self) {
+        // SAFETY: the handle is this job's, open until drop.
+        unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) };
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: closed once, here; processes still running are left alone.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+/// Ends a git process and everything under it (on Windows a hook runs in a child shell).
+fn stop_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut kill = Command::new("taskkill");
+        kill.args(["/T", "/F", "/PID", &child.id().to_string()]).creation_flags(0x0800_0000);
+        let _ = kill.output();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Runs git and returns its stdout, trimmed; a non-zero exit becomes an error carrying stderr.
@@ -145,14 +279,45 @@ impl Git {
     }
 
     pub fn worktrees(&self, repo: &Path) -> Result<Vec<Worktree>, String> {
-        let text = run(&["worktree", "list", "--porcelain"], Some(repo))?;
+        let text = run_within(&["worktree", "list", "--porcelain"], Some(repo), LIST_LIMIT)?;
         Ok(parse_worktrees(&text))
     }
 
     /// `git worktree add -b <branch> <dest> <base>`: a new branch in a folder of its own.
     pub fn worktree_add(&self, repo: &Path, dest: &Path, branch: &str, base: &str) -> Result<(), String> {
         let dest = dest.to_string_lossy();
-        run(&["worktree", "add", "-b", branch, &dest, base], Some(repo)).map(|_| ())
+        run_within(&["worktree", "add", "-b", branch, &dest, base], Some(repo), add_limit()).map(|_| ())
+    }
+
+    /// `git worktree add <dest> <branch>`: a folder on a branch that exists already (PROJ-030).
+    pub fn worktree_add_existing(&self, repo: &Path, dest: &Path, branch: &str) -> Result<(), String> {
+        run_within(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo), add_limit()).map(|_| ())
+    }
+
+    /// PROJ-064: how each of `branches` stands against its remote. One look at every branch's
+    /// upstream; the commits on no remote are counted only for branches without one.
+    pub fn push_states(&self, repo: &Path, branches: &[&str]) -> HashMap<String, Push> {
+        let Ok(text) = run_within(&["for-each-ref", "--format=%(refname)%00%(upstream)%00%(upstream:track)", "refs/heads"], Some(repo), LIST_LIMIT) else {
+            return HashMap::new();
+        };
+        let mut out = HashMap::new();
+        for line in text.lines() {
+            let mut f = line.trim_end_matches('\r').split('\0');
+            let (Some(name), up, track) = (f.next().and_then(|r| r.strip_prefix("refs/heads/")), f.next().unwrap_or(""), f.next().unwrap_or("")) else { continue };
+            if !branches.contains(&name) {
+                continue;
+            }
+            let push = if !up.is_empty() && track != "[gone]" {
+                let ahead = track.split("ahead ").nth(1).and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next()).and_then(|n| n.parse().ok()).unwrap_or(0);
+                Push { ahead, upstream: true }
+            } else {
+                let count = run_within(&["rev-list", "--count", &format!("refs/heads/{name}"), "--not", "--remotes"], Some(repo), LIST_LIMIT);
+                let Some(ahead) = count.ok().and_then(|n| n.parse().ok()) else { continue };
+                Push { ahead, upstream: false }
+            };
+            out.insert(name.to_string(), push);
+        }
+        out
     }
 
     /// Removes the worktree folder and then deletes its branch. The folder goes first; a branch
@@ -206,13 +371,13 @@ impl Git {
 
     /// PROJ-070: the checkout's uncommitted and untracked changes, one `git status --porcelain` line each.
     pub fn status_lines(&self, worktree: &Path) -> Result<Vec<String>, String> {
-        run_untrimmed(&["status", "--porcelain"], Some(worktree)).map(|s| s.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+        output_within(&["status", "--porcelain"], Some(worktree), LIST_LIMIT).map(|o| String::from_utf8_lossy(&o).to_string()).map(|s| s.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
     }
 
     /// Does the checkout hold changes Git does not have yet (modified or untracked files, and
     /// work inside a submodule)?
     pub fn dirty(&self, worktree: &Path) -> Result<bool, String> {
-        run(&["status", "--porcelain", "--ignore-submodules=none"], Some(worktree)).map(|s| !s.is_empty())
+        run_within(&["status", "--porcelain", "--ignore-submodules=none"], Some(worktree), LIST_LIMIT).map(|s| !s.is_empty())
     }
 
     /// Could `rev` be a ref spelling at all? Anything git might read as an option or a range is
@@ -411,7 +576,7 @@ pub fn parse_worktrees(text: &str) -> Vec<Worktree> {
             }
         }
         if let Some(path) = path {
-            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, hidden: false, kind: String::new(), source: None });
+            out.push(Worktree { path, branch, head, is_main: i == 0, name: None, parent: None, locked, push: None, hidden: false, kind: String::new(), source: None });
         }
     }
     out
@@ -433,6 +598,67 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    /// PROJ-027: a stalled step is stopped at its limit with an error that says so, and the add
+    /// limit is three minutes unless the variable lengthens it, held between three and thirty.
+    #[test]
+    fn a_stalled_git_step_is_stopped_at_its_limit() {
+        assert_eq!(add_limit_of(None), Duration::from_secs(180));
+        assert_eq!(add_limit_of(Some("60000")), Duration::from_secs(180));
+        assert_eq!(add_limit_of(Some(" 600000 ")), Duration::from_secs(600));
+        assert_eq!(add_limit_of(Some("99999999")), Duration::from_secs(1800));
+        assert_eq!(add_limit_of(Some("soon")), Duration::from_secs(180));
+        let repo = temp_repo("stall");
+        // A hook that never ends stands in for a folder whose sync service holds every file.
+        fs::create_dir_all(repo.join(".git").join("hooks")).unwrap();
+        // The hook leaves a mark if it outlives the stop, so the test also proves it was ended.
+        fs::write(repo.join(".git").join("hooks").join("post-checkout"), "#!/bin/sh\nsleep 3\necho late > ../stall-late\nsleep 60\n").unwrap();
+        let late = repo.with_file_name("stall-late");
+        let _ = fs::remove_file(&late);
+        let dest = repo.with_extension("ws");
+        let started = Instant::now();
+        let err = run_within(&["worktree", "add", "-b", "stuck", &dest.to_string_lossy(), "HEAD"], Some(&repo), Duration::from_secs(1)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(8), "stopped after {:?}", started.elapsed());
+        assert!(err.contains("git worktree add did not finish within 1 s"), "{err}");
+        std::thread::sleep(Duration::from_secs(4));
+        assert!(!late.exists(), "the hook kept running after the stop");
+        // A step that finishes in time gives its output as before.
+        assert_eq!(run_within(&["rev-parse", "--abbrev-ref", "HEAD"], Some(&repo), Duration::from_secs(30)).unwrap(), "main");
+        assert!(run_within(&["rev-parse", "--verify", "nope"], Some(&repo), Duration::from_secs(30)).is_err());
+        let _ = fs::remove_dir_all(&dest);
+        let _ = fs::remove_dir_all(&repo);
+    }
+
+    /// PROJ-064: commits not pushed, in sync after a push, and unpublished without an upstream.
+    #[test]
+    fn push_states_count_commits_not_pushed() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("push");
+        let remote = repo.with_extension("remote");
+        let _ = fs::remove_dir_all(&remote);
+        run(&["init", "-q", "--bare", &remote.to_string_lossy()], None).unwrap();
+        run(&["remote", "add", "origin", &remote.to_string_lossy()], Some(&repo)).unwrap();
+        run(&["push", "-q", "-u", "origin", "main"], Some(&repo)).unwrap();
+        let state = |b: &str| git.push_states(&repo, &[b]).get(b).cloned();
+        assert_eq!(state("main"), Some(Push { ahead: 0, upstream: true }));
+        for n in ["two", "three"] {
+            fs::write(repo.join(n), n).unwrap();
+            run(&["add", "."], Some(&repo)).unwrap();
+            run(&["commit", "-q", "-m", n], Some(&repo)).unwrap();
+        }
+        assert_eq!(state("main"), Some(Push { ahead: 2, upstream: true }));
+        run(&["push", "-q"], Some(&repo)).unwrap();
+        assert_eq!(state("main"), Some(Push { ahead: 0, upstream: true }));
+        run(&["switch", "-q", "-c", "side"], Some(&repo)).unwrap();
+        fs::write(repo.join("side"), "s").unwrap();
+        run(&["add", "."], Some(&repo)).unwrap();
+        run(&["commit", "-q", "-m", "side"], Some(&repo)).unwrap();
+        assert_eq!(state("side"), Some(Push { ahead: 1, upstream: false }));
+        // Only the branches asked about are looked at.
+        assert_eq!(git.push_states(&repo, &["side"]).len(), 1);
+        let _ = fs::remove_dir_all(&remote);
+        let _ = fs::remove_dir_all(&repo);
     }
 
     #[test]
