@@ -871,3 +871,15 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .rail-group { flex: none; }
 .rail-foot { margin-top: auto; padding: 10px 8px 4px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pane-head .right .meter-plan { margin-right: 8px; font-size: 11px; color: var(--fg-muted); }
+/* TERM-010: the grid's gap is the divider (width and light / dark colours from Appearance, DT-A7);
+   while one is dragged the whole window keeps the resize cursor and nothing gets selected. */
+.grid { touch-action: none; }
+html[data-divider="col"], html[data-divider="col"] * { cursor: col-resize !important; user-select: none; }
+html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !important; user-select: none; }
+/* TERM-024: a narrow pane drops header items in a set order; the dot, mark and name always stay. */
+.pane { container-type: inline-size; }
+.pane-head .title { min-width: 0; }
+@container (max-width: 344px) { .pane-head .chip { display: none; } }
+@container (max-width: 264px) { .pane-head .word { display: none; } }
+@container (max-width: 204px) { .pane-head .right .ib { display: none; } }
+@container (max-width: 134px) { .pane-head .status, .pane-head .right { display: none; } }

@@ -442,3 +442,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-050 · The cards VIEW-015, VIEW-019, VIEW-021 and VIEW-024, and this repo's own sidebar rows, chooser pane and Board cells. Nothing from the old app.
 > 2026-10-12 · T-028-b · The card VIEW-017 and this repo's own status vocabulary and Board chip. Nothing from the old app.
 > 2026-10-12 · T-040-b · The cards USAGE-004, VIEW-018 and USAGE-025, and this repo's own meter, ring and pill code. Nothing from the old app.
+> 2026-10-12 · T-144-a · The cards TERM-010 and TERM-024, DT-A7, and this repo's own grid and pane code; CSS container queries and pointer capture are platform features. Nothing from the old app.

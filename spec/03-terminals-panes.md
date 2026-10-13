@@ -650,9 +650,14 @@ User sees: the panes resize live; the divider is a thin coloured line.
 Rules: divider thickness defaults to 3 px; divider colour has separate light and dark values
   (neutral grey tones by default); if the pointer is lost mid-drag (left the window, capture lost),
   the drag still finishes cleanly instead of sticking.
+  (Kolux RS, T-144-a: the defaults follow DT-A7 in the Appearance chapter, 6 px and no colour, with
+  the width and the light / dark colours still settable there; the grid's gap is the divider, the grid
+  captures the pointer, a lost capture ends the drag where it was, a pane never goes under 120 px, and
+  the program hears only the final size.)
 Acceptance:
   - [ ] Releasing the mouse outside the window ends the drag at the last position.
   - [ ] Dividers are about 3 px thick by default and take a different colour in light and dark mode.
+      (Kolux RS: 6 px and uncoloured by default per DT-A7; the colours apply once set.)
 Compat: —
 Source: D-03-010
 
@@ -663,6 +668,8 @@ User sees: header items disappear one by one; the dot, agent mark and session na
 Rules: first the branch chip goes (around 344 px); then the program name (around 264 px); then the
   action buttons (around 204 px); then the status word (around 134 px); the session name truncates
   rather than disappearing.
+  (Kolux RS, T-144-a: CSS container queries on the pane at exactly those widths; under 134 px the
+  whole right-hand group goes with the status word.)
 Acceptance:
   - [ ] At 250 px wide the header shows dot, mark, name, status word and buttons but no branch or
       program name.

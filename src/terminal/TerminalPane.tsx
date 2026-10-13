@@ -14,6 +14,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { attachRenderer, type RendererMode } from "./renderer";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
+import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
@@ -254,11 +255,15 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
       // A hidden pane has no size; fitting it would shrink the program's terminal to nothing.
       if (el.clientWidth === 0 || el.clientHeight === 0) return;
       fit.fit();
+      // TERM-010 (and the size rule of the full-screen card): while a divider is dragged the pane
+      // redraws at each size but the program hears only the final one, when the drag ends.
+      if (dragging()) return;
       const id = idRef.current;
       if (id !== null && !ended) invoke("terminal_resize", { id, cols: term.cols, rows: term.rows }).catch(() => {});
     };
     const observer = new ResizeObserver(resize);
     observer.observe(el);
+    window.addEventListener(DIVIDER_DONE, resize);
     // SET-003: open terminals follow a theme change without being reopened.
     const mode = hookColourMode(term, write, currentDark);
     const recolour = () => {
@@ -269,6 +274,7 @@ export default function TerminalPane({ hidden = false, name, plan, cwd = null, b
 
     return () => {
       alive = false;
+      window.removeEventListener(DIVIDER_DONE, resize);
       window.removeEventListener(TERMINAL_EVENT, recolour);
       mode.dispose();
       clearTimeout(quiet);

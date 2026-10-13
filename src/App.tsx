@@ -42,6 +42,7 @@ import Explorer from "./editor/Explorer";
 import { isMarkdown } from "./editor/markdown";
 import { open } from "@tauri-apps/plugin-dialog";
 import { cellsOf, columnsFor, groupOf, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, blocking } from "./terminal/grid";
+import { DIVIDER_DONE, DRAG_ATTR, dragWeights, gapAt, templateOf, tracks, type Gap } from "./terminal/dividers";
 import StatusBar from "./chrome/StatusBar";
 import { FileCode } from "./chrome/icons";
 import AgentsRail from "./agents/AgentsRail";
@@ -231,6 +232,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
   const [stacked, setStacked] = useState<Record<string, boolean>>({}); // TERM-006: a single pane split down makes a stacked pair
+  const [weights, setWeights] = useState<Record<string, number[]>>({}); // TERM-010: dragged column / row weights, per folder and pane count
+  const dragRef = useRef<{ gap: Gap; at: number; start: number[]; px: number } | null>(null);
   const [launching, setLaunching] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // A toast is a passing note (SESS-024 "starting 3 sessions"); it clears itself.
@@ -910,6 +913,51 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   rowRef.current = rowStates;
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
+  // TERM-010: the grid's column and row weights, even until a divider is dragged; a drag starts on
+  // the grid's own gap, the grid takes the pointer so a release outside the window still ends it,
+  // and the end is announced so panes send their program the final size once.
+  const gridCols = columnsFor(shown.length, stacked[activeDir ?? ""]);
+  const gridRows = rowsFor(shown.length, stacked[activeDir ?? ""]);
+  const weightKey = (axis: "col" | "row") => `${activeDir ?? ""}|${axis}|${axis === "col" ? gridCols : gridRows}`;
+  const weightsOf = (axis: "col" | "row") => weights[weightKey(axis)] ?? Array<number>(axis === "col" ? gridCols : gridRows).fill(1);
+  const gapUnder = (g: HTMLElement, x: number, y: number) => {
+    const rects = [...g.querySelectorAll<HTMLElement>(":scope > .cell:not([hidden])")].map((c) => c.getBoundingClientRect());
+    const cols = tracks(rects, "x");
+    const rows = tracks(rects, "y");
+    const gap = gapAt(x, y, cols, rows);
+    return gap && { gap, px: (gap.axis === "col" ? cols : rows).reduce((a, t) => a + t.end - t.start, 0) };
+  };
+  const onDividerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!terminals || e.target !== e.currentTarget || e.button !== 0) return;
+    const hit = gapUnder(e.currentTarget, e.clientX, e.clientY);
+    if (!hit) return;
+    dragRef.current = { gap: hit.gap, at: hit.gap.axis === "col" ? e.clientX : e.clientY, start: weightsOf(hit.gap.axis), px: hit.px };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // a synthetic pointer has nothing to capture
+    }
+    document.documentElement.setAttribute(DRAG_ATTR, hit.gap.axis);
+    e.preventDefault();
+  };
+  const onDividerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) {
+      if (terminals && e.target === e.currentTarget) {
+        const hit = gapUnder(e.currentTarget, e.clientX, e.clientY);
+        e.currentTarget.style.cursor = hit ? `${hit.gap.axis}-resize` : "";
+      }
+      return;
+    }
+    const now = d.gap.axis === "col" ? e.clientX : e.clientY;
+    setWeights((w) => ({ ...w, [weightKey(d.gap.axis)]: dragWeights(d.start, d.gap.i, now - d.at, d.px) }));
+  };
+  const endDividerDrag = () => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    document.documentElement.removeAttribute(DRAG_ATTR);
+    window.dispatchEvent(new Event(DIVIDER_DONE));
+  };
   const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
   // VIEW-015 / VIEW-021: the Agents rail groups sessions under the saved (switched-on, installed)
   // agents; the shown session is the remembered pick, else the first agent's newest; + adds a
@@ -1219,7 +1267,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           <div
             className={board ? "board" : agentsScreen ? "grid agents" : "grid"}
             hidden={(!terminals && !board && !agentsScreen) || (terminals && page !== null) || (agentsScreen && selected === null)}
-            style={terminals ? { gridTemplateColumns: `repeat(${columnsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${rowsFor(shown.length, stacked[activeDir ?? ""])}, minmax(0, 1fr))` } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
+            onPointerDown={onDividerDown}
+            onPointerMove={onDividerMove}
+            onPointerUp={endDividerDrag}
+            onPointerCancel={endDividerDrag}
+            onLostPointerCapture={endDividerDrag}
+            style={terminals ? { gridTemplateColumns: templateOf(weightsOf("col")), gridTemplateRows: templateOf(weightsOf("row")) } : board ? { gridTemplateColumns: `repeat(${lanes.length || 1}, minmax(0, 1fr))` } : undefined}
           >
               {board &&
                 lanes.map((l, i) => (
