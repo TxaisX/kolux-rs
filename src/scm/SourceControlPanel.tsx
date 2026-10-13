@@ -19,7 +19,8 @@ import Ask from "../chrome/Ask";
 import { ChevronDown, Close, Minus, Plus, Refresh, Undo } from "../chrome/icons";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle } from "./model";
+import { openInBrowser } from "../browser/BrowserPane";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -96,6 +97,15 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
     if (saved) return void runAgent(saved, prompt);
     setAsking({ agent: agents[0]?.id ?? "", prompt, remember: false });
   };
+  // GIT-036: Open in browser shows the commit's GitHub page in a built-in browser tab; it is offered
+  // only when the workspace's project is on GitHub.
+  const [ghRepo, setGhRepo] = useState<{ host: string; owner: string; name: string } | null>(null);
+  useEffect(() => {
+    setGhRepo(null);
+    invoke<{ host: string; owner: string; name: string } | null>("scm_github_repo", { worktree: dir })
+      .then(setGhRepo)
+      .catch(() => setGhRepo(null));
+  }, [dir]);
   // GIT-036: Explain changes starts an agent with a prompt about the commit.
   const explain = (c: Commit) => {
     const prompt = explainPrompt(c);
@@ -928,6 +938,7 @@ export default function SourceControlPanel({ dir, draft, onDraft, onClose, onFix
                   {[
                     { id: "hash", label: "Copy hash", run: () => copy(ctx.commit.hash, "commit hash") },
                     { id: "message", label: "Copy message", run: () => copy(ctx.commit.message, "commit message") },
+                    ...(ghRepo ? [{ id: "open", label: "Open in browser", run: () => openInBrowser(commitUrl(ghRepo, ctx.commit.hash)!) }] : []),
                     { id: "explain", label: "Explain changes", run: () => explain(ctx.commit) },
                   ].map((item) => (
                     <button

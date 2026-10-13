@@ -10,15 +10,19 @@ import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop } from "../chrome/ic
 import { BLANK, resolveAddress } from "./address";
 import { can as canGo, fresh, started, type Pending } from "./history";
 
-type Props = { id: number; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
+type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
 
 /** The pane body's place in the window, in CSS pixels, as the back end places the page. */
+/** GIT-036: asks the window for a new browser tab at `url` in the focused split. */
+export const OPEN_IN_BROWSER = "kolux-open-in-browser";
+export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
+
 function spot(el: HTMLElement) {
   const r = el.getBoundingClientRect();
   return { x: r.left, y: r.top, w: r.width, h: r.height };
 }
 
-export default function BrowserPane({ id, title, hidden = false, focused = false, onFocus, onClose }: Props) {
+export default function BrowserPane({ id, url, title, hidden = false, focused = false, onFocus, onClose }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const bar = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
@@ -56,7 +60,7 @@ export default function BrowserPane({ id, title, hidden = false, focused = false
       );
       if (!alive) return;
       try {
-        await invoke("browser_open", { id, url: BLANK, spot: spot(host.current!) });
+        await invoke("browser_open", { id, url: url ?? BLANK, spot: spot(host.current!) });
         opened.current = true;
         if (alive) {
           setOpen(true);

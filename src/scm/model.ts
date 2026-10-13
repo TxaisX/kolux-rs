@@ -159,6 +159,9 @@ export function graphLines(r: GraphRow): Stroke[] {
 /** GIT-036: what Explain changes asks the agent. */
 export const explainPrompt = (c: Commit): string => `Explain the changes in commit ${c.hash} ("${c.subject}") in plain language: what changed, why it probably changed, and anything that looks risky. Read it with: git show ${c.hash}`;
 
+/** GIT-036: a commit's page on GitHub, or null when the project is not on GitHub. */
+export const commitUrl = (repo: { host: string; owner: string; name: string } | null, hash: string): string | null => (repo ? `https://${repo.host}/${repo.owner}/${repo.name}/commit/${hash}` : null);
+
 /** GIT-021: a branch's pull request; `state` is OPEN, MERGED or CLOSED; `head` its branch. */
 export type Pr = { number: number; url: string; state: string; title?: string | null; head?: string | null; draft?: boolean };
 
