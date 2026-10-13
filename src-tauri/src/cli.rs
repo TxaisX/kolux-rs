@@ -1063,7 +1063,15 @@ fn text_of(command: &str, r: &Value) -> String {
             let term = if s("terminal").is_empty() { "its terminal".to_string() } else { s("terminal") };
             format!("{} abandoned: its worker can no longer report on it; {term} stays open; {} is {}", s("dispatchId"), s("taskId"), s("taskStatus"))
         }
-        SEND => format!("sent {} to {}", r["messageIds"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "), s("to")),
+        SEND => {
+            let sent = format!("sent {} to {}", r["messageIds"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "), s("to"));
+            let k = &r["settled"];
+            match (k["status"].as_str(), k["why"].as_str()) {
+                (Some(st), _) => format!("{sent}\n{} is {st}", k["taskId"].as_str().unwrap_or_default()),
+                (_, Some(why)) => format!("{sent}\n{why}"),
+                _ => sent,
+            }
+        }
         CHECK => {
             let msgs = r["messages"].as_array().cloned().unwrap_or_default();
             let mut out = Vec::new();
@@ -1111,6 +1119,13 @@ fn mail_lines(msgs: &[Value], out: &mut Vec<String>) {
         out.extend(g("body").lines().map(|l| format!("  {l}")));
         if !m["payload"].is_null() {
             out.push(format!("  payload: {}", m["payload"]));
+        }
+        // ORCH-015: a done report shows how it ended, the files it touched and its report.
+        let files = m["filesModified"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", ");
+        for (k, v) in [("outcome", g("outcome").to_string()), ("files", files), ("report", g("reportPath").to_string())] {
+            if !v.is_empty() {
+                out.push(format!("  {k}: {v}"));
+            }
         }
         if !g("reply").is_empty() {
             out.push(format!("  reply: {}", g("reply")));
@@ -2284,9 +2299,22 @@ fn mail(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
         "orchestration.request-show" => m.request_show(&pane.clone().unwrap_or_default(), &text("request").ok_or_else(|| Fail::args("--request is required"))?, u64::from(std::process::id())),
         SEND => {
             let p = need()?;
-            let dispatches = load_list(&store, DISPATCHES_KEY);
+            let (mut tasks, mut dispatches) = (load_list(&store, TASKS_KEY), load_list(&store, DISPATCHES_KEY));
             let peers = peers(ctx);
-            m.once(retry, |m| m.post(&p, a, &dispatches, &peers, now_ms()))?
+            let v = m.once(retry, |m| {
+                let mut v = m.post(&p, a, &dispatches, &peers, now_ms())?;
+                // ORCH-015: the worker's own done report settles its task with the mail.
+                let settled = crate::orchestration::report(&mut tasks, &mut dispatches, &p, a, now_ms())?;
+                if !settled.is_null() {
+                    v["settled"] = settled;
+                }
+                Ok(v)
+            })?;
+            if !v["settled"].is_null() {
+                let (t, d) = (Value::Array(tasks).to_string(), Value::Array(dispatches).to_string());
+                store.set_all(&[(TASKS_KEY, &t), (DISPATCHES_KEY, &d)]).map_err(|e| Fail::new("failed", e.to_string()))?;
+            }
+            v
         }
         CHECK => {
             let p = need()?;
@@ -3999,13 +4027,15 @@ mod tests {
         let msgs = vec![
             json!({ "id": "msg-3", "from": "term-2", "fromAgent": "Claude Code", "type": "status", "priority": "urgent", "subject": "stop", "body": "halt now", "payload": { "n": 1 }, "reply": "kolux orchestration reply --id msg-3 --body x" }),
             json!({ "id": "msg-4", "from": "term-5", "type": "question", "priority": "normal", "subject": "which?", "body": "", "reply": "kolux orchestration reply --id msg-4 --body y" }),
+            json!({ "id": "msg-5", "from": "term-3", "type": "worker_done", "priority": "normal", "subject": "done", "body": "", "outcome": "succeeded", "filesModified": ["a.rs", "b.rs"], "reportPath": "notes/r.md" }),
         ];
         let mut out = Vec::new();
         mail_lines(&msgs, &mut out);
         let text = out.join("\n");
         assert!(text.contains("[URGENT]") && text.contains("Claude Code (term-2)") && text.contains("payload: {\"n\":1}"), "{text}");
         assert!(text.contains("--id msg-3") && text.contains("from term-5") && !text.contains("[NORMAL]"), "{text}");
-        assert_eq!(out.iter().filter(|l| l.starts_with("----")).count(), 2, "each message ends with its own divider");
+        assert!(text.contains("  outcome: succeeded") && text.contains("  files: a.rs, b.rs") && text.contains("  report: notes/r.md"), "{text}");
+        assert_eq!(out.iter().filter(|l| l.starts_with("----")).count(), 3, "each message ends with its own divider");
     }
 
     #[test]
