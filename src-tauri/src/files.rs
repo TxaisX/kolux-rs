@@ -32,7 +32,9 @@ type Grants<'a> = tauri::State<'a, crate::links::Grants>;
 
 /// SAFE-021 / EDIT-045: a path on another machine, outside the projects, or leading out through a
 /// link is refused before the file is touched.
-#[tauri::command]
+// T-442-c: async, because fence.allow can ask git for every project's worktrees (a path outside
+// the project roots, such as a Kolux worktree, on a cold 3 s cache) and that must never hold up typing.
+#[tauri::command(async)]
 pub fn file_read(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
     read_text(&fence.allow(&path, &store, &git, true)?)
 }
@@ -92,9 +94,17 @@ pub fn write_checked(path: &Path, text: &str, loaded_hash: Option<&str>) -> Resu
     Ok(write_text(path, text)?)
 }
 
-#[tauri::command]
+/// Saves run one at a time (T-442-c): the disk-hash check and the write happen under one lock,
+/// so two saves that now run on worker threads can never both pass the check and land out of
+/// order; the later one is refused as changed on disk instead.
+// ponytail: one lock for every path; saves are milliseconds, a per-path map if that ever shows.
+static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[tauri::command(async)]
 pub fn file_write(path: String, text: String, loaded_hash: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), WriteError> {
-    write_checked(&fence.allow(&path, &store, &git, true)?, &text, loaded_hash.as_deref())
+    let path = fence.allow(&path, &store, &git, true)?;
+    let _one = WRITES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    write_checked(&path, &text, loaded_hash.as_deref())
 }
 
 /// ACCT-055: Open a file shows the system picker here, so only the file the user chose is
@@ -328,7 +338,7 @@ pub fn list_dir(dir: &Path) -> Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dir_list(path: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<DirEntry>, String> {
     list_dir(&fence.allow(&path, &store, &git, false)?)
 }
