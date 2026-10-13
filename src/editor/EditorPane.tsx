@@ -24,6 +24,7 @@ import { matchEvent } from "../keys/keymap";
 import { Contents, FindBar, selectedIn, type FindOpen } from "./NoteTools";
 import { replaceInRich } from "./notefind";
 import { outline } from "./toc";
+import { hasSpot, onReveal, spotRange, takeSpot } from "./search";
 import "./editor-extras.css";
 
 /** Save for each open editor pane, by pane key; App's Mod+S calls the focused one. */
@@ -141,6 +142,20 @@ export default function EditorPane({ id, path, readOnly = false, hidden = false,
     setBigOk(false);
     setBanner(null);
   }, [path]);
+
+  // EDIT-037: a search hit opens here with the hit selected and in view. A note in the rich view
+  // shows its source for that, since the hit's line and column are the file's.
+  const [reveals, setReveals] = useState(0);
+  useEffect(() => onReveal(() => setReveals((n) => n + 1)), []);
+  useEffect(() => {
+    const cm = view.current;
+    if (!cm || !hasSpot(path)) return;
+    if (md && mode !== "source") return setMode("source");
+    const s = takeSpot(path)!;
+    const r = spotRange(cm.state.doc, s);
+    cm.dispatch({ selection: { anchor: r.from, head: r.to }, effects: EditorView.scrollIntoView(r.from, { y: "center" }) });
+    cm.focus();
+  }, [reveals, ready, mode, path, md]);
 
   // EDIT-012: the rich view, started over the source text whenever the tab switches to it.
   useEffect(() => {

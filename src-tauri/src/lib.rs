@@ -12,6 +12,7 @@ mod claude_key;
 mod codex_accounts;
 mod codex_usage;
 mod creatures;
+mod editor_search;
 mod fence;
 mod files;
 mod fsops;
@@ -355,6 +356,7 @@ pub fn run() {
             files::file_write,
             files::file_pick,
             files::md_list,
+            editor_search::editor_search,
             artifacts::artifacts_list,
             artifacts::artifact_add,
             artifacts::artifact_remove,

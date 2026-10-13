@@ -13,7 +13,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ChevronDown, Close, FileCode, FolderPlus, Plus } from "../chrome/icons";
+import { ChevronDown, Close, FileCode, FolderPlus, Plus, Search } from "../chrome/icons";
+import ContentSearch from "./ContentSearch";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 
@@ -102,6 +103,21 @@ type Props = { root: string; hidden: boolean; focusAsk: number; onOpen: (path: s
 
 export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Props) {
   const keymap = useKeymap();
+  // EDIT-037: the explorer shows either the file tree or the content search; Mod+Shift+F
+  // brings the search forward (with its text selected) while the explorer is shown.
+  const [searching, setSearching] = useState(false);
+  const [searchAsk, setSearchAsk] = useState(0);
+  useEffect(() => {
+    if (hidden) return;
+    const key = (e: KeyboardEvent) => {
+      if (matchEvent(keymap, e, ["global"])?.id !== "sidebar.search.toggle") return;
+      e.preventDefault();
+      setSearching(true);
+      setSearchAsk((n) => n + 1);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [hidden, keymap]);
   const [kids, setKids] = useState<Record<string, Node[] | undefined>>({});
   const [failed, setFailed] = useState<Record<string, string>>({});
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -147,7 +163,7 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
     if (hidden && box.current?.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
   }, [hidden]);
   useEffect(() => {
-    if (focusAsk && !hidden) box.current?.focus();
+    if (focusAsk && !hidden && !searching) box.current?.focus();
   }, [focusAsk, hidden]);
 
   const rows = flatten(root, kids, open, draft);
@@ -469,10 +485,13 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   return (
     <aside className="explorer" hidden={hidden} aria-label="Explorer">
       <header className="explorer-head">
-        <span className="title">Explorer</span>
+        <span className="title">{searching ? "Search" : "Explorer"}</span>
         <span className="path" title={root}>
           {name}
         </span>
+        <button className={`ib${searching ? " on" : ""}`} onClick={() => (setSearching(!searching), setSearchAsk((n) => n + 1))} aria-pressed={searching} title="Search file contents (Ctrl+Shift+F)" aria-label="Search file contents">
+          <Search size={12} />
+        </button>
         <button className="ib" onClick={() => startNew(false)} title="New file" aria-label="New file">
           <Plus size={12} />
         </button>
@@ -512,7 +531,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
           </button>
         </div>
       )}
+      <ContentSearch root={root} hidden={!searching} focusAsk={searchAsk} onOpen={onOpen} />
       <div
+        hidden={searching}
         className={`explorer-rows${dropAt === root ? " drop" : ""}`}
         ref={box}
         tabIndex={0}
