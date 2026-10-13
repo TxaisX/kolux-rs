@@ -20,6 +20,9 @@ mod fonts;
 mod git;
 mod hooks;
 mod include;
+// T-043-e: the macOS keychain rule table; the Mac wiring that calls it is T-043-f.
+#[cfg_attr(not(test), allow(dead_code))]
+mod keychain;
 mod grok;
 mod install;
 mod keybindings;
@@ -168,7 +171,9 @@ pub fn run() {
             // Git the app still opens, and the landing screen says so (APP-023).
             app.manage(git::Git::detect().unwrap_or(git::Git { version: String::new() }));
             app.manage(tools::Cache::default());
-            app.manage(fence::Fence::default());
+            // ACCT-055: picked-file grants saved by the last run come back.
+            let fence = fence::Fence::load(&app.state::<Mutex<Store>>());
+            app.manage(fence);
             app.manage(token_usage::Flights::default());
             // The command line reaches the app through a loopback port (PROJ-077).
             cli::serve(app.handle().clone(), &dir)?;
@@ -222,6 +227,10 @@ pub fn run() {
             // The window is gone: no shell may outlive it.
             if let tauri::WindowEvent::Destroyed = event {
                 window.state::<Terminals>().kill_all();
+            }
+            // ACCT-055: files dropped in from outside may be copied into the Explorer, nothing else.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                window.state::<fence::Fence>().dropped(paths);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -358,6 +367,8 @@ pub fn run() {
             onboarding::onboarding_get,
             onboarding::onboarding_step,
             onboarding::onboarding_close,
+            onboarding::onboarding_reopen,
+            onboarding::onboarding_milestone,
             files::file_read,
             files::file_write,
             files::file_pick,
@@ -403,6 +414,16 @@ pub fn run() {
                 activity::save(&app.state::<Mutex<Store>>(), true);
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
+                // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's,
+                // each step given two seconds. Settings need no step: every change is already on disk.
+                if let (Ok(profile), Ok(store)) = (app.path().app_data_dir(), app.state::<Mutex<Store>>().lock()) {
+                    let steps = [codex_accounts::sign_in_files(&store, &profile), claude_accounts::sign_in_files(&store, &profile)];
+                    drop(store);
+                    for pairs in steps {
+                        let p = profile.clone();
+                        let _ = secrets::within(std::time::Duration::from_secs(2), move || secrets::save_changed(&pairs, &p));
+                    }
+                }
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
                     diag::write(&dir, "app exit");

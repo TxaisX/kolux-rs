@@ -7,7 +7,7 @@ import VendorMark from "../chrome/VendorMark";
 import { pillDetail, pillText, weeklyOf, type ClaudeLimit } from "./claude";
 import { tone } from "./meter";
 import { publishClaude as publishLaunch } from "./launchWarn";
-import { publishClaude as publishPlan, usePlan } from "./plan";
+import { publishClaude as publishPlan, usePlan, useResetTick } from "./plan";
 
 /** The top bar's read goes to the plan line and the launch screen's warning alike. */
 const publishClaude = (limits: ClaudeLimit[]) => {
@@ -18,6 +18,7 @@ const publishClaude = (limits: ClaudeLimit[]) => {
 /** USAGE-008: drawn only for an installed Claude with a known weekly window, tinted by its use. */
 export function ClaudePillView({ limits, installed = true }: { limits: ClaudeLimit[]; installed?: boolean }) {
   const w = weeklyOf(limits);
+  useResetTick([w?.resetsAt]); // USAGE-024: the hover countdown keeps itself current
   if (!installed || !w) return null;
   return (
     <span className={`usage-part ${tone(w.usedPercent)}`.trim()} title={pillDetail(limits)} data-claude-state="ok">

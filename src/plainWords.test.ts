@@ -3,19 +3,21 @@
 // one render): JSX text, the visible attributes, strings shown from inside JSX, toast messages
 // and the Connect cards' headline/detail lines. A banned word found there fails `pnpm test`.
 // ponytail: a syntax scan, so text built far from the JSX (a helper in another file) is only
-// caught when that file is listed here; add the onboarding wizard and the no-Git dialog when
-// they reach this lane (T-209-b).
+// caught when that file is listed here.
 import { expect, test } from "vitest";
 import ts from "typescript";
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 import { BANNED, GLOSSARY, jargon, CONNECT } from "./glossary";
 import { AddProjectView } from "./projects/AddProject";
+import StartGit from "./projects/StartGit";
 
-/** In-scope screens: Add Project, the launcher, the landing notices, the sidebar, the Connect cards, error toasts. */
+/** In-scope screens: onboarding, Add Project, the folder-without-Git dialog, the launcher, the landing notices, the sidebar, the Connect cards, error toasts. */
 const SOURCES = import.meta.glob(
   [
+    "./onboarding/Wizard.tsx",
     "./projects/AddProject.tsx",
+    "./projects/StartGit.tsx",
     "./projects/ProjectsPanel.tsx",
     "./launch/ChooserPane.tsx",
     "./launch/PlusMenu.tsx",
@@ -24,6 +26,7 @@ const SOURCES = import.meta.glob(
     "./settings/SettingsPage.tsx",
     "./settings/claudeKey.ts",
     "./settings/CodexCard.tsx",
+    "./settings/CodexAccounts.tsx",
     "./settings/ClaudeAccounts.tsx",
     "./settings/AccountRow.tsx",
     "./settings/Attention.tsx",
@@ -79,7 +82,7 @@ function shownText(file: string): string[] {
 }
 
 test("ONB-036: no banned word in the text shown on a newcomer screen", () => {
-  expect(SCREENS).toHaveLength(15); // a renamed file must not drop out of the scan silently
+  expect(SCREENS).toHaveLength(18); // a renamed file must not drop out of the scan silently
   const found = SCREENS.flatMap((f) => shownText(f).flatMap((t) => jargon(t).map((w) => `${f}: "${w}" in "${t.trim()}"`)));
   expect(found).toEqual([]);
 });
@@ -102,4 +105,10 @@ test("ONB-036: hovering the plain Add Project choice shows the technical term", 
   const html = renderToString(createElement(AddProjectView, { step: "choose", onStep: () => {}, onBrowse: () => {}, onClose: () => {} }));
   expect(html).toContain(`title="${GLOSSARY.clone.hover}"`);
   expect(GLOSSARY.clone.hover).toMatch(/git clone/i);
+});
+
+test("T-209-b ONB-036: the folder-without-Git dialog says project, with the technical term on hover", () => {
+  const html = renderToString(createElement(StartGit, { folder: "G:/work/site", files: [], busy: false, onStart: () => {}, onCancel: () => {} })).replace(/<!-- -->/g, "");
+  expect(html).toContain(`<span title="${GLOSSARY.repository.hover}">Git ${GLOSSARY.repository.plain}</span> yet`);
+  expect(jargon(html.replace(/title="[^"]*"/g, ""))).toEqual([]);
 });

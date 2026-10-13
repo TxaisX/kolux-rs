@@ -45,7 +45,7 @@ pub fn file_write(path: String, text: String, fence: tauri::State<'_, crate::fen
 /// ACCT-055: Open a file shows the system picker here, so only the file the user chose is
 /// granted (never its folder); none when the picker was cancelled.
 #[tauri::command]
-pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>) -> Result<Option<String>, String> {
+pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let mut pick = app.dialog().file().set_title("Open a file");
     if let Some(dir) = default_path {
@@ -53,7 +53,7 @@ pub async fn file_pick(app: tauri::AppHandle, default_path: Option<String>, fenc
     }
     let Some(chosen) = pick.blocking_pick_file() else { return Ok(None) };
     let path = chosen.into_path().map_err(|e| e.to_string())?;
-    fence.grant(&path)?;
+    fence.grant(&path, &*store.lock().map_err(|e| e.to_string())?)?;
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 

@@ -17,7 +17,7 @@ pub struct Counts {
     /// Agent turns started: one per stretch from a prompt to the turn's end.
     pub agents_started: u64,
     pub working_ms: u64,
-    /// Counted once Kolux creates pull requests in this tree (T-136-d); kept and shown meanwhile.
+    /// Pull requests Kolux made (Source Control's Create pull request); linking one is not counted.
     pub prs_created: u64,
 }
 
@@ -67,6 +67,12 @@ impl Activity {
         if matches!(state, "done" | "interrupted") {
             o.turn = false;
         }
+    }
+
+    /// Kolux made a pull request.
+    pub fn pr_created(&mut self) {
+        self.counts.prs_created += 1;
+        self.dirty = true;
     }
 
     /// The pane closed: any turn it had open ends now.
@@ -138,6 +144,11 @@ pub fn save(store: &Mutex<Store>, at_quit: bool) {
     }
 }
 
+/// Kolux made a pull request (scm.rs pr_create).
+pub fn pr_created() {
+    with(|a| a.pr_created());
+}
+
 #[tauri::command]
 pub fn activity_counts() -> Counts {
     with(|a| a.snapshot(now_ms()))
@@ -182,6 +193,16 @@ mod tests {
         a.end(1, 5_000);
         a.note(1, "working", 6_000); // a new pane on the same key is a new turn
         assert_eq!(a.counts.agents_started, 3);
+    }
+
+    #[test]
+    fn usage_011_a_pull_request_kolux_creates_is_counted_and_saved() {
+        let mut a = Activity::load(Some(r#"{"since":5,"agentsStarted":2,"workingMs":9,"prsCreated":3}"#), 7);
+        assert!(a.take_save(false, 8).is_none());
+        a.pr_created();
+        assert_eq!(a.snapshot(9).prs_created, 4);
+        let saved = a.take_save(false, 10).expect("a new pull request is saved with the next batch");
+        assert_eq!(Activity::load(Some(&saved), 11).counts.prs_created, 4);
     }
 
     #[test]

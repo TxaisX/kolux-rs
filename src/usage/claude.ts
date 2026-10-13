@@ -8,14 +8,29 @@ const left = (used: number) => `${Math.max(0, Math.round(100 - used))}% left`;
 /** The pill's window: the weekly one alone (USAGE-008); the 5-hour window never shows here. */
 export const weeklyOf = (limits: ClaudeLimit[]): ClaudeLimit | undefined => limits.find((l) => l.kind === "seven_day");
 
-/** "2d 4h", "4h 5m", "12m", or "now" once the time has passed. */
+/** "2d 4h", "4h 5m", "12m", "under 1m", or "now" once the time has come; rounded down, zero parts
+ *  dropped (USAGE-024). */
 export function countdown(at: number, now: number = Date.now()): string {
+  if (at <= now) return "now";
   const mins = Math.floor((at - now) / 60_000);
-  if (mins <= 0) return "now";
+  if (mins === 0) return "under 1m";
   const d = Math.floor(mins / 1440);
   const h = Math.floor((mins % 1440) / 60);
   const m = mins % 60;
-  return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  const parts = d > 0 ? [[d, "d"], [h, "h"]] : [[h, "h"], [m, "m"]];
+  return parts.filter(([n]) => n).map(([n, u]) => `${n}${u}`).join(" ");
+}
+
+const MINUTE = 60_000;
+const HOUR = 3_600_000;
+/** USAGE-024: ms until the nearest future reset's countdown next changes, a little after the
+ *  change: each minute within a day of it, each hour further out. null with nothing to count. */
+export function nextTick(resets: (number | null | undefined)[], now: number = Date.now()): number | null {
+  const ahead = resets.filter((r): r is number => typeof r === "number" && r > now);
+  if (!ahead.length) return null;
+  const left = Math.min(...ahead) - now;
+  const unit = left <= 86_400_000 ? MINUTE : HOUR;
+  return (left % unit || unit) + 250;
 }
 
 /** The hover line both pills share: the weekly limit, what is left, and when it resets. */

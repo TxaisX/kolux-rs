@@ -1,8 +1,9 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { KITS, RECALL_KEY, assignRoles, catalogueProblems, fillEmpty, firstDropped, isWorkbook, recalled, remember, sampleValues, unquote, type Kit } from "./catalog";
+import { KITS, RECALL_KEY, assignRoles, catalogueProblems, readyVendors, fillEmpty, firstDropped, isWorkbook, recalled, remember, sampleValues, unquote, type Kit } from "./catalog";
 import { KitGallery, KitSetup, canStart, startValues } from "./Kits";
+import { offeredAgents } from "../launch/agents";
 
 const noop = () => {};
 const kit = (id: string) => KITS.find((k) => k.id === id)!;
@@ -84,4 +85,16 @@ test("a kit's setup warns about a workbook and with no AI keeps Start kit off", 
   expect(html).toContain("Connect Claude, Codex or Grok first");
   expect(html).toMatch(/<button class="btn primary" disabled="">Start kit/);
   expect(html).toContain("kit-results");
+});
+
+test("T-207-b ONB-005: kits only count and cast the AIs that are installed and switched on", () => {
+  const list = [
+    { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "c" },
+    { id: "codex", name: "Codex", program: "codex", args: [], installed: true, path: "x" },
+    { id: "grok", name: "Grok", program: "grok", args: [], installed: false, path: null },
+  ];
+  expect(readyVendors(offeredAgents(list, {}))).toEqual(["claude", "codex"]);
+  // Codex switched off on the Agents page: no kit role goes to it and it does not make an AI "ready".
+  expect(readyVendors(offeredAgents(list, { disabledAgents: ["codex"] }))).toEqual(["claude"]);
+  expect(readyVendors(offeredAgents(list, { disabledAgents: ["claude", "codex"] }))).toEqual([]);
 });

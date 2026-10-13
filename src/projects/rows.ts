@@ -7,7 +7,8 @@
 
 export type AgentState = "permission" | "blocked" | "waiting" | "interrupted" | "working" | "queued" | "done" | "idle";
 export type PrState = "open" | "draft" | "merged" | "closed" | "suppressed" | null;
-export type RowInfo = { state: AgentState; changed: number; pr: PrState };
+/** `cache`: when the prompt cache of its idle Claude agents runs out (SET-059), null when none counts. */
+export type RowInfo = { state: AgentState; changed: number; pr: PrState; cache?: number | null };
 export type GroupBy = "none" | "project" | "status" | "pr";
 export type SortBy = "smart" | "name";
 

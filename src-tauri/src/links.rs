@@ -234,7 +234,7 @@ pub fn file_grant(store: tauri::State<'_, Mutex<crate::state::Store>>, grants: t
     grants.0.lock().unwrap_or_else(|e| e.into_inner()).insert(fence_key(&path));
     // The editor reads and saves through ACCT-055's fence, so a file is granted there too; a
     // folder or a missing file is not (that fence grants only existing files).
-    let _ = fence.grant(Path::new(&path));
+    let _ = fence.grant(Path::new(&path), &store.lock().unwrap_or_else(|e| e.into_inner()));
     Ok(())
 }
 

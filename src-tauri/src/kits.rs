@@ -210,8 +210,9 @@ pub fn prepare(dir: &Path, record: RunRecord, earlier_name: &str) -> Prepared {
 }
 
 #[tauri::command]
-pub fn kit_check(dir: String) -> Option<RunCheck> {
-    check(Path::new(&dir))
+/// ACCT-055: only a project or the samples folder, like the other kit commands.
+pub fn kit_check(store: State<'_, Mutex<Store>>, dir: String) -> Option<RunCheck> {
+    guard(&store, &dir).ok().and_then(|d| check(&d))
 }
 
 /// SKILL-015: refused for an unknown kit or a folder that is not a project or under samples.

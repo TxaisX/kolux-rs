@@ -32,6 +32,7 @@ import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, stripOn } from "./settings/general";
+import { cacheDue, cacheMinutes } from "./projects/cache";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
@@ -51,8 +52,8 @@ import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
-import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, openAt, type Outcome } from "./onboarding/firstRun";
-import { KITS, VENDORS, RECALL_KEY, assignRoles, remember, type Kit, type Vendor } from "./kits/catalog";
+import { ADD_PROJECT, closer, firstFolderAgent, kitLaunch, oneClick, openAt, REOPEN_WIZARD, type Outcome } from "./onboarding/firstRun";
+import { KITS, RECALL_KEY, assignRoles, readyVendors, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
 import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
@@ -406,7 +407,8 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     return () => window.removeEventListener(OPEN_IN_BROWSER, show);
   }, [panes, focused, activeDir]);
   // SKILL-003: Claude, Codex and Grok, when found and not switched off, can take kit roles.
-  const kitAIs = useMemo(() => VENDORS.filter((v) => agents.some((a) => a.id === v && a.installed)), [agents]) as Vendor[];
+  // ONB-005 / SKILL-003: `agents` is already the switched-on set, so a kit never counts or casts an AI turned off on the Agents page.
+  const kitAIs = useMemo(() => readyVendors(agents), [agents]);
   const pickKit = (id: string) => {
     setKitConflict(null);
     setKits({ kit: id, sampleDir: null });
@@ -1342,6 +1344,19 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
     ),
   );
   const endWizard = (outcome: Outcome, after?: () => void) => wizardClose.end(outcome, after);
+  // ONB-009: Onboarding in the sidebar help menu starts the wizard over on screen one.
+  useEffect(() => {
+    const counts = oneClick();
+    const reopen = () => {
+      if (!counts()) return;
+      invoke("onboarding_reopen").then(
+        () => setWizard(0),
+        (err) => setToast(`Kolux could not reopen onboarding (${String(err)}).`),
+      );
+    };
+    window.addEventListener(REOPEN_WIZARD, reopen);
+    return () => window.removeEventListener(REOPEN_WIZARD, reopen);
+  }, []);
   // ONB-010: armed by Pick a folder, or by Skip while no project exists; the next project added
   // starts the saved default agent in it, once.
   const firstFolder = useRef(false);
@@ -1539,6 +1554,11 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   };
   // SKILL-011: Restart and Move to start one seat for the role on the chosen AI and make it the
   // role's session; with the settings unreadable nothing starts.
+  /** SKILL-011: why a kit seat's hooks say it is stopped, while it is. */
+  const kitStop = (k: number) => {
+    const cause = hook[k] === "blocked" ? turn[k]?.stop?.cause : undefined;
+    return cause === "limit" || cause === "signin" ? cause : null;
+  };
   const kitRestart = async (i: number, ai: string) => {
     const dir = activeDir;
     const check = kitCheck;
@@ -1626,10 +1646,12 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
   // STAT-001: a hook-fed state wins over the guess from the program's state.
   for (const p of panes) if (p.cwd !== null && p.kind !== "browser" && !p.seats) (byDir[p.cwd] ??= []).push(hook[p.key] ?? paneState(p.agent, running[p.key]));
   const rowStates: Record<string, RowInfo> = {};
+  const cacheFor = cacheMinutes(settings); // SET-059
   for (const [dir, states] of Object.entries(byDir)) {
     const state = strongest(states);
     const prev = rowRef.current[dir];
-    rowStates[dir] = prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null };
+    const cache = cacheDue(panes.filter((p) => p.cwd === dir).map((p) => ({ agent: p.agent, state: hook[p.key], since: stamp[p.key]?.at ?? 0 })), cacheFor);
+    rowStates[dir] = { ...(prev && prev.state === state ? prev : { state, changed: Date.now(), pr: null }), cache };
   }
   rowRef.current = rowStates;
   const cells = cellsOf(panes);
@@ -2114,7 +2136,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
               {page === null && activeDir && kitCheck && (
                 <KitStrip
                   check={kitCheck}
-                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k], ai: aiOf(panes.find((p) => p.key === k) ?? { agent: "shell", program: null }) }))}
+                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k], stop: kitStop(k), ai: aiOf(panes.find((p) => p.key === k) ?? { agent: "shell", program: null }) }))}
                   sent={kitRuns.current[activeDir]?.sent ?? {}}
                   now={Date.now()}
                   folded={kitFolded}
@@ -2125,6 +2147,7 @@ function Window({ initial, layout }: { initial: Record<string, unknown>; layout:
                   onPreview={kitPreview}
                   onOpenFile={kitOpenFile}
                   onRestart={(i, ai) => void kitRestart(i, ai)}
+                  onSignIn={() => openSettings("accounts")}
                   onFocusSeat={(key) => {
                     setActiveDir(activeDir);
                     setFocused(key);

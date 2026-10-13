@@ -167,6 +167,10 @@ input { font: inherit; }
 .sess .fold.shut svg { transform: rotate(-90deg); }
 .sb-form .check { display: flex; align-items: center; gap: 8px; }
 .sess .hint { font-size: 11px; color: var(--fg-muted); }
+/* SET-059: the prompt-cache countdown; yellow in the final minute, a red icon once it runs out. */
+.sess .cache-timer { font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; }
+.sess .cache-timer.last { color: var(--warn); }
+.sess .cache-timer.gone { color: var(--danger); }
 /* GIT-065: the badge sits where the row buttons appear on hover, so it never squeezes the name. */
 .sess .hint.push { position: absolute; right: 8px; white-space: nowrap; pointer-events: none; }
 .sess:hover .hint.push,
@@ -798,7 +802,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .kit-strip-row.can:hover, .kit-strip-row.can:focus-visible { background: var(--row-selected); outline: none; }
 .kit-strip-state { color: var(--fg-muted); }
 .kit-strip-row.done .kit-strip-state { color: var(--fg); }
-.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state { color: var(--warn); }
+.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state, .kit-strip-row.limit .kit-strip-state, .kit-strip-row.signin .kit-strip-state { color: var(--warn); }
 .kit-strip-row { flex-wrap: wrap; }
 .kit-strip-files { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: flex-end; flex-basis: 100%; padding-bottom: 4px; }
 .kit-strip-file { display: inline-flex; gap: 4px; align-items: center; }

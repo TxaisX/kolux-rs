@@ -271,6 +271,30 @@ pub fn write_file(path: &Path, plain: &str) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// ACCT-025: seals each (live sign-in file, vault file) pair again when the live file no longer
+/// matches its sealed copy (the agent renewed its token while Kolux ran); a missing live file is
+/// skipped. Returns how many were saved.
+pub fn save_changed(pairs: &[(PathBuf, PathBuf)], log_dir: &Path) -> usize {
+    let mut saved = 0;
+    for (live, vault) in pairs {
+        let Ok(now) = fs::read_to_string(live) else { continue };
+        if read_file(vault, log_dir).ok().flatten().as_deref() != Some(now.as_str()) && write_file(vault, &now).is_ok() {
+            saved += 1;
+        }
+    }
+    saved
+}
+
+/// ACCT-025: runs one quit step on its own thread and waits at most the limit for it, so quitting
+/// never hangs; None when it ran out of time (the thread is left to end with the app).
+pub fn within<T: Send + 'static>(limit: std::time::Duration, step: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(step());
+    });
+    rx.recv_timeout(limit).ok()
+}
+
 /// Reads a vault file, opened. A clear file (older release) is read and sealed again. A sealed
 /// file that cannot be opened is moved aside (`<name>.unreadable-<secs>`) and reads as `None`.
 /// The managed sign-ins of T-043 read through it.
@@ -503,6 +527,27 @@ pub fn clear_setting(store: &Store, key: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ACCT-025: on quit a sign-in the agent renewed is sealed again; an unchanged or missing one
+    // is left alone, and a step that hangs is given up after its time limit.
+    #[test]
+    fn renewed_sign_ins_are_sealed_again_on_quit_and_a_hung_step_is_dropped() {
+        let dir = crate::test_dir::temp("quit-save");
+        let (live, vault, gone) = (dir.join("auth.json"), dir.join("vault").join("codex-a.json"), dir.join("nothing.json"));
+        fs::write(&live, r#"{"token":"fake-1"}"#).unwrap();
+        write_file(&vault, r#"{"token":"fake-1"}"#).unwrap();
+        let pairs = vec![(live.clone(), vault.clone()), (gone, dir.join("vault").join("codex-b.json"))];
+        assert_eq!(save_changed(&pairs, &dir), 0);
+        assert!(!dir.join("vault").join("codex-b.json").exists(), "nothing is made for a missing sign-in");
+        fs::write(&live, r#"{"token":"fake-2"}"#).unwrap();
+        assert_eq!(save_changed(&pairs, &dir), 1);
+        assert_eq!(read_file(&vault, &dir).unwrap().as_deref(), Some(r#"{"token":"fake-2"}"#));
+        assert!(!fs::read_to_string(&vault).unwrap().contains("fake-2"), "the copy is sealed");
+        assert_eq!(within(std::time::Duration::from_secs(1), || 7), Some(7));
+        let started = std::time::Instant::now();
+        assert_eq!(within(std::time::Duration::from_millis(50), || std::thread::sleep(std::time::Duration::from_secs(5))), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kolux-rs-secrets-{name}-{}", std::process::id()));

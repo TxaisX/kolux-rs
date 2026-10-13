@@ -7,7 +7,7 @@ import ChooserPane, { seatAgents } from "./ChooserPane";
 import type { AgentInfo } from "./PlusMenu";
 import { defaultCopies, pickShape, TERMINAL, type Copies, type SavedShape, type Seat, type Shape } from "./seats";
 
-const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:\\bin\\claude.exe" };
+const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:\\bin\\claude.exe", docs: true };
 const render = (seats: Seat[], closable = true, inGit = true, copies: Copies = defaultCopies(seats.length, inGit), shape: Shape = "custom", task = "", saved: SavedShape[] = []) =>
   renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape, task, onTask: () => {}, onStart: () => {}, copies, inGit, onCopies: () => {}, closable, onClose: () => {}, saved, onSaved: () => {}, onPickSaved: () => {} }));
 const radio = (html: string, label: string) => html.split("<label").find((l) => l.includes(label))!;
@@ -147,7 +147,7 @@ test("SESS-021: Use last lineup shows only when offered, naming the remembered a
   expect(renderToString(createElement(ChooserPane, { ...props, lastLineup: null }))).not.toContain("Use last lineup");
 });
 
-const agent = (id: string, name: string, installed: boolean): AgentInfo => ({ id, name, program: id, args: [], installed, path: installed ? `C:/bin/${id}.exe` : null });
+const agent = (id: string, name: string, installed: boolean): AgentInfo => ({ id, name, program: id, args: [], installed, path: installed ? `C:/bin/${id}.exe` : null, docs: ["claude", "codex", "grok"].includes(id) });
 const renderWith = (agents: AgentInfo[], detecting = false, seats: Seat[] = [{ agent: null, model: null }]) =>
   renderToString(createElement(ChooserPane, { saved: [], onSaved: () => {}, onPickSaved: () => {}, number: 2, agents, detecting, seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: true, onCopies: () => {}, closable: true, onClose: () => {} }));
 
@@ -169,6 +169,13 @@ test("SESS-017: Claude, Codex and Grok come first; a missing one is greyed with 
   expect(renderWith(list, false, [{ agent: "aider", model: null }])).toContain("Aider");
   // Agents with a known page link out to it.
   expect(html).toContain("Claude Code docs");
+});
+
+test("T-201-c SESS-017: any agent with its own page links out to it, the folded ones too", () => {
+  const list = [claude, agent("codex", "Codex", true), agent("grok", "Grok", true), { ...agent("aider", "Aider", true), docs: true }, agent("trae", "Trae", true)];
+  const html = renderWith(list, false, [{ agent: "aider", model: null }]);
+  expect(html).toContain("Aider docs");
+  expect(html).not.toContain("Trae docs");
 });
 
 test("SESS-017: nothing reads not installed while detection runs, and finding no AI at all says so", () => {

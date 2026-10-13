@@ -60,7 +60,18 @@ export function attentionText(a: Attention, now = Date.now()): string {
   return a.message;
 }
 
-/** `offer` = false: the card's own buttons already cover it, so only the reason is shown. */
+/** ACCT-014: the window event "Check again" sends; the grid detects the agents afresh and every
+ *  connection card re-reads its status on it. */
+export const CHECK_AGAIN = "kolux-check-again";
+
+/** What a fix button does. "check" detects afresh and clears the stale note (the card's Cancel),
+ *  never starting a sign-in; "connect" starts the card's sign-in again. */
+export function fixDoes(f: Fix): "check" | "install-page" | "key" | "connect" {
+  return f === "Check again" ? "check" : f === "Open install page" ? "install-page" : f === "Use a 1-year key instead" ? "key" : "connect";
+}
+
+/** `offer` = false: the card's own buttons already cover it, so only the reason is shown.
+ *  "Check again" also tells the grid and every card to detect afresh (see fixDoes). */
 export function AttentionNote({ attention, route, busy, offer = true, onFix }: { attention: Attention | null; route: Route; busy?: boolean; offer?: boolean; onFix: (f: Fix) => void }) {
   if (!attention) return null;
   const fix = offer ? fixFor(attention, route) : null;
@@ -68,7 +79,7 @@ export function AttentionNote({ attention, route, busy, offer = true, onFix }: {
     <div className="attn" data-reason={attention.reason} role="alert">
       <p className="conn-detail warn">{attentionText(attention)}</p>
       {fix && (
-        <button className="btn primary" disabled={busy} onClick={() => onFix(fix)}>
+        <button className="btn primary" disabled={busy} onClick={() => (fixDoes(fix) === "check" && window.dispatchEvent(new Event(CHECK_AGAIN)), onFix(fix))}>
           {fix}
         </button>
       )}

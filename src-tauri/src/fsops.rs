@@ -145,6 +145,9 @@ pub fn restore(_paths: &[String]) -> Result<(), String> {
 type Store<'a> = tauri::State<'a, Mutex<crate::state::Store>>;
 type Grants<'a> = tauri::State<'a, crate::links::Grants>;
 type Fence = (Vec<String>, std::collections::HashSet<String>);
+/// ACCT-055's fence (fence.rs): the user's projects and their worktrees.
+type Guard<'a> = tauri::State<'a, crate::fence::Fence>;
+type GitState<'a> = tauri::State<'a, crate::git::Git>;
 
 fn fence_of(store: &Store<'_>, grants: &Grants<'_>) -> Fence {
     (crate::links::roots(store), grants.snapshot())
@@ -154,23 +157,30 @@ fn fenced(f: &Fence, path: &str, follow: bool) -> Result<PathBuf, String> {
     crate::links::fence(path, &f.0, &f.1, follow)
 }
 
+// ACCT-055: each command below works only on paths inside the user's projects and worktrees
+// (fence.rs) and, on top of that, never out through a link (EDIT-045's `links::fence`); a copy
+// may also take files the user just dropped in from outside.
 #[tauri::command]
-pub fn fs_create(store: Store<'_>, grants: Grants<'_>, dir: String, name: String, folder: bool) -> Result<String, String> {
+pub fn fs_create(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, dir: String, name: String, folder: bool) -> Result<String, String> {
+    guard.allow(&dir, &store, &git, false)?;
     create(&fenced(&fence_of(&store, &grants), &dir, true)?, &name, folder).map(|p| shown(&p))
 }
 
 #[tauri::command]
-pub fn fs_rename(store: Store<'_>, grants: Grants<'_>, path: String, name: String) -> Result<String, String> {
+pub fn fs_rename(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, path: String, name: String) -> Result<String, String> {
+    guard.allow(&path, &store, &git, false)?;
     rename(&fenced(&fence_of(&store, &grants), &path, false)?, &name).map(|p| shown(&p))
 }
 
 #[tauri::command]
-pub async fn fs_trash(store: Store<'_>, grants: Grants<'_>, paths: Vec<String>) -> Result<Vec<Gone>, String> {
+pub async fn fs_trash(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, paths: Vec<String>) -> Result<Vec<Gone>, String> {
     let f = fence_of(&store, &grants);
+    let refused = paths.iter().map(|p| guard.allow(p, &store, &git, false).err()).collect::<Vec<_>>();
     tauri::async_runtime::spawn_blocking(move || {
         paths
             .into_iter()
-            .map(|p| match fenced(&f, &p, false) {
+            .zip(refused)
+            .map(|(p, refused)| match refused.map_or_else(|| fenced(&f, &p, false), Err) {
                 Ok(_) => trash_each(std::slice::from_ref(&p)).remove(0),
                 Err(e) => Gone { path: p, permanent: false, error: Some(e) },
             })
@@ -181,7 +191,8 @@ pub async fn fs_trash(store: Store<'_>, grants: Grants<'_>, paths: Vec<String>) 
 }
 
 #[tauri::command]
-pub async fn fs_restore(store: Store<'_>, grants: Grants<'_>, paths: Vec<String>) -> Result<(), String> {
+pub async fn fs_restore(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, paths: Vec<String>) -> Result<(), String> {
+    guard.allow_all(&paths, &store, &git)?;
     let f = fence_of(&store, &grants);
     for p in &paths {
         fenced(&f, p, false)?;
@@ -284,12 +295,16 @@ pub fn move_into(from: &Path, dir: &Path) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn fs_copy(store: Store<'_>, grants: Grants<'_>, paths: Vec<String>, dir: String) -> Result<Vec<Placed>, String> {
+pub async fn fs_copy(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, paths: Vec<String>, dir: String) -> Result<Vec<Placed>, String> {
+    guard.allow(&dir, &store, &git, false)?;
     let f = fence_of(&store, &grants);
+    // Ok(true): a file the user just dropped in from outside, copied as it is.
+    let sources = paths.iter().map(|p| guard.allow_source(p, &store, &git).map(|_| guard.was_dropped(Path::new(p)))).collect::<Vec<_>>();
     tauri::async_runtime::spawn_blocking(move || {
         paths
             .into_iter()
-            .map(|p| match fenced(&f, &p, false).and_then(|from| fenced(&f, &dir, true).and_then(|d| copy_into(&from, &d))) {
+            .zip(sources)
+            .map(|(p, source)| match source.and_then(|dropped| if dropped { Ok(PathBuf::from(&p)) } else { fenced(&f, &p, false) }).and_then(|from| fenced(&f, &dir, true).and_then(|d| copy_into(&from, &d))) {
                 Ok((to, 0)) => Placed { from: p, to: Some(shown(&to)), error: None },
                 Ok((to, n)) => Placed { from: p, error: Some(format!("{}: {n} link(s) inside were left out", shown(&to))), to: Some(shown(&to)) },
                 Err(e) => Placed { from: p, to: None, error: Some(e) },
@@ -302,7 +317,8 @@ pub async fn fs_copy(store: Store<'_>, grants: Grants<'_>, paths: Vec<String>, d
 
 /// Each move is (entry, folder to move it into).
 #[tauri::command]
-pub async fn fs_move(store: Store<'_>, grants: Grants<'_>, moves: Vec<(String, String)>) -> Result<Vec<Placed>, String> {
+pub async fn fs_move(store: Store<'_>, grants: Grants<'_>, guard: Guard<'_>, git: GitState<'_>, moves: Vec<(String, String)>) -> Result<Vec<Placed>, String> {
+    guard.allow_all(moves.iter().flat_map(|(p, d)| [p, d]), &store, &git)?;
     let f = fence_of(&store, &grants);
     tauri::async_runtime::spawn_blocking(move || {
         moves
