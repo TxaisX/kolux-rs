@@ -53,6 +53,11 @@ Rules: logs go to local files that rotate, can be read only by the user, and are
   list of known secret key names, and masking text that is already masked changes nothing; the user
   can create a review copy, open it and throw it away before sharing; writing a diagnostic record
   can never make the action it records fail.
+  (Kolux RS, T-064-a: the terminals run inside the app, so the "terminal service" log is the app's own
+  `logs/kolux.log` (app start and exit, each session's start and end, what background passes refused;
+  never a session's output or arguments); files move aside past 512 KB and the oldest go past 2 MB in
+  all; the logs folder inherits the profile folder's user-only permission (ACCT-009); the copy, the
+  review copy and its discard live in Settings > General > Diagnostics.)
 Acceptance:
   - [ ] Run a command containing a fake API key, then copy diagnostics → the key is absent from the
         clipboard text.

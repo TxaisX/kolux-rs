@@ -11,6 +11,7 @@ mod claude_key;
 mod codex_accounts;
 mod codex_usage;
 mod creatures;
+mod diag;
 mod files;
 mod fsops;
 mod fonts;
@@ -113,6 +114,8 @@ pub fn run() {
             store.set("start_count", &starts.to_string())?;
             app.manage(Mutex::new(store));
             app.manage(links::Grants::default());
+            // APP-041: the app's own start-and-stop record, next to what the terminals report.
+            diag::write(&dir, &format!("app start {starts}, Kolux RS {}", app.package_info().version));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.
             if let Some(w) = app.get_webview_window("main") {
@@ -288,6 +291,9 @@ pub fn run() {
             fsops::fs_copy,
             fsops::fs_move,
             fsops::clip_write,
+            diag::diag_bundle,
+            diag::diag_review,
+            diag::diag_review_discard,
             update::update_status,
             update::update_mark,
             update::update_check,
@@ -304,6 +310,7 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 app.state::<Terminals>().kill_all();
                 if let Ok(dir) = app.path().app_data_dir() {
+                    diag::write(&dir, "app exit");
                     let _ = std::fs::remove_file(dir.join(cli::FILE));
                     let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));
                 }

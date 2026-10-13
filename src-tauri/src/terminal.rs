@@ -280,6 +280,10 @@ impl Terminals {
         inner.next_id += 1;
         let id = inner.next_id;
         let out_app = app.clone();
+        // APP-041: each session's start and end go to the app's own log (no arguments: they may carry secrets).
+        let log_dir = app.path().app_data_dir().ok();
+        let exit_dir = log_dir.clone();
+        let label = program.clone().unwrap_or_else(|| "shell".to_string());
         let exit_app = app;
         let registry = self.inner.clone();
         let out_registry = self.inner.clone();
@@ -351,10 +355,16 @@ impl Terminals {
                     inner.keys.remove(&id);
                     inner.logs.remove(&id);
                 }
+                if let Some(d) = &exit_dir {
+                    crate::diag::write(d, &format!("terminal {id} exited ({code:?})"));
+                }
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
         )?;
         inner.sessions.insert(id, session);
+        if let Some(d) = &log_dir {
+            crate::diag::write(d, &format!("terminal {id} started ({label})"));
+        }
         inner.keys.insert(id, key);
         if is_program {
             let agent = program.as_deref().and_then(crate::agents::credited_agent);

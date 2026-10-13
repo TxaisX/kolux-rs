@@ -19,7 +19,6 @@ use crate::state::Store;
 use base64::Engine;
 use serde_json::Value;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -203,16 +202,10 @@ fn move_aside(path: &Path) -> Result<PathBuf, String> {
     Ok(aside)
 }
 
-/// One line in `<profile>/logs/kolux.log`. Never carries a secret. Failures are ignored.
+/// One line in the app's own log (`diag`, APP-041: rotated and capped). Never carries a secret;
+/// failures are ignored.
 pub fn log(dir: &Path, line: &str) {
-    let logs = dir.join("logs");
-    if fs::create_dir_all(&logs).is_err() {
-        return;
-    }
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(logs.join("kolux.log")) {
-        let _ = writeln!(f, "{secs} {line}");
-    }
+    crate::diag::write(dir, line);
 }
 
 /// What the one-off pass did, for the tests and the log.

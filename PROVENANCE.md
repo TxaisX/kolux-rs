@@ -451,3 +451,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-061 · The card GIT-003 and the app's own CloseAsk dialog; git's reset, checkout and pathspec-from-file behaviour as the unit test exercises it on this machine; no outside source.
 > 2026-10-12 · T-062-a · The cards EDIT-044, EDIT-045 and EDIT-053 and the T-060 host refusal; Rust std `canonicalize` and Windows sharing-violation error codes as the unit tests exercise them on this machine; no outside source.
 > 2026-10-12 · T-063 · The card BROW-051 and the app's own hooks and CLI servers; the Fetch standard's CORS and Sec-Fetch behaviour as the app's own web view showed it; no outside source.
+> 2026-10-12 · T-064-a · The card APP-041 and the app's own secrets, terminal and settings modules; the token prefixes are the public formats of Anthropic, GitHub, Slack, AWS, Google, GitLab and npm keys as their documentation shows them; no outside source.
