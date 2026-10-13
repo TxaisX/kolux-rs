@@ -37,6 +37,7 @@ import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 import { GLOSSARY } from "../glossary";
+import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
 
 /** The pages that open over the content column from the sidebar footer. */
 export type Page = "automations" | "routing";
@@ -192,6 +193,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
+  const [importing, setImporting] = useState<{ project: string; path: string; list: SetupImport[] } | null>(null);
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
   const indexed = useRef(""); // the last project list and owner map handed to the window
@@ -336,6 +338,23 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     await reload();
     const open = openedWorktree(await invoke<Worktree[]>("workspace_list", { projectId: p.id }), p.path);
     if (open) onSelect(open.path, open.branch);
+    // VIEW-112: another tool's setup file in the new project is offered for import.
+    const list = await invoke<SetupImport[]>("setup_imports_list", { path: p.path }).catch(() => [] as SetupImport[]);
+    if (list.some((i) => !i.refused)) setImporting({ project: p.name, path: p.path, list });
+    else if (refusedLine(list)) say("warn", `No setup commands imported. ${refusedLine(list)}`);
+  };
+  const importSetup = async (file: string) => {
+    if (!importing) return;
+    setBusy("importing");
+    try {
+      await invoke("setup_import", { path: importing.path, file });
+      say("ok", `The setup commands from ${file} are in kolux.yaml; commit it so new workspaces run them.`);
+      setImporting(null);
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy("");
+    }
   };
   const addPath = async (path: string) => {
     if (!path.trim()) return;
@@ -1381,6 +1400,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           </button>
         </div>
       </aside>
+      {importing && <ImportSetup {...importing} busy={busy !== ""} onImport={importSetup} onClose={() => setImporting(null)} />}
       {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onCancel={() => setStartGit(null)} />}
     </div>
   );

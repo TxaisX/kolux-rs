@@ -222,6 +222,8 @@ pub fn run() {
             projects::workspace_items,
             projects::workspace_item,
             setup::workspace_setup,
+            setup::setup_imports_list,
+            setup::setup_import,
             projects::workspace_set_parent,
             projects::workspace_branches,
             projects::workspace_open_branch,
