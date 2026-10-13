@@ -252,7 +252,8 @@ pub fn reply_body(path: &str, body: &[u8], settings: &Value) -> String {
         if event.get("hook_event_name")?.as_str()? != "PreToolUse" || !matches!(event.get("tool_name")?.as_str()?, "Bash" | "PowerShell") {
             return None;
         }
-        let rule = crate::protected::check(event.get("tool_input")?.get("command")?.as_str()?, settings)?;
+        let base = crate::protected::Base::from_env(event.get("cwd").and_then(Value::as_str));
+        let rule = crate::protected::check(event.get("tool_input")?.get("command")?.as_str()?, &base, settings)?;
         Some(json!({ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": crate::protected::reason(rule.name) } }).to_string())
     };
     ask().unwrap_or_else(|| "{}".into())
@@ -946,6 +947,8 @@ mod tests {
         assert_eq!(reply_body("/claude", br#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"git push -f"}}"#, &s), "{}");
         assert_eq!(reply_body("/claude", b"not json {", &s), "{}", "a garbled body fails open");
         assert_eq!(reply_body("/codex", pre("Bash", "git push -f").as_bytes(), &s), "{}", "Codex is not guarded");
+        let body = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"/home/me/app","tool_input":{"command":"rm -rf .git"}}"#;
+        assert!(reply_body("/claude", body, &json!({})).contains("Deleting folders outside the workspace"), "SAFE-013 through the hook, judged against cwd");
         let off = json!({ "protectedOff": ["force-push"] });
         assert_eq!(reply_body("/claude", pre("Bash", "git push -f").as_bytes(), &off), "{}", "a switched-off rule asks no more");
         // The Claude script prints the answer for Claude to read; Codex's still discards it.

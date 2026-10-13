@@ -274,6 +274,9 @@ Rules: recursive deletes are rm with a recursive flag; rd, rmdir, del and erase 
   used instead; with neither known, any relative recursive delete asks. Paths are compared as text
   only and never looked up on disk; Git Bash drive paths are turned into Windows form; comparisons
   on Windows ignore letter case.
+  (Kolux RS, T-059-a: rule `delete` in `src-tauri/src/protected.rs`; the workspace is Claude's own
+  hook cwd, which a Kolux pane makes the worktree folder, DT-C23; a temp root wins over the
+  workspace test, so a repository kept under TEMP is not protected from its own deletes.)
 Acceptance:
   - [ ] rm -rf on the filesystem root, on a folder in the user's documents, on .., on ., on .git, or
         on a path held in a shell variable → each asks.
@@ -307,6 +310,9 @@ Rules: every program in a chain is inspected (semicolons, ampersands, pipes, and
   2026-10-04 audit findings S1 (PowerShell value switches), S2 (wrapper option values), S3
   (run-together cmd switches and the doubled slash), S4 (bare cd and popd) and the at-sign-for-HEAD
   gap; the rebuild must pass all of them from its first version.
+  (Kolux RS, T-059-a: `protected::segments` and its helpers; the inner commands of a PowerShell
+  -File script, a shell reading stdin, and `find -exec` are not read, and `start`'s title is
+  skipped by its empty quotes only.)
 Acceptance:
   - [ ] bash -c wrapping rm -rf / → asks; rm -rf / inside a $( ) substitution → asks; cmd /c
         wrapping rd /s /q on the Users folder → asks.
