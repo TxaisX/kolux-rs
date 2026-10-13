@@ -20,7 +20,11 @@ test("the look is written down once, so a fresh profile stays New; T-418: a miss
 test("the first screen counts only under New", () => {
   expect(startScreen({ uiLook: "new", firstScreen: "board" })).toBe("board");
   expect(startScreen({ uiLook: "classic", firstScreen: "board" })).toBe("terminals");
-  expect(savedFirst({ firstScreen: "elsewhere" })).toBe("terminals");
+  expect(savedFirst({ firstScreen: "elsewhere" })).toBe("board");
+  // VIEW-001: a New profile that never chose a screen opens on Board; Classic stays on Terminals.
+  expect(startScreen({ uiLook: "new" })).toBe("board");
+  expect(startScreen({ uiLook: "new", firstScreen: "terminals" })).toBe("terminals");
+  expect(startScreen({ uiLook: "classic" })).toBe("terminals");
 });
 
 test("VIEW-005: the screen left at quit comes back, an unknown one falls back", () => {
@@ -29,7 +33,7 @@ test("VIEW-005: the screen left at quit comes back, an unknown one falls back", 
   expect(startScreen({ uiLook: "classic", lastScreen: "inbox" })).toBe("inbox");
   expect(startScreen({ uiLook: "classic", lastScreen: "board" })).toBe("terminals");
   expect(startScreen({ uiLook: "new", firstScreen: "agents", lastScreen: "settings" })).toBe("agents");
-  expect(startScreen({ uiLook: "new", lastScreen: 7 })).toBe("terminals");
+  expect(startScreen({ uiLook: "new", lastScreen: 7 })).toBe("board");
 });
 
 test("VIEW-005: quick switches are one write, a close flushes the last one", () => {

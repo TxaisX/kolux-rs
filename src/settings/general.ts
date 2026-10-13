@@ -26,10 +26,10 @@ export function stampLook(s: Record<string, unknown>): Record<string, unknown> |
   return { ...s, ...(look ? {} : { [LOOK_FIELD]: readLook(s) }), ...(mode ? {} : { [FIELD.mode]: "dark" }) };
 }
 
-/** The saved first screen (Terminals when unset or unknown). */
+/** The saved first screen (VIEW-001: Board when never chosen or unknown). */
 export function savedFirst(s: Record<string, unknown>): Screen {
   const v = s[FIRST_FIELD];
-  return v === "agents" || v === "board" ? v : "terminals";
+  return v === "agents" || v === "terminals" ? v : "board";
 }
 
 /** VIEW-005: the screen in front at quit. Picking a first screen in General writes it too, so the
@@ -37,7 +37,7 @@ export function savedFirst(s: Record<string, unknown>): Screen {
 export const LAST_SCREEN_FIELD = "lastScreen";
 
 /** The screen the window opens on: the one left at quit (Agents and Board only under New), else the
- *  first-screen choice under New, else Terminals; an unknown saved value counts as none. */
+ *  first-screen choice under New (Board when none), else Terminals; an unknown saved value counts as none. */
 export function startScreen(s: Record<string, unknown>): Screen {
   const classic = readLook(s) === "classic";
   const last = s[LAST_SCREEN_FIELD];
