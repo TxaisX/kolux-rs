@@ -5,7 +5,7 @@
 // it can be edited and Mod+S writes the file. The sides are read again every two seconds while the
 // tab is in front, so a change made in a terminal, or a stage made elsewhere, shows without
 // reopening. A markdown file's diff is source text, never the rich view.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
@@ -30,6 +30,20 @@ export const withoutWhitespace = (a: string, b: string) => diff(a, b).filter((c)
 
 type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; autosave?: number | null };
 
+// EDIT-028: past this many lines (both sides together), or this much text, the tab asks before it draws.
+const BIG_LINES = 20_000;
+const BIG_CHARS = 2_000_000;
+/** The line count of a diff too large to draw without asking, or 0 when it can draw straight away. */
+export const bigDiff = (s: Sides) => {
+  let n = 0;
+  for (const t of [s.original, s.modified]) {
+    if (!t) continue;
+    n++;
+    for (let i = t.indexOf("\n"); i !== -1; i = t.indexOf("\n", i + 1)) n++;
+  }
+  return n > BIG_LINES || s.original.length + s.modified.length > BIG_CHARS ? n : 0;
+};
+
 export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, autosave = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [sides, setSides] = useState<Sides | null>(null);
@@ -48,7 +62,10 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   const front = useRef(!hidden);
   front.current = !hidden;
   const lang = useRef(new Compartment());
-  const ready = sides !== null;
+  const big = useMemo(() => (sides ? bigDiff(sides) : 0), [sides]);
+  const here = `${staged}:${path}`;
+  const [loadFor, setLoadFor] = useState<string | null>(null); // the diff the user said to load anyway
+  const ready = sides !== null && (!big || loadFor === here);
 
   // The sides, now and every two seconds while the tab is in front.
   useEffect(() => {
@@ -240,6 +257,14 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
           The diff of {name} did not load: {error}
           <button className="btn" onClick={() => setTries((n) => n + 1)}>
             Retry
+          </button>
+        </div>
+      )}
+      {sides && !ready && (
+        <div className="notice md-banner" role="status">
+          This diff is large ({big.toLocaleString()} lines across both sides) and may take a while to draw.
+          <button className="btn" onClick={() => setLoadFor(here)}>
+            Load diff
           </button>
         </div>
       )}
