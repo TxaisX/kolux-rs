@@ -1,19 +1,19 @@
 //! STAT-002 / STAT-003 (T-120-a): the one switch for every agent's status hooks, and what the
 //! `kolux agent hooks` commands report. Off, `sync` takes Kolux's entries out of every agent and
-//! nothing puts them back at launch; on (the default, and what a missing or unreadable value
-//! means), they return. The commands answer from the files themselves, so they work whether or not
-//! Kolux is open.
+//! nothing puts them back at launch; on, they return. Off is the default (T-152-gate): no saved or an
+//! unreadable value installs nothing, and turning it on is the user's recorded approval. The
+//! commands answer from the files themselves, so they work whether or not Kolux is open.
 
-use super::{codex_command, codex_home, names_mine, read_opt, sync};
+use super::{clear, codex_command, codex_home, names_mine, read_opt, sync};
 use crate::hooks::{claude_settings_file, home_dir, install_codex, write_codex_script, CLAUDE_EVENTS, CODEX_EVENTS};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
-/// The Settings key; only `false` turns the hooks off.
+/// The Settings key; only a saved `true` turns the hooks on.
 pub const SWITCH_KEY: &str = "agentStatusHooks";
 
 pub fn on(settings: &Value) -> bool {
-    settings.get(SWITCH_KEY) != Some(&Value::Bool(false))
+    settings.get(SWITCH_KEY) == Some(&Value::Bool(true))
 }
 
 /// A group (or a bare entry) that runs one of Kolux's scripts.
@@ -79,7 +79,7 @@ pub fn set(dir: &Path, want: bool) -> Result<Value, String> {
     store.patch_settings(&set, &[]).map_err(|e| format!("{}: {e}", dir.display()))?;
     let settings = store.settings();
     drop(store);
-    let outcomes: Vec<Value> = sync(&settings, dir).into_iter().map(|(id, r)| json!({ "agent": id, "done": r.as_ref().ok(), "error": r.err() })).collect();
+    let outcomes: Vec<Value> = if want { sync(&settings, dir) } else { clear(dir) }.into_iter().map(|(id, r)| json!({ "agent": id, "done": r.as_ref().ok(), "error": r.err() })).collect();
     let mut out = report(&settings);
     out["changed"] = json!(outcomes);
     Ok(out)

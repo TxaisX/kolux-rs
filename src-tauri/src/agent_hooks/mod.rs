@@ -17,13 +17,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The Settings key listing the agents switched off on the Agents page (SET-010).
 pub const DISABLED_KEY: &str = "disabledAgents";
-/// T-152-gate: hook entries go into agents' own settings only once this setting is true.
-pub const INSTALL_KEY: &str = "agentHooksInstall";
-
-/// T-152-gate: off unless switched on, so a launch never writes into the user's agent settings by default.
-pub fn install_allowed(settings: &Value) -> bool {
-    settings.get(INSTALL_KEY).and_then(Value::as_bool).unwrap_or(false)
-}
 /// The copy of an agent's settings kept from before Kolux first wrote to them.
 pub const BACKUP_SUFFIX: &str = ".bak-kolux";
 const LOCK_FILE: &str = "install.lock";
@@ -290,9 +283,10 @@ fn apply(home: &Path, profile: &Path, id: &str, plan: Plan) -> Result<&'static s
 /// At start, and whenever an agent is switched on or off: Kolux's scripts are refreshed, then
 /// each managed agent is installed, cleared or left by `plan`. Never stops the launch; each
 /// agent's outcome is returned and problems also go to stderr. `profile` is Kolux's data folder.
+/// T-152-gate (STAT-002): while the status hooks switch is off it does nothing and writes nothing.
 pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
-    if !install_allowed(settings) {
-        eprintln!("kolux-rs: agent hooks: not installed ({INSTALL_KEY} is off)");
+    if !switch::on(settings) {
+        eprintln!("kolux-rs: agent hooks: switched off, nothing installed or changed");
         return Vec::new();
     }
     let home = home_dir();
@@ -326,12 +320,34 @@ pub fn sync(settings: &Value, profile: &Path) -> Vec<(&'static str, Result<&'sta
         .collect()
 }
 
+/// STAT-002: the user switched the status hooks off: Kolux's own entries come out of every agent
+/// (the user's own hooks stay), and nothing else is written, not even Kolux's scripts.
+pub fn clear(profile: &Path) -> Vec<(&'static str, Result<&'static str, String>)> {
+    let home = home_dir();
+    let _lock = match Lock::take(&home.join(SCRIPT_DIR)) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("kolux-rs: agent hooks: {e}");
+            return Vec::new();
+        }
+    };
+    MANAGED.iter().map(|&id| (id, apply(&home, profile, id, Plan::Remove))).collect()
+}
+
 /// STAT-004: the Agents page switched an agent on or off; the hooks follow in the background.
+/// `clear` is the status hooks switch just turned off (STAT-002), which takes Kolux's entries out.
 #[tauri::command]
-pub fn agent_hooks_sync(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>) -> Result<(), String> {
+pub fn agent_hooks_sync(store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, clear: Option<bool>) -> Result<(), String> {
     let (settings, profile) = store.lock().map(|s| (s.settings(), s.dir())).map_err(|e| e.to_string())?;
-    std::thread::spawn(move || sync(&settings, &profile));
+    let off = clear == Some(true) && !switch::on(&settings);
+    std::thread::spawn(move || if off { self::clear(&profile) } else { sync(&settings, &profile) });
     Ok(())
+}
+
+/// T-152-gate: the Claude Code settings file the hooks go into, shown beside the switch.
+#[tauri::command]
+pub fn agent_hooks_file() -> String {
+    crate::hooks::claude_settings_file().display().to_string()
 }
 
 pub mod saved;

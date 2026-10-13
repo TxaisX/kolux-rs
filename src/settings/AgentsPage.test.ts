@@ -11,10 +11,12 @@ test("the Agents page carries the 200k cap switch, on by default (USAGE-006)", (
   expect(renderToString(createElement(AgentsPageView, { cap: false, onCap: () => {} }))).not.toContain('checked=""');
 });
 
-test("the status hooks switch is on unless saved off, and says what off does (STAT-002)", () => {
-  expect(hooksOn({})).toBe(true);
-  expect(hooksOn({ agentStatusHooks: "x" })).toBe(true);
+test("the status hooks switch is off until saved on, says what off does and names the file (STAT-002, T-152-gate)", () => {
+  expect(hooksOn({})).toBe(false);
+  expect(hooksOn({ agentStatusHooks: "x" })).toBe(false);
   expect(hooksOn({ agentStatusHooks: false })).toBe(false);
+  expect(hooksOn({ agentStatusHooks: true })).toBe(true);
+  expect(renderToString(createElement(HooksSwitch, { on: false, onSwitch: () => {}, file: "G:/scratch/claude/settings.json" }))).toContain("G:/scratch/claude/settings.json");
   const html = renderToString(createElement(HooksSwitch, { on: true, onSwitch: () => {} }));
   expect(html).toContain('role="switch"');
   expect(html).toContain('checked=""');

@@ -18,16 +18,17 @@ const MINE: &str = "\"C:/Users/me/.kolux-rs/agent-hooks/claude.cmd\" || exit 0";
 #[test]
 fn stat_004_hooks_go_only_to_found_agents_and_leave_switched_off_ones() {
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    let none = json!({});
+    // The status hooks switch is on (T-152-gate: it reads off until saved on).
+    let none = json!({ "agentStatusHooks": true });
     assert_eq!(plan(&none, &ids(&["claude"]), true), vec![("claude", Plan::Install), ("codex", Plan::Leave)], "only Claude Code installed: only it gains hooks");
-    let off = json!({ "disabledAgents": ["codex"] });
+    let off = json!({ "agentStatusHooks": true, "disabledAgents": ["codex"] });
     assert_eq!(plan(&off, &ids(&["claude", "codex"]), true), vec![("claude", Plan::Install), ("codex", Plan::Remove)], "a switched-off agent has its hooks taken out");
     assert_eq!(plan(&off, &[], false), vec![("claude", Plan::Leave), ("codex", Plan::Remove)], "detection failed: nothing installed, nothing removed for being unfound");
     // A program the user set on the Agents page counts as found.
     let exe = std::env::current_exe().unwrap();
-    let set = json!({ "agentOptions": { "codex": { "command": format!(" \"{}\" ", exe.display()) } } });
+    let set = json!({ "agentStatusHooks": true, "agentOptions": { "codex": { "command": format!(" \"{}\" ", exe.display()) } } });
     assert_eq!(plan(&set, &[], true)[1], ("codex", Plan::Install));
-    let gone = json!({ "agentOptions": { "codex": { "command": "C:/nowhere/codex.exe" } } });
+    let gone = json!({ "agentStatusHooks": true, "agentOptions": { "codex": { "command": "C:/nowhere/codex.exe" } } });
     assert_eq!(plan(&gone, &[], true)[1], ("codex", Plan::Leave));
 }
 
@@ -320,10 +321,10 @@ mod script_runs {
 // ---- T-120-a: STAT-002 / STAT-003 ----
 
 #[test]
-fn stat_002_the_switch_off_takes_every_agent_out_and_on_is_the_default() {
+fn stat_002_the_switch_off_takes_every_agent_out_and_off_is_the_default() {
     let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     let found = ids(&["claude", "codex"]);
-    assert!(switch::on(&json!({})) && switch::on(&json!({ "agentStatusHooks": "garbage" })), "never saved, or unreadable, reads as on");
+    assert!(!switch::on(&json!({})) && !switch::on(&json!({ "agentStatusHooks": "garbage" })), "never saved, or unreadable, reads as off (T-152-gate)");
     let off = json!({ "agentStatusHooks": false });
     assert!(!switch::on(&off));
     assert_eq!(plan(&off, &found, true), vec![("claude", Plan::Remove), ("codex", Plan::Remove)]);
@@ -377,9 +378,9 @@ fn t_152_gate_installing_stays_off_with_the_default_settings() {
     // A fresh profile's settings, the empty settings a failed read gives, and anything but a true.
     let dir = temp("gate");
     let fresh = crate::state::Store::open(&dir).unwrap().settings();
-    for settings in [fresh, Value::Null, json!({}), json!({ INSTALL_KEY: "true" }), json!({ INSTALL_KEY: false })] {
-        assert!(!install_allowed(&settings), "{settings}");
+    for settings in [fresh, Value::Null, json!({}), json!({ switch::SWITCH_KEY: "true" }), json!({ switch::SWITCH_KEY: false })] {
+        assert!(!switch::on(&settings), "{settings}");
     }
-    assert!(install_allowed(&json!({ INSTALL_KEY: true })));
+    assert!(switch::on(&json!({ switch::SWITCH_KEY: true })));
     let _ = fs::remove_dir_all(&dir);
 }

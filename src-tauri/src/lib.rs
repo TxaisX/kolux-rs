@@ -261,6 +261,7 @@ pub fn run() {
             save_settings,
             settings_patch,
             hooks::agent_hooks::agent_hooks_sync,
+            hooks::agent_hooks::agent_hooks_file,
             hooks::agent_hooks::saved::agent_status_saved,
             hooks::agent_hooks::saved::agent_resumable,
             notify,
