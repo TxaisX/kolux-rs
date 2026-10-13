@@ -644,6 +644,68 @@ pub fn pr_create(gh: &Path, worktree: &Path, title: &str, body: &str, base: &str
 }
 
 /// Only an https link to a pull request, with nothing a shell could read as an option.
+/// GIT-026: finds pull-request links in a terminal's output. The unfinished end of a chunk is
+/// carried into the next, so a link split across chunks is found once it is whole; each link
+/// is reported once per terminal.
+#[derive(Default)]
+pub struct PrScan {
+    carry: String,
+    seen: std::collections::HashSet<String>,
+}
+
+impl PrScan {
+    pub fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        let text = std::mem::take(&mut self.carry) + &String::from_utf8_lossy(chunk);
+        let is_url = |c: char| c.is_ascii_alphanumeric() || "-._~/:%?#=&+@".contains(c);
+        let mut found = Vec::new();
+        let mut rest = text.as_str();
+        while let Some(at) = rest.find("https://") {
+            let tail = &rest[at..];
+            let end = tail.find(|c: char| !is_url(c));
+            let Some(end) = end else {
+                // The link runs to the end of the chunk: wait for the rest (a runaway is dropped).
+                if tail.len() < 400 {
+                    self.carry = tail.to_string();
+                }
+                return found;
+            };
+            if let Some(url) = pr_url_in(&tail[..end]) {
+                if self.seen.insert(url.clone()) {
+                    found.push(url);
+                }
+            }
+            rest = &tail[end..];
+        }
+        // A link may start in the last few characters ("htt" before "ps://").
+        let keep = rest.char_indices().rev().nth(6).map_or(0, |(i, _)| i);
+        self.carry = rest[keep..].to_string();
+        found
+    }
+}
+
+/// GIT-026: `https://host/owner/repo/pull/<number>`, with anything after the number dropped.
+fn pr_url_in(link: &str) -> Option<String> {
+    let parts: Vec<&str> = link.strip_prefix("https://")?.split('/').collect();
+    let number = parts.get(4).map(|n| n.split(['#', '?']).next().unwrap_or(""))?;
+    let ok = parts.len() >= 5 && parts[..3].iter().all(|p| !p.is_empty()) && parts[3] == "pull" && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
+    ok.then(|| format!("https://{}/{}/{}/pull/{number}", parts[0], parts[1], parts[2]))
+}
+
+/// GIT-026: makes a printed link the workspace's linked pull request (the `scmLinkedPrs`
+/// setting a hand link uses); false when it already was.
+/// ponytail: a whole-settings write from the window in the same moment wins over this one.
+pub fn link_printed(store: &crate::state::Store, dir: &str, url: &str) -> bool {
+    let mut settings = store.settings();
+    if settings["scmLinkedPrs"][dir] == url {
+        return false;
+    }
+    if !settings["scmLinkedPrs"].is_object() {
+        settings["scmLinkedPrs"] = serde_json::json!({});
+    }
+    settings["scmLinkedPrs"][dir] = url.into();
+    store.save_settings(&settings).is_ok()
+}
+
 fn safe_pr_url(url: &str) -> bool {
     url.starts_with("https://") && url.contains("/pull/") && !url.chars().any(|c| c.is_whitespace() || c == '"')
 }
@@ -1573,6 +1635,35 @@ mod tests {
         assert_eq!((st.operation, st.branch.as_deref()), (None, Some("other")));
         assert_eq!(run(&["rev-parse", "HEAD"], Some(&repo)).unwrap(), other);
         let _ = fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn git026_a_pull_request_link_printed_in_a_terminal_attaches_once_even_split_across_chunks() {
+        let mut scan = PrScan::default();
+        assert!(scan.feed(b"Creating pull request for feat into main\r\n\r\nhttps://github.com/o/r/pu").is_empty());
+        assert_eq!(scan.feed(b"ll/42\r\n"), ["https://github.com/o/r/pull/42"]);
+        // The same link printed again is handled once.
+        assert!(scan.feed(b"see https://github.com/o/r/pull/42 again\n").is_empty());
+        // Colour codes around a link, an Enterprise host, and a path after the number.
+        assert_eq!(scan.feed(b"\x1b[36mhttps://git.example.com/team/app/pull/7/files\x1b[0m\n"), ["https://git.example.com/team/app/pull/7"]);
+        // Links that are not a pull request's.
+        assert!(scan.feed(b"https://github.com/o/r/issues/3 https://github.com/o/r/pull/ https://github.com/o/pull/9 \n").is_empty());
+        // A link split inside its scheme.
+        assert!(scan.feed(b"htt").is_empty());
+        assert_eq!(scan.feed(b"ps://github.com/o/r/pull/8 "), ["https://github.com/o/r/pull/8"]);
+        // The link becomes the workspace's linked pull request, once, beside other settings.
+        let dir = std::env::temp_dir().join(format!("kolux-rs-scm-git026-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = crate::state::Store::open(&dir).unwrap();
+        store.save_settings(&serde_json::json!({ "uiLook": "classic", "scmLinkedPrs": { "C:/other": "https://github.com/o/r/pull/1" } })).unwrap();
+        assert!(link_printed(&store, "C:/ws", "https://github.com/o/r/pull/42"));
+        assert!(!link_printed(&store, "C:/ws", "https://github.com/o/r/pull/42"));
+        let s = store.settings();
+        assert_eq!(s["scmLinkedPrs"]["C:/ws"], "https://github.com/o/r/pull/42");
+        assert_eq!(s["scmLinkedPrs"]["C:/other"], "https://github.com/o/r/pull/1");
+        assert_eq!(s["uiLook"], "classic");
+        drop(store);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

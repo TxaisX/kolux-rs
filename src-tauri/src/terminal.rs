@@ -91,6 +91,9 @@ impl Terminals {
         let registry = self.inner.clone();
         let out_registry = self.inner.clone();
         let is_program = program.as_deref().map(str::trim).is_some_and(|p| !p.is_empty());
+        // GIT-026: a pull-request link printed in any pane, hidden or parked ones too, attaches to its workspace.
+        let mut prs = crate::scm::PrScan::default();
+        let link_dir = cwd.clone();
         let mut command = match program.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => program_command(p, &args, cwd.as_deref()),
             None => shell_command(cwd.as_deref()),
@@ -129,6 +132,14 @@ impl Terminals {
             move |chunk| {
                 let data = base64::engine::general_purpose::STANDARD.encode(chunk);
                 let _ = out_app.emit(OUTPUT_EVENT, OutputPayload { id, data });
+                if let Some(dir) = link_dir.as_deref() {
+                    for url in prs.feed(chunk) {
+                        let linked = out_app.state::<Mutex<crate::state::Store>>().lock().is_ok_and(|s| crate::scm::link_printed(&s, dir, &url));
+                        if linked {
+                            let _ = out_app.emit("settings-saved", ());
+                        }
+                    }
+                }
                 if is_program {
                     if let Ok(mut inner) = out_registry.lock() {
                         if let Some(m) = inner.marks.get_mut(&id) {
