@@ -601,6 +601,97 @@ pub fn pr_link(gh: &Path, worktree: &Path, url: &str) -> Result<Pr, String> {
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
 }
 
+/// GIT-027: one workspace the background poll looks up, with its hand-linked pull request if any.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct PollItem {
+    pub path: String,
+    #[serde(default)]
+    pub linked: Option<String>,
+}
+
+/// GIT-027: what the poll found for one workspace. `error` means "keep what you had".
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PolledPr {
+    pub path: String,
+    pub linked: bool,
+    pub pr: Option<Pr>,
+    pub error: Option<String>,
+}
+
+/// GIT-027 / GIT-028: one round of the background poll. `limited_until` (Unix seconds) is set when
+/// GitHub's rate limit stopped the round; nothing more should be asked before then.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrPoll {
+    pub prs: Vec<PolledPr>,
+    pub limited_until: Option<u64>,
+}
+
+/// GIT-027: the most a round looks up; the caller puts the visible workspace first.
+pub const POLL_MAX: usize = 60;
+
+/// GIT-027: looks up the pull requests of many workspaces with one `gh pr list` per GitHub project
+/// (checkouts under different remote forms share it), in the order the items come, a short `gap`
+/// apart. A rate-limit answer stops the round (the circuit breaker) and reads when it resets.
+// ponytail: each project's 100 most recent pull requests; a branch whose PR is older shows none.
+pub fn prs_poll(gh: &Path, items: &[PollItem], gap: std::time::Duration) -> PrPoll {
+    let config = ssh_config();
+    let mut groups: Vec<(String, Vec<&PollItem>)> = Vec::new();
+    let mut out = PrPoll::default();
+    for it in items.iter().take(POLL_MAX) {
+        let url = run(&["remote", "get-url", "origin"], Some(Path::new(&it.path))).ok();
+        match url.and_then(|u| github_repo(&u, &config)) {
+            Some(g) => match groups.iter_mut().find(|(k, _)| *k == g.key) {
+                Some((_, list)) => list.push(it),
+                None => groups.push((g.key, vec![it])),
+            },
+            None => out.prs.push(PolledPr { path: it.path.clone(), linked: it.linked.is_some(), pr: None, error: None }),
+        }
+    }
+    let mut stopped: Option<String> = None;
+    for (n, (_, list)) in groups.iter().enumerate() {
+        if n > 0 && stopped.is_none() {
+            std::thread::sleep(gap);
+        }
+        let answer = match &stopped {
+            Some(why) => Err(why.clone()),
+            None => gh_run(gh, Path::new(&list[0].path), &["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], None).map_err(|e| gh_words(&e)).and_then(|t| serde_json::from_str::<Vec<Pr>>(&t).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))),
+        };
+        if let Err(e) = &answer {
+            if stopped.is_none() && e.to_lowercase().contains("rate limit") {
+                stopped = Some(e.clone());
+                out.limited_until = gh_budget(gh).ok().and_then(|b| b.iter().find(|x| x.name == "REST").map(|x| x.reset));
+            }
+        }
+        for it in list {
+            let dir = Path::new(&it.path);
+            let found = answer.as_ref().map_err(String::clone).and_then(|prs| match &it.linked {
+                Some(url) => prs.iter().find(|p| p.url.eq_ignore_ascii_case(url.trim())).cloned().map(Some).ok_or_else(|| "The linked pull request is not among the project's latest".to_string()),
+                None => {
+                    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"], Some(dir)).unwrap_or_default();
+                    let mine: Vec<&Pr> = prs.iter().filter(|p| p.head.as_deref() == Some(branch.as_str())).collect();
+                    let pick = mine.iter().find(|p| p.state == "OPEN").or(mine.first()).map(|p| (*p).clone());
+                    let base = run(&["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], Some(dir)).ok().map(|b| b.trim_start_matches("origin/").to_string());
+                    let default = base.as_deref().map_or(branch == "main" || branch == "master", |b| b == branch);
+                    // GIT-025: a closed or merged pull request from the default branch stays hidden.
+                    Ok(pick.filter(|p| !(default && p.state != "OPEN")))
+                }
+            });
+            let (pr, error) = match found {
+                Ok(pr) => (pr, None),
+                Err(e) => (None, Some(e)),
+            };
+            out.prs.push(PolledPr { path: it.path.clone(), linked: it.linked.is_some(), pr, error });
+        }
+    }
+    out
+}
+
+#[tauri::command]
+pub async fn scm_prs_poll(items: Vec<PollItem>) -> Result<PrPoll, String> {
+    tauri::async_runtime::spawn_blocking(move || Ok(prs_poll(&gh_program()?, &items, std::time::Duration::from_millis(400)))).await.map_err(|e| e.to_string())?
+}
+
 /// GIT-021: creates the branch's pull request against `base` on origin, pushing unpushed work
 /// first. An open one the branch already has is returned instead of a second being made. The
 /// head must still be checked out and ahead of the base, with no uncommitted tracked change.
@@ -2254,6 +2345,80 @@ mod tests {
         assert!(task_detail(&gh, "bad host", "o/r", 3).is_err());
         assert_eq!(fs::read_to_string(tools.join("calls.txt")).unwrap().lines().count(), before);
         let _ = fs::remove_dir_all(&tools);
+    }
+
+    #[test]
+    fn git027_background_poll_asks_once_per_repository_and_stops_at_the_rate_limit() {
+        let root = std::env::temp_dir().join(format!("kolux-rs-scm-git027-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).unwrap();
+        let checkout = |name: &str, branch: &str, origin: Option<&str>| {
+            let dir = temp_repo(&format!("git027-{name}"));
+            if branch != "main" {
+                run(&["checkout", "-q", "-b", branch], Some(&dir)).unwrap();
+            }
+            if let Some(o) = origin {
+                run(&["remote", "add", "origin", o], Some(&dir)).unwrap();
+            }
+            dir.to_string_lossy().to_string()
+        };
+        // Two checkouts of one project under different remote forms, its main checkout, a second
+        // project that hits the rate limit, a third never reached, and one with no GitHub remote.
+        let a1 = checkout("a1", "feat", Some("https://github.com/o/r.git"));
+        let a2 = checkout("a2", "fix", Some("git@github.com:O/R.git"));
+        let a3 = checkout("a3", "main", Some("https://github.com/o/r"));
+        let b = checkout("b", "work", Some("https://github.com/o/s.git"));
+        let c = checkout("c", "work", Some("https://github.com/o/t.git"));
+        let d = checkout("d", "work", None);
+        fs::write(tools.join("list.json"), r#"[
+            {"number":5,"url":"https://github.com/o/r/pull/5","state":"CLOSED","title":"Old feat","headRefName":"feat","isDraft":false},
+            {"number":9,"url":"https://github.com/o/r/pull/9","state":"OPEN","title":"Feat","headRefName":"feat","isDraft":true},
+            {"number":8,"url":"https://github.com/o/r/pull/8","state":"MERGED","title":"Fix","headRefName":"fix","isDraft":false},
+            {"number":3,"url":"https://github.com/o/r/pull/3","state":"CLOSED","title":"From main","headRefName":"main","isDraft":false},
+            {"number":2,"url":"https://github.com/o/r/pull/2","state":"OPEN","title":"Elsewhere","headRefName":"other","isDraft":false}]"#).unwrap();
+        fs::write(tools.join("budget.json"), r#"{"resources":{"core":{"limit":5000,"remaining":0,"reset":1760000000}}}"#).unwrap();
+        let gh = if cfg!(windows) {
+            let f = tools.join("gh.cmd");
+            let script = "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%2\"==\"rate_limit\" (type \"%~dp0budget.json\" & exit /b 0)\r\necho %* | findstr /c:\"o/s\" >nul && (echo API rate limit exceeded for user ID 1. 1>&2 & exit /b 1)\r\ntype \"%~dp0list.json\"\r\n";
+            fs::write(&f, script).unwrap();
+            f
+        } else {
+            let f = tools.join("gh");
+            let script = "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\n[ \"$2\" = rate_limit ] && { cat \"$d/budget.json\"; exit 0; }\ncase \"$*\" in *o/s*) echo 'API rate limit exceeded for user ID 1.' >&2; exit 1;; esac\ncat \"$d/list.json\"\n";
+            fs::write(&f, script).unwrap();
+            std::process::Command::new("chmod").args(["+x", f.to_str().unwrap()]).status().unwrap();
+            f
+        };
+        let item = |path: &str, linked: Option<&str>| PollItem { path: path.to_string(), linked: linked.map(String::from) };
+        let items = vec![item(&a1, None), item(&d, None), item(&b, None), item(&a2, None), item(&a3, None), item(&c, None), item(&a1, Some("https://github.com/o/r/pull/2"))];
+        let got = prs_poll(&gh, &items, std::time::Duration::from_millis(10));
+        let calls = fs::read_to_string(tools.join("calls.txt")).unwrap().replace('"', "");
+        // One list call per project in the order asked, then the budget read; o/t is never asked.
+        let lists: Vec<&str> = calls.lines().filter(|l| l.starts_with("pr list")).collect();
+        assert_eq!(lists.len(), 2, "{calls}");
+        assert!(lists[0].contains("--repo github.com/o/r") && lists[1].contains("--repo github.com/o/s"), "{calls}");
+        assert!(lists[0].contains("--state all --limit 100 --json number,url,state,title,headRefName,isDraft"), "{calls}");
+        assert!(calls.contains("api rate_limit") && !calls.contains("o/t"), "{calls}");
+        assert_eq!(got.limited_until, Some(1760000000));
+        let of = |p: &str, linked: bool| got.prs.iter().find(|x| x.path == p && x.linked == linked).unwrap();
+        // The branch's open pull request wins over an older closed one.
+        assert_eq!(of(&a1, false).pr.as_ref().map(|p| (p.number, p.draft)), Some((9, true)));
+        assert_eq!(of(&a2, false).pr.as_ref().map(|p| (p.number, p.state.as_str())), Some((8, "MERGED")));
+        // A closed pull request from the default branch stays hidden.
+        assert_eq!(of(&a3, false).pr, None);
+        assert!(of(&a3, false).error.is_none());
+        // A hand link is found in the same answer, wherever its branch is.
+        assert_eq!(of(&a1, true).pr.as_ref().map(|p| p.number), Some(2));
+        // The rate-limited project and the one behind it keep what they had (an error, no answer).
+        assert!(of(&b, false).error.as_deref().unwrap().contains("rate limit"));
+        assert!(of(&c, false).error.is_some() && of(&c, false).pr.is_none());
+        // No GitHub remote: no pull request and nothing to retry.
+        assert!(of(&d, false).pr.is_none() && of(&d, false).error.is_none());
+        for p in [&a1, &a2, &a3, &b, &c, &d] {
+            let _ = fs::remove_dir_all(p);
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

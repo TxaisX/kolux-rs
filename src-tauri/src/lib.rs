@@ -247,6 +247,7 @@ pub fn run() {
             scm::scm_gh_budget,
             scm::scm_tasks_search,
             scm::scm_gh_account,
+            scm::scm_prs_poll,
             scm::scm_task_detail,
             scm::scm_repo_labels,
             scm::scm_task_labels,

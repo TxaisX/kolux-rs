@@ -20,8 +20,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
-import { pushBadge, type Pushed } from "../scm/model";
+import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type PrState, type RowInfo } from "./rows";
+import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
+import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
@@ -126,6 +127,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [hiddenWts, setHiddenWts] = useState<Record<string, Worktree[]>>({}); // PROJ-042: hidden by the user
   const [fresh, setFresh] = useState<Record<string, Worktree[]>>({}); // PROJ-041: made outside Kolux, not yet reviewed
   const [pushedBy, setPushedBy] = useState<Record<string, Pushed>>({}); // GIT-065: by worktree path
+  const [prBy, setPrBy] = useState<Record<string, PrState>>({}); // GIT-027: the background poll, by worktree path
+  const polled = useRef({ failures: 0, at: 0, next: 0, limited: 0 });
   const pushTag = (w: Worktree) => {
     const b = pushBadge(pushedBy[w.path]);
     return b && <span className={`hint push ${b.tone}`}>{b.text}</span>;
@@ -227,6 +230,52 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     if (key !== indexed.current) index.current(list, owner, names);
     indexed.current = key;
   }, []);
+  // GIT-027 / GIT-028: every shown workspace's pull request, polled in the background: the visible
+  // workspace first, one gh call per GitHub project, a round every few minutes while the window is
+  // shown (backing off after failures, waiting out a rate limit), and again on focus when stale.
+  const pollPaths = Object.values(worktrees).flat().map((w) => w.path);
+  const norm = (d: string) => d.replace(/[\\/]+$/, "").toLowerCase();
+  const pollActive = activeDir === null ? null : (pollPaths.find((p) => norm(p) === norm(activeDir)) ?? null);
+  const pollLinks = linkedPrs(settings[SCM_LINKED_PR_KEY]);
+  const pollKey = JSON.stringify([pollPaths, pollActive, pollLinks]);
+  useEffect(() => {
+    if (pollPaths.length === 0) return;
+    const st = polled.current;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let dead = false;
+    const later = (ms: number) => {
+      clearTimeout(timer);
+      st.next = Date.now() + ms;
+      timer = setTimeout(round, ms);
+    };
+    const round = () => {
+      if (document.hidden) return later(60_000);
+      invoke<PrPoll>("scm_prs_poll", { items: pollItems(pollPaths, pollActive, pollLinks) })
+        .then((answer) => {
+          if (dead) return;
+          setPrBy((prev) => mergePoll(prev, answer));
+          st.failures = answer.prs.some((x) => x.error !== null) ? st.failures + 1 : 0;
+          st.at = Date.now();
+          st.limited = answer.limitedUntil ?? 0;
+          later(nextDelay(st.failures, answer.limitedUntil, Date.now()));
+        })
+        .catch(() => {
+          if (dead) return;
+          st.failures += 1;
+          later(nextDelay(st.failures, null, Date.now()));
+        });
+    };
+    later(Math.max(1500, st.next - Date.now()));
+    const focus = () => {
+      if (Date.now() - st.at > STALE_MS && st.limited * 1000 < Date.now()) later(0);
+    };
+    window.addEventListener("focus", focus);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+      window.removeEventListener("focus", focus);
+    };
+  }, [pollKey]);
   // PROJ-063: a branch switched inside a workspace folder shows on its row within a few seconds.
   // PROJ-041: the same poll notices worktrees made outside Kolux, in both layouts (DT-O2).
   useEffect(() => {
@@ -785,7 +834,10 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const openCount = (w: Worktree) => openDirs.filter((d) => same(d, w.path)).length;
   const isActive = (w: Worktree) => openCount(w) > 0;
   const isSelected = (w: Worktree) => activeDir !== null && same(activeDir, w.path);
-  const infoOf = (w: Worktree): RowInfo => Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
+  const infoOf = (w: Worktree): RowInfo => {
+    const info = Object.entries(states).find(([d]) => same(d, w.path))?.[1] ?? { state: "idle", changed: 0, pr: null };
+    return w.path in prBy ? { ...info, pr: prBy[w.path] } : info;
+  };
   const isUnread = (w: Worktree) => [...unread].some((d) => same(d, w.path));
   const setRead = (w: Worktree, read: boolean) => onUnread(w.path, !read);
   const show = (w: Worktree) => {
