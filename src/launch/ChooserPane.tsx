@@ -22,8 +22,15 @@ import { KITS, VENDOR_NAME, assignRoles, type Vendor } from "../kits/catalog";
 import { canLaunch, FEATURED, type AgentPass } from "./agents";
 import { allReady, modelsFor, NOT_GIT, pickShape, QUICK_COUNTS, renameShape, resizeLineup, sameForAll, saveShape, seatGap, seatReady, SHAPES, sharedWarning, TERMINAL, type Copies, type SavedShape, type Seat, type Shape, choiceOf, DEFAULT_MODEL, lineupAgents, type Lineup } from "./seats";
 
-/** Agents whose own page `open_install_page` knows (agents.rs `install_page`). */
-const DOC_PAGES = ["claude", "codex", "grok"];
+/** SESS-017: a link to the agent's own documentation, when Kolux knows it (agents.rs `install_page`). */
+function DocsLink({ agent }: { agent: AgentInfo }) {
+  if (!agent.docs) return null;
+  return (
+    <button className="btn link agent-link" onClick={() => void invoke("open_install_page", { agent: agent.id }).catch(() => {})} aria-label={`${agent.name} docs`} title={`Open ${agent.name}'s own documentation`}>
+      Docs
+    </button>
+  );
+}
 
 /** SESS-017: the featured three first (a missing one only once detection is done), the other
  * installed agents behind the fold, and whether no AI was found at all. */
@@ -346,21 +353,20 @@ export default function ChooserPane({ number, hidden = false, focused = false, a
                         Set up
                       </button>
                     )}
-                    {DOC_PAGES.includes(a.id) && (
-                      <button className="btn link agent-link" onClick={() => void invoke("open_install_page", { agent: a.id }).catch(() => {})} aria-label={`${a.name} docs`} title={`Open ${a.name}'s own documentation`}>
-                        Docs
-                      </button>
-                    )}
+                    <DocsLink agent={a} />
                   </span>
                 ))}
                 {lineup.more.length > 0 &&
                   (unfolded.includes(i) || lineup.more.some((a) => a.id === seat.agent) ? (
                     lineup.more.map((a) => (
-                      <label key={a.id} className="choice" title={a.path ?? a.name}>
-                        <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
-                        <VendorMark agent={markFor(a.id)} size={12} />
-                        {a.name}
-                      </label>
+                      <span key={a.id} className="agent-seat">
+                        <label className="choice" title={a.path ?? a.name}>
+                          <input type="radio" name={`seat-${number}-${i}-ai`} checked={seat.agent === a.id} onChange={() => pickAgent(i, a.id)} />
+                          <VendorMark agent={markFor(a.id)} size={12} />
+                          {a.name}
+                        </label>
+                        <DocsLink agent={a} />
+                      </span>
                     ))
                   ) : (
                     <button className="btn link agent-link" onClick={() => setUnfolded((u) => [...u, i])}>
