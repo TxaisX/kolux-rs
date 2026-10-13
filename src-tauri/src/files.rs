@@ -204,7 +204,7 @@ pub async fn diff_sides(path: String, staged: bool, fence: tauri::State<'_, crat
 }
 
 /// The changed files the diff picker lists (EDIT-027).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_changes(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Change>, String> {
     git.changes(&fence.allow(&root, &store, &git, false)?)
 }
@@ -217,7 +217,7 @@ pub async fn change_entries(root: String, fence: tauri::State<'_, crate::fence::
 
 /// One side of a changed image, as bytes (EDIT-029: images load on their own); empty when the
 /// file is not on that side.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<tauri::ipc::Response, String> {
     let (old, now) = git.diff_bytes(&fence.allow(&path, &store, &git, false)?, staged)?;
     Ok(tauri::ipc::Response::new(if new { now } else { old }))
@@ -226,7 +226,7 @@ pub fn diff_image(path: String, staged: bool, new: bool, fence: tauri::State<'_,
 /// Mod+Shift+M: an empty note at the worktree root named untitled.md, then untitled-2.md and
 /// onwards. It never overwrites a file and gives up after 100 taken names. Naming it on the
 /// first save is EDIT-054 (T-237).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn md_new(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<String, String> {
     new_note(&fence.allow(&root, &store, &git, false)?)
 }

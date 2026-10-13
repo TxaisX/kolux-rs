@@ -293,7 +293,13 @@ pub fn origin(store: &Store, path: &str) -> Option<serde_json::Value> {
 /// workspaces of the project other than its main checkout, and the parent may not be the
 /// workspace itself or anything nested under it.
 pub fn reparent(git: &Git, store: &Store, project: &Project, path: &str, parent: Option<&str>) -> Result<(), String> {
-    let all = list_workspaces(git, store, project)?;
+    reparent_in(store, project, git.worktrees(Path::new(&project.path))?, path, parent)
+}
+
+/// `reparent` over worktrees already scanned, so a caller can run Git with the store unlocked
+/// (T-442-b) and lock it only for this store work.
+pub fn reparent_in(store: &Store, project: &Project, scanned: Vec<Worktree>, path: &str, parent: Option<&str>) -> Result<(), String> {
+    let all = decorate(store, project, scanned)?;
     let find = |p: &str| all.iter().find(|w| same_folder(Path::new(&w.path), Path::new(p)));
     let gone = |p: &str| format!("{p} is no longer a workspace of {}", project.name);
     let me = find(path).ok_or_else(|| gone(path))?;
@@ -320,21 +326,28 @@ pub fn reparent(git: &Git, store: &Store, project: &Project, path: &str, parent:
 }
 
 /// PROJ-040: records the composer's parent for a workspace just made. A parent removed in the
-/// meantime is dropped with a warning and the workspace sits at the top level.
-pub fn nest_under(git: &Git, store: &Store, project: &Project, made: &mut Created, parent: Option<&str>) -> Result<(), String> {
+/// meantime is dropped with a warning and the workspace sits at the top level. Git scans the
+/// worktrees with the store unlocked (T-442-b); only the store work holds the lock.
+pub fn nest_under(git: &Git, store: &Mutex<Store>, project: &Project, made: &mut Created, parent: Option<&str>) -> Result<(), String> {
     let Some(parent) = non_blank(parent) else { return Ok(()) };
-    match reparent(git, store, project, &made.worktree.path, Some(parent)) {
+    let moved = match git.worktrees(Path::new(&project.path)) {
+        Ok(all) => reparent_in(&*store.lock().map_err(|e| e.to_string())?, project, all, &made.worktree.path, Some(parent)),
+        Err(e) => Err(e),
+    };
+    match moved {
         Ok(()) => made.worktree.parent = Some(parent.to_string()),
         Err(why) => made.warnings.push(format!("not nested under the parent you picked ({why}), so it sits at the top level")),
     }
     Ok(())
 }
 
-#[tauri::command]
+// T-442-b: this and the other Git-running commands here run off the window thread (a plain
+// command blocks every other call, typing in a pane included) and unlock the store for Git.
+#[tauri::command(async)]
 pub fn workspace_set_parent(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String, parent: Option<String>) -> Result<(), String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    reparent(&git, &store, &project, &path, non_blank(parent.as_deref()))
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    let all = git.worktrees(Path::new(&project.path))?;
+    reparent_in(&*store.lock().map_err(|e| e.to_string())?, &project, all, &path, non_blank(parent.as_deref()))
 }
 
 pub fn list_workspaces(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
@@ -367,8 +380,19 @@ pub fn decorate(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<
 /// PROJ-006: a linked worktree whose repository is already a project selects that project (the
 /// match is on the main checkout, never the folder picked); otherwise the folder picked is added.
 pub fn add_project(git: &Git, store: &Store, path: &Path) -> Result<Project, String> {
+    register_project(store, locate_repo(git, path)?)
+}
+
+/// The Git half of `add_project`: the top level of the repository holding `path` and its main
+/// checkout. Needs no store, so commands run it unlocked (T-442-b).
+pub fn locate_repo(git: &Git, path: &Path) -> Result<(PathBuf, PathBuf), String> {
     let top = git.toplevel(path)?;
     let main = git.worktrees(&top)?.into_iter().find(|w| w.is_main).map(|w| PathBuf::from(w.path)).unwrap_or_else(|| top.clone());
+    Ok((top, main))
+}
+
+/// The store half of `add_project`, over what `locate_repo` found.
+pub fn register_project(store: &Store, (top, main): (PathBuf, PathBuf)) -> Result<Project, String> {
     let mut projects = load_projects(store);
     if let Some(existing) = projects.iter().find(|p| same_folder(Path::new(&p.path), &main) || same_folder(Path::new(&p.path), &top)) {
         return Ok(existing.clone());
@@ -475,12 +499,12 @@ pub fn git_first_commit_preview(path: String) -> Result<Vec<FirstFile>, String> 
 }
 
 /// GIT-061: Start Git and commit, then the folder is added like any repository.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn git_start(git: State<'_, Git>, store: StoreState<'_>, path: String, files: Vec<String>) -> Result<Project, String> {
     let folder = Path::new(path.trim());
     start_git(folder, &files, &[])?;
-    let store = store.lock().map_err(|e| e.to_string())?;
-    add_project(&git, &store, folder)
+    let found = locate_repo(&git, folder)?;
+    register_project(&*store.lock().map_err(|e| e.to_string())?, found)
 }
 
 /// The default workspaces root: `kolux-rs\workspaces` in the user's home folder. A different
@@ -509,14 +533,16 @@ pub fn workspaces_dir(store: &Store) -> PathBuf {
 
 /// The folder and layout for `project`'s workspaces (PROJ-025): the project's own folder when it
 /// has one, else the global setting, else the default; a relative folder counts from the
-/// project root (joining an absolute one leaves it as it is).
-pub fn place_for(store: &Store, project: &Project) -> Place {
+/// project root (joining an absolute one leaves it as it is). It asks Git for the user name and
+/// checks the prefix, so commands read `settings` under the store lock and call this with the
+/// lock let go (T-442-b; `locked_place`).
+pub fn place_from(project: &Project, settings: &serde_json::Value) -> Place {
     let own = project.workspaces_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
-    let settings = store.settings();
     let user = || prefix_user(|| crate::git::run(&["config", "user.name"], Some(Path::new(&project.path))).ok(), crate::scm::gh_login);
     let (prefix, prefix_warning) = branch_prefix(settings[PREFIX_SETTING].as_str(), settings[PREFIX_CUSTOM_SETTING].as_str(), user, &git_accepts);
     let refresh = settings[REFRESH_BASE_SETTING].as_bool() == Some(true);
-    Place { root: Path::new(&project.path).join(own.unwrap_or_else(|| workspaces_dir(store))), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning, refresh }
+    let dir = || resolve_workspaces_dir(std::env::var(WORKSPACES_DIR_ENV).ok().as_deref(), settings[WORKSPACES_DIR_SETTING].as_str());
+    Place { root: Path::new(&project.path).join(own.unwrap_or_else(dir)), flat: settings[LAYOUT_SETTING].as_str() == Some("flat"), prefix, prefix_warning, refresh }
 }
 
 /// GIT-066: the name behind the default prefix: the configured git user name, else the gh login.
@@ -814,21 +840,33 @@ pub fn remember_retired(store: &Store, name: &str) -> Result<(), String> {
 }
 
 /// A creature name in use nowhere, now or before (SESS-023).
+#[cfg(test)]
 pub fn fresh_name(git: &Git, store: &Store, projects: &[Project], seed: u64) -> String {
-    let mut taken = names_in_use(git, projects);
+    pick_name(store, names_in_use(git, projects), seed)
+}
+
+/// A creature name outside `taken` (the names Git has in use) and every retired one.
+fn pick_name(store: &Store, mut taken: Vec<String>, seed: u64) -> String {
     taken.extend(retired_names(store));
     creature_name(&taken, seed)
 }
 
 /// A workspace an agent launch makes for itself: a creature name nobody uses, branched from the
 /// main checkout, or from `base` when given (AUTO-005). The clock seeds the pick so launches do
-/// not always start at the same pair.
-pub fn create_fresh_workspace(git: &Git, store: &Store, place: &Place, projects: &[Project], project: &Project, base: Option<&str>) -> Result<Worktree, String> {
+/// not always start at the same pair. `lock` hands over the store only for the store work, so
+/// Git runs unlocked (T-442-b); picking the name and recording it as used is one locked step, so
+/// two launches at once never pick one name.
+pub fn create_fresh_workspace<S: std::ops::Deref<Target = Store>>(git: &Git, lock: impl Fn() -> Result<S, String>, place: &Place, projects: &[Project], project: &Project, base: Option<&str>) -> Result<Worktree, String> {
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    let name = fresh_name(git, store, projects, seed);
-    remember_retired(store, &name)?;
+    let taken = names_in_use(git, projects);
+    let name = {
+        let store = lock()?;
+        let name = pick_name(&store, taken, seed);
+        remember_retired(&store, &name)?;
+        name
+    };
     let made = create_workspace(git, place, project, &name, base)?.worktree;
-    note_seen(store, project, &made.path)?;
+    note_seen(&*lock()?, project, &made.path)?;
     Ok(made)
 }
 
@@ -912,22 +950,19 @@ pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<V
 // PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
 #[tauri::command(async)]
 pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
-    let (project, place) = {
-        let store = store.lock().map_err(|e| e.to_string())?;
-        let project = find_project(&store, &project_id)?;
-        let place = place_for(&store, &project);
-        (project, place)
-    };
+    let (project, place) = locked_place(&store, &project_id)?;
     let made = open_branch_workspace_until(&git, &place, &project, &branch, folder.as_deref(), &|| dropped(ticket));
     if let Some(t) = ticket {
         settle_create(t);
     }
     let mut made = made?;
-    let store = store.lock().map_err(|e| e.to_string())?;
-    set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
-    note_seen(&store, &project, &made.worktree.path)?;
+    {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
+        note_seen(&store, &project, &made.worktree.path)?;
+    }
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
-    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
+    let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
 
@@ -943,12 +978,7 @@ pub fn workspace_prs(store: StoreState<'_>, project_id: String) -> Result<Vec<cr
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: StoreState<'_>, project_id: String, number: u64, folder: Option<String>, name: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
-    let (project, place) = {
-        let store = store.lock().map_err(|e| e.to_string())?;
-        let project = find_project(&store, &project_id)?;
-        let place = place_for(&store, &project);
-        (project, place)
-    };
+    let (project, place) = locked_place(&store, &project_id)?;
     let repo = Path::new(&project.path);
     let pr = crate::pr_checkout::view(&crate::scm::gh_program()?, repo, number)?;
     let fork = if pr.is_cross_repository {
@@ -964,17 +994,19 @@ pub fn workspace_open_pr(app: tauri::AppHandle, git: State<'_, Git>, store: Stor
         settle_create(t);
     }
     let (mut made, reused) = opened?;
-    let store = store.lock().map_err(|e| e.to_string())?;
-    set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": reused, "pr": pr.url })))?;
-    if crate::scm::link_printed(&store, &made.worktree.path, &pr.url) {
-        let _ = tauri::Emitter::emit(&app, "settings-saved", ()); // the window's copy of the links is stale otherwise
+    {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": reused, "pr": pr.url })))?;
+        if crate::scm::link_printed(&store, &made.worktree.path, &pr.url) {
+            let _ = tauri::Emitter::emit(&app, "settings-saved", ()); // the window's copy of the links is stale otherwise
+        }
+        note_seen(&store, &project, &made.worktree.path)?;
+        let shown = name.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&pr.title).to_string();
+        set_name(&store, &made.worktree.path, Some(&shown))?;
+        made.worktree.name = Some(shown);
     }
-    note_seen(&store, &project, &made.worktree.path)?;
-    let shown = name.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or(&pr.title).to_string();
-    set_name(&store, &made.worktree.path, Some(&shown))?;
-    made.worktree.name = Some(shown);
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
-    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
+    let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
 /// PROJ-037: an issue or pull request named by its address, as the palette read it.
@@ -1100,10 +1132,10 @@ pub fn project_list(store: StoreState<'_>) -> Result<Vec<Project>, String> {
     Ok(load_projects(&store))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> Result<Project, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    add_project(&git, &store, Path::new(path.trim()))
+    let found = locate_repo(&git, Path::new(path.trim()))?;
+    register_project(&*store.lock().map_err(|e| e.to_string())?, found)
 }
 
 /// PROJ-041: the new worktrees made outside Kolux, for the sidebar's count line.
@@ -1197,21 +1229,37 @@ pub struct Preview {
     pub folder: String,
 }
 
-#[tauri::command]
+/// `place_from` with the settings read from `store`.
+#[cfg(test)]
+pub fn place_for(store: &Store, project: &Project) -> Place {
+    place_from(project, &store.settings())
+}
+
+// T-442-b: the prefix asks Git for the user name, so this runs off the window thread too.
+#[tauri::command(async)]
 pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option<String>, branch: Option<String>) -> Result<Option<Preview>, String> {
     let typed = non_blank(branch.as_deref()).unwrap_or(&name);
     let branch = safe_name(typed).unwrap_or_else(|| "workspace".to_string());
-    let store = store.lock().map_err(|e| e.to_string())?;
     let folder = match project_id.filter(|id| !id.is_empty()) {
         Some(id) => {
-            let project = find_project(&store, &id)?;
-            let place = place_for(&store, &project);
+            let (project, place) = locked_place(&store, &id)?;
             let folder = workspace_path(&place, &project, &branch).display().to_string();
             return Ok(Some(Preview { branch: format!("{}{branch}", place.prefix), folder }));
         }
         None => String::new(),
     };
     Ok(Some(Preview { branch, folder }))
+}
+
+/// Project `project_id` and where its workspaces go: the store is locked only to read them, and
+/// Git (the user name behind the prefix) runs after it is let go (T-442-b).
+fn locked_place(store: &Mutex<Store>, project_id: &str) -> Result<(Project, Place), String> {
+    let (project, settings) = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        (find_project(&store, project_id)?, store.settings())
+    };
+    let place = place_from(&project, &settings);
+    Ok((project, place))
 }
 
 /// Makes a workspace in a registered project and keeps the typed name (the sidebar's Create and
@@ -1223,12 +1271,7 @@ pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &st
 
 /// `create_named` with the overtaken checks of `create_workspace_until` (PROJ-020).
 pub fn create_named_until(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>, branch: Option<&str>, overtaken: &dyn Fn() -> bool) -> Result<Created, String> {
-    let (project, place) = {
-        let store = store.lock().map_err(|e| e.to_string())?;
-        let project = find_project(&store, project_id)?;
-        let place = place_for(&store, &project);
-        (project, place)
-    };
+    let (project, place) = locked_place(store, project_id)?;
     let mut made = create_workspace_until(git, &place, &project, non_blank(branch).unwrap_or(name), base, overtaken)?;
     note_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &made.worktree.path)?;
     let typed = name.trim();
@@ -1250,32 +1293,34 @@ pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: 
     }
     let mut made = made?;
     // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
-    let store = store.lock().map_err(|e| e.to_string())?;
-    if let Some(i) = issue {
-        // SESS-036: linked to the issue the composer named it from (the `issue:` selector finds it)
-        set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "issue": i.number, "issueUrl": i.url })))?;
-    }
-    let project = find_project(&store, &project_id)?;
+    let project = {
+        let store = store.lock().map_err(|e| e.to_string())?;
+        if let Some(i) = issue {
+            // SESS-036: linked to the issue the composer named it from (the `issue:` selector finds it)
+            set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "issue": i.number, "issueUrl": i.url })))?;
+        }
+        find_project(&store, &project_id)?
+    };
     nest_under(&git, &store, &project, &mut made, parent.as_deref())?;
-    let _ = crate::activity::touch(&store, &made.worktree.path); // PROJ-051
+    let _ = crate::activity::touch(&*store.lock().map_err(|e| e.to_string())?, &made.worktree.path); // PROJ-051
     Ok(made)
 }
 
-/// A fresh creature-named workspace in project `project_id`. The store stays locked while Git
-/// works so two launches at once never pick one name.
+/// A fresh creature-named workspace in project `project_id`; see `create_fresh_workspace` for
+/// how the store stays unlocked while Git works.
 pub fn create_fresh(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<Worktree, String> {
     create_fresh_from(git, store, project_id, None)
 }
 
 /// As `create_fresh`, cut from `base` (a ref) when given, else the project's base (AUTO-005).
 pub fn create_fresh_from(git: &Git, store: &Mutex<Store>, project_id: &str, base: Option<&str>) -> Result<Worktree, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, project_id)?;
-    let place = place_for(&store, &project);
-    create_fresh_workspace(git, &store, &place, &load_projects(&store), &project, base)
+    let lock = || store.lock().map_err(|e| e.to_string());
+    let (project, place) = locked_place(store, project_id)?;
+    let projects = load_projects(&*lock()?);
+    create_fresh_workspace(git, lock, &place, &projects, &project, base)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_create_fresh(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Worktree, String> {
     create_fresh(&git, &store, &project_id)
 }
@@ -1306,7 +1351,7 @@ pub fn project_set(store: StoreState<'_>, project_id: String, workspaces_dir: St
     Ok(project)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, project_id: String, path: String) -> Result<RemoveCheck, String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
@@ -1824,7 +1869,7 @@ mod tests {
         store.save_settings(&serde_json::json!({ "workspacesDir": p(&root) })).unwrap();
         // A fresh profile: a project added now starts with worktrees made elsewhere hidden.
         let project = add_project(&git, &store, &repo).unwrap();
-        let made = create_fresh_workspace(&git, &store, &nested(&root), &load_projects(&store), &project, None).unwrap();
+        let made = create_fresh_workspace(&git, || Ok(&store), &nested(&root), &load_projects(&store), &project, None).unwrap();
         let hand = root.join("by-hand");
         let claude = repo.join(".claude").join("worktrees").join("agent-1");
         let scratch = repo.join(".tool").join("x");
@@ -1947,7 +1992,7 @@ mod tests {
             git_in(&repo, &["worktree", "add", "-q", "-b", n, &side.join(n).to_string_lossy()]);
         }
         // One Kolux makes itself is not offered.
-        create_fresh_workspace(&git, &store, &nested(&root), &load_projects(&store), &project, None).unwrap();
+        create_fresh_workspace(&git, || Ok(&store), &nested(&root), &load_projects(&store), &project, None).unwrap();
         let fresh: Vec<_> = unseen(&git, &store, &project).unwrap().into_iter().map(|w| w.branch.unwrap()).collect();
         assert_eq!(fresh.len(), 3, "{fresh:?}");
         assert!(fresh.iter().all(|b| ["a", "b", "c"].contains(&b.as_str())));
@@ -2067,6 +2112,8 @@ mod tests {
         reparent(&git, &store, &project, &a.path, None).unwrap();
         assert_eq!(parent_of(&a.path), None);
         // PROJ-040: a parent removed while the composer was open is dropped with a warning.
+        let store = Mutex::new(store);
+        let parent_of = |p: &str| list_workspaces(&git, &store.lock().unwrap(), &project).unwrap().into_iter().find(|w| w.path == p).unwrap().parent;
         let mut made = make("late");
         remove_workspace(&git, &project, &b.path, false).unwrap();
         nest_under(&git, &store, &project, &mut made, Some(&b.path)).unwrap();
@@ -2093,8 +2140,8 @@ mod tests {
         let project = add_project(&git, &store, &repo).unwrap();
         let projects = load_projects(&store);
 
-        let first = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project, None).unwrap();
-        let second = create_fresh_workspace(&git, &store, &nested(&root), &projects, &project, None).unwrap();
+        let first = create_fresh_workspace(&git, || Ok(&store), &nested(&root), &projects, &project, None).unwrap();
+        let second = create_fresh_workspace(&git, || Ok(&store), &nested(&root), &projects, &project, None).unwrap();
         let name_of = |w: &Worktree| Path::new(&w.path).file_name().unwrap().to_string_lossy().to_string();
         assert_ne!(name_of(&first), name_of(&second), "two launches never share a name");
         for w in [&first, &second] {
