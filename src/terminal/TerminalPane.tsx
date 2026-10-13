@@ -20,6 +20,7 @@ import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } f
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { batchAcks, memoryProfile } from "./flow";
 import { resumes } from "./layout";
+import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
 import { hookColourMode } from "./colourMode";
@@ -143,6 +144,18 @@ type Props = {
   };
 };
 
+// TERM-113: panes that are not on screen at mount (background tabs of a restored layout) start one
+// after another, a short beat apart, so the shown tab's programs get the first spawns and come up
+// usable first. ponytail: a timer ladder, not a queue; the visible panes never wait.
+let waiting = 0;
+const stagger = () =>
+  new Promise<void>((done) =>
+    setTimeout(() => {
+      waiting--;
+      done();
+    }, 150 + 60 * waiting++),
+  );
+
 export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
@@ -171,6 +184,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   // TERM-107: a restored pane wears a mark in its header until the first key or click in it; an agent
   // pane whose start line does not resume its conversation is marked as restored without resume.
   const [restoredMark, setRestoredMark] = useState<string | null>(null);
+  // TERM-111: a shell that died (non-zero exit) stays with an overlay offering a restart in the same
+  // pane; restart() re-runs the start line, or opens a plain shell, keeping the buffer.
+  const [died, setDied] = useState<number | null>(null);
+  const restart = useRef<(shell: boolean) => void>(() => {});
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
   // ACCT-050: the agent the user started by hand in this shell, as Rust recognises it.
   const [found, setFound] = useState<Agent | null>(null);
@@ -305,12 +324,16 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     let chain: Promise<unknown> = Promise.resolve();
     const write = (data: string) => {
       const id = idRef.current;
-      if (ended) return;
+      if (ended) {
+        // TERM-111: after an agent's program ended, Enter leaves the pane with a working shell.
+        if (data === "\r" && agent !== "shell") restart.current(true);
+        return;
+      }
       if (id === null) {
         if (!held.push(data)) setFlash("Keys typed before the shell started were dropped past 16 KB");
         return;
       }
-      chain = chain.then(() => invoke("terminal_write", { id, data })).catch((e) => setFlash(`Typing could not reach the program (${String(e)})`));
+      chain = chain.then(() => invoke("terminal_write", { id, data })).catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`));
     };
     term.onData(write);
     term.onBell(() => bell.current?.());
@@ -394,6 +417,13 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             }
           term.write(`\r\n\x1b[90m[process ${endedLabel(e.payload.code)}]\x1b[0m\r\n`);
             setStatus({ kind: "ended", code: e.payload.code });
+            // TERM-111: a shell that exited by itself closes its pane (its neighbours take the space and
+            // the tab goes with its last pane); one that died stays, with the exit code and a Restart;
+            // an agent pane keeps what its program printed and Enter starts a shell in it.
+            const code = e.payload.code;
+            if (agent !== "shell") term.write("\x1b[90mEnter starts a shell here\x1b[0m\r\n");
+            else if (code === 0 || code === null) closeRef.current?.();
+            else setDied(code);
           }),
         ),
       );
@@ -403,6 +433,51 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         unlisteners.forEach((u) => u());
         return;
       }
+      // TERM-110: a failure to start is said in plain words (SESS-024 then drops the pane and says so).
+      const fail = (err: unknown) => {
+        early = null;
+        const why = explainError(String(err), cwd ?? "no folder");
+        setStatus({ kind: "failed", error: why });
+        failed.current?.(why);
+      };
+      // TERM-111: start() also serves the overlay's Restart (the original start line) and the shell an
+      // agent pane gets on Enter after its program ended; the buffer is kept both times.
+      const start = async (prog: string | null, argv: readonly string[], keepInView: boolean) => {
+        try {
+          const { id, program: ran, account: used } = await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program: prog, args: argv, env: env ?? null, paneKey: number, account: account ?? null });
+          setStarted(ran);
+          if (!alive) {
+            invoke("terminal_kill", { id }).catch(() => {});
+            return;
+          }
+          idRef.current = id;
+          if (keepInView) {
+            const follow = term.onWriteParsed(() => term.scrollToLine(viewTop(term.buffer.active, term.rows)));
+            const stop = term.onKey(() => {
+              follow.dispose();
+              stop.dispose();
+            });
+          }
+          setStatus({ kind: "running", id, account: used });
+          const queued = early ?? [];
+          early = null;
+          for (const h of queued) if (h.id === id) h.run();
+          held.drain(write);
+          if (held.dropped > 0) setFlash(`${held.dropped} characters typed before the shell started were dropped`);
+          if (isFocused.current) term.focus();
+        } catch (err) {
+          fail(err);
+        }
+      };
+      restart.current = (shell) => {
+        if (!alive) return;
+        ended = false;
+        idRef.current = null;
+        early = [];
+        setDied(null);
+        setStatus({ kind: "starting" });
+        void start(shell ? null : program, shell ? [] : args, false);
+      };
       try {
         // TERM-106: a pane back from a restart shows what it printed before, then a fresh shell. The
         // saved file is a transcript of everything this pane's terminal processed, so replaying it
@@ -436,31 +511,12 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             keepInView = true;
           }
         }
-        const { id, program: ran, account: used } = await invoke<{ id: number; program: string | null; account: string | null }>("terminal_spawn", { cols: term.cols, rows: term.rows, cwd, program, args, env: env ?? null, paneKey: number, account: account ?? null });
-        setStarted(ran);
-        if (!alive) {
-          invoke("terminal_kill", { id }).catch(() => {});
-          return;
-        }
-        idRef.current = id;
-        if (keepInView) {
-          const follow = term.onWriteParsed(() => term.scrollToLine(viewTop(term.buffer.active, term.rows)));
-          const stop = term.onKey(() => {
-            follow.dispose();
-            stop.dispose();
-          });
-        }
-        setStatus({ kind: "running", id, account: used });
-        const queued = early ?? [];
-        early = null;
-        for (const h of queued) if (h.id === id) h.run();
-        held.drain(write);
-        if (held.dropped > 0) setFlash(`${held.dropped} characters typed before the shell started were dropped`);
-        if (isFocused.current) term.focus();
+        // TERM-113: a pane that is not on screen at mount lets the shown ones start first.
+        if (el.clientWidth === 0 || el.clientHeight === 0) await stagger();
+        if (!alive) return;
+        await start(program, args, keepInView);
       } catch (err) {
-        early = null;
-        setStatus({ kind: "failed", error: String(err) });
-        failed.current?.(String(err));
+        fail(err);
       }
     })();
 
@@ -861,6 +917,31 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
               )}
               <button ref={noticeButton} className="btn primary" onClick={notice.onPrimary}>
                 {notice.primary}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {died !== null && !notice && (
+        <div className="pane-ask" onMouseDown={(e) => e.stopPropagation()}>
+          <div
+            className="ask"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="The shell ended"
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") closeRef.current?.();
+            }}
+          >
+            <h2 className="ask-title">The shell ended with exit code {died}</h2>
+            <p className="ask-body">{exitAdvice(died)}</p>
+            <div className="btn-row">
+              <button className="btn" onClick={() => closeRef.current?.()}>
+                Close pane
+              </button>
+              <button className="btn primary" autoFocus onClick={() => restart.current(false)}>
+                Restart
               </button>
             </div>
           </div>
