@@ -45,7 +45,7 @@ pub fn text_hash(bytes: &[u8]) -> String {
 }
 
 /// Why file_write did not save. `Failed` goes to the window as the plain message it always was;
-/// `ChangedOnDisk` goes as `{ kind: "changedOnDisk", message, path, diskHash }` (diskHash null
+/// `ChangedOnDisk` goes as `{ kind: "stale", message, path, diskHash }` (diskHash null
 /// when the file is gone), so the editor can offer to reload or overwrite.
 #[derive(Debug, PartialEq)]
 pub enum WriteError {
@@ -64,7 +64,7 @@ impl serde::Serialize for WriteError {
         match self {
             WriteError::Failed(message) => s.serialize_str(message),
             WriteError::ChangedOnDisk { path, disk_hash } => serde_json::json!({
-                "kind": "changedOnDisk",
+                "kind": "stale", // the kind the editor's isStale (src/editor/buffers.ts) looks for
                 "message": format!("{path} changed on disk since it was opened, so it was not saved"),
                 "path": path,
                 "diskHash": disk_hash,
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(err, WriteError::ChangedOnDisk { path: f.display().to_string(), disk_hash: Some(text_hash(b"agent\n")) });
         assert_eq!(fs::read_to_string(&f).unwrap(), "agent\n");
         let sent = serde_json::to_value(&err).unwrap();
-        assert_eq!((sent["kind"].as_str(), sent["diskHash"].as_str()), (Some("changedOnDisk"), Some(text_hash(b"agent\n").as_str())));
+        assert_eq!((sent["kind"].as_str(), sent["diskHash"].as_str()), (Some("stale"), Some(text_hash(b"agent\n").as_str())));
 
         // Deleted on disk: refused with no disk hash. No hash given: saves as before.
         fs::remove_file(&f).unwrap();
