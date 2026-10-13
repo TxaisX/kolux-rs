@@ -1356,7 +1356,13 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             if !a["force"].as_bool().unwrap_or(false) && ctx.git.dirty(Path::new(&w.path))? {
                 return Err(Fail { code: "dirty", message: format!("{shown} has uncommitted changes"), data: json!({ "hint": "add --force to remove it anyway, changes and all" }) });
             }
-            ctx.terminals.kill_under(Path::new(&w.path));
+            // ORCH-058: its terminals and their processes end first and must be shown gone; a stop
+            // that cannot be proven blocks the removal unless --force waives it.
+            let stopped = ctx.terminals.kill_under(Path::new(&w.path));
+            if !stopped.stuck.is_empty() && !a["force"].as_bool().unwrap_or(false) {
+                let pids: Vec<String> = stopped.stuck.iter().map(u32::to_string).collect();
+                return Err(Fail { code: "stuck", message: format!("{} process{} in {shown} did not stop (pid {})", pids.len(), if pids.len() == 1 { "" } else { "es" }, pids.join(", ")), data: json!({ "hint": "add --force to remove it anyway, leaving them running", "pids": stopped.stuck }) });
+            }
             // CLI-020: --force forces only the checkout's removal; the branch is kept.
             let keep = a["force"].as_bool().unwrap_or(false) || projects::keeps_branch(&*ctx.store.lock().map_err(|e| e.to_string())?, &w.path);
             projects::remove_worktree(ctx.git, &project, &w.path, true, keep)?;
@@ -1366,7 +1372,7 @@ pub fn dispatch(ctx: &Ctx, req: &Request) -> Result<Value, Fail> {
             }
             (ctx.notify)(json!({ "kind": "removed", "path": w.path }));
             let warnings: Vec<&str> = if a["runHooks"].as_bool().unwrap_or(false) { vec!["--run-hooks: teardown scripts do not run yet; the worktree was removed without them"] } else { vec![] };
-            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": keep && w.branch.is_some(), "warnings": warnings }))
+            Ok(json!({ "path": w.path, "branch": w.branch, "name": w.name, "projectId": project.id, "branchKept": keep && w.branch.is_some(), "stopped": stopped.ended, "stuck": stopped.stuck, "warnings": warnings }))
         }
         "app.open" => {
             (ctx.front)()?;

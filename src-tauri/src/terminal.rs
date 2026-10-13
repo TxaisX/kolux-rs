@@ -263,6 +263,14 @@ struct ExitPayload {
     code: Option<u32>,
 }
 
+/// ORCH-058: what `kill_under` did: how many sessions it ended, and the pids it could not show
+/// gone in time (or could not check), which block a removal unless waived.
+#[derive(Default, Debug, PartialEq)]
+pub struct Stopped {
+    pub ended: usize,
+    pub stuck: Vec<u32>,
+}
+
 impl Terminals {
     /// Starts a pane. With no `program` it runs the user's shell; with one (an agent such as
     /// `claude`) it runs that program directly with `args`, in `cwd`.
@@ -300,6 +308,10 @@ impl Terminals {
             command.env("PATH", path);
         }
         if let Ok(dir) = tauri::Manager::path(&out_app).app_data_dir() {
+            // CLI-007 / ORCH-054: the pane reaches the Kolux that opened it, so the other-build
+            // override (COMPAT 7) it may have inherited from the shell that started Kolux is
+            // pointed at this app's own folder too.
+            command.env("KOLUX_USER_DATA_PATH", &dir);
             command.env(crate::cli::APP_DIR_ENV, dir);
         }
         // SET-027: the user's variables for this agent; Kolux's account variable below wins.
@@ -436,25 +448,28 @@ impl Terminals {
         inner.marks.get(&id).map(|m| m.last_output.unwrap_or(m.started).elapsed())
     }
 
-    /// Ends every session that was started in `dir` or a folder under it, and waits (briefly) for
-    /// the programs to be gone, so the folder can be deleted. Returns how many were ended.
-    pub fn kill_under(&self, dir: &std::path::Path) -> usize {
+    /// ORCH-058: ends every session started in `dir` or a folder under it, each with the processes
+    /// it started, and waits up to three seconds for them to be shown gone, so the folder can be
+    /// deleted. A record with no process behind it (stale) is swept and never counts as stuck.
+    pub fn kill_under(&self, dir: &std::path::Path) -> Stopped {
         let wanted = |d: &str| {
             let d = std::path::Path::new(d);
             let same = |a: &std::path::Path, b: &std::path::Path| a.canonicalize().ok() == b.canonicalize().ok();
             same(d, dir) || d.ancestors().skip(1).any(|a| same(a, dir))
         };
-        let ids: Vec<u32> = match self.inner.lock() {
-            Ok(inner) => inner.dirs.iter().filter(|(_, d)| wanted(d)).map(|(id, _)| *id).collect(),
-            Err(_) => return 0,
+        let found: Vec<(u32, Option<u32>)> = match self.inner.lock() {
+            Ok(inner) => inner.dirs.iter().filter(|(_, d)| wanted(d)).map(|(id, _)| (*id, inner.sessions.get(id).and_then(PtySession::pid))).collect(),
+            Err(_) => return Stopped::default(),
         };
-        for id in &ids {
+        for (id, pid) in &found {
+            // The tree first: a dev server the shell started holds the folder as much as the shell.
+            if let Some(pid) = pid {
+                crate::procs::kill_tree(*pid);
+            }
             let _ = self.kill(*id);
         }
-        if !ids.is_empty() {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-        ids.len()
+        let pids: Vec<u32> = found.iter().filter_map(|(_, p)| *p).collect();
+        Stopped { ended: found.len(), stuck: crate::procs::wait_gone(&pids, std::time::Duration::from_secs(3)) }
     }
 
     /// The open terminal whose secret is `key` (ORCH-001: a pane the runtime saw), by its handle.
@@ -655,6 +670,33 @@ mod tests {
         screen_open("r2");
         assert_eq!(screen_wait("r2"), None);
         assert!(SCREENS.lock().unwrap().is_empty());
+    }
+
+    /// ORCH-058: the shells in a worktree are ended and shown gone before its folder is deleted,
+    /// and a record with no process behind it never blocks.
+    #[test]
+    fn orch058_kill_under_ends_the_shells_in_a_folder_so_it_can_be_deleted() {
+        let dir = std::env::temp_dir().join(format!("kolux-orch058-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = Terminals::default();
+        let s = PtySession::spawn(shell_command(Some(&dir.to_string_lossy())), 80, 24, |_| {}, |_| {}).expect("spawn a shell in the folder");
+        let pid = s.pid().expect("the platform reports the shell's pid");
+        {
+            let mut inner = t.inner.lock().unwrap();
+            inner.sessions.insert(1, s);
+            inner.dirs.insert(1, dir.to_string_lossy().into_owned());
+            // A stale record: the folder above, with no session behind it.
+            inner.dirs.insert(2, std::env::temp_dir().to_string_lossy().into_owned());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let stopped = t.kill_under(&dir);
+        assert_eq!((stopped.ended, stopped.stuck.as_slice()), (1, &[][..]), "the shell ended and was shown gone");
+        assert_eq!(crate::procs::alive(pid), Some(false));
+        assert!(t.inner.lock().unwrap().sessions.is_empty());
+        std::fs::remove_dir_all(&dir).expect("the folder is free once its shell is gone");
+        let stale = t.kill_under(&std::env::temp_dir());
+        assert_eq!((stale.ended, stale.stuck.len()), (1, 0), "a stale record is swept without blocking");
+        assert!(t.inner.lock().unwrap().dirs.is_empty());
     }
 
     #[test]

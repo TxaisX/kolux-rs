@@ -444,3 +444,4 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-040-b · The cards USAGE-004, VIEW-018 and USAGE-025, and this repo's own meter, ring and pill code. Nothing from the old app.
 > 2026-10-12 · T-144-a · The cards TERM-010 and TERM-024, DT-A7, and this repo's own grid and pane code; CSS container queries and pointer capture are platform features. Nothing from the old app.
 > 2026-10-12 · T-102-a · The cards TERM-044, TERM-049 and TERM-045, COMPAT's tab.close / tab.closeAll rows, and this repo's own close question, grid and menu code. Nothing from the old app.
+> 2026-10-12 · T-174-a · The cards ORCH-054 and ORCH-058, COMPAT 7, CLI-007 and this repo's own CLI, terminal and process code; taskkill, the Toolhelp snapshot and kill(1) are platform tools. Nothing from the old app.
