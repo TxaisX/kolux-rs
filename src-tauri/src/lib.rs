@@ -1,3 +1,4 @@
+mod activity;
 mod agents;
 mod artifacts;
 mod automations;
@@ -117,6 +118,8 @@ pub fn run() {
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
             onboarding::first_start(&store, starts)?;
+            // USAGE-011: last run's activity counts, before any pane reports.
+            activity::start(&store);
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
@@ -172,6 +175,12 @@ pub fn run() {
                 std::thread::sleep(std::time::Duration::from_secs(15));
                 resume::tick(&handle, &log_dir);
             });
+            // USAGE-011: changed activity counts are saved in batches.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                activity::save(&handle.state::<Mutex<Store>>(), false);
+            });
             // STAT-045: a working agent that prints nothing for the chosen minutes is reported once
             // per silent spell. Silence is the terminal's own output, never the hooks.
             let handle = app.handle().clone();
@@ -207,6 +216,7 @@ pub fn run() {
             terminal::terminal_spawn,
             terminal::terminal_write,
             status::agent_history,
+            activity::activity_counts,
             status::agent_answer,
             terminal::terminal_resize,
             terminal::terminal_kill,
@@ -348,6 +358,8 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // USAGE-011: open turns end and the counts are written; no batched save follows.
+                activity::save(&app.state::<Mutex<Store>>(), true);
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
                 app.state::<Terminals>().kill_all();

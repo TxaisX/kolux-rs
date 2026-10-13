@@ -389,6 +389,7 @@ pub fn report(pane_key: u32, terminal: Option<u32>, agent: Agent, event: &Value)
         let session = s.entry(pane_key).or_default();
         session.terminal = terminal.or(session.terminal);
         let (change, child) = session.apply(agent, event)?;
+        crate::activity::note(pane_key, change.state);
         Some(Status { pane_key, terminal, change, children: session.children.clone(), stop: session.stop.clone(), reply: session.reply.clone(), child, interrupted: session.interrupted })
     })
 }

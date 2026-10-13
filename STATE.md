@@ -1453,6 +1453,12 @@ move to the copy that is left, so the total stays the same. Rescans skip files t
 nested folders are read, Codex accounts whose folder points outside Kolux's own storage are not
 followed, and results saved by the older scan are rebuilt once.
 
+[accounts] T-136-c: the Usage page now opens with three cards counting Kolux's own activity:
+agents started, time agents spent working and pull requests created, with the date counting began.
+Before any agent has run it invites you to start the first one. The counts come from the agents'
+own status reports, so reloading the window never adds a turn, and they survive quitting Kolux
+while an agent is busy.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2612,7 +2618,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-170 · USAGE-016/017: files are read oldest first (creation time, then change time, then path) and a reply (Claude message id) or token event (Codex time plus running total) held by several files counts for the first; the per-file memory (size and change time) lives in memory only, so the first scan after a restart reads every file once (T-170-b keeps it across restarts). The saved results carry a format mark (2) and anything else is thrown away and rescanned. The computer's own Codex folder is always <user folder>/.codex/sessions, whatever CODEX_HOME says; a managed home counts only when its resolved sessions folder lies inside <app data>/codex-accounts. Worktree credit (Kolux scope) now works out "." and ".." before comparing, so a path that climbs out of a worktree gets no credit.
 
+- [accounts] T-136-c · USAGE-011: an agent turn starts when a pane's hook-fed state becomes working from no open turn and ends on done or interrupted (a SessionStart reads done), or when its terminal ends; waiting, permission and blocked close the working stretch without ending the turn. Counting runs in the app's back end from the hook events, so a window reload or reconnect restates nothing. Counts live under the store key activityCounts, saved every 5 s when changed and once at quit after open turns are closed; a batched save never follows the one at quit. The page keeps its Settings name Usage (SET-006 lists it so), and the palette's Settings entries already take "usage" straight there. The invitation is text only, pointing at New session, since no window event opens the new-session chooser.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-136-c · done (part): activity.rs (turns, working stretches, batched and quit saves), status.rs and terminal.rs feed it, src/usage/Activity.tsx headline cards and invitation · evidence/T-136-c.txt, T-136-c-1-first-run-invitation.png, T-136-c-2-two-turns-after-reload.png, T-136-c-3-counts-intact-after-quit.png
 - 2026-10-12 · [accounts] T-170 · done (part): token_usage claude_file/codex_file/merge, per-file Cache, codex_roots, format mark; workspaces trim resolves . and .. · evidence/T-170.txt, T-170-1-fork-counted-once.png, T-170-2-original-gone-total-kept.png
 - 2026-10-12 · [accounts] T-171 · done (part): ConnectGrid liveCheck (5 s while visible, on focus, changes broadcast); claude_key::strip_inherited, claude_accounts::sign_in_overrides, codex_accounts::ready_home wired in terminal_spawn · evidence/T-171.txt, T-171-1-grok-not-installed.png, T-171-2-grok-found-without-reload.png
 - 2026-10-12 · [accounts] T-154-b · done: `src-tauri/src/fence.rs` (projects, worktrees and exact grants; shares, drive roots and links refused); file commands fenced; Open a file uses file_pick · evidence/T-154-b.txt, T-154-b-1-picker.png

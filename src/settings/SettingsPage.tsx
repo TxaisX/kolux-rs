@@ -28,6 +28,7 @@ const TerminalPage = lazy(() => import("./TerminalPage"));
 const GitPage = lazy(() => import("./GitPage"));
 const AgentsPage = lazy(() => import("./AgentsPage"));
 const TokenAnalytics = lazy(() => import("../usage/TokenAnalytics"));
+const Activity = lazy(() => import("../usage/Activity"));
 
 export function ClaudeCardView({ status, busy, error, onAction, onUseAccount, own = null, resume = false, onResume }: { status: KeyStatus | null; busy: boolean; error?: string | null; onAction: (a: KeyAction) => void; onUseAccount?: () => void; own?: OwnSignIn | null; resume?: boolean; onResume?: (on: boolean) => void }) {
   const card = keyCard(status);
@@ -268,6 +269,7 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
           )}
           {page === "usage" && (
             <>
+              <Activity />
               <p className="settings-sub">What your agents used, read from the logs they keep on this computer.</p>
               <TokenAnalytics />
             </>

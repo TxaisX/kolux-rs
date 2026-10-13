@@ -170,6 +170,7 @@ impl Terminals {
                     inner.keys.remove(&id);
                     inner.ended.insert(id);
                 }
+                crate::activity::terminal_ended(id);
                 let _ = exit_app.emit(EXIT_EVENT, ExitPayload { id, code });
             },
         )?;
