@@ -362,7 +362,7 @@ export default function AutomationsPage({ projects, agents, settings, onSettings
                       <td>{triggerLabel(a)}</td>
                       <td>{names.agent(a.provider)}</td>
                       <td>{names.project(a.projectId)}</td>
-                      <td>{last ? `${statusWord(last)} · ${ago(last.at, now)}` : "Never"}</td>
+                      <td>{last ? `${statusWord(last)} · ${ago(last.lastAt ?? last.at, now)}` : "Never"}</td>
                       <td>{upcoming(a, now)}</td>
                       <td className="autos-act">
                         <button
@@ -493,7 +493,7 @@ function Detail({ a, runs, runsError, now, agent, tab, onTab, onRun, onToggle }:
               <span className="num">#{r.number}</span>
               <span>{statusWord(r)}</span>
               <span className="muted">{r.trigger === "manual" ? "by hand" : r.trigger === "event" ? "by an event" : "by the timetable"}</span>
-              <span className="muted">{ago(r.at, now)}</span>
+              <span className="muted">{r.lastAt ? `first ${ago(r.at, now)}, last ${ago(r.lastAt, now)}` : ago(r.at, now)}</span>
               {r.worktreeName && <span className="chip">{r.worktreeName}</span>}
               {r.detail && <span className="muted">{r.detail}</span>}
               {r.output && <pre className="auto-output">{r.output}</pre>}

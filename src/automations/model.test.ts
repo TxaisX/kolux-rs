@@ -126,6 +126,9 @@ test("AUTO-007 grace choices and why a run was skipped read in words", () => {
   expect(statusWord({ ...r, cause: "missed" })).toBe("Skipped (Kolux was away)");
   expect(statusWord({ ...r, cause: "signin" })).toBe("Skipped (sign-in needed)");
   expect(statusWord({ ...r, cause: "unavailable" })).toBe("Skipped (unavailable)");
+  // AUTO-012: the same refusal again and again is one entry with a count.
+  expect(statusWord({ ...r, cause: "unavailable", repeats: 12 })).toBe("Skipped (unavailable) · 12 times");
+  expect(statusWord({ ...r, cause: "unavailable", repeats: 1 })).toBe("Skipped (unavailable)");
 });
 
 test("AUTO-008 the precheck's limits and its skip read in words", () => {

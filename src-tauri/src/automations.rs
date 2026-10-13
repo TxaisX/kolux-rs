@@ -233,8 +233,16 @@ pub fn tick(l: &Launch, now: i64) -> Result<Vec<Value>, String> {
     Ok(started)
 }
 
-/// A run that never started, logged so the gap shows (AUTO-007, AUTO-022).
+/// A run that never started, logged so the gap shows (AUTO-007, AUTO-022). AUTO-012: when the
+/// automation's newest run was skipped for the same reason, that entry counts one more instead,
+/// so an hour of five-minute refusals is one line, not twelve. A missed time is already one entry
+/// per absence (AUTO-007), so two absences stay two.
 fn skip(store: &Store, id: &str, trigger: &str, cause: &str, detail: &str) -> Result<Value, String> {
+    let newest = load(store, RUNS_KEY)?.into_iter().filter(|r| r["automationId"] == id).max_by_key(|r| r["number"].as_u64().unwrap_or(0));
+    if let Some(last) = newest.filter(|r| cause != "missed" && r["status"] == "skipped" && r["cause"] == cause && r["detail"] == detail && r["trigger"] == trigger) {
+        let repeats = last["repeats"].as_u64().unwrap_or(1) + 1;
+        return patch_run(store, last["id"].as_str().unwrap_or_default(), json!({ "repeats": repeats, "lastAt": now_ms() }));
+    }
     let run = new_run(store, id, trigger)?;
     patch_run(store, run["id"].as_str().unwrap_or_default(), json!({ "status": "skipped", "cause": cause, "detail": detail }))
 }
@@ -290,6 +298,14 @@ pub fn tidy(store: &Store) -> Result<(), String> {
             a["lastRunNumber"] = json!(number);
         }
         runs[i]["number"] = json!(number);
+    }
+    // AUTO-012: a run an earlier start left queued or starting was never handed to an agent, so it
+    // cannot finish now; one already dispatched stays, since Kolux cannot tell its agent was lost.
+    // ponytail: reconnecting dispatched runs to their panes and closing the unfound ones after a
+    // settling period need agent status (T-025), as does completing a run (T-072-b).
+    for r in runs.iter_mut().filter(|r| r["status"] == "pending" || r["status"] == "dispatching") {
+        r["status"] = json!("failed");
+        r["detail"] = json!("Kolux closed before this run was handed to its agent");
     }
     let ids: std::collections::BTreeSet<String> = runs.iter().filter_map(|r| r["automationId"].as_str().map(String::from)).collect();
     for id in &ids {
@@ -958,6 +974,62 @@ mod tests {
         assert_eq!(other[0]["number"], json!(1), "an old run without a number is given one");
         assert_eq!(new_run(&store, "auto-2", "manual").unwrap()["number"], json!(2));
         assert_eq!(new_run(&store, "auto-1", "manual").unwrap()["number"], json!(121));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto012_the_same_refusal_again_and_again_is_one_entry_with_a_count() {
+        let dir = temp("repeat");
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let store = Mutex::new(Store::open(&dir.join("db")).unwrap());
+        seed(&store.lock().unwrap(), &ws);
+        let git = Git::detect().unwrap();
+        let notify = |_: &str, _: Value| {};
+        let yes = |_: &str| true;
+        let l = Launch { git: &git, store: &store, claude_config: dir.join("claude.json"), installed: &yes, notify: &notify };
+        // Every five minutes for an hour, with auto-2's project gone.
+        for k in 0..12 {
+            {
+                let s = store.lock().unwrap();
+                let mut autos = load(&s, KEY).unwrap();
+                autos[1]["trigger"] = json!({ "kind": "schedule", "cron": "*/5 * * * *", "timezone": "UTC" });
+                autos[1]["nextRunAt"] = json!(FRI_NOON + k * 300_000);
+                save(&s, KEY, &autos).unwrap();
+            }
+            tick(&l, FRI_NOON + k * 300_000 + 5_000).unwrap();
+        }
+        let gone = runs_of(&store, "auto-2");
+        assert_eq!(gone.len(), 1, "{gone:?}");
+        assert_eq!((gone[0]["status"].as_str(), gone[0]["cause"].as_str(), gone[0]["repeats"].as_u64()), (Some("skipped"), Some("unavailable"), Some(12)));
+        // A different reason starts a new entry.
+        {
+            let s = store.lock().unwrap();
+            skip(&s, "auto-2", "schedule", "missed", "Kolux was not available").unwrap();
+        }
+        assert_eq!(runs_of(&store, "auto-2").len(), 2);
+        drop(l);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto012_after_a_restart_a_run_never_handed_on_is_closed_and_a_running_one_is_kept() {
+        let dir = temp("restart");
+        let store = Store::open(&dir.join("db")).unwrap();
+        seed(&store, &dir);
+        let runs = json!([
+            { "id": "run-1", "automationId": "auto-1", "number": 1, "status": "pending", "at": 1 },
+            { "id": "run-2", "automationId": "auto-1", "number": 2, "status": "dispatching", "at": 2 },
+            { "id": "run-3", "automationId": "auto-1", "number": 3, "status": "dispatched", "at": 3 },
+        ]);
+        store.set(RUNS_KEY, &runs.to_string()).unwrap();
+        tidy(&store).unwrap();
+        let got = load(&store, RUNS_KEY).unwrap();
+        let st: Vec<&str> = got.iter().map(|r| r["status"].as_str().unwrap()).collect();
+        assert_eq!(st, ["failed", "failed", "dispatched"], "Kolux cannot tell a running agent was lost, so it stays dispatched");
+        assert!(got[0]["detail"].as_str().unwrap().contains("closed before"), "{}", got[0]);
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
