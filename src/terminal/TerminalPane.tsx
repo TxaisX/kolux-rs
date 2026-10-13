@@ -3,7 +3,7 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { branchChip, crewLabel, crewLine, headerOf, type Crew } from "./status";
+import { branchChip, crewLabel, crewLine, foundAgent, headerOf, type Crew } from "./status";
 import PaneMenu from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
@@ -167,6 +167,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     return () => clearTimeout(t);
   }, [flash]);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
+  // ACCT-050: the agent the user started by hand in this shell, as Rust recognises it.
+  const [found, setFound] = useState<Agent | null>(null);
   // TERM-025 / TERM-027: the pane menu, opened by "..." or a right-click on the header, and the inline name field.
   const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   const [naming, setNaming] = useState(false);
@@ -277,6 +279,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       else if (id === idRef.current) run();
     };
     const unlisteners: UnlistenFn[] = [];
+    // TERM-098: output drawn before terminal_spawn hands back the id can hold the console's
+    // opening cursor query; the terminal's answer goes through write() like a key, so it is held
+    // here and sent once the id is known, or the shell never starts.
     // TERM-115: keys typed while the shell is still starting are held and sent once it runs
     // (capped); a write the program side refuses is said out loud rather than lost in silence.
     const held = new HeldKeys();
@@ -355,6 +360,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           for (let y = 0; y < term.rows; y++) rows.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? "");
           invoke("terminal_screen_reply", { request: e.payload.request, rows }).catch(() => {});
         }),
+        await listen<{ terminal: number; agent: string | null }>("pane-agent", (e) =>
+          mine(e.payload.terminal, () => setFound(foundAgent(e.payload.agent))),
+        ),
         await listen<ExitEvent>("terminal-exit", (e) =>
           mine(e.payload.id, () => {
             ended = true;
@@ -495,7 +503,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     if (hook === "done") setFinishedAt((t) => t ?? Date.now());
     else if (hook === "working") setFinishedAt(null);
   }, [hook]);
-  const header = headerOf(agent, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
+  // A shell pane running an agent the user started by hand reads as that agent's session.
+  const shown: Agent = agent === "shell" && found ? found : agent;
+  const header = headerOf(shown, status.kind, status.kind === "ended" ? status.code : undefined, false, finishedAt, now, hook);
   const { word, tone, glyph, age, needsYou } = header;
   const explain = header.state === "blocked" && stop ? `${stopLine(stop)}.` : header.explain;
   const needs = useRef(onNeedsYou);
@@ -532,7 +542,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   // The seat's job title names the pane; else the workspace folder (an agent launch's creature
   // name); else "Terminal N" (SESS-024).
   const title = jobTitle || (cwd ? folderName(cwd) : `Terminal${number ? ` ${number}` : ""}`);
-  const agentLabel = name ?? (agent === "shell" ? "Plain shell" : programWord(agent));
+  const agentLabel = name ?? (shown === "shell" ? "Plain shell" : programWord(shown));
   // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
   const model = agent === "shell" ? null : modelOf(args);
   // TERM-022: before git answers, the branch the pane was opened on; a folder outside git has none.
@@ -545,7 +555,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const openMenu = (x: number, y: number) => setMenuAt({ top: Math.min(y, window.innerHeight - 160), left: Math.min(x, window.innerWidth - 240) });
 
   return (
-    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
+    <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={shown} style={card?.column ? { gridColumn: card.column } : undefined}>
       <header
         className="pane-head"
         onContextMenu={(e) => {
@@ -558,7 +568,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>
         <span className="agent-mark" title={agentLabel}>
-          <VendorMark agent={agent} size={13} />
+          <VendorMark agent={shown} size={13} />
         </span>
         {naming && onRename ? (
           <NameField
@@ -586,7 +596,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
         <span className="word" title={program ? [program, ...args.map(withoutRules)].join(" ") : undefined}>
-          {name ?? shellName ?? (agent === "shell" && !program && started ? shellWord(started) : programWord(agent))}
+          {name ?? shellName ?? (shown === "shell" && !program && started ? shellWord(started) : programWord(shown))}
           {model && ` · ${model}`}
         </span>
         <span className={`status ${tone}`} data-tip={explain}>

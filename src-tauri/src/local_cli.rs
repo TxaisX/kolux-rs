@@ -3,7 +3,13 @@
 //! guides bundled into this build, so they always match its version.
 
 use super::{commands, Fail, Parsed, HELP};
+use crate::hooks::agent_hooks::switch;
 use serde_json::{json, Value};
+
+/// The settings of the Kolux profile this command reaches; none read as empty.
+fn profile_settings() -> Value {
+    std::fs::read(super::data_dir().join("settings.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_else(|| json!({}))
+}
 
 /// CLI-001: every bundled guide and reference by name, so a test can check what they mention.
 #[cfg(test)]
@@ -17,6 +23,10 @@ pub const COMMANDS: &[super::Command] = &[
     ("skills get", "skills.get", &["topic", "full", "references", "reference"]),
     ("skills show", "skills.get", &["topic", "full", "references", "reference"]),
     ("skills coverage", "skills.coverage", &[]),
+    ("agent hooks status", "agent.hooks.status", &[]),
+    ("agent hooks on", "agent.hooks.on", &[]),
+    ("agent hooks off", "agent.hooks.off", &[]),
+    ("agent hooks prepare-codex", "agent.hooks.prepare-codex", &[]),
 ];
 
 /// ORCH-043: the folders under home where each agent reads skills installed for the whole
@@ -172,6 +182,10 @@ const SUMMARIES: &[(&str, &str)] = &[
     ("skills get", "Print a bundled skill guide, in short, in full, or one reference."),
     ("skills coverage", "Show which installed agents have the orchestration skill installed for the whole computer."),
     ("claude-teams", "Run Claude Code with Agent Teams in Kolux panes; arguments go to Claude untouched."),
+    ("agent hooks status", "Show whether each agent's status hooks are installed, partly installed or missing."),
+    ("agent hooks on", "Switch the agent status hooks on and put Kolux's entries back into every agent."),
+    ("agent hooks off", "Switch the agent status hooks off and take Kolux's entries out of every agent."),
+    ("agent hooks prepare-codex", "Install and trust Kolux's Codex hooks before Codex is first started."),
 ];
 
 /// The bare word some commands take after their verb, and the flag it stands for.
@@ -330,6 +344,11 @@ pub fn run(p: &Parsed) -> Option<Result<Value, Fail>> {
         "skills.list" => Ok(json!({ "skills": SKILLS.iter().map(|s| json!({ "name": s.name, "description": split(s.guide).0, "aliases": s.aliases, "references": s.refs.iter().map(|r| r.0).collect::<Vec<_>>() })).collect::<Vec<_>>() })),
         "skills.get" => skills_get(&p.args),
         "skills.coverage" => Ok(skills_coverage()),
+        // STAT-003: read from the files themselves, so Kolux may be closed.
+        "agent.hooks.status" => Ok(switch::report(&profile_settings())),
+        "agent.hooks.on" => switch::set(&super::data_dir(), true).map_err(Fail::from),
+        "agent.hooks.off" => switch::set(&super::data_dir(), false).map_err(Fail::from),
+        "agent.hooks.prepare-codex" => switch::prepare_codex(&profile_settings()).map_err(Fail::from),
         _ => return None,
     })
 }
@@ -348,6 +367,15 @@ pub fn text(command: &str, r: &Value) -> Option<String> {
             let head = format!("The {} skill, installed for the whole computer (an install inside a repo does not count):", r["skill"].as_str().unwrap_or_default());
             if rows.is_empty() { format!("{head}\nNo agents were found on this computer.") } else { format!("{head}\n{}", rows.join("\n")) }
         }
+        "agent.hooks.status" | "agent.hooks.on" | "agent.hooks.off" => {
+            let mut out = vec![format!("Agent status hooks: {}", if r["on"] == true { "on" } else { "off" })];
+            for a in r["agents"].as_array().into_iter().flatten() {
+                let why = a["reason"].as_str().map(|w| format!("  ({w})")).unwrap_or_default();
+                out.push(format!("{:<14}{}{why}", a["name"].as_str().unwrap_or_default(), a["state"].as_str().unwrap_or_default()));
+            }
+            out.join("\n")
+        }
+        "agent.hooks.prepare-codex" => format!("Kolux's Codex hooks are installed and trusted in {}", r["home"].as_str().unwrap_or_default()),
         _ => return None,
     })
 }

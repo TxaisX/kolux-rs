@@ -34,6 +34,7 @@ mod newproject;
 mod notifications;
 mod onboarding;
 mod orchestration;
+mod foreground;
 mod procs;
 mod protected;
 mod resources;
@@ -184,11 +185,20 @@ pub fn run() {
             cli::serve(app.handle().clone(), &dir)?;
             // AUTO-001: the automations clock.
             automations::start_clock(app.handle().clone());
-            // Agents report their status through hooks (STAT-001): the listener, the script and
-            // Claude Code's settings entries. ponytail: always on; the switch is STAT-002 (T-120).
+            // Agents report their status through hooks (STAT-001): the listener, then the scripts
+            // and each found, switched-on agent's entries (STAT-004), off the launch path.
+            // STAT-006 / STAT-030: the last run's statuses, with what hooks held while Kolux was
+            // closed, are read before the listener opens.
+            if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                hooks::agent_hooks::saved::startup(&store, &dir);
+            }
             let hooks = hooks::serve(app.handle().clone(), &dir)?;
             app.manage(hooks);
-            hooks::install_all();
+            let settings = app.state::<Mutex<Store>>().lock().map(|s| s.settings()).unwrap_or_default();
+            let profile = dir.clone();
+            std::thread::spawn(move || {
+                hooks::agent_hooks::sync(&settings, &profile);
+            });
             // Shortly after the first window: seal anything older still in the clear and limit
             // the profile folder to this user (ACCT-009). Never delays or stops the launch.
             let handle = app.handle().clone();
@@ -205,6 +215,12 @@ pub fn run() {
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(15));
                 resume::tick(&handle, &log_dir);
+            });
+            // ACCT-050: an agent started by hand in a shell pane is recognised within a few seconds.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                foreground::poll(&handle);
             });
             // USAGE-011: changed activity counts are saved in batches.
             let handle = app.handle().clone();
@@ -245,6 +261,10 @@ pub fn run() {
             get_settings,
             save_settings,
             settings_patch,
+            hooks::agent_hooks::agent_hooks_sync,
+            hooks::agent_hooks::agent_hooks_file,
+            hooks::agent_hooks::saved::agent_status_saved,
+            hooks::agent_hooks::saved::agent_resumable,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,
@@ -446,6 +466,10 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 // USAGE-011: open turns end and the counts are written; no batched save follows.
                 activity::save(&app.state::<Mutex<Store>>(), true);
+                // STAT-037: the agents still mid-task are recorded before their terminals end.
+                if let Ok(store) = app.state::<Mutex<Store>>().lock() {
+                    hooks::agent_hooks::saved::at_quit(&store);
+                }
                 // ACCT-015: no sign-in or install keeps running after Kolux quits.
                 claude_key::cancel_all(std::time::Duration::from_secs(2));
                 // ACCT-025: sign-ins the agents renewed are sealed again, Codex's then Claude's,

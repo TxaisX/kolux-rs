@@ -713,7 +713,15 @@ impl Terminals {
     /// cannot be told), `Some(Some(agent))` for a program Kolux started (USAGE-007).
     pub fn program(&self, id: u32) -> Option<Option<&'static str>> {
         let inner = self.inner.lock().ok()?;
-        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent))
+        // ACCT-050: a shell credits the agent the user started in it by hand.
+        inner.sessions.contains_key(&id).then(|| inner.marks.get(&id).and_then(|m| m.agent).or_else(|| crate::foreground::found(id)))
+    }
+
+    /// ACCT-050: every shell session (no program of Kolux's own) with its process id and
+    /// foreground process group.
+    pub fn shells(&self) -> Vec<(u32, Option<u32>, Option<i32>)> {
+        let Ok(inner) = self.inner.lock() else { return Vec::new() };
+        inner.sessions.iter().filter(|(id, _)| !inner.marks.contains_key(id)).map(|(id, s)| (*id, s.pid(), s.foreground_group())).collect()
     }
 
     /// How long the program in `id` has printed nothing (since it started, when it never has), for
@@ -863,7 +871,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     // ACCT-005: otherwise a Claude pane runs on the active managed account's own folder.
     let env_own = env.unwrap_or_default();
     let pinned = resumed.is_some();
-    let (env, cap, account): (Vec<(String, String)>, bool, Option<String>) = {
+    let (env, cap, account, hooks_on): (Vec<(String, String)>, bool, Option<String>, bool) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let settings = store.settings();
         let used = codex.then(|| account.clone().or_else(|| crate::codex_accounts::active_account(&store).map(|a| a.id))).flatten();
@@ -879,7 +887,7 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
             .map(|(k, v)| (k.to_string(), v))
             .into_iter()
             .collect();
-        (env, crate::cap::on(&settings), used)
+        (env, crate::cap::on(&settings), used, crate::hooks::agent_hooks::switch::on(&settings))
     };
     // ACCT-024: on a managed Claude account, the user's own settings may not sign the pane in.
     if env.iter().any(|(k, _)| k == crate::claude_accounts::CONFIG_ENV) {
@@ -904,7 +912,8 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
     if cap {
         crate::cap::apply(program.as_deref(), &mut args, &mut env, crate::cap::env_set());
     }
-    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it.
+    // STAT-008: a managed Codex home gets Kolux's hooks (and their trust) before Codex reads it,
+    // unless the status hooks are switched off (STAT-002).
     if let Some((_, home)) = env.iter().find(|(k, _)| k == crate::codex_accounts::HOME_ENV) {
         // ACCT-021: the user's own Codex settings first; a failed copy never stops the launch.
         let user = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from);
@@ -914,7 +923,9 @@ pub async fn terminal_spawn(app: AppHandle, terminals: tauri::State<'_, Terminal
                 eprintln!("kolux-rs: codex settings: {e}");
             }
         }
-        crate::hooks::install_codex_home(std::path::Path::new(home));
+        if hooks_on {
+            crate::hooks::install_codex_home(std::path::Path::new(home));
+        }
     }
     let agent = program.as_deref().and_then(crate::agents::credited_agent);
     let dir = cwd.clone();
