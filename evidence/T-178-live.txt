@@ -1,0 +1,20 @@
+T-178 (EDIT-046, saves are all-or-nothing, big and binary files handled safely) live proof, 2026-10-13, lane release,
+dev build on port 1422, CDP 9232, window on the second screen. Lane profile backed up first and restored afterwards
+(settings.json, state.db, state.db-wal, state.db-shm: cmp same).
+
+Setup: throwaway repo G:/Temp/release-T-178/repo with a committed notes.txt ("first note line"), a.zip made by
+git archive of that commit (191 bytes, a real zip), and app.log of 20,971,577 bytes (411,208 lines, the last one
+"LAST LINE OF THE LOG"). Added with project_add, workspace selected, explorer opened.
+
+1. Opened app.log from the explorer: it opened in the source view with no notice (the old app stopped at 5 MB);
+   Ctrl+End reached line 411208 "LAST LINE OF THE LOG". Screenshot: evidence/T-178-log.png.
+2. Opened a.zip: no text view (no editor in the tab); the tab says
+   "a.zip did not open: G:\Temp\release-T-178\repo\a.zip holds binary data, so it is not shown as text".
+   Screenshot: evidence/T-178-zip.png.
+3. Opened notes.txt, typed "SAVED ", Ctrl+S: notes.txt on disk reads "SAVED first note line"; ls -la of the
+   folder lists only .git, a.zip, app.log, notes.txt (no temporary save file left).
+
+Unit tests (src-tauri/src/files.rs): edit046_big_logs_open_binaries_and_oversized_files_do_not (a 20 MB log
+reads whole, a zip header is refused as binary, a file one byte over READ_LIMIT is refused naming its size);
+a_save_replaces_the_file_and_leaves_no_temporary_behind (the save writes a temporary copy, syncs it and renames
+it over the file; the folder holds one file afterwards).

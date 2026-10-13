@@ -1,13 +1,34 @@
 // Reading and saving the text of a file shown in an editor tab (EDIT-001). A save goes to a
 // temporary file beside the target and is then moved over it, so a failed write never leaves a
 // half-written file behind. Fencing file access to the user's projects is EDIT-045 (T-062);
-// large and binary files are EDIT-046 (T-178).
+// large and binary files (EDIT-046): reads stop at READ_LIMIT and a file whose first bytes hold a NUL is binary.
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
+/// EDIT-046: the most a text tab reads (the old app stopped at 5 MB).
+pub const READ_LIMIT: u64 = 50 * 1024 * 1024;
+/// How much of a file is looked at first: a NUL byte in it means binary data, not text.
+const SAMPLE: u64 = 8192;
+
 pub fn read_text(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let io = |e: std::io::Error| format!("{}: {e}", path.display());
+    let mut f = fs::File::open(path).map_err(io)?;
+    let len = f.metadata().map_err(io)?.len();
+    let over = || format!("{} is {:.1} MB, over the {} MB a text tab opens", path.display(), len.max(READ_LIMIT + 1) as f64 / 1048576.0, READ_LIMIT >> 20);
+    if len > READ_LIMIT {
+        return Err(over());
+    }
+    let mut bytes = Vec::with_capacity(len as usize);
+    (&mut f).take(SAMPLE).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.contains(&0) {
+        return Err(format!("{} holds binary data, so it is not shown as text", path.display()));
+    }
+    // Bounded again, in case the file grew since its size was read.
+    f.take(READ_LIMIT + 1 - bytes.len() as u64).read_to_end(&mut bytes).map_err(io)?;
+    if bytes.len() as u64 > READ_LIMIT {
+        return Err(over());
+    }
     String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8 text", path.display()))
 }
 
@@ -25,7 +46,7 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), String> {
     fs::rename(&temp, path).map_err(fail)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn file_read(path: String) -> Result<String, String> {
     read_text(Path::new(&path))
 }
@@ -342,12 +363,29 @@ mod tests {
     }
 
     #[test]
+    fn edit046_big_logs_open_binaries_and_oversized_files_do_not() {
+        let d = temp_dir("big");
+        let log = d.join("app.log");
+        let line = "2026-10-13 03:50:00 INFO a line of a long log file\n";
+        fs::write(&log, line.repeat(20 * 1024 * 1024 / line.len() + 1)).unwrap();
+        assert!(fs::metadata(&log).unwrap().len() > 20 * 1024 * 1024);
+        assert!(read_text(&log).unwrap().ends_with(line), "a 20 MB log opens");
+        let zip = d.join("a.zip");
+        fs::write(&zip, [0x50, 0x4b, 3, 4, 0x14, 0, 0, 0, 8, 0, 0x41, 0x42]).unwrap(); // a zip local file header
+        assert!(read_text(&zip).unwrap_err().contains("binary"), "a zip is not shown as text");
+        let huge = d.join("huge.txt");
+        fs::File::create(&huge).unwrap().set_len(READ_LIMIT + 1).unwrap();
+        assert!(read_text(&huge).unwrap_err().contains("MB"), "over the read limit");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn failures_name_the_file() {
         let d = temp_dir("fail");
         let missing = d.join("nope").join("a.txt");
         assert!(read_text(&missing).unwrap_err().contains("a.txt"));
         assert!(write_text(&missing, "x").unwrap_err().starts_with("could not save"));
-        fs::write(d.join("bin"), [0xff, 0xfe, 0x00]).unwrap();
+        fs::write(d.join("bin"), [0xff, 0xfe, 0x41]).unwrap();
         assert!(read_text(&d.join("bin")).unwrap_err().contains("not UTF-8"));
     }
 }
