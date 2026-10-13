@@ -275,3 +275,11 @@ export function removeTarget<T extends { key: number; seats?: Seat[] }>(shown: T
   const target = shown.find((p) => p.key === focused) ?? shown[shown.length - 1];
   return target ? { key: target.key, chooser: false } : null;
 }
+
+/** SESS-018: the New session page starts from this project's previous launch for the count and
+ *  the files choice, but every seat starts blank (SESS-015). Separate copies need Git. */
+export function sheetStart(last: Lineup | undefined, inGit: boolean): { seats: Seat[]; copies: Copies } {
+  const n = Math.max(1, last?.seats.length ?? 1);
+  const copies = last ? (last.copies === "separate" && !inGit ? "shared" : last.copies) : defaultCopies(n, inGit);
+  return { seats: Array.from({ length: n }, emptySeat), copies };
+}

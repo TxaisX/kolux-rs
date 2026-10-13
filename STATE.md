@@ -33,7 +33,9 @@ opens the name field with a live preview of the branch and folder; Create makes 
 opens it with a shell; Remove asks first and deletes folder and branch. Clicking a row switches
 workspaces instantly, each keeping its panes as they were. The plus menu lists only agents that
 are really installed and starts one in a fresh pre-trusted worktree or as a tab; empty panes ask
-what to run. Where workspaces live, how a new one starts (nested or flat, base branch) and the
+what to run, and on the New look a new session is chosen on a full-page New session sheet over the
+workspace (count and folders from the project's last launch, Ctrl+Enter starts a complete lineup,
+Escape closes). Where workspaces live, how a new one starts (nested or flat, base branch) and the
 shortcuts (`~\.kolux\keybindings.json`, 127 command ids) are the user's own and remembered. A
 Source Control panel stages, commits, pushes and pulls. `kolux-dev worktree create / rm` and
 `kolux-dev orchestration worker-start` (flag checking only) drive it from a terminal. Settings has

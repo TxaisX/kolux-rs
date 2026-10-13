@@ -68,7 +68,7 @@ input { font: inherit; }
 
 /* ---- body ---- */
 .body { flex: 1; min-height: 0; display: flex; }
-.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--fg-muted); }
 .empty h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
 .empty p { margin: 0; font-size: 12px; }
@@ -1154,3 +1154,16 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .task-labels { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
 .task-x { margin-left: 2px; color: var(--fg-faint); font-size: 12px; line-height: 1; }
 .task-x:hover:not(:disabled) { color: var(--fg); }
+
+/* SESS-018: the New session page fills the workspace area (8 px gutter, like the grid). */
+.sheet-wrap { position: absolute; inset: 8px; z-index: 20; display: flex; }
+.pane.chooser.sheet { flex: 1; border-radius: 12px; }
+.pane.chooser.sheet .chooser-body { padding: 16px 24px; font-size: 13px; max-width: 1080px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+.pane.chooser.sheet .chooser-foot { padding: 10px 24px; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.sheet-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line-subtle); }
+.sheet-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sheet-title h2 { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); }
+.sheet-project { font-size: 13px; color: var(--fg); }
+.sheet-path { font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sheet-keys { margin-left: 8px; gap: 4px; }
+.chooser-count.warn { color: var(--warn); }

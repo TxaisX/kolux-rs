@@ -86,7 +86,7 @@ import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./usage/meter";
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
-import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
+import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, sheetStart, type Lineup } from "./launch/seats";
 import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
@@ -220,6 +220,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [settingsRead, setSettingsRead] = useState(false); // USAGE-009: no alert before this is true
   useUsageAlerts(settingsRead ? settings : null);
   const classic = readLook(settings) === "classic";
+  // SESS-018: on the New look a new session is chosen on a full-page sheet over the workspace,
+  // held here rather than in the grid; Classic keeps the chooser pane (SESS-019).
+  const [sheet, setSheet] = useState<Pane | null>(null);
   // SET-027: everywhere but Settings, only agents that are switched on are offered.
   const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
   const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
@@ -660,6 +663,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // up to MAX_PANES.
   const addChooser = () => {
     if (cellsOf(panesIn(panes, activeDir)).length >= MAX_PANES) return setToast(`A workspace holds up to ${MAX_PANES} panes.`);
+    if (!classic) {
+      // SESS-018: the count and the files choice come from this project's last launch; seats start blank.
+      const at: Pane = { key: 0, cwd: activeDir, branch: null, agent: "shell", program: null, args: [] };
+      const start = sheetStart(lineupsOf(settings)[projectOf(activeDir) ?? projectFor(null) ?? ""], inGitFor(at));
+      setSheet({ ...at, key: nextKey.current++, seats: start.seats, copies: start.copies, shape: "custom" });
+      return;
+    }
     const key = nextKey.current++;
     setPanes((ps) => [...ps, { key, cwd: activeDir, branch: null, agent: "shell", program: null, args: [], seats: [emptySeat()] }]);
     setFocused(key);
@@ -820,8 +830,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     if (!cli) setFocused(pane.key);
   };
 
-  const setSeats = (key: number, seats: Seat[]) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, seats } : p)));
-  const setChooser = (key: number, patch: Partial<Pane>) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  const setChooser = (key: number, patch: Partial<Pane>) => {
+    setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+    setSheet((s) => (s && s.key === key ? { ...s, ...patch } : s));
+  };
+  const setSeats = (key: number, seats: Seat[]) => setChooser(key, { seats });
 
   // SESS-021: a lineup is kept per project once one of its agent seats has really started (its
   // pane reports a running program); until then it waits here under its batch.
@@ -854,8 +867,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // (or the chooser's folder outside any project), named after its worktree, or after the folder
   // and its seat number when the seats share one folder.
   const startSeats = async (key: number, seats: Seat[]) => {
-    const chooser = panes.find((p) => p.key === key);
+    const chooser = panes.find((p) => p.key === key) ?? (sheet?.key === key ? sheet : undefined);
     if (!chooser) return;
+    const inGrid = panes.some((p) => p.key === key);
     setLaunching(true);
     try {
       const picked = seats.map((s) => (s.agent === TERMINAL ? null : agents.find((a) => a.id === s.agent && a.installed) ?? null));
@@ -901,7 +915,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           : { key: k, cwd, branch, agent: "shell", program: null, args: [], title, batch };
       });
       if (pid && picked.some(Boolean)) pendingLineup.current[batch] = { pid, lineup: lineupOf(chooser.shape ?? "custom", separate ? "separate" : "shared", seats) };
-      setPanes((ps) => ps.flatMap((p) => (p.key === key ? made : [p])));
+      // A grid chooser gives its place to the new panes; the New session page adds them (SESS-018).
+      setPanes((ps) => (inGrid ? ps.flatMap((p) => (p.key === key ? made : [p])) : [...ps, ...made]));
+      if (!inGrid) {
+        setSheet(null);
+        setScreen("terminals");
+        setPage(null);
+      }
       setToast(made.length === 1 ? "Starting 1 session" : `Starting ${made.length} sessions`);
       setActiveDir(made[0].cwd);
       setFocused(made[0].key);
@@ -1571,6 +1591,45 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setUnreadPanes((u) => new Set([...u].filter((k) => !seen.includes(k))));
     for (const p of panes) if (seen.includes(p.key) && p.cwd !== null) markDir(p.cwd, false);
   });
+  // The chooser, in a grid cell (SESS-007) or as the New session page (SESS-018).
+  const renderChooser = (p: Pane & { seats: Seat[] }, hidden: boolean, focused: boolean, onFocus: () => void, onClose: () => void, sheetOf: { project: string; path: string } | null = null) => (
+    <ChooserPane
+      key={p.key}
+      number={p.key}
+      hidden={hidden}
+      focused={focused}
+      onFocus={onFocus}
+      agents={agents}
+      detecting={!agentPass.done}
+      seats={p.seats}
+      pass={agentPass}
+      onRefresh={refreshAgents}
+      lastLineup={offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds)}
+      onUseLineup={() => {
+        const l = offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds);
+        if (l) setChooser(p.key, { ...applyLineup(l, installedIds), copies: l.copies });
+      }}
+      onSeats={(s) => setSeats(p.key, s)}
+      shape={p.shape ?? "custom"}
+      onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
+      task={p.task ?? ""}
+      onTask={(task) => setChooser(p.key, { task })}
+      kit={p.kit ?? null}
+      onKit={(kit) => setChooser(p.key, { kit })}
+      vendors={kitAIs}
+      onStart={(s) => void startSeats(p.key, s)}
+      copies={p.copies ?? defaultCopies(p.seats.length, inGitFor(p))}
+      inGit={inGitFor(p)}
+      onCopies={(copies) => setChooser(p.key, { copies })}
+      busy={launching}
+      closable
+      onClose={onClose}
+      sheet={sheetOf}
+      saved={Array.isArray(settings[SAVED_SHAPES_KEY]) ? (settings[SAVED_SHAPES_KEY] as SavedShape[]) : []}
+      onSaved={(list) => saveSetting(SAVED_SHAPES_KEY, list)}
+      onPickSaved={(t) => setChooser(p.key, { shape: "custom", seats: restoreShape(t, installedIds), task: t.task ?? "", copies: t.copies })}
+    />
+  );
   return (
     <div className="app">
       <Tip />
@@ -1668,6 +1727,14 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           />
         )}
         <div className="content">
+          {sheet?.seats && (
+            <div className="sheet-wrap">
+              {(() => {
+                const proj = projects.find((x) => x.id === (projectOf(sheet.cwd) ?? projectFor(null)));
+                return renderChooser(sheet as Pane & { seats: Seat[] }, false, true, () => {}, () => setSheet(null), { project: proj?.name ?? "No project", path: sheet.cwd ?? proj?.path ?? "Home folder" });
+              })()}
+            </div>
+          )}
           <SignInNotice />
           <KeyLostNotice />
           {terminals && page === null && <ToolNotices projects={projects.map((p) => p.id).join(",")} />}
@@ -1866,41 +1933,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                 ) : p.kind === "preview" && p.path ? (
                   <PreviewPane key={p.key} id={p.key} path={p.path} hidden={!terminals || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.seats ? (
-                  <ChooserPane
-                    key={p.key}
-                    number={p.key}
-                    hidden={!board && p.key !== active}
-                    focused={p.key === focused}
-                    onFocus={() => setFocused(p.key)}
-                    agents={agents}
-                    detecting={!agentPass.done}
-                    seats={p.seats}
-                    pass={agentPass}
-                    onRefresh={refreshAgents}
-                    lastLineup={offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds)}
-                    onUseLineup={() => {
-                      const l = offeredLineup(lineupsOf(settings)[projectOf(p.cwd) ?? projectFor(null) ?? ""], installedIds);
-                      if (l) setChooser(p.key, { ...applyLineup(l, installedIds), copies: l.copies });
-                    }}
-                    onSeats={(s) => setSeats(p.key, s)}
-                    shape={p.shape ?? "custom"}
-                    onLineup={(shape, s) => setChooser(p.key, { shape, seats: s })}
-                    task={p.task ?? ""}
-                    onTask={(task) => setChooser(p.key, { task })}
-                    kit={p.kit ?? null}
-                    onKit={(kit) => setChooser(p.key, { kit })}
-                    vendors={kitAIs}
-                    onStart={(s) => void startSeats(p.key, s)}
-                    copies={p.copies ?? defaultCopies(p.seats.length, inGitFor(p))}
-                    inGit={inGitFor(p)}
-                    onCopies={(c) => setPanes((ps) => ps.map((x) => (x.key === p.key ? { ...x, copies: c } : x)))}
-                    busy={launching}
-                    closable
-                    onClose={() => closePane(p.key)}
-                    saved={Array.isArray(settings[SAVED_SHAPES_KEY]) ? (settings[SAVED_SHAPES_KEY] as SavedShape[]) : []}
-                    onSaved={(list) => saveSetting(SAVED_SHAPES_KEY, list)}
-                    onPickSaved={(t) => setChooser(p.key, { shape: "custom", seats: restoreShape(t, installedIds), task: t.task ?? "", copies: t.copies })}
-                  />
+                  renderChooser(p as Pane & { seats: Seat[] }, !board && p.key !== active, p.key === focused, () => setFocused(p.key), () => closePane(p.key))
                 ) : (
                   <TerminalPane
                     key={p.key}
