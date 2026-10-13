@@ -1,0 +1,30 @@
+T-161-b live proof (PROJ-072 Recover from a failed delete), lane release dev app (port 1422), window moved to the
+second screen by pid; lane profile backed up and restored (cmp: settings.json, state.db, -wal, -shm all same).
+Test repo G:/Temp/release-T-161b/del (one commit); project added with project_add, workspaces term-ws, hand-ws
+(and a stray term-ws-2) made with workspace_create under C:/Users/XiongT/kolux-rs/workspaces/del/.
+
+1. A terminal still running in the folder
+   - Selected term-ws: a PowerShell opened in C:/Users/XiongT/kolux-rs/workspaces/del/term-ws (status bar: 2 terminals).
+   - Ctrl+Shift+Backspace: "Remove term-ws and its folder? ... Nothing uncommitted is there."  [Remove] [Keep]
+   - Remove: the folder stays and the question reads
+     "Terminal 2 is still running in this folder. Force delete ends it and deletes the workspace."  [Force delete] [Keep]
+     (T-161-b-running.png; the name is the tab's own name, the one every other toast uses)
+   - Force delete: the terminal ended (status bar: 1 terminal), and then:
+       ls workspaces/del            -> hand-ws  term-ws-2          (term-ws gone)
+       git worktree list            -> main, hand-ws, term-ws-2    (term-ws gone)
+       git branch                   -> main, txais-xiong/hand-ws, txais-xiong/term-ws-2  (its branch deleted)
+
+2. A folder deleted by hand
+   - rm -rf workspaces/del/hand-ws outside Kolux; the row stays (Git still lists it).
+   - Selected hand-ws (explorer: "The folder did not load ... os error 3"), Ctrl+Shift+Backspace:
+     "Remove hand-ws and its folder? ... Its folder is already gone; only what Git and Kolux kept of it is cleared."
+     (T-161-b-gone.png)
+   - Remove: no error; the row went away, and then:
+       git worktree list            -> main, term-ws-2
+       git branch                   -> main, txais-xiong/term-ws-2
+       .git/worktrees               -> term-ws-2               (hand-ws's admin folder cleared)
+
+3. Cleanup: term-ws-2 removed with workspace_remove (force, endTerminals) -> git worktree list: main only.
+
+Not exercised live: a path past Windows' 260-character limit. Git 2.55 deletes those itself, so the new fallback
+(the folder deleted directly, then Git again) is covered by the Rust test with a 300+ character path.

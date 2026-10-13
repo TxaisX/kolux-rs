@@ -259,15 +259,7 @@ impl Terminals {
     /// Ends every session that was started in `dir` or a folder under it, and waits (briefly) for
     /// the programs to be gone, so the folder can be deleted. Returns how many were ended.
     pub fn kill_under(&self, dir: &std::path::Path) -> usize {
-        let wanted = |d: &str| {
-            let d = std::path::Path::new(d);
-            let same = |a: &std::path::Path, b: &std::path::Path| a.canonicalize().ok() == b.canonicalize().ok();
-            same(d, dir) || d.ancestors().skip(1).any(|a| same(a, dir))
-        };
-        let ids: Vec<u32> = match self.inner.lock() {
-            Ok(inner) => inner.dirs.iter().filter(|(_, d)| wanted(d)).map(|(id, _)| *id).collect(),
-            Err(_) => return 0,
-        };
+        let ids = self.under(dir);
         for id in &ids {
             let _ = self.kill(*id);
         }
@@ -275,6 +267,19 @@ impl Terminals {
             std::thread::sleep(std::time::Duration::from_millis(300));
         }
         ids.len()
+    }
+
+    /// PROJ-072: the sessions started in `dir` or a folder inside it that are still running.
+    pub fn under(&self, dir: &std::path::Path) -> Vec<u32> {
+        let wanted = |d: &str| {
+            let d = std::path::Path::new(d);
+            let same = |a: &std::path::Path, b: &std::path::Path| a.canonicalize().ok() == b.canonicalize().ok();
+            same(d, dir) || d.ancestors().skip(1).any(|a| same(a, dir))
+        };
+        match self.inner.lock() {
+            Ok(inner) => inner.dirs.iter().filter(|(id, d)| !inner.ended.contains(id) && wanted(d)).map(|(id, _)| *id).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// The open terminal whose secret is `key` (ORCH-001: a pane the runtime saw), by its handle.

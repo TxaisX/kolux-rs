@@ -718,7 +718,7 @@ pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force:
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    if !force && git.dirty(Path::new(&target.path))? {
+    if !force && Path::new(&target.path).exists() && git.dirty(Path::new(&target.path))? {
         return Err(format!("{} has uncommitted changes", target.branch.as_deref().unwrap_or(worktree_path)));
     }
     crate::include::unlink_shared(repo, Path::new(&target.path));
@@ -794,6 +794,8 @@ pub struct RemoveCheck {
     pub nested: Vec<String>,
     /// What the workspace looked like when asked; a delete carrying another stamp is refused.
     pub stamp: String,
+    /// PROJ-072: the folder was deleted by hand; the delete only clears what Git and Kolux kept.
+    pub gone: bool,
 }
 
 pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result<RemoveCheck, String> {
@@ -802,17 +804,26 @@ pub fn remove_check(git: &Git, project: &Project, worktree_path: &str) -> Result
     if target.is_main {
         return Err("the main checkout cannot be removed; remove the project instead".to_string());
     }
-    let changes = git.status_lines(Path::new(&target.path))?;
     let here = Path::new(&target.path);
+    let gone = !here.exists();
+    let changes = if gone { Vec::new() } else { git.status_lines(here)? };
     // ponytail: only this repository's worktrees count as nested; other projects' folders inside it are not looked for.
     let nested = all.iter().filter(|w| Path::new(&w.path).ancestors().skip(1).any(|a| same_folder(a, here))).map(|w| w.path.clone()).collect();
     let stamp = format!("{}|{}", target.head, changes.join("|"));
-    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp })
+    Ok(RemoveCheck { changes, locked: target.locked.clone(), nested, stamp, gone })
 }
 
 /// Why a delete must not go ahead (PROJ-070), or `None` when it may: the workspace changed
 /// since the question was asked, holds another worktree, is locked (never forced), or has
 /// changes and the user did not choose to lose them.
+/// PROJ-072: running terminals stop a delete until the user picks Force delete.
+pub fn terminals_refusal(running: usize, end: bool) -> Option<String> {
+    (running > 0 && !end).then(|| {
+        let (n, verb) = if running == 1 { ("A terminal is".to_string(), "it") } else { (format!("{running} terminals are"), "them") };
+        format!("{n} still running in this folder. Force delete ends {verb} and deletes the workspace.")
+    })
+}
+
 pub fn removal_refused(now: &RemoveCheck, force: bool, asked: &str) -> Option<String> {
     if now.stamp != asked {
         return Some("This workspace changed after you were asked. Look again before deleting it.".into());
@@ -1033,7 +1044,7 @@ pub fn workspace_remove_check(git: State<'_, Git>, store: StoreState<'_>, projec
 /// the question showed) and nothing refuses it; `force` loses uncommitted changes.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String) -> Result<(), String> {
+pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: State<'_, crate::terminal::Terminals>, project_id: String, path: String, force: bool, stamp: String, end_terminals: Option<bool>) -> Result<(), String> {
     let project = {
         let store = store.lock().map_err(|e| e.to_string())?;
         find_project(&store, &project_id)?
@@ -1041,7 +1052,12 @@ pub fn workspace_remove(git: State<'_, Git>, store: StoreState<'_>, terminals: S
     if let Some(why) = removal_refused(&remove_check(&git, &project, &path)?, force, &stamp) {
         return Err(why);
     }
-    // A shell still sitting in the folder would keep Windows from deleting it.
+    // PROJ-072: terminals still running in the folder are ended only once the user said so; one
+    // left there would keep Windows from deleting it.
+    let running = terminals.under(Path::new(&path)).len();
+    if let Some(why) = terminals_refusal(running, end_terminals.unwrap_or(false)) {
+        return Err(why);
+    }
     terminals.kill_under(Path::new(&path));
     let keep = keeps_branch(&*store.lock().map_err(|e| e.to_string())?, &path);
     remove_worktree(&git, &project, &path, force, keep)?;
@@ -1886,6 +1902,30 @@ mod tests {
         assert!(remove_check(&git, &project, &repo.to_string_lossy()).is_err());
         remove_workspace(&git, &project, &inner.to_string_lossy(), true).unwrap();
         remove_workspace(&git, &project, &ws, true).unwrap();
+        // PROJ-072: running terminals refuse until forced
+        assert_eq!(terminals_refusal(0, false), None);
+        assert_eq!(terminals_refusal(1, false).unwrap(), "A terminal is still running in this folder. Force delete ends it and deletes the workspace.");
+        assert!(terminals_refusal(2, false).unwrap().starts_with("2 terminals are"));
+        assert_eq!(terminals_refusal(2, true), None);
+        // PROJ-072: a folder deleted by hand is cleanup: no changes, nothing refuses it, Git forgets it
+        let hand = create_workspace(&git, &place, &project, "by-hand", None).unwrap().worktree.path;
+        fs::remove_dir_all(&hand).unwrap();
+        let gone = remove_check(&git, &project, &hand).unwrap();
+        assert!(gone.gone && gone.changes.is_empty());
+        assert_eq!(removal_refused(&gone, false, &gone.stamp), None);
+        remove_worktree(&git, &project, &hand, false, false).unwrap();
+        assert!(!git.worktrees(&repo).unwrap().iter().any(|w| same_folder(Path::new(&w.path), Path::new(&hand))));
+        assert_eq!(crate::git::run(&["branch", "--list", "by-hand"], Some(&repo)).unwrap(), "");
+        // PROJ-072: a path past Windows' limit inside the workspace is still deleted
+        let deep = create_workspace(&git, &place, &project, "deep", None).unwrap().worktree.path;
+        let mut long = Path::new(&deep).to_path_buf();
+        while long.as_os_str().len() < 300 {
+            long.push("a-folder-name-that-makes-the-path-long");
+        }
+        fs::create_dir_all(&long).unwrap();
+        fs::write(long.join("f.txt"), "x").unwrap();
+        remove_worktree(&git, &project, &deep, true, false).unwrap();
+        assert!(!Path::new(&deep).exists());
         drop(store);
         for d in [profile, repo, place.root] {
             let _ = fs::remove_dir_all(d);

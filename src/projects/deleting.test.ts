@@ -1,5 +1,12 @@
 import { expect, test } from "vitest";
-import { asksBeforeDelete, blocker, deleteTarget, isClean, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { asksBeforeDelete, blocker, deleteTarget, isClean, runningSentence, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+
+test("PROJ-072: the delete toast names the terminals still running and offers force", () => {
+  expect(runningSentence([])).toBeNull();
+  expect(runningSentence(["Terminal 3"])).toBe("Terminal 3 is still running in this folder. Force delete ends it and deletes the workspace.");
+  expect(runningSentence(["Terminal 3", "Claude"])).toBe("Terminal 3 and Claude are still running in this folder. Force delete ends them and deletes the workspace.");
+  expect(runningSentence(["a", "b", "c", "d", "e"])).toContain("a, b, c and 2 more are");
+});
 
 const clean: RemoveCheck = { changes: [], locked: null, nested: [], stamp: "h|" };
 

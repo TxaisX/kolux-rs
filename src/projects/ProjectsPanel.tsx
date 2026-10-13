@@ -17,7 +17,7 @@
 // T-022: rows carry the strongest live agent state and an unread mark (PROJ-063), the list can be
 // grouped by project, status or pull request and sorted Smart or by name (PROJ-045, PROJ-050).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { blocker, deleteTarget, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
+import { blocker, deleteTarget, runningSentence, shownChanges, skipsQuestion, type RemoveCheck } from "./deleting";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
@@ -83,6 +83,8 @@ type Props = {
   createName?: string;
   /** Bumped by Mod+Shift+Backspace (workspace.delete): asks to delete the workspace shown (PROJ-070). */
   deleteRequest: number;
+  /** PROJ-072: the names of the terminal tabs open in a folder or one inside it. */
+  terminalsIn?: (dir: string) => string[];
   /** PROJ-038: starts an agent with a first prompt in a workspace just made; `show` brings it in front. */
   onStartIn: (agent: AgentInfo, dir: string, branch: string | null, prompt: string, show: boolean) => void;
   /** PROJ-047: child workspaces nest under their parent unless this is off. */
@@ -122,7 +124,7 @@ function pushHint(w: Worktree) {
   );
 }
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, terminalsIn, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -162,7 +164,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [more, setMore] = useState(false); // SESS-038: Create more
   const nameRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string } | null>(null);
+  const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string; running?: boolean; endTerminals?: boolean } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string; detail?: string | null } | null>(null);
@@ -593,9 +595,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   };
   const remove = async (c = confirm) => {
     if (!c) return;
+    // PROJ-072: terminals still open in the folder are named, and ended only with Force delete.
+    const running = c.endTerminals ? null : runningSentence(terminalsIn?.(c.path) ?? []);
+    if (running) {
+      setConfirm({ ...c, refusal: running, running: true });
+      return;
+    }
     setBusy("removing");
     try {
-      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp });
+      await invoke("workspace_remove", { projectId: c.projectId, path: c.path, force: c.force, stamp: c.check.stamp, endTerminals: c.endTerminals ?? false });
       onRemoved(c.path);
       say("ok", `removed ${c.branch} and its folder`);
       setConfirm(null);
@@ -603,7 +611,8 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     } catch (err) {
       // refused: say why in the question, showing the workspace as it is now with the force box cleared
       const check = await invoke<RemoveCheck>("workspace_remove_check", { projectId: c.projectId, path: c.path }).catch(() => null);
-      if (check) setConfirm({ ...c, check, force: false, refusal: String(err) });
+      const running = String(err).includes("still running in this folder");
+      if (check) setConfirm({ ...c, check, force: false, refusal: String(err), running, endTerminals: false });
       else fail(err);
     } finally {
       setBusy("");
@@ -911,7 +920,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           <div className="sb-form warn">
             <span>
               Remove <b>{confirm.branch}</b> and its folder? Its branch is deleted too, unless the workspace was opened on a branch that already existed.{" "}
-              {blocker(confirm.check) ?? (confirm.check.changes.length > 0 ? `${confirm.check.changes.length} uncommitted or untracked change${confirm.check.changes.length === 1 ? "" : "s"} would be lost:` : "Nothing uncommitted is there.")}
+              {blocker(confirm.check) ?? (confirm.check.gone ? "Its folder is already gone; only what Git and Kolux kept of it is cleared." : confirm.check.changes.length > 0 ? `${confirm.check.changes.length} uncommitted or untracked change${confirm.check.changes.length === 1 ? "" : "s"} would be lost:` : "Nothing uncommitted is there.")}
             </span>
             {confirm.check.changes.length > 0 && (
               <ul className="del-changes" aria-label="changes that would be lost">
@@ -933,9 +942,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
               </label>
             )}
             <div className="btn-row">
-              <button className="btn danger" onClick={() => remove()} disabled={busy !== "" || blocker(confirm.check) !== null}>
-                {busy === "removing" ? "Removing…" : "Remove"}
-              </button>
+              {confirm.running ? (
+                <button className="btn danger" onClick={() => remove({ ...confirm, endTerminals: true })} disabled={busy !== "" || blocker(confirm.check) !== null || (confirm.check.changes.length > 0 && !confirm.force)}>
+                  {busy === "removing" ? "Removing…" : "Force delete"}
+                </button>
+              ) : (
+                <button className="btn danger" onClick={() => remove()} disabled={busy !== "" || blocker(confirm.check) !== null}>
+                  {busy === "removing" ? "Removing…" : "Remove"}
+                </button>
+              )}
               <button className="btn" onClick={() => setConfirm(null)}>
                 Keep
               </button>

@@ -79,7 +79,7 @@ import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
 import { failureOf, folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
-import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
+import { activeAfterRemove, focusIn, panesIn, sameDir, underDir, withoutDir, nameOf } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
 import { matchEvent } from "./keys/keymap";
@@ -1469,6 +1469,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             createRequest={createRequest}
             createName={createName}
             deleteRequest={deleteRequest}
+            terminalsIn={(dir) => panes.filter((p) => !p.kind && underDir(p.cwd, dir)).map((p) => tabName(p, titles))}
             onStartIn={startIn}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}

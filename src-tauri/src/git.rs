@@ -335,8 +335,20 @@ impl Git {
                     attempt += 1;
                     std::thread::sleep(std::time::Duration::from_millis(250));
                 }
+                // PROJ-072: on Windows Git cannot delete paths past its length limit; the folder is
+                // deleted here (the standard library handles long paths) and Git, finding it gone,
+                // drops the registration on the next pass.
+                Err(e) if attempt < 5 && dest.exists() && e.to_lowercase().contains("too long") => {
+                    attempt += 1;
+                    std::fs::remove_dir_all(dest).map_err(|f| format!("{e}; deleting the folder directly failed too: {f}"))?;
+                }
                 Err(e) => return Err(e),
             }
+        }
+        // Git leaves the folder when something it does not track is still inside; this is a forced
+        // delete of a workspace Kolux made, so what is left goes too.
+        if dest.exists() {
+            let _ = std::fs::remove_dir_all(dest);
         }
         if dest.exists() {
             return Err(format!("the folder {} is still there: something keeps it open", dest.display()));
