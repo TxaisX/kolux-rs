@@ -73,6 +73,8 @@ test("GIT-023: create pull request says why it cannot run, and an open one is of
   const none: PrLook = { loading: false, pr: null, error: null };
   expect(prReason(ready, none)).toBe(null);
   expect(prReason(null, none)).toBe("Loading");
+  // GIT-023: a branch that tracks a fork remote is a fork head.
+  expect(prReason({ ...ready, upstream: "fork/feat" }, none)).toBe("Fork head not supported: the branch tracks fork/feat; push it to origin first");
   expect(prReason({ ...ready, branch: "main", upstream: "origin/main" }, none)).toBe("Move to a feature branch first");
   expect(prReason({ ...ready, changed: [{ path: "a.txt", status: "M", from: null }] }, none)).toBe("Commit your changes first");
   expect(prReason({ ...ready, untracked: [{ path: "new.txt", status: "U", from: null }] }, none)).toBe(null);

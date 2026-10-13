@@ -167,6 +167,7 @@ export const prReason = (s: Status | null, look: PrLook): string | null => {
   if (s.branch === null) return "No branch checked out";
   if (s.base !== null && (s.base === s.branch || s.base === `origin/${s.branch}`)) return "Move to a feature branch first";
   if (s.upstream === null) return "Push the branch first";
+  if (!s.upstream.startsWith("origin/")) return `Fork head not supported: the branch tracks ${s.upstream}; push it to origin first`;
   if (s.behind > 0) return `Sync first: the remote has ${plural(s.behind, "commit")} this copy lacks`;
   if (s.ahead > 0) return `Push ${plural(s.ahead, "commit")} first`;
   if (s.base === null) return "No base branch on the remote";
