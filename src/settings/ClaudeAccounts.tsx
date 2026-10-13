@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AccountRow, signedInAt } from "./AccountRow";
 import { invoke } from "@tauri-apps/api/core";
+import { patchSettings } from "./useSettings";
 import { listen } from "@tauri-apps/api/event";
 import { AttentionNote, openInstallPage, type Attention } from "./Attention";
 
@@ -111,9 +112,7 @@ export function ClaudeAccountsView({ view, error, confirming = null, onAction }:
 
 /** Writes the upkeep switch; switching it off asks Claude Code at once whether the active account is still signed in. */
 function setUpkeep(on: boolean): Promise<void> {
-  return invoke<Record<string, unknown>>("get_settings")
-    .then((s) => invoke("save_settings", { value: { ...s, [UPKEEP_FIELD]: on } }))
-    .then(() => (on ? undefined : invoke<void>("claude_account_check")));
+  return patchSettings({ [UPKEEP_FIELD]: on }).then(() => (on ? undefined : invoke<void>("claude_account_check")));
 }
 
 /** Starts a sign-in for a new account; the Claude card's "Use my Claude account instead". */

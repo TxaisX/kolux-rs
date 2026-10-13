@@ -355,7 +355,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-178 · EDIT-046 Saves are all-or-nothing, and big or binary files are handled safely
 - [ ] T-179 · BROW-020 Browser tabs come back after a restart · BROW-021 [compat] Hidden worktrees give back browser memory
 - [ ] T-180 · SKILL-022 Delete skills safely from the Skills page
-- [ ] T-181 · SET-035 [compat] Settings save at once, reach every window, and hide secrets · SET-036 Settings text fields never lose what was typed
+- [x] T-181 · SET-035 [compat] Settings save at once, reach every window, and hide secrets · SET-036 Settings text fields never lose what was typed
 - [ ] T-182 · APP-001 Only one copy runs; launching again brings the open window forward · APP-002 The window appears quickly even when the terminal service is slow · APP-006 Closing asks first when work could be lost, and quitting always finishes · APP-011 Restart, reload and update only go ahead after a safe save · APP-020 Terminals find the same tools as the user's shell, including new installs
 - [ ] T-183 · APP-021 Broken folder permissions are detected and repaired on Windows · APP-039 After a crash the app offers to report it as a GitHub issue · APP-042 When the interface crashes or a screen fails to load, the app recovers or asks · APP-043 Repeated graphics crashes lead to safe graphics, with the user's consent · APP-049 A damaged saved-state file never wipes the user's setup
 - [ ] T-184 · APP-053 Closing a terminal or the app leaves no orphaned processes · APP-062 A manual restore check proves terminals survive quits and a killed service · also passes: STAT-054 Closing an agent ends every process it started · ACCT-051 Closing a pane or quitting ends every child process

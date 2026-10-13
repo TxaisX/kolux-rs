@@ -1,0 +1,26 @@
+T-181 live proof, 2026-10-13, lane release dev app (port 1422, CDP 9232), single window, lane profile backed up and restored (cmp same x4).
+
+SET-035 secrets never reach the window and the window cannot write one
+  get_settings keys: uiLook, defaultAgent, disabledAgents (no claudeOauthToken / xaiApiKey)
+  patch_settings({claudeOauthToken:'typed-in-window', xaiApiKey:'typed-key', t181Probe:'a'})
+    returned keys: uiLook, defaultAgent, disabledAgents, t181Probe; secrets in return: none
+    settings.json on disk: t181Probe "a" written, "typed" appears 0 times
+SET-035/036 saves made in quick succession apply in order, each on the last stored result
+  four patchSettings calls fired without waiting: {t181Probe:1} {t181Probe:2} {t181Other:x} {t181Probe:3}
+    each returned: 1/-  2/-  2/x  3/x ; stored afterwards t181Probe "3", t181Other "x"
+SET-035 a save made elsewhere reaches the open page without a reload
+  Settings > Notifications open, quiet minutes field 10; patch_settings({quietMinutes:42}) sent from outside the page
+    field after the settings-saved event: 42
+SET-036 a field saves after a short pause
+  typed 25 into Quiet alert minutes: stored right after typing 42, at 300 ms 42, at 1000 ms 25
+SET-036 a cleared number field goes back to its default
+  field emptied, then left: stored 10, field shows 10
+SET-036 input-method composition is never saved half-way (real CDP Input.imeSetComposition, Agents > Claude Code > Command)
+  composing "にほ" then "日本": field 日本, stored 1.9 s into composing: null (nothing)
+  composition committed: stored 1.2 s later {"claude":{"command":"日本"}}  (evidence/T-181-ime.png)
+SET-036 acceptance: type a value and close the window within a second -> there after restart
+  typed C:/tools/claude-proxy.exe into Command (stored before close: 日本), pressed the window Close button 7 ms later
+  app exited; settings.json agentOptions.claude.command = "C:/tools/claude-proxy.exe"
+  restarted: Command field shows C:/tools/claude-proxy.exe  (evidence/T-181-restart.png)
+Regression: Appearance > App font typed Consolas and left: stored appFont "Consolas"; agentOptions and quietMinutes kept (22 keys)
+Not proven live: window A -> window B font change (the app has one window, DT-R60); the same settings-saved event and re-read are proven above within one window.

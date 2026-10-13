@@ -5,7 +5,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import type { AgentInfo } from "../launch/PlusMenu";
 import { DEFAULT_AGENT_KEY, defaultAgentId, disabledAgents, switchAgent } from "../launch/agents";
 import { Segmented } from "./GeneralPage";
-import { useSettings } from "./useSettings";
+import { useDraft, useSettings } from "./useSettings";
 import { CAP_FIELD, capOn } from "../usage/meter";
 
 const OPTIONS_FIELD = "agentOptions";
@@ -15,15 +15,13 @@ type StartLine = { args: string[]; program: string | null };
 
 const optionsOf = (s: Record<string, unknown>, id: string): Options => ((s[OPTIONS_FIELD] as Record<string, Options> | undefined)?.[id] ?? {}) as Options;
 
-/** A text field kept as a draft while typing and saved when it loses focus. */
-function Draft({ label, value, multi, placeholder, onSave }: { label: string; value: string; multi?: boolean; placeholder: string; onSave: (v: string) => void }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const props = { "aria-label": label, className: multi ? "field multi" : "field", placeholder, value: draft, onBlur: () => draft !== value && onSave(draft) };
+/** A text field that saves a short pause after typing and on leaving it (SET-036). */
+function Draft({ label, value, multi, placeholder, onSave }: { label: string; value: string; multi?: boolean; placeholder: string; onSave: (v: string) => unknown }) {
+  const props = { "aria-label": label, className: multi ? "field multi" : "field", placeholder, ...useDraft(value, onSave) };
   return (
     <label className="agent-field">
       <span>{label}</span>
-      {multi ? <textarea {...props} rows={3} onChange={(e) => setDraft(e.target.value)} /> : <input {...props} onChange={(e) => setDraft(e.target.value)} />}
+      {multi ? <textarea {...props} rows={3} /> : <input {...props} />}
     </label>
   );
 }
@@ -50,7 +48,7 @@ export function AgentsPageView({ cap, onCap }: { cap: boolean; onCap: (on: boole
 export default function AgentsPage() {
   const { settings, error, save: write } = useSettings();
   const [written, setWritten] = useState(0);
-  const save = (patch: Record<string, unknown>) => write(patch).then(() => setWritten((n) => n + 1));
+  const save = (patch: Record<string, unknown>) => write(patch).then((ok) => (setWritten((n) => n + 1), ok));
   const [agents, setAgents] = useState<AgentInfo[] | null>(null);
   const [looking, setLooking] = useState(false);
   const [failed, setFailed] = useState<string | null>(null); // SESS-002: an errored search is not an empty one

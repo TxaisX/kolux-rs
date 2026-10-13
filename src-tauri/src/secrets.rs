@@ -133,6 +133,22 @@ pub fn keep_stored_secrets(stored: &Value, mut incoming: Value) -> Value {
     incoming
 }
 
+/// SET-035: a change from the window, laid over the stored settings: each field in `patch` replaces
+/// the stored one, a null removes it, and the secret fields stay as stored whatever the patch says.
+pub fn patched(stored: &Value, patch: Value) -> Value {
+    let mut next = stored.clone();
+    if let (Some(obj), Value::Object(patch)) = (next.as_object_mut(), patch) {
+        for (k, v) in patch {
+            if v.is_null() {
+                obj.remove(&k);
+            } else {
+                obj.insert(k, v);
+            }
+        }
+    }
+    keep_stored_secrets(stored, next)
+}
+
 /// Reads a secret settings field, opened. `None` when it is not set.
 pub fn read_setting(store: &Store, key: &str) -> Result<Option<String>, String> {
     match store.settings().get(key) {
@@ -417,6 +433,19 @@ mod tests {
         assert_eq!(shown, serde_json::json!({ "theme": "classic" }));
         let back = keep_stored_secrets(&stored, serde_json::json!({ "theme": "dark", "claudeOauthToken": "typed" , "xaiApiKey": "x"}));
         assert_eq!(back, serde_json::json!({ "theme": "dark", "claudeOauthToken": "kolux-sealed:v1:abc" }));
+    }
+
+    #[test]
+    fn set035_a_patch_lands_on_the_stored_settings_and_never_writes_a_secret() {
+        let stored = serde_json::json!({ "theme": "classic", "font": "Mono", "claudeOauthToken": "kolux-sealed:v1:abc" });
+        let next = patched(&stored, serde_json::json!({ "font": "Fira", "gone": null, "theme": null, "claudeOauthToken": "typed", "xaiApiKey": "x" }));
+        assert_eq!(next, serde_json::json!({ "font": "Fira", "claudeOauthToken": "kolux-sealed:v1:abc" }));
+        // two patches in a row: the second lands on the first, so neither undoes the other
+        let again = patched(&next, serde_json::json!({ "theme": "dark" }));
+        assert_eq!(again["font"], "Fira");
+        assert_eq!(again["theme"], "dark");
+        // a patch that is not an object changes nothing
+        assert_eq!(patched(&stored, serde_json::json!(3)), stored);
     }
 
     #[test]

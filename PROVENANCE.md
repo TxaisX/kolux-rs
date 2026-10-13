@@ -437,6 +437,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
 
+> 2026-10-13 · T-181 · the SET-035 and SET-036 spec cards, the repo's own lib.rs, secrets.rs, useSettings.ts and settings pages, the @tauri-apps/api window.js type/js file in node_modules (onCloseRequested awaits its handler, then destroys), the Chrome DevTools Protocol docs for Input.imeSetComposition. Nothing from the old app.
 > 2026-10-13 · T-178 · the EDIT-046 spec card, the repo's own files.rs and EditorPane.tsx, the Rust std docs for Read::take and fs::rename. Nothing from the old app.
 > 2026-10-13 · T-177-e · the EDIT-032 spec card and the repo's own Explorer.tsx, EditorPane.tsx, buffers.ts, autosave.ts, session.ts, fsops.rs and App.tsx. Nothing from the old app.
 > 2026-10-13 · T-177-d · the EDIT-028 spec card and the repo's own DiffPane.tsx, DiffPane.test.ts and notify.ts/notify.test.ts. Nothing from the old app.

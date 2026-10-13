@@ -61,6 +61,7 @@ import TerminalPane from "./terminal/TerminalPane";
 import ProjectsPanel, { type Page } from "./projects/ProjectsPanel";
 import AutomationsPage from "./automations/AutomationsPage";
 import RoutingPage from "./settings/RoutingPage";
+import { changes, patchSettings } from "./settings/useSettings";
 import SourceControlPanel from "./scm/SourceControlPanel";
 import { SCM_AGENT_KEY, SUMMARY_UPSTREAM_KEY } from "./scm/model";
 import { markFor, programWord, type AgentInfo } from "./launch/PlusMenu";
@@ -341,9 +342,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       .finally(() => setSamplesBusy(false));
   };
   const saveSetting = (key: string, value: unknown) => {
-    const next = { ...settings, [key]: value };
-    setSettings(next);
-    invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+    setSettings((s) => ({ ...s, [key]: value }));
+    patchSettings({ [key]: value }).catch((err) => setNotice(String(err)));
   };
   // SESS-004: the default agent is a settings key; the plus menu lists it first.
   const setDefault = (id: string) => saveSetting(DEFAULT_AGENT_KEY, id);
@@ -769,9 +769,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     delete pendingLineup.current[batch];
     void invoke<Record<string, unknown>>("get_settings")
       .then((s) => {
-        const next = { ...s, [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
-        setSettings(next);
-        return invoke("save_settings", { value: next });
+        const patch = { [LAST_LINEUP_KEY]: { ...lineupsOf(s), [wait.pid]: wait.lineup } };
+        setSettings((t) => ({ ...t, ...patch }));
+        return patchSettings(patch);
       })
       .catch((err) => setNotice(String(err)));
   };
@@ -1512,9 +1512,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onRemoved={removed}
             nest={settings[NESTING_KEY] !== false}
             onNest={(on) => {
-              const next = { ...settings, [NESTING_KEY]: on };
-              setSettings(next);
-              invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+              setSettings((s) => ({ ...s, [NESTING_KEY]: on }));
+              patchSettings({ [NESTING_KEY]: on }).catch((err) => setNotice(String(err)));
             }}
             agents={agents}
             defaultId={defaultId}
@@ -1554,7 +1553,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                patchSettings(changes(settings, next)).catch((err) => setNotice(String(err)));
               }}
             />
           )}
@@ -1564,7 +1563,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               settings={settings}
               onSettings={(next) => {
                 setSettings(next);
-                invoke("save_settings", { value: next }).catch((err) => setNotice(String(err)));
+                patchSettings(changes(settings, next)).catch((err) => setNotice(String(err)));
               }}
             />
           )}

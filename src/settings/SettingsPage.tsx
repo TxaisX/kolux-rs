@@ -4,6 +4,7 @@
 // the Codex sign-ins came with T-043-b / T-043-c.
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { patchSettings } from "./useSettings";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { actionLabel, keyCard, ownSignInLine, RESUME_FIELD, resumeOn, type KeyAction, type KeyStatus, type OwnSignIn } from "./claudeKey";
@@ -103,9 +104,7 @@ function ClaudeCard() {
   }, [read]);
   const saveResume = (on: boolean) => {
     setResume(on);
-    invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [RESUME_FIELD]: on } }))
-      .catch((e) => {
+    patchSettings({ [RESUME_FIELD]: on }).catch((e) => {
         setResume(!on);
         setError(String(e));
       });

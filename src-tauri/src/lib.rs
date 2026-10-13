@@ -75,17 +75,30 @@ fn save_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, v
     let store = store.lock().map_err(|e| e.to_string())?;
     // The window cannot write a secret field; the sealed values on disk are kept as they are.
     let value = secrets::keep_stored_secrets(&store.settings(), value);
+    store_settings(&app, store, value).map(|_| ())
+}
+
+/// SET-035: one change, laid over what is stored while the store is held, so two saves in quick
+/// succession never undo each other. Returns what was really stored, without its secrets.
+#[tauri::command(async)]
+fn patch_settings(app: tauri::AppHandle, store: tauri::State<'_, Mutex<Store>>, patch: serde_json::Value) -> Result<serde_json::Value, String> {
+    let store = store.lock().map_err(|e| e.to_string())?;
+    let value = secrets::patched(&store.settings(), patch);
+    store_settings(&app, store, value).map(secrets::without_secrets)
+}
+
+fn store_settings(app: &tauri::AppHandle, store: std::sync::MutexGuard<'_, Store>, value: serde_json::Value) -> Result<serde_json::Value, String> {
     let before = store.settings().get(resume::FIELD) == Some(&serde_json::Value::Bool(true));
     store.save_settings(&value).map_err(|e| e.to_string())?;
     drop(store);
     // USAGE-007: off discards the waits, on picks up the panes already stopped on a limit.
     let after = value.get(resume::FIELD) == Some(&serde_json::Value::Bool(true));
     if before != after {
-        resume::switched(&app, after);
+        resume::switched(app, after);
     }
-    // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again.
-    let _ = tauri::Emitter::emit(&app, "settings-saved", ());
-    Ok(())
+    // Views that depend on a setting (the lapsed sign-in notice, ACCT-012) read again, in every window.
+    let _ = tauri::Emitter::emit(app, "settings-saved", ());
+    Ok(value)
 }
 
 /// A desktop notification (STAT-041). The window decides when one is due and with which words.
@@ -198,6 +211,7 @@ pub fn run() {
             notifications::open_notification_settings,
             get_settings,
             save_settings,
+            patch_settings,
             notify,
             sysmem::process_memory,
             fonts::list_fonts,

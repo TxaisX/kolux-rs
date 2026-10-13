@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
 import { schemeOptions, SchemeList } from "./SchemePicker";
-import { useSettings } from "./useSettings";
+import { patchSettings, saveOnClose, useSettings } from "./useSettings";
 import { fontStack, loadFonts, rankFonts } from "./fonts";
 import { FIELDS as STATUS_FIELDS, readStatusBar, STATUS_ITEMS, toggleItem } from "../chrome/statusItems";
 import { CHROME, chromeShown, windowSummary } from "../chrome/chromeItems";
@@ -323,6 +323,8 @@ export default function AppearancePage() {
   const [error, setError] = useState<string | null>(null);
   const status = useSettings();
   const timer = useRef<number | undefined>(undefined);
+  // SET-036: a look change waiting on its short pause is saved at once on changing page or closing.
+  const pending = useRef<(() => unknown) | null>(null);
   useEffect(() => {
     invoke<Record<string, unknown>>("get_settings")
       .then((s) => {
@@ -330,23 +332,27 @@ export default function AppearancePage() {
         setAutomations(titleBarButton(s, "automations"));
       })
       .catch((e) => setError(String(e)));
-    return () => window.clearTimeout(timer.current);
+    const off = saveOnClose(() => pending.current?.());
+    return () => {
+      off();
+      window.clearTimeout(timer.current);
+      void pending.current?.();
+    };
   }, []);
   const change = (next: Appearance) => {
     setLook(next);
     applyAppearance(next);
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      invoke<Record<string, unknown>>("get_settings")
-        .then((s) => invoke("save_settings", { value: writeAppearance(s, next) }))
-        .catch((e) => setError(String(e)));
-    }, 250);
+    pending.current = () => {
+      pending.current = null;
+      window.clearTimeout(timer.current);
+      return patchSettings(writeAppearance({}, next)).catch((e) => setError(String(e)));
+    };
+    timer.current = window.setTimeout(() => void pending.current?.(), 250);
   };
   const toggle = (on: boolean) => {
     setAutomations(on);
-    invoke<Record<string, unknown>>("get_settings")
-      .then((s) => invoke("save_settings", { value: { ...s, [TITLE_BAR_FIELD.automations]: on } }))
-      .catch((e) => setError(String(e)));
+    patchSettings({ [TITLE_BAR_FIELD.automations]: on }).catch((e) => setError(String(e)));
   };
   return (
     <>
