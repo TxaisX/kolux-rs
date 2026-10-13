@@ -46,6 +46,9 @@ const COPY_IDS = [["session", "Copy Session ID"], ["terminal", "Copy Terminal ID
 
 type Status = { kind: "starting" } | { kind: "running"; id: number; account: string | null } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
+/** council D2 MERGE 31 (3): the host element of a dev build carries its terminal for the evidence probes. */
+type DevHost = HTMLDivElement & { __koluxTerm?: Terminal };
+
 /** ACCT-064: a centred question over the terminal; Enter takes the first button, Escape the second. */
 export type PaneNotice = { title: string; body: string; primary: string; onPrimary: () => void; secondary?: string; onSecondary?: () => void };
 
@@ -275,6 +278,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     term.loadAddon(fit);
     term.open(el);
     termRef.current = term;
+    // council D2 MERGE 31 (3): in a dev build the pane's terminal is reachable from its host element, so the
+    // evidence probes can read the scrollback cap and the buffer length (the way launchWarn.ts exposes
+    // __koluxUsage). A release build has no handle.
+    if (import.meta.env.DEV) (el as DevHost).__koluxTerm = term;
     // TERM-096: a printed handle of an open terminal (term-N) is a link that opens its pane.
     term.registerLinkProvider({
       provideLinks(y, done) {
@@ -321,8 +328,10 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     // TERM-071: writes go one after another (terminal_write is async, so two in flight could land out
     // of order); a chunked paste then reaches the program in order, and a key typed during it waits its turn.
     let chain: Promise<unknown> = Promise.resolve();
-    const write = (data: string) => {
+    const write = (data: string): Promise<unknown> | void => {
       const id = idRef.current;
+      // Council D2 MERGE 31 (2): Ctrl+C or Esc during a paste drops what has not gone yet; the key itself still goes.
+      if (data === "\x03" || data === "\x1b") pasting.cancel();
       if (ended) {
         // TERM-111: after an agent's program ended, Enter leaves the pane with a working shell.
         if (data === "\r" && agent !== "shell") restart.current(true);
@@ -332,7 +341,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         if (!held.push(data)) setFlash("Keys typed before the shell started were dropped past 16 KB");
         return;
       }
-      chain = chain.then(() => invoke("terminal_write", { id, data })).catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`));
+      return (chain = chain.then(() => invoke("terminal_write", { id, data })).catch((e) => setFlash(`Typing could not reach the program (${explainError(String(e))})`)));
     };
     term.onData(write);
     term.onBell(() => bell.current?.());
@@ -355,12 +364,19 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const pasting = attachPaste(
       term.textarea,
       (text) => {
-        term.paste(text);
+        // Council D2 MERGE 31 (2): the chunk goes straight to the program through the ordered write chain
+        // (xterm's own paste would bracket every chunk and run ahead of the writes); paste.ts has already
+        // rewritten the line ends and bracketed the whole paste once, and the next chunk waits for this
+        // promise. The scroll-to-bottom mirrors what xterm does on user input.
+        if (term.options.scrollOnUserInput !== false) term.scrollToBottom();
+        const landed = write(text);
         // TERM-103: a paste burst fills the glyph atlas with one-off runs; start it fresh afterwards.
         if (text.length > 2048) choice.clearGlyphs();
+        return landed;
       },
       () => pending !== null,
       setFlash, // TERM-071: a paste over the limit says so in the header; nothing is sent
+      () => term.modes.bracketedPasteMode && term.options.ignoreBracketedPasteMode !== true,
     );
     // TERM-065: the copy chord copies a selection and gives the keyboard back; Ctrl+C with nothing
     // selected is the program's interrupt and goes through untouched. Nothing selected under
@@ -575,6 +591,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       pasting.detach();
       acks.stop();
       term.dispose();
+      delete (el as DevHost).__koluxTerm;
     };
   }, []);
 

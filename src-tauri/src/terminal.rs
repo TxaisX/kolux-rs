@@ -729,9 +729,12 @@ impl Terminals {
         inner.logs.get(&id).and_then(|l| l.written).map(|t| t.elapsed())
     }
 
+    /// Council D2 MERGE 31 item 1: the registry lock is held only to find the session's writer; the
+    /// write itself (which blocks for as long as the program takes to read, ~12 KB/s into ConPTY)
+    /// runs under that writer's own lock, so other panes' ack, resize and kill never wait on it.
     pub fn write(&self, id: u32, data: &str) -> Result<(), String> {
-        let mut inner = self.inner.lock().map_err(|e| e.to_string())?;
-        inner.sessions.get_mut(&id).ok_or("no such terminal")?.write(data.as_bytes())
+        let writer = self.inner.lock().map_err(|e| e.to_string())?.sessions.get(&id).ok_or("no such terminal")?.writer()?;
+        crate::pty::write_shared(&writer, data.as_bytes())
     }
 
     pub fn resize(&self, id: u32, cols: u16, rows: u16) -> Result<(), String> {
@@ -1087,13 +1090,16 @@ pub fn terminal_diagnostics(app: AppHandle, terminals: tauri::State<'_, Terminal
     Ok(diagnostics_text(&head, &screen, home.as_deref()))
 }
 
-#[tauri::command]
+/// Council D2 MERGE 31 item 1: `async` so the registry lock is taken off the main thread; the
+/// window keeps drawing while another pane's paste is in flight.
+#[tauri::command(async)]
 pub fn terminal_resize(terminals: tauri::State<'_, Terminals>, id: u32, cols: u16, rows: u16) -> Result<(), String> {
     terminals.resize(id, cols, rows)
 }
 
 /// ACCT-054: the pane drew `bytes` more of session `id`'s output.
-#[tauri::command]
+/// Council D2 MERGE 31 item 1: `async` for the same reason as `terminal_resize`.
+#[tauri::command(async)]
 pub fn terminal_ack(terminals: tauri::State<'_, Terminals>, id: u32, bytes: u64) {
     terminals.ack(id, bytes)
 }
@@ -1117,6 +1123,42 @@ pub fn terminal_memory_profile() -> MemoryProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Council D2 MERGE 31 item 1: a pane whose program takes its input slowly (ConPTY reads a
+    /// paste at ~12 KB/s) must not hold the registry while the write blocks, or every other
+    /// pane's ack, resize and kill wait behind it on the main thread.
+    #[test]
+    fn merge31_slow_write_to_one_pane_does_not_block_another_panes_bookkeeping() {
+        /// A program that takes 600 ms to read whatever it is given.
+        struct Slow;
+        impl std::io::Write for Slow {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(600));
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let t = Arc::new(Terminals::default());
+        {
+            let mut inner = t.inner.lock().unwrap();
+            inner.sessions.insert(1, PtySession::fake(Box::new(Slow)));
+            inner.sessions.insert(2, PtySession::fake(Box::new(std::io::sink())));
+            inner.flow.insert(2, Arc::new(Flow::default()));
+        }
+        let slow = Arc::clone(&t);
+        let paste = std::thread::spawn(move || slow.write(1, &"x".repeat(70_000)));
+        std::thread::sleep(Duration::from_millis(100));
+        let start = Instant::now();
+        t.write(2, "y").expect("the other pane's key goes through");
+        t.ack(2, 1);
+        assert_eq!(t.resize(2, 80, 24), Err("session already closed".to_string()), "a fake has no PTY to resize, but the call returns at once");
+        assert!(t.inner.lock().unwrap().sessions.contains_key(&2), "the registry itself is free");
+        let waited = start.elapsed();
+        assert!(waited < Duration::from_millis(300), "pane 2's bookkeeping waited {waited:?} behind pane 1's 600 ms write");
+        paste.join().unwrap().expect("the slow write still completes");
+    }
 
     #[test]
     fn acct_054_a_flood_pauses_the_reader_until_the_pane_acknowledges_and_a_silent_pane_only_for_the_wait() {

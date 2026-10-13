@@ -7,6 +7,7 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -233,9 +234,30 @@ pub fn start_line(resolved: &std::path::Path) -> (std::ffi::OsString, Vec<std::f
     }
 }
 
+/// The program's input, behind its own lock (council D2 MERGE 31 item 1): a caller clones it out of
+/// the session registry and writes without holding the registry, so one pane's slow paste (ConPTY
+/// takes input at ~12 KB/s) never stalls another pane's bookkeeping. One lock per session keeps
+/// that session's writes in order.
+pub type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// Writes `data` to a session's input: the reply-to-query conversion on Windows, then the write
+/// and flush under the writer's own lock. A poisoned lock (a writer panicked mid-write) is used
+/// anyway: the pipe is still the pipe.
+pub fn write_shared(writer: &SharedWriter, data: &[u8]) -> Result<(), String> {
+    let keyed;
+    let data = if cfg!(windows) && is_reply(data) {
+        keyed = as_key_events(data);
+        &keyed[..]
+    } else {
+        data
+    };
+    let mut w = writer.lock().unwrap_or_else(PoisonError::into_inner);
+    w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
+}
+
 pub struct PtySession {
     master: Option<Box<dyn MasterPty + Send>>,
-    writer: Option<Box<dyn Write + Send>>,
+    writer: Option<SharedWriter>,
     killer: Box<dyn ChildKiller + Send + Sync>,
     pid: Option<u32>,
     /// The program that started (ACCT-046: an automatic shell may be a fallback).
@@ -315,20 +337,33 @@ impl PtySession {
             })
             .map_err(|e| e.to_string())?;
 
-        Ok(Self { master: Some(pair.master), writer: Some(writer), killer, pid, program, job })
+        Ok(Self { master: Some(pair.master), writer: Some(Arc::new(Mutex::new(writer))), killer, pid, program, job })
+    }
+
+    /// A session over a fake writer, for tests of the write path with no PTY behind it.
+    #[cfg(test)]
+    pub(crate) fn fake(writer: Box<dyn Write + Send>) -> Self {
+        #[derive(Debug)]
+        struct NoChild;
+        impl ChildKiller for NoChild {
+            fn kill(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+                Box::new(NoChild)
+            }
+        }
+        Self { master: None, writer: Some(Arc::new(Mutex::new(writer))), killer: Box::new(NoChild), pid: None, program: "fake".into(), job: None }
     }
 
     /// Sends keystrokes (already encoded as the terminal would) to the program.
-    pub fn write(&mut self, data: &[u8]) -> Result<(), String> {
-        let w = self.writer.as_mut().ok_or("session already closed")?;
-        let keyed;
-        let data = if cfg!(windows) && is_reply(data) {
-            keyed = as_key_events(data);
-            &keyed[..]
-        } else {
-            data
-        };
-        w.write_all(data).and_then(|_| w.flush()).map_err(|e| e.to_string())
+    pub fn write(&self, data: &[u8]) -> Result<(), String> {
+        write_shared(&self.writer()?, data)
+    }
+
+    /// The program's input, to write to without holding whatever holds the session.
+    pub fn writer(&self) -> Result<SharedWriter, String> {
+        self.writer.clone().ok_or_else(|| "session already closed".to_string())
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
