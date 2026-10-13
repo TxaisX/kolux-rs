@@ -367,6 +367,11 @@ impl Git {
         run(&["worktree", "move", &from.to_string_lossy(), &to.to_string_lossy()], Some(repo)).map(|_| ())
     }
 
+    /// PROJ-068: `git worktree repair`: Git learns that the worktree now sits in `dir`.
+    pub fn worktree_repair(&self, repo: &Path, dir: &Path) -> Result<(), String> {
+        run_within(&["worktree", "repair", &dir.to_string_lossy()], Some(repo), LIST_LIMIT).map(|_| ())
+    }
+
     fn checked_out_somewhere(&self, repo: &Path, branch: &str) -> Result<bool, String> {
         Ok(self.worktrees(repo)?.iter().any(|w| w.branch.as_deref() == Some(branch)))
     }

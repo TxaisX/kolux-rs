@@ -245,3 +245,13 @@ export function prefixSample(mode: string, custom: string, check: PrefixCheck | 
   if (/^\/+$/.test(typed)) return { sample, note: "A prefix of only slashes is no prefix, so new branches get the bare name." };
   return { sample, note: null };
 }
+
+/** PROJ-068: an older refresh never replaces a newer one. Each refresh takes a ticket when it starts;
+ *  the ticket says whether it is still the newest when the refresh comes back. */
+export function newestOnly(): () => () => boolean {
+  let last = 0;
+  return () => {
+    const mine = ++last;
+    return () => mine === last;
+  };
+}

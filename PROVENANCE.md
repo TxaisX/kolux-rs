@@ -437,6 +437,7 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-017-c · Context7: `/github/copilot-cli` (two queries: configuration file locations and settings keys; `--allow-all-paths`), `/websites/cursor_cli` (two queries: global options incl. `--trust`, changelog on workspace trust), `/websites/cursor` (one query: workspace trust in the editor). None documents a trust file. Nothing else outside the repo.
 > 2026-10-12 · T-018-c · Nothing outside the repo: the card (GIT-002) and the repo's own scm module.
 
+> 2026-10-12 · T-161-c · the PROJ-068 spec card, the repo's own projects.rs, visibility.rs, git.rs, model.ts and ProjectsPanel.tsx, and git's own documentation of worktree repair and the gitdir files of linked worktrees. Nothing from the old app.
 > 2026-10-12 · T-161-b · the PROJ-072 spec card, the repo's own git.rs, projects.rs, terminal.rs, deleting.ts, ProjectsPanel.tsx and App.tsx, and git's own documentation of worktree remove and prune. Nothing from the old app.
 > 2026-10-12 · T-161-a · the PROJ-027, PROJ-031 and PROJ-064 spec cards, COMPAT for the variable name, the repo's own git.rs, projects.rs, automations.rs, ProjectsPanel.tsx, model.ts and App.tsx, git's own documentation of for-each-ref (%(upstream:track)) and rev-list --not --remotes, and the windows-sys 0.61 JobObjects bindings in the cargo registry. Nothing from the old app.
 > 2026-10-12 · T-076 · the CLI-012 spec card and the repo's own cli.rs, local_cli.rs, App.tsx and ProjectsPanel.tsx. Nothing from the old app.

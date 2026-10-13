@@ -1,5 +1,14 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, failureOf, pushLabel } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, failureOf, pushLabel, newestOnly } from "./model";
+
+test("PROJ-068: a refresh that comes back after a newer one started is dropped", () => {
+  const ticket = newestOnly();
+  const older = ticket();
+  expect(older()).toBe(true);
+  const newer = ticket();
+  expect(older()).toBe(false);
+  expect(newer()).toBe(true);
+});
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
