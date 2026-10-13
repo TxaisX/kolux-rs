@@ -22,7 +22,7 @@ import { batchAcks, memoryProfile } from "./flow";
 import { resumes } from "./layout";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
-import { currentDark, currentTerminal, monoFont, TERMINAL_EVENT } from "../theme";
+import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
 import { hookColourMode } from "./colourMode";
 import { folderName } from "../projects/model";
 import { withoutRules } from "../launch/seats";
@@ -264,8 +264,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     if (!el) return;
     const term = new Terminal({
       cursorBlink: true,
-      fontFamily: monoFont,
-      fontSize: 13,
+      ...termFont(number), // TERM-097 / TERM-078: saved font plus this pane's zoom
       theme: currentTerminal(),
       allowProposedApi: true,
       // TERM-013: ConPTY repaints the screen itself after a resize, so a taller pane gets blank rows
@@ -537,6 +536,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     const mode = hookColourMode(term, write, currentDark);
     const recolour = () => {
       term.options.theme = currentTerminal();
+      Object.assign(term.options, termFont(number));
+      resize();
       mode.changed();
     };
     window.addEventListener(TERMINAL_EVENT, recolour);
