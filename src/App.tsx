@@ -29,7 +29,7 @@ import SettingsPage from "./settings/SettingsPage";
 import Ask from "./chrome/Ask";
 import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { closeSet, returnTab, type Which } from "./terminal/tabClose";
-import { applyAppearance, readAppearance } from "./theme";
+import { applyAppearance, readAppearance, zoomTerm } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, readLook, saveLayout, startScreen, stripOn } from "./settings/general";
@@ -640,6 +640,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
+          break;
+        case "zoom.in":
+        case "zoom.out":
+        case "zoom.reset":
+          zoomTerm(focused, hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset"); // TERM-078
           break;
         case "tab.newTerminal":
           void newTab(null);
@@ -2129,7 +2134,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
         }
         screen={screen}
         classic={classic}
-        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
+        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} onZoom={(how) => zoomTerm(focused, how)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body" style={{ "--sidebar-w": `${leftWidth}px` } as CSSProperties}>
         {palette && (
           <WorktreePalette

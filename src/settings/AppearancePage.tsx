@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
-import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, type Appearance, type Mode } from "../theme";
+import { applyAppearance, buildTheme, isDark, MODES, previewOf, readAppearance, SPAN, swatch, themeLabel, themeVars, THEMES, uiFont, monoFont, writeAppearance, WEIGHTS, type Appearance, type FontWeight, type Mode } from "../theme";
 import { importScheme } from "../terminal/schemes";
 import { GPU_FIELD, gpuOn } from "../terminal/renderer";
 import { schemeOptions, SchemeList } from "./SchemePicker";
@@ -188,7 +188,35 @@ export function AppearanceView({ look, onChange, windowPart, windowSummary = "",
         <p className="conn-detail">Leave a field empty for the default. A font that is not installed falls back to the default, so text always shows.</p>
       </section>
       </Fold>
-      <Fold id="terminal" title="Terminal" summary={[firstFamily(monoFont), look.lightTerminal ? `${name(look.terminal)} / ${name(look.lightScheme)}` : name(look.terminal)].join(" · ")} {...fold("terminal")}>
+      <Fold id="terminal" title="Terminal" summary={[look.termFont || firstFamily(monoFont), `${look.termSize} pt`, look.lightTerminal ? `${name(look.terminal)} / ${name(look.lightScheme)}` : name(look.terminal)].join(" · ")} {...fold("terminal")}>
+      <section className="conn-card" data-section="terminal-font">
+        <h2 className="conn-name">Terminal font</h2>
+        {/* TERM-097: every pane and, unless it has its own font, the editor redraw with these. */}
+        <FontField label="Terminal font" value={look.termFont} placeholder={`Default (${firstFamily(monoFont)})`} onPick={(termFont) => onChange({ ...look, termFont })} />
+        <label className="look-slider">
+          <span>Size</span>
+          <input type="range" min={SPAN.termSize[0]} max={SPAN.termSize[1]} step={1} value={look.termSize} onChange={(e) => onChange({ ...look, termSize: Number(e.target.value) })} />
+          <output>{look.termSize} pt</output>
+        </label>
+        <label className="look-slider">
+          <span>Line height</span>
+          <input type="range" min={SPAN.termLineHeight[0]} max={SPAN.termLineHeight[1]} step={0.1} value={look.termLineHeight} onChange={(e) => onChange({ ...look, termLineHeight: Number(e.target.value) })} />
+          <output>{look.termLineHeight.toFixed(1)}</output>
+        </label>
+        {([["termWeight", "Weight"], ["termWeightBold", "Bold weight"]] as const).map(([key, label]) => (
+          <label key={key} className="look-select">
+            <span>{label}</span>
+            <select aria-label={label} value={look[key]} onChange={(e) => onChange({ ...look, [key]: e.target.value as FontWeight })}>
+              {WEIGHTS.map((w) => (
+                <option key={w} value={w}>
+                  {w[0].toUpperCase() + w.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+        <p className="conn-detail">Zoom In, Zoom Out and Reset Size (the View menu, Ctrl+= / Ctrl+- / Ctrl+0) change only the focused terminal.</p>
+      </section>
       <section className="conn-card" data-section="terminal-colours">
         <h2 className="conn-name">Terminal colours</h2>
         <TerminalColours look={look} onChange={onChange} />

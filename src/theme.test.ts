@@ -1,6 +1,6 @@
 import design from "../design/DESIGN.md?raw";
 import { expect, test } from "vitest";
-import { applyTheme, buildTheme, classic, coreTokens, isDark, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance } from "./theme";
+import { applyTheme, buildTheme, classic, coreTokens, isDark, previewOf, readAppearance, terminalFor, terminalTheme, themeVars, THEMES, writeAppearance, appearanceVars, termFont, zoomTerm } from "./theme";
 
 /** The `| \`--token\` | \`#hex\` |` rows of DESIGN.md section 2, as a name-to-hex map. */
 function designPalette(): Record<string, string> {
@@ -132,4 +132,31 @@ test("SET-023: a custom scheme can be picked for either mode; a removed one fall
   expect(terminalFor(a, true)).toMatchObject({ background: "#123456", foreground: "#fedcba" });
   expect(look({ terminalScheme: "custom:Mine" }).terminal, "not in the saved list").toBe("default");
   expect(writeAppearance({}, a)).toMatchObject({ terminalScheme: "custom:Mine", terminalSchemeLight: "tango-light", terminalCustomSchemes: custom });
+});
+
+// TERM-097 / TERM-078 (T-144-b)
+test("terminal font defaults to size 14, line height 1, normal and bold, and keeps saved values in range", () => {
+  expect(readAppearance({})).toMatchObject({ termFont: "", termSize: 14, termLineHeight: 1, termWeight: "normal", termWeightBold: "bold" });
+  const a = readAppearance({ terminalFont: " Fira Code ", terminalFontSize: 99, terminalLineHeight: 1.25, terminalFontWeight: 300, terminalFontWeightBold: "heavy" });
+  expect(a).toMatchObject({ termFont: "Fira Code", termSize: 32, termLineHeight: 1.3, termWeight: "300", termWeightBold: "bold" });
+  expect(writeAppearance({}, a)).toMatchObject({ terminalFont: "Fira Code", terminalFontSize: 32, terminalFontWeight: "300" });
+});
+
+test("the editor font follows the terminal font unless it has its own", () => {
+  const vars = (s: Record<string, unknown>) => appearanceVars(readAppearance(s), true);
+  expect(vars({ terminalFont: "Fira Code" })["--editor-font"]).toBe('"Fira Code", "Cascadia Mono", Consolas, monospace');
+  expect(vars({ terminalFont: "Fira Code", editorFont: "Hack" })["--editor-font"]).toBe('"Hack", "Fira Code", "Cascadia Mono", Consolas, monospace');
+});
+
+test("zooming in twice then reset returns to the configured size, and only the zoomed pane changes", () => {
+  expect(termFont(7).fontSize).toBe(14);
+  expect(zoomTerm(7, "in")).toBe(15);
+  expect(zoomTerm(7, "in")).toBe(16);
+  expect(termFont(7)).toMatchObject({ fontSize: 16, lineHeight: 1, fontWeight: "normal", fontWeightBold: "bold" });
+  expect(termFont(8).fontSize, "another pane").toBe(14);
+  expect(zoomTerm(7, "reset")).toBe(14);
+  expect(termFont(7).fontSize).toBe(14);
+  for (let i = 0; i < 20; i++) zoomTerm(8, "out");
+  expect(termFont(8).fontSize, "floor").toBe(6);
+  zoomTerm(8, "reset");
 });
