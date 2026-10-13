@@ -23,7 +23,7 @@ export const screens: Array<{ id: Screen; label: string }> = [
 
 /** `classic` (SET-037): the Classic look has no screen switcher; the window stays on Terminals. */
 /** `automations` (VIEW-011): the Automations page button, present only when it is turned on in Settings > Appearance. */
-export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; onSettings?: () => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void };
+export type TopBarProps = { screen: Screen; classic?: boolean; onScreen: (s: Screen) => void; sidebarOpen: boolean; onToggleSidebar: () => void; rightOpen: boolean; onToggleRight: () => void; appName?: boolean; automations?: { open: boolean; onToggle: () => void }; installed?: string[]; onSearch?: () => void; onBack?: () => void; onForward?: () => void };
 
 /** `appName` (SET-020): the app name beside the mark, off by default (DT-A6). */
 export default function TopBar({ screen, classic = false, onScreen, sidebarOpen, onToggleSidebar, rightOpen, onToggleRight, appName = false, automations, installed = [], onSearch, onBack, onForward }: TopBarProps) {

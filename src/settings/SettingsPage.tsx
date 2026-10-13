@@ -11,7 +11,7 @@ import ClaudeAccounts, { addClaudeAccount } from "./ClaudeAccounts";
 import CodexCard from "./CodexCard";
 import { ConnectGrid, OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
-import CloseAsk from "../terminal/CloseAsk";
+import Ask from "../chrome/Ask";
 import GrokCard from "./GrokCard";
 import { AttentionNote, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
@@ -142,7 +142,7 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
     <>
       <ClaudeCardView status={status} busy={busy} error={error} onAction={act} onUseAccount={useAccount} own={own} resume={resume} onResume={saveResume} />
       {asking && (
-        <CloseAsk
+        <Ask
           {...claudeDisconnect}
           onCancel={() => setAsking(false)}
           onConfirm={() => {

@@ -40,6 +40,8 @@ mod state;
 mod status;
 mod sysmem;
 mod terminal;
+#[cfg(test)]
+mod test_dir;
 mod tools;
 mod token_usage;
 mod trust;

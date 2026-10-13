@@ -29,7 +29,7 @@ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
-import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, titleBarButton } from "./settings/general";
+import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
@@ -1543,7 +1543,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       <TopBar
         appName={chromeShown(settings, "titleBarAppName")}
         automations={
-          titleBarButton(settings, "automations")
+          chromeShown(settings, "automationsButton")
             ? {
                 open: terminals && page === "automations",
                 onToggle: () => {
@@ -1555,7 +1555,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         }
         screen={screen}
         classic={classic}
-        onScreen={setScreen} installed={installedIds} onSettings={() => setSettingsOpen(true)} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
+        onScreen={setScreen} installed={installedIds} onSearch={() => setPalette(true)} onBack={travel(hist, -1, stillThere) === null ? undefined : () => step(-1)} onForward={travel(hist, 1, stillThere) === null ? undefined : () => step(1)} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((o) => !o)} rightOpen={terminals && right.open} onToggleRight={() => (terminals && right.open ? saveRight({ open: false }) : showRight(right.tab))} />
       <div className="body">
         {palette && (
           <WorktreePalette

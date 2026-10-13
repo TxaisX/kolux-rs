@@ -502,3 +502,5 @@ If a pass reads forbidden material, follow LOOP.md section 0: stop, then add a l
 > 2026-10-12 · T-136-c · rules from the USAGE-011 card and SET-006; hook event names from this tree's own hooks.rs; no outside source used; no old Kolux source read
 
 > 2026-10-12 · T-137-b / T-139-c · source check only: docs.x.ai/build/cli/reference and docs.x.ai/build/features/status-line read; neither documents Grok credit figures or a session-file format; nothing built or copied
+
+> 2026-10-12 · T-339 · rules from SET-020, VIEW-011, VIEW-116, USAGE-010, ORCH-031 and ACCT-001 cards and DT-A6; no outside source used; no old Kolux source read

@@ -16,7 +16,7 @@ import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
 import { OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
-import CloseAsk, { type Ask } from "../terminal/CloseAsk";
+import Ask, { type Question } from "../chrome/Ask";
 import { CONNECT } from "../glossary";
 
 export type CodexAccount = { id: string; email: string | null; home: string; lastSignIn: number; signInError: boolean; label?: string };
@@ -72,7 +72,7 @@ export function codexHeadline(v: CodexView): string {
 }
 
 /** ACCT-015: what Disconnect asks. Only the active account Kolux made is removed. */
-export function codexDisconnect(v: CodexView): Ask {
+export function codexDisconnect(v: CodexView): Question {
   const active = v.accounts.find((a) => a.id === v.active);
   if (active)
     return {
@@ -240,7 +240,7 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
       window.removeEventListener("focus", read);
     };
   }, [read]);
-  const [ask, setAsk] = useState<Ask | null>(null);
+  const [ask, setAsk] = useState<Question | null>(null);
   const act = (a: CodexAction) => {
     setError(null);
     setConfirming(a.kind === "ask-remove" ? a.id : null);
@@ -271,7 +271,7 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
     <>
       <CodexCardView view={view} error={error} confirming={confirming} pending={pending} naming={naming} onAction={act} />
       {ask && (
-        <CloseAsk
+        <Ask
           {...ask}
           onCancel={() => setAsk(null)}
           onConfirm={() => {

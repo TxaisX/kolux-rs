@@ -1,18 +1,22 @@
 // VIEW-116: the one confirmation dialog. Cancel holds focus when it opens, so a stray Enter backs
 // out; Enter confirms only on prompts that opt in (`enter`) and only while Confirm has focus;
 // Escape always cancels. The don't-ask-again tick lives in this dialog alone: it is handed over
-// only with a confirm, and the next prompt (a new dialog) starts unticked.
+// only with a confirm, and the next prompt (a new dialog) starts unticked. With `confirm` null it
+// only explains, with a single OK (ACCT-015's Disconnect when nothing can be disconnected).
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /** What a key press in the dialog does: Escape cancels; Enter on Confirm is blocked unless the
  * prompt opts in; anything else (Enter on Cancel included) does what the focused control does. */
 export const askKey = (key: string, onConfirm: boolean, enter: boolean): "cancel" | "block" | "pass" => (key === "Escape" ? "cancel" : key === "Enter" && onConfirm && !enter ? "block" : "pass");
 
+/** A question held in state until it is drawn; `confirm` null only explains. */
+export type Question = { title: string; body: string; confirm: string | null };
+
 type Props = {
   title: string;
   body: ReactNode;
-  /** The confirm button's word, e.g. Delete. */
-  confirm: string;
+  /** The confirm button's word, e.g. Delete; null shows only an OK that closes. */
+  confirm: string | null;
   /** Lets Enter confirm while the confirm button has focus. */
   enter?: boolean;
   /** Offers a don't-ask-again box; its tick reaches `onConfirm` and nowhere else. */
@@ -53,12 +57,20 @@ export default function Ask({ title, body, confirm, enter = false, dontAsk = fal
           </label>
         )}
         <div className="btn-row">
-          <button ref={cancel} className="btn" onClick={onCancel}>
-            {cancelText}
-          </button>
-          <button ref={ok} className={safe ? "btn primary" : "btn danger"} onClick={() => onConfirm(tick)}>
-            {confirm}
-          </button>
+          {confirm === null ? (
+            <button ref={cancel} className="btn primary" onClick={onCancel}>
+              OK
+            </button>
+          ) : (
+            <>
+              <button ref={cancel} className="btn" onClick={onCancel}>
+                {cancelText}
+              </button>
+              <button ref={ok} className={safe ? "btn primary" : "btn danger"} onClick={() => onConfirm(tick)}>
+                {confirm}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -529,9 +529,9 @@ mod tests {
     const CREDS: &str = r#"{"claudeAiOauth":{"accessToken":"fake-access","refreshToken":"fake-refresh"}}"#;
     const SIGNED_IN: &str = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Example Org"}"#;
 
-    fn profile(tag: &str) -> (PathBuf, Mutex<Store>) {
-        let dir = std::env::temp_dir().join(format!("kolux-claude-accounts-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+    /// The folder goes when the test ends, after the store in it has closed.
+    fn profile(tag: &str) -> (crate::test_dir::TempDir, Mutex<Store>) {
+        let dir = crate::test_dir::temp(&format!("claude-accounts-{tag}"));
         let store = Store::open(&dir).unwrap();
         (dir, Mutex::new(store))
     }
@@ -555,7 +555,6 @@ mod tests {
         let other = r#"{"loggedIn":true,"authMethod":"claude.ai","email":"sam@example.com","orgName":"Second Org"}"#;
         sign_in(&store, &dir, "a3", false, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(other.into())).unwrap();
         assert_eq!(load(&store.lock().unwrap()).len(), 2, "one email in two organisations is two accounts");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -578,7 +577,6 @@ mod tests {
         assert_eq!(active(&s), None, "the system default can be picked again");
         assert!(remove(&s, &dir, "a2").is_err());
         drop(s);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -591,7 +589,6 @@ mod tests {
         assert!(!vault.contains("fake-refresh"), "the kept copy is sealed");
         assert_eq!(load(&store.lock().unwrap()), vec![a.clone()]);
         assert_eq!(active(&store.lock().unwrap()), None, "adding does not change the active account");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -609,7 +606,6 @@ mod tests {
         assert!(!serde_json::from_str::<Account>(r#"{"id":"x","email":null,"organization":null,"configDir":"d","lastSignIn":1}"#).unwrap().stale);
         sign_in(&store, &dir, "a1", true, 8, writes(r#"{"claudeAiOauth":{"accessToken":"fake-2"}}"#, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).unwrap();
         assert!(!load(&store.lock().unwrap())[0].stale, "Sign in again clears it");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -622,7 +618,6 @@ mod tests {
         assert_eq!(err.reason, "sign-in-refused", "a refused sign-in offers Try again");
         assert!(load(&store.lock().unwrap()).is_empty());
         assert!(!dir.join(FOLDER).join("a1").exists() && !dir.join(FOLDER).join("a2").exists(), "no partial folder left");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -640,7 +635,6 @@ mod tests {
         // The same credentials as before are never taken as a new sign-in.
         assert!(sign_in(&store, &dir, "a1", true, 9, writes(CREDS, Ended::Exited(Some(0))), |_| Some(SIGNED_IN.into())).is_err());
         assert_eq!(load(&store.lock().unwrap())[0].last_sign_in, 7, "the row is unchanged");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1459,6 +1459,11 @@ Before any agent has run it invites you to start the first one. The counts come 
 own status reports, so reloading the window never adds a turn, and they survive quitting Kolux
 while an agent is busy.
 
+[accounts] T-339 (cleanup): the Automations button now has one switch, Show Automations button in
+Settings > Appearance, which governs the title-bar and sidebar buttons together (the separate Title
+bar card is gone). The Notifications page lists each kind once. The launch screen now warns about
+Claude's usage as well as Codex's. kolux-dev orchestration reset says what each scope cleared and kept.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2622,7 +2627,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-137-b / T-139-c · 2026-10-12 source check: xAI's public Grok Build docs (docs.x.ai/build/cli/reference, docs.x.ai/build/features/status-line) document no usage, credit or allowance figures and no session-file format; the status-line input names only model.display_name, context_window.used_percentage, workspace.branch and cwd, and its built-in cost item has no documented field. The credits commands found elsewhere come from third-party tools, not xAI. Both tasks stay open until xAI publishes a source; nothing was built.
 
+- [accounts] T-339 · One field per window item: `automationsButton` (SET-020, on by default per DT-A6) is also VIEW-011's title-bar button, so `titleBarAutomations` and the Title bar card are gone; a saved `titleBarAutomations` is ignored. The notification kind switches keep `notifyOnFinish` and `notifyOnStopped` (the Notifications card's own switches); `notifyUsage` is dropped as the Usage alerts section is that switch. Claude's launch figures are its five_hour and seven_day limits, published from the same read as the top-bar pill. The CLI reset summary keeps its counts and adds what went and what stayed: tasks clears tasks, workers and gates and keeps Runs and mail; messages clears the mail and delivery positions and keeps Runs and tasks; all clears everything and ids keep counting up. The Codex accounts list was not moved by T-138 or T-138-b (it is still inside the Codex card); moving it is T-138-c.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-339 · done: CloseAsk folded into chrome/Ask (OK-only when confirm is null); duplicate notification switches removed; claudeFigures / publishClaude in launchWarn.ts fed by ClaudePill; TopBar onSettings dropped; titleBarButton and the Title bar card removed, automationsButton drives the title-bar button; reset summary explains each scope; test_dir.rs guard for the account and usage tests; T-138-c split for the Codex list move · evidence/T-339.txt, T-339-1-one-automations-switch.png, T-339-2-switch-off-no-button.png, T-339-3-notification-switches-once.png
 - 2026-10-12 · [accounts] T-137-b, T-139-c · not built: no public xAI source for Grok credit figures or the Grok session file (checked docs.x.ai); left unticked
 - 2026-10-12 · [accounts] T-136-c · done (part): activity.rs (turns, working stretches, batched and quit saves), status.rs and terminal.rs feed it, src/usage/Activity.tsx headline cards and invitation · evidence/T-136-c.txt, T-136-c-1-first-run-invitation.png, T-136-c-2-two-turns-after-reload.png, T-136-c-3-counts-intact-after-quit.png
 - 2026-10-12 · [accounts] T-170 · done (part): token_usage claude_file/codex_file/merge, per-file Cache, codex_roots, format mark; workspaces trim resolves . and .. · evidence/T-170.txt, T-170-1-fork-counted-once.png, T-170-2-original-gone-total-kept.png

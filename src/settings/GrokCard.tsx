@@ -10,7 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { AttentionNote, fixFor, type Attention } from "./Attention";
 import { OtherWays, taglineOf } from "./ConnectGrid";
 import { settleWithin } from "./pending";
-import CloseAsk, { type Ask } from "../terminal/CloseAsk";
+import Ask, { type Question } from "../chrome/Ask";
 
 export type GrokView = {
   connection: "cli" | "key" | "none";
@@ -26,7 +26,7 @@ export type GrokAction = "connect" | "code" | "key" | "cancel" | "disconnect";
 export const KEY_FIELD = "xaiApiKey";
 
 /** ACCT-015: what Disconnect asks. Only the saved xAI key is ever erased. */
-export function grokDisconnect(v: GrokView): Ask {
+export function grokDisconnect(v: GrokView): Question {
   if (v.keySaved)
     return {
       title: "Disconnect the xAI key?",
@@ -171,7 +171,7 @@ export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on
   const [pending, setPending] = useState<GrokAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState(false);
-  const [ask, setAsk] = useState<Ask | null>(null);
+  const [ask, setAsk] = useState<Question | null>(null);
   const read = useCallback(() => {
     invoke<GrokView>("grok_status")
       .then(setView)
@@ -211,7 +211,7 @@ export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on
         }}
       />
       {ask && (
-        <CloseAsk
+        <Ask
           {...ask}
           onCancel={() => setAsk(null)}
           onConfirm={() => {

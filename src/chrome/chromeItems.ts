@@ -1,6 +1,7 @@
 // SET-020: what the window chrome shows, kept in the settings file as booleans. DT-A6: the app name
 // is off by default (DESIGN.md draws it nowhere) and the Automations button stays on until the
-// command palette gives Automations a second way in.
+// command palette gives Automations a second way in. One switch per item: `automationsButton` is
+// both SET-020's Automations button and VIEW-011's title-bar button (title bar and sidebar alike).
 import { readStatusBar, STATUS_ITEMS } from "./statusItems";
 
 export const CHROME = [

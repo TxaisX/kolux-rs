@@ -540,18 +540,8 @@ mod tests {
         assert!(tracking_of(Some(true), false));
     }
 
-    /// A throwaway folder, removed when the test ends.
-    struct Temp(PathBuf);
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    fn temp(tag: &str) -> Temp {
-        let d = std::env::temp_dir().join(format!("kolux-usage-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        Temp(d)
+    fn temp(tag: &str) -> crate::test_dir::TempDir {
+        crate::test_dir::temp(&format!("usage-{tag}"))
     }
     fn write(path: &Path, lines: &[Value]) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

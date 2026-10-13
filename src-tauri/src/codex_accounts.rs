@@ -530,11 +530,8 @@ pub fn codex_account_remove(app: AppHandle, store: tauri::State<'_, Mutex<Store>
 mod tests {
     use super::*;
 
-    fn temp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("kolux-codex-acct-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    fn temp(name: &str) -> crate::test_dir::TempDir {
+        crate::test_dir::temp(&format!("codex-acct-{name}"))
     }
 
     fn token(email: &str) -> String {
@@ -671,7 +668,8 @@ mod tests {
     #[test]
     fn disconnect_deletes_only_what_kolux_made_for_the_account() {
         let profile = temp("disconnect");
-        let own = temp("remove-own").join(".codex");
+        let own_user = temp("remove-own");
+        let own = own_user.join(".codex");
         fs::create_dir_all(&own).unwrap();
         fs::write(own.join("auth.json"), token("me@example.com")).unwrap();
         let before = fs::read(own.join("auth.json")).unwrap();
