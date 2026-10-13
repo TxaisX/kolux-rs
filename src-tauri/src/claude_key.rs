@@ -591,8 +591,7 @@ mod tests {
 
     #[test]
     fn keep_and_forget_round_trip_sealed() {
-        let dir = std::env::temp_dir().join(format!("kolux-key-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = crate::test_dir::temp("key"); // removed after the store below has closed
         let store = Store::open(&dir).unwrap();
         keep(&store, KEY, 42).unwrap();
         let raw = std::fs::read_to_string(dir.join("settings.json")).unwrap();
@@ -604,7 +603,6 @@ mod tests {
         forget(&store).unwrap();
         let s = store.settings();
         assert!(s.get(TOKEN_FIELD).is_none() && s.get(MODE_FIELD).is_none() && s.get(CREATED_FIELD).is_none());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]
