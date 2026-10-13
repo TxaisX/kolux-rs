@@ -642,7 +642,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .conn-chip.connecting { color: var(--working); }
 .conn-headline { font-size: 13px; color: var(--fg-row); }
 .conn-detail { margin: 0; font-size: 12px; color: var(--fg-muted); }
-.conn-detail.warn { color: #fdc030; }
+.conn-detail.warn, .conn-switch small.warn { color: #fdc030; }
 /* ACCT-001 Connect grid, ACCT-003 install progress */
 .conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-items: stretch; max-width: 1100px; }
 .conn-grid .conn-card { max-width: none; height: 100%; box-sizing: border-box; }
@@ -726,7 +726,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 /* SET-005: the colours written as literals above, as tokens in light mode (dark keeps the measured
    values as they are). */
 [data-mode="light"] .usage-part.warn, [data-mode="light"] .conn-chip.expired, [data-mode="light"] .conn-chip.attention,
-[data-mode="light"] .conn-detail.warn, [data-mode="light"] .note.warn, [data-mode="light"] .signin-notice span { color: var(--warn); }
+[data-mode="light"] .conn-detail.warn, [data-mode="light"] .conn-switch small.warn, [data-mode="light"] .note.warn, [data-mode="light"] .signin-notice span { color: var(--warn); }
 [data-mode="light"] .note.error, [data-mode="light"] .btn.danger, [data-mode="light"] .notice { color: var(--danger); }
 [data-mode="light"] .btn.danger, [data-mode="light"] .notice, [data-mode="light"] .sb-form.warn, [data-mode="light"] .signin-notice { border-color: var(--danger-line); }
 [data-mode="light"] .btn.danger:hover:not(:disabled), [data-mode="light"] .branch:hover, [data-mode="light"] .sess:hover { background: var(--kbd-bg); }

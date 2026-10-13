@@ -410,16 +410,16 @@ fn t_152_1_a_debug_build_writes_agent_settings_only_inside_the_temp_folder() {
     let dir = temp("t152-target");
     fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
     let scratch = std::env::temp_dir();
-    assert!(scratch_only(&dir.join("settings.json"), &scratch).is_ok());
+    assert!(scratch_only(&dir.join("settings.json"), &scratch, &home_dir()).is_ok());
     let outside = std::env::current_dir().unwrap().join("settings.json");
-    assert!(scratch_only(&outside, &scratch).unwrap_err().contains("left alone"));
+    assert!(scratch_only(&outside, &scratch, &home_dir()).unwrap_err().contains("left alone"));
     let climbed = scratch.join("..").join(outside.parent().unwrap().strip_prefix(outside.ancestors().last().unwrap()).unwrap()).join("settings.json");
-    assert!(scratch_only(&climbed, &scratch).is_err(), "`..` cannot climb out of the temp folder");
+    assert!(scratch_only(&climbed, &scratch, &home_dir()).is_err(), "`..` cannot climb out of the temp folder");
     // Whatever this test process inherited, the resolved file is written only when it is scratch.
     let resolved = claude_settings_file();
     let profile = dir.join(PRODUCTION_ID);
     println!("resolved {} -> {:?}", resolved.display(), claude_target(&profile));
-    assert_eq!(claude_target(&profile).is_ok(), scratch_only(&resolved, &scratch).is_ok());
+    assert_eq!(claude_target(&profile).is_ok(), scratch_only(&resolved, &scratch, &home_dir()).is_ok());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -432,27 +432,27 @@ fn t_152_b_2_a_scratch_settings_folder_needs_the_marker_not_only_the_temp_folder
         fs::create_dir_all(d).unwrap();
     }
     // Under temp but no marker anywhere up to the temp folder: refused (TEMP=G:\ no longer admits all).
-    let err = scratch_only(&bare.join("settings.json"), &scratch).unwrap_err();
+    let err = scratch_only(&bare.join("settings.json"), &scratch, &home_dir()).unwrap_err();
     assert!(err.contains(SCRATCH_MARKER) && err.contains("left alone"), "{err}");
     // The marker in the folder itself, or two folders up, admits it.
     fs::write(bare.join(SCRATCH_MARKER), "").unwrap();
-    assert!(scratch_only(&bare.join("settings.json"), &scratch).is_ok());
+    assert!(scratch_only(&bare.join("settings.json"), &scratch, &home_dir()).is_ok());
     fs::write(dir.join("marked").join(SCRATCH_MARKER), "").unwrap();
-    assert!(scratch_only(&deep.join("settings.json"), &scratch).is_ok(), "a marker two folders up counts");
+    assert!(scratch_only(&deep.join("settings.json"), &scratch, &home_dir()).is_ok(), "a marker two folders up counts");
     // `..` from a marked folder into an unmarked one, and letter-case spellings, resolve first.
     let climbed = bare.join("..").join("other").join("settings.json");
-    assert!(scratch_only(&climbed, &scratch).is_err(), "`..` out of a marked folder is refused");
+    assert!(scratch_only(&climbed, &scratch, &home_dir()).is_err(), "`..` out of a marked folder is refused");
     let upper = |p: &Path| PathBuf::from(p.to_string_lossy().to_uppercase());
     if cfg!(windows) {
-        assert!(scratch_only(&upper(&bare).join("settings.json"), &scratch).is_ok(), "case spelling of a marked folder");
-        assert!(scratch_only(&upper(&other).join("settings.json"), &scratch).is_err(), "case spelling of an unmarked folder");
+        assert!(scratch_only(&upper(&bare).join("settings.json"), &scratch, &home_dir()).is_ok(), "case spelling of a marked folder");
+        assert!(scratch_only(&upper(&other).join("settings.json"), &scratch, &home_dir()).is_err(), "case spelling of an unmarked folder");
     }
     // A marker above the scratch root does not count: with the root set lower, `dir`'s own
     // marker is outside it.
     fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
-    assert!(scratch_only(&other.join("settings.json"), &other).is_err(), "a marker above the scratch root is ignored");
+    assert!(scratch_only(&other.join("settings.json"), &other, &home_dir()).is_err(), "a marker above the scratch root is ignored");
     // A missing folder fails closed.
-    assert!(scratch_only(&dir.join("missing").join("settings.json"), &scratch).is_err());
+    assert!(scratch_only(&dir.join("missing").join("settings.json"), &scratch, &home_dir()).is_err());
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -469,7 +469,7 @@ fn t_152_b_2_test_dev_and_lane_runs_are_fenced_and_the_identifier_matches_the_ap
     // marked scratch; G:\Dev\claude-config holds no marker, so a run that inherited it stays out.
     let resolved = claude_settings_file();
     let scratch = std::env::temp_dir();
-    assert_eq!(claude_target(Path::new(PRODUCTION_ID)).is_ok(), scratch_only(&resolved, &scratch).is_ok());
+    assert_eq!(claude_target(Path::new(PRODUCTION_ID)).is_ok(), scratch_only(&resolved, &scratch, &home_dir()).is_ok());
 }
 
 #[test]
@@ -480,14 +480,14 @@ fn t_152_2_the_first_write_keeps_a_hashed_copy_and_a_failed_copy_stops_the_insta
     fs::write(&file, &user).unwrap();
     install_claude_at(&home, &file).unwrap();
     assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), user, "the copy is the file from before the install");
-    let record = fs::read_to_string(home.join(SCRIPT_DIR).join(BACKUP_RECORD)).unwrap();
+    let record = fs::read_to_string(target_dir(&home, &file).join(BACKUP_RECORD)).unwrap();
     let hashes: Vec<&str> = record.lines().map(|l| l.split_whitespace().next().unwrap()).collect();
     println!("{record}");
     assert_eq!(hashes.len(), 2);
     assert_eq!(hashes[0], hashes[1]);
     assert_eq!(hashes[0], sha256(&backup_of(&file)).unwrap());
     // A second install keeps the first copy.
-    remove_claude(&file, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+    remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
     fs::write(&file, "{\"model\":\"sonnet\"}\n").unwrap();
     install_claude_at(&home, &file).unwrap();
     assert_eq!(fs::read_to_string(backup_of(&file)).unwrap(), user, "never replaced");
@@ -525,7 +525,7 @@ fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
         v
     };
     assert_eq!(strip_all(&after), strip_all(&user));
-    remove_claude(&file, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+    remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
     assert_eq!(ev(&fs::read_to_string(&file).unwrap()), user, "parsed equal once Kolux's entries are out");
     // Not JSON: refused, nothing written, no copy made.
     let bad = dir.join("bad").join("settings.json");
@@ -542,7 +542,7 @@ fn t_152_3_only_kolux_entries_change_and_invalid_json_is_refused() {
 fn t_152_4_the_users_status_line_still_runs_and_comes_back_exactly() {
     let dir = temp("t152-status");
     let (home, file) = (dir.join("home"), dir.join("settings.json"));
-    let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
+    let prev = target_dir(&home, &file).join(STATUS_PREV);
     let user = ev(&shaped());
     fs::write(&file, shaped()).unwrap();
     install_claude_at(&home, &file).unwrap();
@@ -592,7 +592,7 @@ fn t_152_6_switching_off_gives_back_the_file_byte_for_byte_and_codex_is_not_writ
         fs::write(&file, &user).unwrap();
         install_claude_at(&home, &file).unwrap();
         assert_ne!(fs::read_to_string(&file).unwrap(), user, "{name}: installed");
-        assert!(remove_claude(&file, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap());
+        assert!(remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap());
         assert_eq!(fs::read(&file).unwrap(), user.as_bytes(), "{name}: byte for byte");
     }
     // Without the copy the layout still comes back (indent, line ends, final newline).
@@ -600,7 +600,7 @@ fn t_152_6_switching_off_gives_back_the_file_byte_for_byte_and_codex_is_not_writ
     fs::remove_file(backup_of(&file)).unwrap();
     install_claude_at(&home, &file).unwrap();
     fs::remove_file(backup_of(&file)).unwrap();
-    remove_claude(&file, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+    remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), shaped());
     // Codex: switching on writes nothing into any Codex home.
     assert_eq!(apply(&home, &dir.join("profile"), "codex", Plan::Install).unwrap(), "not written (Codex hooks wait for T-025-e)");
@@ -634,7 +634,7 @@ fn read_only(file: &Path, on: bool) {
 fn t_152_4_a_failed_install_after_the_status_line_save_leaves_his_line_for_the_next_off() {
     let dir = temp("t152-prev-first");
     let (home, file) = (dir.join("home"), dir.join("settings.json"));
-    let prev = home.join(SCRIPT_DIR).join(STATUS_PREV);
+    let prev = target_dir(&home, &file).join(STATUS_PREV);
     let user = shaped();
     fs::write(&file, &user).unwrap();
     // A settings file that cannot be replaced: install_claude fails after the status line save.
@@ -699,7 +699,7 @@ fn t_152_b_4_a_claude_file_with_an_empty_hooks_object_installs_and_comes_back_by
         fs::write(&file, text).unwrap();
         install_claude_at(&home, &file).unwrap();
         assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed");
-        remove_claude(&file, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+        remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), text, "on then off gives back {text:?}");
     }
     let _ = fs::remove_dir_all(&dir);
@@ -709,11 +709,11 @@ fn t_152_b_4_a_claude_file_with_an_empty_hooks_object_installs_and_comes_back_by
 fn t_152_b_3_the_kept_copy_is_checked_against_its_record_on_every_install() {
     let dir = temp("t152b-record");
     let (home, file) = (dir.join("home"), dir.join("settings.json"));
-    let record = home.join(SCRIPT_DIR).join(BACKUP_RECORD);
+    let record = target_dir(&home, &file).join(BACKUP_RECORD);
     let user = shaped();
     fs::write(&file, &user).unwrap();
     install_claude_at(&home, &file).unwrap();
-    let off = |f: &Path| remove_claude(f, &home.join(SCRIPT_DIR).join(STATUS_PREV)).unwrap();
+    let off = |f: &Path| remove_claude(f, &target_dir(&home, f).join(STATUS_PREV)).unwrap();
     off(&file);
     assert_eq!(fs::read_to_string(&file).unwrap(), user);
     // A missing record is rebuilt from the copy and the file as they are, both lines.
@@ -803,5 +803,173 @@ fn t_152_b_5_a_save_between_read_and_write_is_merged_once_and_a_second_one_fails
     assert_eq!(ev(&now)["model"], "saved-twice");
     assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "not installed");
     assert!(!file.with_extension("json.kolux-rs-tmp").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The same whole-file save Claude Code makes, run between Kolux's read and its write.
+fn save_between(f: &Path, model: &'static str) -> Box<dyn FnOnce()> {
+    let f = f.to_path_buf();
+    Box::new(move || {
+        let mut v: Value = ev(&fs::read_to_string(&f).unwrap());
+        v["model"] = json!(model);
+        fs::write(&f, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    })
+}
+
+#[test]
+fn t_152_c_1_two_settings_files_in_one_home_keep_their_own_slot_and_record() {
+    let dir = temp("t152c-targets");
+    let home = dir.join("home");
+    let (a, b) = (dir.join("a").join("settings.json"), dir.join("b").join("settings.json"));
+    let line = |c: &str| {
+        let mut v = ev(&shaped());
+        v["statusLine"] = json!({ "type": "command", "command": c, "padding": 2 });
+        serde_json::to_string_pretty(&v).unwrap() + "\n"
+    };
+    let (ua, ub) = (line("a-line.sh"), line("b-line.sh"));
+    for (f, u) in [(&a, &ua), (&b, &ub)] {
+        fs::create_dir_all(f.parent().unwrap()).unwrap();
+        fs::write(f, u).unwrap();
+    }
+    let (ta, tb) = (target_dir(&home, &a), target_dir(&home, &b));
+    println!("A {} -> {}\nB {} -> {}", a.display(), ta.display(), b.display(), tb.display());
+    assert_ne!(ta, tb);
+    assert!(ta.starts_with(home.join(SCRIPT_DIR).join(TARGETS)) && ta.file_name().unwrap().len() == 16);
+    // Other spellings of A (`..`, letter case) are A's slot, not a new one.
+    assert_eq!(target_dir(&home, &dir.join("b").join("..").join("a").join("settings.json")), ta);
+    if cfg!(windows) {
+        assert_eq!(target_dir(&home, &PathBuf::from(a.to_string_lossy().to_uppercase())), ta);
+    }
+    install_claude_at(&home, &a).unwrap();
+    assert!(!tb.exists(), "installing A writes nothing of B's");
+    install_claude_at(&home, &b).unwrap();
+    let mine = |d: &Path| [d.join(STATUS_PREV), d.join(STATUS_PREV).with_extension("json"), d.join(BACKUP_RECORD)].map(|f| fs::read(f).ok());
+    let b_had = mine(&tb);
+    assert!(b_had.iter().all(Option::is_some), "B's slot and record are B's own");
+    // Each file's status line runs its own saved line.
+    let runs = |f: &Path, d: &Path| fs::read_to_string(f).unwrap().contains(&d.join(STATUS_PREV).to_string_lossy().replace('\\', "/"));
+    assert!(runs(&a, &ta) && runs(&b, &tb));
+    // A record names only its own file and copy.
+    let ra = fs::read_to_string(ta.join(BACKUP_RECORD)).unwrap();
+    assert!(ra.contains(&a.display().to_string()) && !ra.contains(&b.display().to_string()), "{ra}");
+    // Off and on again for A never touches B's slot or record.
+    remove_claude(&a, &ta.join(STATUS_PREV)).unwrap();
+    assert_eq!(fs::read_to_string(&a).unwrap(), ua, "A comes back byte for byte");
+    assert_eq!(mine(&tb), b_had);
+    install_claude_at(&home, &a).unwrap();
+    assert_eq!(mine(&tb), b_had);
+    // B gets its own line back, not A's (one shared slot would have handed it A's).
+    remove_claude(&b, &tb.join(STATUS_PREV)).unwrap();
+    assert_eq!(fs::read_to_string(&b).unwrap(), ub, "B comes back byte for byte");
+    remove_claude(&a, &ta.join(STATUS_PREV)).unwrap();
+    assert_eq!(fs::read_to_string(&a).unwrap(), ua);
+    // A record for A is not consulted for B: with B's record gone, a damaged copy of B is not
+    // vouched for by A's record, which is still there.
+    fs::remove_file(tb.join(BACKUP_RECORD)).unwrap();
+    fs::write(backup_of(&b), "not json").unwrap();
+    assert!(ta.join(BACKUP_RECORD).is_file());
+    let err = back_up(&b, &tb.join(BACKUP_RECORD)).unwrap_err();
+    assert!(err.contains("has no record") && err.contains(&tb.join(BACKUP_RECORD).display().to_string()), "{err}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_c_3_on_with_two_saves_fails_whole_with_the_error_in_the_reply_and_off_retries_once() {
+    use super::super::BEFORE_REREAD;
+    let dir = temp("t152c-retry");
+    let (home, file) = (dir.join("home"), dir.join("settings.json"));
+    fs::write(&file, shaped()).unwrap();
+    // On, saved twice in the gap: the install fails, the reply carries why, and the file is his.
+    BEFORE_REREAD.with(|c| c.borrow_mut().extend([save_between(&file, "saved-twice"), save_between(&file, "saved-first")]));
+    let reply = outcomes(vec![("claude", install_claude_at(&home, &file).map(|_| "installed"))]);
+    println!("{}", json!(reply));
+    assert_eq!(reply[0]["agent"], "claude");
+    assert!(reply[0]["done"].is_null());
+    assert!(reply[0]["error"].as_str().is_some_and(|e| e.ends_with(CHANGED)), "{reply:?}");
+    assert_eq!(ev(&fs::read_to_string(&file).unwrap())["model"], "saved-twice");
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "not installed", "the file agrees with the failure");
+    // On again, then off with one save in the gap: read again once, and it succeeds.
+    install_claude_at(&home, &file).unwrap();
+    BEFORE_REREAD.with(|c| c.borrow_mut().push(save_between(&file, "saved-during-off")));
+    assert!(remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap());
+    assert!(BEFORE_REREAD.with(|c| c.borrow().is_empty()), "the save ran");
+    let after = ev(&fs::read_to_string(&file).unwrap());
+    assert_eq!(after["model"], "saved-during-off", "his save is kept");
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "not installed");
+    assert_eq!(after["statusLine"], ev(&shaped())["statusLine"], "his status line is back");
+    // Off with two saves fails and writes nothing.
+    install_claude_at(&home, &file).unwrap();
+    BEFORE_REREAD.with(|c| c.borrow_mut().extend([save_between(&file, "off-twice"), save_between(&file, "off-first")]));
+    let err = remove_claude(&file, &target_dir(&home, &file).join(STATUS_PREV)).unwrap_err();
+    assert!(err.ends_with(CHANGED), "{err}");
+    assert_eq!(switch::inspect(&file, &CLAUDE_EVENTS).0, "installed", "the file still has what the failed off left");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn t_152_c_4_a_hooked_file_without_its_copy_is_refused_and_nothing_is_written() {
+    let dir = temp("t152c-hooked");
+    let (home, file) = (dir.join("home"), dir.join("settings.json"));
+    fs::write(&file, shaped()).unwrap();
+    install_claude_at(&home, &file).unwrap();
+    fs::remove_file(backup_of(&file)).unwrap();
+    let record = target_dir(&home, &file).join(BACKUP_RECORD);
+    let (had, record_had) = (fs::read(&file).unwrap(), fs::read(&record).unwrap());
+    let err = install_claude_at(&home, &file).unwrap_err();
+    println!("{err}");
+    assert!(err.contains("already holds Kolux's hook entries") && err.contains(&file.display().to_string()), "{err}");
+    assert_eq!(fs::read(&file).unwrap(), had, "the file is not written");
+    assert!(!backup_of(&file).exists(), "no copy of a hooked file");
+    assert_eq!(fs::read(&record).unwrap(), record_had, "the record is not written");
+    // Kolux's status line alone counts as Kolux's entries too.
+    let line = dir.join("line.json");
+    fs::write(&line, r#"{"statusLine":{"type":"command","command":"C:/Users/me/.kolux-rs/agent-hooks/claude-status.cmd"}}"#).unwrap();
+    assert!(back_up(&line, &dir.join("line.sha256")).unwrap_err().contains("already holds Kolux's hook entries"));
+    assert!(!backup_of(&line).exists() && !dir.join("line.sha256").exists());
+    let _ = fs::remove_dir_all(&dir);
+}
+
+fn one_var(name: &'static str, value: &'static str) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+    move |n| (n == name).then(|| value.into())
+}
+
+#[test]
+fn t_152_c_5_a_temp_folder_too_wide_for_scratch_is_refused_and_lane_variables_fence() {
+    let dir = temp("t152c-wide");
+    let (home, cfg, bare) = (dir.join("home"), dir.join("cfg"), dir.join("bare"));
+    for d in [&home, &cfg, &bare] {
+        fs::create_dir_all(d).unwrap();
+    }
+    fs::write(cfg.join(SCRATCH_MARKER), "").unwrap();
+    let file = cfg.join("settings.json");
+    let away = std::env::current_dir().unwrap();
+    assert!(!away.starts_with(&dir));
+    assert!(scratch_only(&file, &dir, &away).is_ok(), "marked, below TEMP, home elsewhere");
+    // A1: a TEMP that holds the home folder, or is it, is refused.
+    let err = scratch_only(&file, &dir, &home).unwrap_err();
+    println!("{err}");
+    assert!(err.contains("holds the home folder") && err.contains("left alone"), "{err}");
+    assert!(scratch_only(&file, &dir, &dir).unwrap_err().contains("holds the home folder"));
+    // A1: a TEMP at a drive root is refused, marker or not.
+    let root = dir.ancestors().last().unwrap();
+    let err = scratch_only(&file, root, &away).unwrap_err();
+    println!("{err}");
+    assert!(err.contains("drive root"), "{err}");
+    // A1: the marker must sit strictly below TEMP; one in TEMP itself admits nothing.
+    fs::write(dir.join(SCRATCH_MARKER), "").unwrap();
+    assert!(scratch_only(&bare.join("settings.json"), &dir, &away).is_err(), "a marker in TEMP itself");
+    assert!(scratch_only(&dir.join("settings.json"), &dir, &away).is_err(), "a file directly in TEMP");
+    assert!(scratch_only(&file, &dir, &away).is_ok());
+    // A2: a release build with the production profile is fenced when a lane's app folder variables
+    // name another folder, and not when they are unset, empty or name the production profile.
+    let prod = Path::new(r"C:\Users\me\AppData\Roaming\com.txaisxiong.kolux-rs");
+    let none = |_: &str| None;
+    assert!(!fenced_by(prod, false, none), "the installed product");
+    assert!(fenced_by(prod, false, one_var("KOLUX_APP_DIR", r"G:\Temp\hooks-t152c\profile")));
+    assert!(fenced_by(prod, false, one_var("KOLUX_USER_DATA_PATH", r"G:\Temp\hooks-t152c\profile")));
+    assert!(!fenced_by(prod, false, one_var("KOLUX_APP_DIR", r"C:\Users\me\AppData\Roaming\com.txaisxiong.kolux-rs")), "a pane of the installed app");
+    assert!(!fenced_by(prod, false, one_var("KOLUX_USER_DATA_PATH", "")), "empty reads as unset");
+    assert!(fenced_by(prod, true, none), "a test or debug build");
+    assert!(fenced_by(Path::new(r"G:\Temp\x\profile"), false, none), "a lane profile");
     let _ = fs::remove_dir_all(&dir);
 }

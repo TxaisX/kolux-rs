@@ -16,10 +16,11 @@
 // Flow 3  Discard in Source Control asks first, and Cancel loses nothing: the file and git status are unchanged.
 // Flow 4  a Claude pane's status dot turns Working: agentOptions.claude.command points at a stand-in program
 //         that posts the same hook events Kolux's installed hook posts (SessionStart, UserPromptSubmit) from the
-//         pane's own hook variables. CLAUDE_CONFIG_DIR and CODEX_HOME point at scratch folders under --temp for
-//         the launched app, so the user's real Claude and Codex configuration is never touched. FAILs when the
-//         app did not install its hook into the scratch Claude settings.json, or the hook script that entry
-//         names is missing on disk.
+//         pane's own hook variables. CLAUDE_CONFIG_DIR, CODEX_HOME, USERPROFILE and HOME (with APPDATA and
+//         LOCALAPPDATA below it) point at scratch folders under --temp for the launched app, so the user's real
+//         Claude and Codex configuration and Kolux's real hook folder are never touched. FAILs when the app did
+//         not install its hook into the scratch Claude settings.json, or the hook script that entry names is
+//         missing on disk or not under the scratch home.
 // Flow 5  quit and come back (council C2, T-542-b): with two or more shells, the Claude stand-in and one
 //         non-default setting live, the app pid's descendant tree is captured (Win32_Process ParentProcessId
 //         walk), the window is closed through the app's own path (window close over CDP, the same as the X
@@ -41,6 +42,7 @@
 // it cannot run flow 5 (it has no exe path to relaunch).
 import { spawn, execFile } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -73,9 +75,21 @@ const required = (n) => n !== 5 || QUIT_REQUIRED;
 const repo = join(TEMP, "repo");
 const marks = join(TEMP, "marks");
 const standin = join(TEMP, "standin");
-const claudeConfig = join(TEMP, "claude-config");
-const codexHome = join(TEMP, "codex-home");
-const profile = join(process.env.APPDATA ?? "", IDENTIFIER);
+// T-152-c (5): the app's own temp folder (TEMP/TMP) holds the scratch agent config folders but not
+// the scratch home below: a debug build refuses a temp folder that holds the home as scratch.
+const appTemp = join(TEMP, "tmp");
+const claudeConfig = join(appTemp, "claude-config");
+const codexHome = join(appTemp, "codex-home");
+// T-152-c (2): the app keeps its hook scripts, status line slot and backup record under the user's home
+// (USERPROFILE on Windows, HOME elsewhere), so a run gets a scratch home and never writes the real one.
+// Cargo and rustup find their own folders from the home too, so those stay pinned to the real ones.
+const userHome = join(TEMP, "home");
+const realHome = homedir();
+// Windows finds AppData from the home too (%USERPROFILE%AppDataRoaming), and the app will not start
+// when that folder is missing, so a launched app keeps its profile under the scratch home as well.
+const roaming = join(userHome, "AppData", "Roaming");
+const local = join(userHome, "AppData", "Local");
+const profile = ATTACH ? join(process.env.APPDATA ?? "", IDENTIFIER) : join(roaming, IDENTIFIER);
 const koluxSettings = join(profile, "settings.json");
 // A plain text file: the Explorer opens it in the CodeMirror editor, whose save writes the text as typed.
 const smokeFile = join(repo, "notes.txt");
@@ -275,7 +289,7 @@ const moveWindow = (pid) =>
      $h = [IntPtr]::Zero; for ($i = 0; $i -lt 20 -and $h -eq [IntPtr]::Zero; $i++) { $h = (Get-Process -Id ${pid}).MainWindowHandle; if ($h -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500 } }
      if ($h -eq [IntPtr]::Zero) { 'no window handle' } else { [U.W]::SetWindowPos($h,[IntPtr]::Zero,-1920,0,0,0,0x0005) | Out-Null; 'moved' }`,
   );
-const appEnv = () => ({ ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: codexHome });
+const appEnv = () => ({ ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${CDP}`, CLAUDE_CONFIG_DIR: claudeConfig, CODEX_HOME: codexHome, TEMP: appTemp, TMP: appTemp, USERPROFILE: userHome, HOME: userHome, APPDATA: roaming, LOCALAPPDATA: local, CARGO_HOME: process.env.CARGO_HOME ?? join(realHome, ".cargo"), RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(realHome, ".rustup") });
 
 async function launch() {
   if (!IDENTIFIER.endsWith(".smoke")) throw new Error(`refusing to wipe the profile of ${IDENTIFIER}: use an identifier ending in ".smoke" or --attach`);
@@ -286,6 +300,7 @@ async function launch() {
   // T-152-b (2): a dev run writes a Claude settings file only below this scratch marker.
   writeFileSync(join(claudeConfig, ".kolux-rs-scratch"), "");
   mkdirSync(codexHome, { recursive: true });
+  mkdirSync(local, { recursive: true });
   const cfg = join(TEMP, "tauri.smoke.json");
   writeFileSync(cfg, JSON.stringify({ identifier: IDENTIFIER, build: { devUrl: `http://localhost:${PORT}`, beforeDevCommand: `pnpm exec vite --port ${PORT} --strictPort` } }));
   const logFile = join(TEMP, "tauri-dev.log");
@@ -555,6 +570,8 @@ function installedHook() {
   const m = text.match(/([A-Za-z]:\/[^"\\]*agent-hooks\/claude\.cmd)/);
   if (!m) throw new Error(`the installed hook file ${settingsFile} names no agent-hooks/claude.cmd script`);
   if (!existsSync(m[1])) throw new Error(`the installed hook script ${m[1]} named by ${settingsFile} is missing on disk`);
+  const norm = (s) => s.replace(/\\/g, "/").toLowerCase();
+  if (!norm(m[1]).startsWith(norm(userHome) + "/")) throw new Error(`the installed hook script ${m[1]} is not under the scratch home ${userHome}`);
   return `hook installed into the scratch ${settingsFile}, script ${m[1]} on disk`;
 }
 async function flow4() {
