@@ -44,6 +44,46 @@ pub struct Status {
     pub operation: Option<String>,
     /// GIT-015: conflicted files whose clash markers are gone, so they only need staging.
     pub resolved: Vec<String>,
+    /// GIT-001: the lines each file adds and removes, per section; a binary file has no entry.
+    pub lines: LineCounts,
+}
+
+/// GIT-001: `[added, removed]` by path for the staged, changed and untracked sections.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct LineCounts {
+    pub staged: std::collections::BTreeMap<String, [u32; 2]>,
+    pub changed: std::collections::BTreeMap<String, [u32; 2]>,
+    pub untracked: std::collections::BTreeMap<String, [u32; 2]>,
+}
+
+/// `git diff --numstat -M -z` output by path; a rename is keyed by its new path and a binary
+/// file ("-" for both counts) is left out.
+fn numstat(text: &str) -> std::collections::BTreeMap<String, [u32; 2]> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut f = text.split('\0');
+    while let Some(head) = f.next() {
+        let mut p = head.splitn(3, '\t');
+        let (Some(a), Some(r), Some(path)) = (p.next(), p.next(), p.next()) else { continue };
+        // A rename leaves the path empty and gives the old and new paths as the next two fields.
+        let path = if path.is_empty() { f.nth(1).unwrap_or_default() } else { path };
+        if let (Ok(a), Ok(r)) = (a.parse(), r.parse()) {
+            out.insert(path.to_string(), [a, r]);
+        }
+    }
+    out
+}
+
+/// An untracked file's lines, the last one counted without its newline; None for a binary file
+/// (a NUL byte) or one over a megabyte.
+fn file_lines(path: &Path) -> Option<u32> {
+    if std::fs::metadata(path).ok()?.len() > 1_000_000 {
+        return None;
+    }
+    let b = std::fs::read(path).ok()?;
+    if b.contains(&0) {
+        return None;
+    }
+    Some(b.iter().filter(|&&c| c == b'\n').count() as u32 + u32::from(b.last().is_some_and(|&c| c != b'\n')))
 }
 
 /// What a commit attempt came to: `id` is the new commit when it worked; otherwise `output` is
@@ -69,6 +109,10 @@ pub fn status(worktree: &Path) -> Result<Status, String> {
     }
     st.base = Git::detect().ok().and_then(|g| g.default_branch(worktree));
     st.operation = operation(worktree);
+    st.lines.staged = run(&["diff", "--cached", "--numstat", "-M", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    st.lines.changed = run(&["diff", "--numstat", "-z"], Some(worktree)).map(|t| numstat(&t)).unwrap_or_default();
+    // ponytail: the first 2 000 untracked files are counted; a folder of thousands shows the rest bare.
+    st.lines.untracked = st.untracked.iter().take(2_000).filter_map(|c| Some((c.path.clone(), [file_lines(&worktree.join(&c.path))?, 0]))).collect();
     st.resolved = st
         .conflicts
         .iter()
@@ -1829,6 +1873,26 @@ mod tests {
         run(&["add", "."], Some(&dir)).unwrap();
         run(&["commit", "-q", "-m", "first"], Some(&dir)).unwrap();
         dir
+    }
+
+    #[test]
+    fn git001_each_change_carries_its_added_and_removed_lines_and_a_binary_file_none() {
+        let dir = temp_repo("lines");
+        commit_file(&dir, "a.txt", "one\ntwo\nthree\n");
+        commit_file(&dir, "old name.txt", "keep\nthis\n");
+        fs::write(dir.join("a.txt"), "one\n2\nthree\nfour\n").unwrap();
+        fs::write(dir.join("b.txt"), "x\n").unwrap();
+        run(&["add", "b.txt"], Some(&dir)).unwrap();
+        run(&["mv", "old name.txt", "new ü.txt"], Some(&dir)).unwrap();
+        fs::write(dir.join("new.txt"), "1\n2\n3").unwrap();
+        fs::write(dir.join("pic.bin"), [0u8, 1, 2, 10, 0]).unwrap();
+        let st = status(&dir).unwrap();
+        assert_eq!(st.lines.changed.get("a.txt"), Some(&[2, 1]));
+        assert_eq!(st.lines.staged.get("b.txt"), Some(&[1, 0]));
+        assert_eq!(st.lines.staged.get("new ü.txt"), Some(&[0, 0]), "a rename counts at its new path");
+        assert_eq!(st.lines.untracked.get("new.txt"), Some(&[3, 0]), "the last line counts without its newline");
+        assert_eq!(st.lines.untracked.get("pic.bin"), None, "a binary file carries no counts");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     fn paths(list: &[Change]) -> Vec<&str> {

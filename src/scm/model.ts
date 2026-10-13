@@ -22,6 +22,8 @@ export type Status = {
   operation: string | null;
   /** GIT-015: conflicted files with their clash markers gone, waiting to be staged. */
   resolved: string[];
+  /** GIT-001: `[added, removed]` by path per section; a binary file has no entry. */
+  lines?: { staged: Record<string, [number, number]>; changed: Record<string, [number, number]>; untracked: Record<string, [number, number]> };
 };
 
 /** GIT-065: whether a workspace's commits are on its remote (`scm_pushed`). */
@@ -265,6 +267,8 @@ export const capped = <T>(rows: T[], cap: number): { shown: T[]; more: number } 
 
 /** GIT-066: the settings key of the order the Source Control groups are listed in. */
 export const SCM_GROUP_ORDER_KEY = "scmGroupOrder";
+/** GIT-001: the panel shows a flat list ("list", the default) or a folder tree ("tree"). */
+export const SCM_VIEW_KEY = "scmView";
 export type ScmGroup = "conflicts" | "staged" | "changes" | "untracked";
 /** GIT-066: the orders on offer, `[id, label, groups]`; conflicts lead in each, since they block a commit. */
 export const SCM_GROUP_ORDERS: [string, string, ScmGroup[]][] = [
@@ -449,3 +453,50 @@ export function budgetLine(b: Budget, nowSec: number): string {
 
 /** Under a tenth left. */
 export const budgetLow = (b: Budget): boolean => b.remaining * 10 < b.limit;
+
+/** GIT-001: one row of the tree view: a folder (with every file beneath it) or a file. */
+export type TreeItem = { kind: "dir"; path: string; name: string; depth: number; files: string[] } | { kind: "file"; change: Change; name: string; depth: number };
+
+/** GIT-001: a section's files as a folder tree, folders before files, each level by name; the
+ *  folders in `closed` keep their row but hide what is beneath them. */
+export function fileTree(rows: Change[], closed: Set<string>): TreeItem[] {
+  type Node = { dirs: Map<string, Node>; files: Change[] };
+  const root: Node = { dirs: new Map(), files: [] };
+  for (const r of rows) {
+    const parts = r.path.split("/");
+    let at = root;
+    for (const d of parts.slice(0, -1)) {
+      if (!at.dirs.has(d)) at.dirs.set(d, { dirs: new Map(), files: [] });
+      at = at.dirs.get(d)!;
+    }
+    at.files.push(r);
+  }
+  const byName = (a: string, b: string) => a.localeCompare(b);
+  const all = (n: Node): string[] => [...n.files.map((f) => f.path), ...[...n.dirs.values()].flatMap(all)].sort(byName);
+  const out: TreeItem[] = [];
+  const walk = (n: Node, prefix: string, depth: number) => {
+    for (const name of [...n.dirs.keys()].sort(byName)) {
+      const sub = n.dirs.get(name)!;
+      const path = prefix + name;
+      out.push({ kind: "dir", path, name, depth, files: all(sub) });
+      if (!closed.has(path)) walk(sub, path + "/", depth + 1);
+    }
+    for (const f of [...n.files].sort((a, b) => byName(a.path, b.path))) out.push({ kind: "file", change: f, name: f.path.slice(prefix.length), depth });
+  };
+  walk(root, "", 0);
+  return out;
+}
+
+/** GIT-016: the most files each list in the review prompt names before it counts the rest. */
+export const REVIEW_CAP = 50;
+/** GIT-016: the prompt for Review changes: the base, the files the branch changed (`total` may be
+ *  more than `committed` holds) and the uncommitted ones; null when there is nothing to look at. */
+export function reviewPrompt(base: string, committed: Change[], total: number, uncommitted: string[]): string | null {
+  if (total === 0 && uncommitted.length === 0) return null;
+  const list = (paths: string[], all: number) => [...paths.slice(0, REVIEW_CAP).map((p) => `- ${p}`), ...(all > Math.min(paths.length, REVIEW_CAP) ? [`- and ${all - Math.min(paths.length, REVIEW_CAP)} more`] : [])].join("\n");
+  const parts = [`Review the work on this branch before it ships. It will merge into ${base}.`];
+  if (total > 0) parts.push(`Files this branch changed since ${base} (${total}):\n${list(committed.map((c) => c.path), total)}`);
+  if (uncommitted.length > 0) parts.push(`Files with changes not committed yet (${uncommitted.length}):\n${list(uncommitted, uncommitted.length)}`);
+  parts.push("Look for bugs, missing tests and anything that does not fit the rest of the code. Report what you find, most serious first, before changing anything.");
+  return parts.join("\n\n");
+}

@@ -1182,3 +1182,10 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .plan-sheet-foot { padding: 10px 14px; border-top: 1px solid var(--line); }
 .plan-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .plan-review-btn { height: 20px; padding: 0 8px; font-size: 11.5px; }
+/* GIT-001: each file's lines added and removed, and the tree view's folder rows. */
+.scm-lines { display: flex; gap: 4px; flex: none; font: 11px var(--mono-font); }
+.scm-lines .add { color: #73c991; }
+.scm-lines .del { color: #f14c4c; }
+.scm-dir .chev { display: inline-flex; flex: none; width: 10px; color: var(--fg-muted); }
+.scm-dir .chev.shut { transform: rotate(-90deg); }
+.scm-dir .count { flex: none; font-size: 11px; color: var(--fg-muted); }
