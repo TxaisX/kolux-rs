@@ -1,0 +1,66 @@
+T-152-b · STAT-005 [compat] council D2 fix-before items for the first real install - text proof, 2026-10-13
+Lane hooks (G:\Dev\kolux-rs-lanes\hooks, lane/hooks). Council input: the D2 review of MERGE 23.
+
+===================================================================================================
+Item 1 (FIX-BEFORE 1): real-shape on/off proof on a copy of the CURRENT settings file
+===================================================================================================
+Input: the coordinator's fresh read-only copy G:\Temp\hooks-proof\settings-copy-2b0a181d.json
+(one hook event PreToolUse holding a memory-guard hook, a statusLine chaining an older status script,
+40 skillOverrides). The T-152 proof ran on the pre-strip copy c0aa884f / 13066 B; this one runs on
+the file he will run with. His real settings file was never opened, hashed or named by the run.
+Only hashes, byte counts, key names and group counts are pasted (never the file's text).
+Method: G:\Temp\hooks-t152b\proof.sh (debug kolux-dev.exe built from this lane at 8cae168;
+`kolux-dev agent hooks on` then `off`, the same sync()/clear() the app's switch runs), with
+CLAUDE_CONFIG_DIR, CODEX_HOME, USERPROFILE and KOLUX_APP_DIR all scratch under G:\Temp\hooks-t152b;
+counts by count.js (node). Codex home seeded with {"hooks":{}} (12 bytes).
+
+  input copy: /g/Temp/hooks-proof/settings-copy-2b0a181d.json
+  input sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+  input bytes 10077
+  recorded sha (coordinator's .sha256 file): 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+  env: CLAUDE_CONFIG_DIR=G:\Temp\hooks-t152b\claude-config CODEX_HOME=G:\Temp\hooks-t152b\codex USERPROFILE=G:\Temp\hooks-t152b\home KOLUX_APP_DIR=G:\Temp\hooks-t152b\profile
+  codex/hooks.json before: 373f2641a0d8fe47c1802afbf8e88e7f2da218e9befd552a7cf52822754b1d45 bytes 12
+  --- before on
+    G:/Temp/hooks-t152b/claude-config/settings.json: sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e bytes 10077 top-level keys 13 events 1 (PreToolUse) groups 1 hook commands 1 .kolux-rs entries 0 skillOverrides 40 statusLine is Kolux's false
+  --- kolux-dev agent hooks on (stderr)
+    exit 0
+    kolux-rs: claude hooks: kept a copy before the first write: sha256 original 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e, backup 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+    kolux-rs: claude hooks: installed
+    kolux-rs: codex hooks: not written (Codex hooks wait for T-025-e)
+    changed: {"requestId":"1f80-18de3135a74163ec","success":true,"result":{"on":true,"agents":[{"agent":"claude","name":"Claude Code","state":"installed","file":"G:\\Temp\\hooks-t152b\\claude-config\\settings.json","reason":null},{"agent":"codex","name":"Codex","state":"not installed","file":"G:\\Temp\\hooks-t152b\\codex\\hooks.json","reason":null}],"changed":[{"agent":"claude","done":"installed","error":null},{"agent":"codex","done":"not written (Codex hooks wait for T-025-e)","error":null}]},"meta":{"runtimeId":""}}
+  --- after on
+    G:/Temp/hooks-t152b/claude-config/settings.json: sha256 3ff376852f36f15893c45763d33438d3305e5afff9b6b7024b1cd1b714c0a742 bytes 10557 top-level keys 13 events 12 (PreToolUse,SessionStart,UserPromptSubmit,Stop,StopFailure,SubagentStart,SubagentStop,TeammateIdle,PostToolUse,PostToolUseFailure,PermissionRequest,PostCompact) groups 13 hook commands 13 .kolux-rs entries 12 skillOverrides 40 statusLine is Kolux's true
+    pre-existing hook groups still in place, unchanged: 1 of 1 (events: PreToolUse)
+    other top-level keys unchanged: 11 of 11
+    parsed-equal once Kolux entries and statusLine are set aside: true
+    statusLine slot equal to the copy's: false
+    settings.json.bak-kolux sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+    record /g/Temp/hooks-t152b/home/.kolux-rs/agent-hooks/claude-settings.sha256:
+      2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+      2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e
+    claude-status-prev.json equals the copy statusLine slot: true
+    claude-status-prev.sh equals its command: true
+  --- kolux-dev agent hooks off (stderr)
+    exit 0
+    changed: {"requestId":"9da4-18de3135fed95920","success":true,"result":{"on":false,"agents":[{"agent":"claude","name":"Claude Code","state":"not installed","file":"G:\\Temp\\hooks-t152b\\claude-config\\settings.json","reason":null},{"agent":"codex","name":"Codex","state":"not installed","file":"G:\\Temp\\hooks-t152b\\codex\\hooks.json","reason":null}],"changed":[{"agent":"claude","done":"removed","error":null},{"agent":"codex","done":"removed","error":null}]},"meta":{"runtimeId":""}}
+  --- after off
+    2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e */g/Temp/hooks-proof/settings-copy-2b0a181d.json
+    2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e */g/Temp/hooks-t152b/claude-config/settings.json
+    2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e */g/Temp/hooks-t152b/claude-config/settings.json.bak-kolux
+    cmp: post-off file byte-identical to the copy
+    off-state sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e bytes 10077
+    G:/Temp/hooks-t152b/claude-config/settings.json: sha256 2b0a181dec2bdad69f2ac45d2d431a5f8adfce71a9a617f133d34397d9b9d07e bytes 10077 top-level keys 13 events 1 (PreToolUse) groups 1 hook commands 1 .kolux-rs entries 0 skillOverrides 40 statusLine is Kolux's false
+    pre-existing hook groups still in place, unchanged: 1 of 1 (events: PreToolUse)
+    other top-level keys unchanged: 11 of 11
+    parsed-equal once Kolux entries and statusLine are set aside: true
+    statusLine slot equal to the copy's: true
+    claude-settings.sha256 record present: 2 lines
+    prev files left: 0
+    codex/hooks.json after: 373f2641a0d8fe47c1802afbf8e88e7f2da218e9befd552a7cf52822754b1d45 bytes 12 text {"hooks":{}}
+    claude-config: settings.json
+    claude-config: settings.json.bak-kolux
+
+Result: on adds Kolux's 12 groups under 12 events and displaces the statusLine (prev .json and .sh saved
+first); the PreToolUse memory-guard group and the other 11 top-level keys are unchanged; off gives
+back sha256 2b0a181d... / 10077 bytes, equal to the copy, the coordinator's recorded sha and the .bak-kolux copy;
+the record keeps both hashes; codex/hooks.json stays {"hooks":{}} byte for byte.
