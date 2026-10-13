@@ -192,7 +192,7 @@ pub struct Sides {
 }
 
 #[tauri::command]
-pub fn diff_sides(path: String, staged: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Sides, String> {
+pub async fn diff_sides(path: String, staged: bool, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Sides, String> {
     let (original, modified) = git.diff_sides(&fence.allow(&path, &store, &git, false)?, staged)?;
     Ok(Sides { original, modified })
 }
@@ -205,7 +205,7 @@ pub fn git_changes(root: String, fence: tauri::State<'_, crate::fence::Fence>, s
 
 /// Every change of the worktree for All Changes (EDIT-029); see Git::change_entries.
 #[tauri::command]
-pub fn change_entries(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Entry>, String> {
+pub async fn change_entries(root: String, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<Vec<crate::git::Entry>, String> {
     git.change_entries(&fence.allow(&root, &store, &git, false)?)
 }
 

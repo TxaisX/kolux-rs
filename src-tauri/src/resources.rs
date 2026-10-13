@@ -98,7 +98,7 @@ pub fn total(procs: &[Proc], owner: &HashMap<u32, Option<u32>>, before: &HashMap
 }
 
 #[tauri::command]
-pub fn resources(terminals: tauri::State<'_, crate::terminal::Terminals>, sampler: tauri::State<'_, Sampler>) -> Resources {
+pub async fn resources(terminals: tauri::State<'_, crate::terminal::Terminals>, sampler: tauri::State<'_, Sampler>) -> Result<Resources, String> {
     let sessions = terminals.list();
     let roots: Vec<(u32, u32)> = sessions.iter().filter_map(|(id, pid, _)| Some((*id, (*pid)?))).collect();
     let app_pid = std::process::id();
@@ -118,7 +118,7 @@ pub fn resources(terminals: tauri::State<'_, crate::terminal::Terminals>, sample
     *last = Some((now, procs.iter().filter(|p| owner.contains_key(&p.pid)).map(|p| (p.pid, p.cpu)).collect()));
     let (free, total) = imp::memory();
     let sessions = sessions.into_iter().map(|(id, _, dir)| SessionUsage { id, dir, usage: each.remove(&id).unwrap_or_default() }).collect();
-    Resources { app, sessions, free, total }
+    Ok(Resources { app, sessions, free, total })
 }
 
 #[cfg(windows)]

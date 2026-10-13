@@ -237,8 +237,14 @@ pub fn note_seen(store: &Store, project: &Project, path: &str) -> Result<(), Str
 /// made again later counts as new.
 /// ponytail: the sidebar polls this every 5 s instead of watching folders (DT-O2); a watcher can feed
 /// the same call if 5 s ever feels slow.
+#[cfg(test)]
 pub fn unseen(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktree>, String> {
-    let list = list_workspaces(git, store, project)?;
+    unseen_of(store, project, git.worktrees(Path::new(&project.path))?)
+}
+
+/// `unseen` over a worktree list already scanned, so the scan can run without the store (T-442).
+pub fn unseen_of(store: &Store, project: &Project, all: Vec<Worktree>) -> Result<Vec<Worktree>, String> {
+    let list = decorate(store, project, all)?;
     let keys: Vec<String> = list.iter().map(|w| name_key(&w.path)).collect();
     let Some(seen) = seen_of(store, project) else {
         save_seen(store, project, &keys)?;
@@ -252,6 +258,7 @@ pub fn unseen(git: &Git, store: &Store, project: &Project) -> Result<Vec<Worktre
 }
 
 /// The review is closed: everything listed now counts as seen.
+#[cfg(test)]
 pub fn mark_all_seen(git: &Git, store: &Store, project: &Project) -> Result<(), String> {
     let keys: Vec<String> = git.worktrees(Path::new(&project.path))?.iter().map(|w| name_key(&w.path)).collect();
     save_seen(store, project, &keys)
@@ -868,17 +875,26 @@ pub fn project_add(git: State<'_, Git>, store: StoreState<'_>, path: String) -> 
 
 /// PROJ-041: the new worktrees made outside Kolux, for the sidebar's count line.
 #[tauri::command]
-pub fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    unseen(&git, &store, &project)
+pub async fn workspace_unseen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    unseen_of(&*store.lock().map_err(|e| e.to_string())?, &project, all)
 }
 
 #[tauri::command]
-pub fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<(), String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    mark_all_seen(&git, &store, &project)
+pub async fn workspace_seen(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<(), String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    let keys: Vec<String> = all.iter().map(|w| name_key(&w.path)).collect();
+    save_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &keys)
+}
+
+/// T-442 (TERM-115): a project's worktrees as Git lists them, with the store let go while git runs,
+/// so a terminal printing a pull request link never waits on it. The commands that call this are
+/// async, so they run off the window's thread and typing never queues behind a slow git.
+/// ponytail: git still blocks one async worker while it runs; spawn_blocking if workers ever starve.
+fn scan(git: &Git, store: &Mutex<Store>, project_id: &str) -> Result<(Project, Vec<Worktree>), String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, project_id)?;
+    let all = git.worktrees(Path::new(&project.path))?;
+    Ok((project, all))
 }
 
 /// SET-032 / PROJ-042: the visibility sources, with the global choice and `project_id`'s own.
@@ -912,10 +928,9 @@ pub fn workspace_hide(store: StoreState<'_>, path: String, hidden: bool) -> Resu
 }
 
 #[tauri::command]
-pub fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    let project = find_project(&store, &project_id)?;
-    list_workspaces(&git, &store, &project)
+pub async fn workspace_list(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<Worktree>, String> {
+    let (project, all) = scan(&git, &store, &project_id)?;
+    decorate(&*store.lock().map_err(|e| e.to_string())?, &project, all)
 }
 
 /// What a typed name becomes (PROJ-021 / PROJ-025): the branch, and the folder it would get in
