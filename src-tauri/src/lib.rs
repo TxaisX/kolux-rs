@@ -117,6 +117,10 @@ pub fn run() {
             }
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
+            // PROJ-074: what deleted workspaces left in their trash folders is cleared in the background.
+            let trash = projects::trash_to_sweep(&store);
+            let started = git::stamp_now();
+            std::thread::spawn(move || trash.iter().for_each(|t| git::sweep_trash(t, started)));
             app.manage(Mutex::new(store));
             // SET-004: the window starts hidden and the page shows it once its first frame has the saved
             // look; this is the backstop for a page that never gets that far.

@@ -16,6 +16,72 @@ pub const LIST_LIMIT: Duration = Duration::from_secs(30);
 /// PROJ-027 (COMPAT): lengthens the worktree-add limit, in milliseconds.
 pub const ADD_LIMIT_ENV: &str = "KOLUX_WORKTREE_ADD_TIMEOUT_MS";
 
+/// PROJ-074: the hidden folder beside a workspace that the workspace is moved into when deleted.
+pub fn trash_dir(dest: &Path) -> Option<PathBuf> {
+    dest.parent().map(|p| p.join(".kolux-trash"))
+}
+
+/// PROJ-074: nanoseconds since 1970; a trash entry's name ends with the one it was moved at.
+pub fn stamp_now() -> u128 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+}
+
+/// PROJ-074: moves `dest` into the trash beside it and gives its new place; None when it will not
+/// move (Windows may hold a folder a moment after a program in it ended), and the caller then
+/// deletes it where it is.
+fn to_trash(dest: &Path) -> Option<PathBuf> {
+    let trash = trash_dir(dest)?;
+    std::fs::create_dir_all(&trash).ok()?;
+    hide(&trash);
+    let to = trash.join(format!("{}-{}", dest.file_name()?.to_string_lossy(), stamp_now()));
+    for attempt in 0..6 {
+        // another removal's background pass may just have deleted the emptied trash folder
+        let _ = std::fs::create_dir_all(&trash);
+        match std::fs::rename(dest, &to) {
+            Ok(()) => return Some(to),
+            Err(_) if attempt < 5 => std::thread::sleep(Duration::from_millis(250)),
+            Err(_) => {}
+        }
+    }
+    let _ = std::fs::remove_dir(&trash);
+    None
+}
+
+#[cfg(windows)]
+fn hide(dir: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, INVALID_FILE_ATTRIBUTES};
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives both calls.
+    unsafe {
+        let now = GetFileAttributesW(wide.as_ptr());
+        if now != INVALID_FILE_ATTRIBUTES {
+            SetFileAttributesW(wide.as_ptr(), now | FILE_ATTRIBUTE_HIDDEN);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn hide(_dir: &Path) {}
+
+/// PROJ-074: deletes what an earlier run left in a trash folder, whatever it is named, then the
+/// folder itself once empty. An entry moved there at or after `started` belongs to a removal
+/// running now and is left to it; anything that will not delete waits for the next sweep.
+pub fn sweep_trash(trash: &Path, started: u128) {
+    if let Ok(entries) = std::fs::read_dir(trash) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let moved = name.rsplit('-').next().and_then(|n| n.parse::<u128>().ok());
+            if moved.is_some_and(|m| m >= started) {
+                continue;
+            }
+            let p = e.path();
+            let _ = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+        }
+    }
+    let _ = std::fs::remove_dir(trash);
+}
+
 /// PROJ-027: three minutes, or the variable's value held between three and thirty minutes.
 pub fn add_limit_of(value: Option<&str>) -> Duration {
     let (least, most) = (180_000, 1_800_000);
@@ -326,6 +392,21 @@ impl Git {
     /// commit it points at, for `delete_branch_if_at` later.
     pub fn worktree_remove(&self, repo: &Path, dest: &Path, branch: Option<&str>) -> Result<Option<String>, String> {
         let dest_s = dest.to_string_lossy();
+        // PROJ-074: the folder first moves into the hidden trash beside it, so the removal is done
+        // at once; Git, finding it gone, only drops its records, and the files go in the background.
+        let trashed = if dest.exists() { to_trash(dest) } else { None };
+        let put_back = |e: String| match &trashed {
+            Some(t) => match std::fs::rename(t, dest) {
+                Ok(()) => {
+                    if let Some(trash) = t.parent() {
+                        let _ = std::fs::remove_dir(trash);
+                    }
+                    e
+                }
+                Err(f) => format!("{e}; moving the folder back from {} failed too: {f}", t.display()),
+            },
+            None => e,
+        };
         // Windows may still hold the folder for a moment after a program in it was ended.
         let mut attempt = 0;
         loop {
@@ -342,8 +423,16 @@ impl Git {
                     attempt += 1;
                     std::fs::remove_dir_all(dest).map_err(|f| format!("{e}; deleting the folder directly failed too: {f}"))?;
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(put_back(e)),
             }
+        }
+        if let Some(t) = trashed {
+            std::thread::spawn(move || {
+                let _ = std::fs::remove_dir_all(&t);
+                if let Some(trash) = t.parent() {
+                    let _ = std::fs::remove_dir(trash);
+                }
+            });
         }
         // Git leaves the folder when something it does not track is still inside; this is a forced
         // delete of a workspace Kolux made, so what is left goes too.
@@ -730,6 +819,55 @@ mod tests {
         assert_eq!(git.worktrees(&repo).unwrap().len(), 1);
 
         fs::remove_dir_all(dest.parent().unwrap()).unwrap();
+        fs::remove_dir_all(&repo).unwrap();
+    }
+
+    #[test]
+    fn proj074_a_deleted_workspace_goes_to_the_hidden_trash_and_is_cleared_in_the_background() {
+        let git = Git::detect().unwrap();
+        let repo = temp_repo("trash");
+        let root = std::env::temp_dir().join(format!("kolux-rs-git-trash-ws-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dest = root.join("big");
+        git.worktree_add(&repo, &dest, "big", "HEAD").unwrap();
+        fs::write(dest.join("built.bin"), vec![0u8; 1 << 20]).unwrap();
+        let trash = trash_dir(&dest).unwrap();
+        assert_eq!(trash, root.join(".kolux-trash"));
+        // the folder leaves its place at once and Git forgets it; the trash empties shortly after
+        assert_eq!(git.worktree_remove(&repo, &dest, Some("big")).unwrap(), None);
+        assert!(!dest.exists());
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 1);
+        assert!(!git.branch_taken(&repo, "big"));
+        let until = Instant::now() + Duration::from_secs(10);
+        while trash.exists() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!trash.exists(), "the background pass clears the trash and then the trash folder itself");
+        // a removal Git refuses (a locked worktree) puts the folder back where Git expects it
+        git.worktree_add(&repo, &dest, "kept", "HEAD").unwrap();
+        fs::write(dest.join("work.txt"), "mine").unwrap();
+        run(&["worktree", "lock", &dest.to_string_lossy()], Some(&repo)).unwrap();
+        assert!(git.worktree_remove(&repo, &dest, Some("kept")).is_err());
+        assert_eq!(fs::read_to_string(dest.join("work.txt")).unwrap(), "mine");
+        assert!(git.worktrees(&repo).unwrap().iter().any(|w| PathBuf::from(&w.path).canonicalize().ok() == dest.canonicalize().ok()));
+        assert!(!trash.exists(), "an empty trash folder is not left behind");
+        run(&["worktree", "unlock", &dest.to_string_lossy()], Some(&repo)).unwrap();
+        // the sweep clears what an earlier run left, whatever its name, and only inside the trash;
+        // what a removal running now has just moved there waits for that removal
+        let started = stamp_now();
+        fs::create_dir_all(trash.join("left-from-before")).unwrap();
+        fs::write(trash.join("left-from-before").join("f"), "x").unwrap();
+        fs::create_dir_all(trash.join(format!("old-{}", started - 1))).unwrap();
+        let fresh = trash.join(format!("new-{}", started + 1_000_000_000));
+        fs::create_dir_all(&fresh).unwrap();
+        fs::write(root.join("beside.txt"), "x").unwrap();
+        sweep_trash(&trash, started);
+        assert!(!trash.join("left-from-before").exists() && !trash.join(format!("old-{}", started - 1)).exists());
+        assert!(fresh.exists() && root.join("beside.txt").exists() && dest.join("work.txt").exists());
+        sweep_trash(&trash, u128::MAX);
+        assert!(!trash.exists());
+        git.worktree_remove(&repo, &dest, Some("kept")).unwrap();
+        let _ = fs::remove_dir_all(&root);
         fs::remove_dir_all(&repo).unwrap();
     }
 

@@ -1,0 +1,25 @@
+T-162-b live proof (PROJ-074 Deleted folders go to a hidden trash and are cleared in the background), lane release
+dev app (port 1422), window moved to the second screen by pid; lane profile backed up and restored (cmp: settings.json,
+state.db, -wal, -shm all same). Test repo G:/Temp/release-T-162b/big (main at 387e17a, .gitignore has build/), added
+with project_add; workspaces under C:/Users/XiongT/kolux-rs/workspaces/big/.
+
+Run 1, through the window: workspace big-build with 2 GB of ignored build output (400 files, 2097152000 bytes)
+   - selected its row (a shell opened there), Ctrl+Shift+Backspace, Remove -> "Terminal 2 is still running ..." -> Force delete
+   - the row was gone 1767 ms after the Force delete click (this includes ending the shell)
+   - checked right after: big/ holds nothing and no .kolux-trash is left; the background pass had already cleared it
+   - git worktree list: main only
+
+Run 2, the command itself, then the app stopped mid-clear: workspace big-two with 2 GB in 20500 files (2099200000 bytes)
+   - workspace_remove answered in 419 ms
+   - right after: big/ holds only .kolux-trash (attributes: Hidden, Directory, Compressed), inside it
+     big-two-1791868284083561900 (the folder name plus when it moved)
+   - the dev app was stopped at once: 14351 files were still in the trash; git worktree list: main only
+   - free space on C: before the restart 84348968960 bytes
+   - restarted the app: the trash folder and every file in it were gone by the time the window answered; big/ empty;
+     free space 86526803968 bytes (other lanes were building at the same time, so the figure is only indicative)
+   - the sidebar after the restart shows big with only main (T-162-b-after-restart.png)
+
+Unit tests (cargo test proj074): the folder leaves its place at once and Git forgets it; the trash empties and then
+goes; a removal Git refuses (a locked worktree) moves the folder back with its files; the sweep clears what an earlier
+run left whatever its name, keeps what a removal running now just moved there, and touches nothing beside the trash;
+a trash folder still clearing is remembered and swept at the next start, then dropped from the list.

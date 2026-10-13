@@ -130,7 +130,27 @@ pub fn set_parent(store: &Store, path: &str, parent: Option<&str>) -> Result<(),
 
 /// Drops what Kolux remembers about a removed workspace, so a later one in the same folder starts
 /// clean: its typed name, its parent and its origin.
+/// PROJ-074: the trash folders a deleted workspace may still be clearing from, swept at the next start.
+const TRASH_KEY: &str = "workspaceTrash";
+
+/// PROJ-074: the trash folders to sweep at start; the ones gone since are dropped from the list.
+pub fn trash_to_sweep(store: &Store) -> Vec<std::path::PathBuf> {
+    let mut all = load_map(store, TRASH_KEY);
+    let before = all.len();
+    all.retain(|k, _| Path::new(k).exists());
+    if all.len() != before {
+        let _ = store.set(TRASH_KEY, &serde_json::Value::Object(all.clone()).to_string());
+    }
+    all.keys().map(std::path::PathBuf::from).collect()
+}
+
 pub fn forget_workspace(store: &Store, path: &str) -> Result<(), String> {
+    // PROJ-074: a trash folder still clearing in the background is swept again at the next start.
+    if let Some(trash) = crate::git::trash_dir(Path::new(path)).filter(|t| t.exists()) {
+        let mut all = load_map(store, TRASH_KEY);
+        all.insert(trash.to_string_lossy().to_string(), serde_json::Value::Bool(true));
+        store.set(TRASH_KEY, &serde_json::Value::Object(all).to_string()).map_err(|e| e.to_string())?;
+    }
     // PROJ-068: Git can give a later worktree the same Git folder; it must not inherit this one's records.
     let mut admins = load_map(store, ADMIN_KEY);
     let before = admins.len();
@@ -1359,6 +1379,26 @@ mod tests {
         for s in [".env.example", ".env.sample", "README.md", "src/tokens.ts", "id_rsa.pub", "package.json", "secret-santa.md"] {
             assert!(!looks_secret(s), "{s}");
         }
+    }
+
+    #[test]
+    fn proj074_a_trash_folder_still_clearing_is_swept_at_the_next_start() {
+        let profile = temp("trash-profile");
+        let store = Store::open(&profile).unwrap();
+        let root = temp("trash-root");
+        let ws = root.join("ws");
+        fs::create_dir_all(root.join(".kolux-trash").join("ws-1")).unwrap();
+        forget_workspace(&store, &ws.to_string_lossy()).unwrap();
+        assert_eq!(trash_to_sweep(&store), [root.join(".kolux-trash")]);
+        crate::git::sweep_trash(&root.join(".kolux-trash"), crate::git::stamp_now());
+        assert!(!root.join(".kolux-trash").exists());
+        assert!(trash_to_sweep(&store).is_empty(), "a swept trash folder leaves the list");
+        // no trash folder beside it: nothing to remember
+        forget_workspace(&store, &root.join("other").to_string_lossy()).unwrap();
+        assert!(load_map(&store, TRASH_KEY).is_empty());
+        drop(store);
+        let _ = fs::remove_dir_all(profile);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
