@@ -3,9 +3,9 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-013-c · The two rules of the create-workspace card that T-013 left out (a creation overtaken by a newer one is cancelled and its half-made checkout removed; a stand-in tab while Git works)
-Done: 251 / 513 tasks  ·  P0 parity: 0/228 cards
+Done: 253 / 515 tasks  ·  P0 parity: 0/228 cards
 
-How to read this: `PLAN.md` holds the 513 tasks in build order; each names the spec cards it must
+How to read this: `PLAN.md` holds the 515 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
 `node scripts/plan-check.mjs` proves the plan still covers every card exactly once.
 
