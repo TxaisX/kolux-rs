@@ -26,6 +26,7 @@ import { afterScan, prefixSample, type PrefixCheck, matchLetters, middle, nestRo
 import { ArrowRight, Bell, ChevronDown, Clock, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
+import Cleanup from "./Cleanup";
 import { openKits } from "../kits/Kits";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
@@ -167,6 +168,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [confirm, setConfirm] = useState<{ projectId: string; path: string; branch: string; check: RemoveCheck; force: boolean; refusal?: string; running?: boolean; endTerminals?: boolean } | null>(null);
   const [busy, setBusy] = useState("");
   const [startGit, setStartGit] = useState<{ folder: string; files: FirstFile[] } | null>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   // PROJ-073: a note can carry one action, such as deleting the branch a removal kept.
   const [message, setMessage] = useState<{ kind: "ok" | "warn" | "error"; text: string; detail?: string | null; action?: { label: string; run: () => void } } | null>(null);
   const [gitVersion, setGitVersion] = useState("");
@@ -1116,6 +1118,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
                 <option value="smart">Smart: what needs you first</option>
                 <option value="name">Name</option>
               </select>
+              <button className="btn" onClick={() => setCleanupOpen(true)}>
+                Clean up workspaces…
+              </button>
             </div>
           )}
           {creating === "" && nameField(null)}
@@ -1316,6 +1321,7 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
           </button>
         </div>
       </aside>
+      {cleanupOpen && <Cleanup projects={projects} onClose={() => setCleanupOpen(false)} />}
       {startGit && <StartGit {...startGit} busy={busy !== ""} onStart={startGitAndAdd} onCancel={() => setStartGit(null)} />}
     </div>
   );

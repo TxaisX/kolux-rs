@@ -1,0 +1,27 @@
+T-162-c live proof (PROJ-080 Workspace cleanup: scan for stale and merged workspaces), lane release dev app (port
+1422), window moved to the second screen by pid; lane profile backed up and restored (cmp: settings.json, state.db,
+-wal, -shm all same). Test repo G:/Temp/release-T-162c/cl added with project_add, four workspaces made with
+workspace_create: quiet-one, quiet-two, quiet-three (each one commit dated 30 days back, clean) and busy (a commit
+just now plus an untracked wip.txt). The lane profile also has its two stale "repo" projects whose folder is gone.
+
+1. Open cleanup with three idle, clean workspaces -> all three are preselected
+   Group and sort the list -> Clean up workspaces...
+   [x] quiet-one    clean · last commit 30 days ago · has commits of its own
+   [x] quiet-three  clean · last commit 30 days ago · has commits of its own
+   [x] quiet-two    clean · last commit 30 days ago · has commits of its own
+   busy is not listed (recent work); "3 selected"   (T-162-c-preselected.png)
+   Each stale repo project shows "Could not scan repo: could not run git: The directory name is invalid.
+   (os error 267)" in its own place while cl is listed: one repository failing does not hold up the others.
+
+2. Open cleanup twice in quick succession -> only one scan runs
+   (a page-side counter on the IPC requests for workspace_cleanup_scan)
+   open, Close after 50 ms, open again after 50 ms -> 3 requests in all, one per project (3 projects), so one scan;
+   20 ms after the second open the dialog said "Scanning 0 of 3 repositories... The list below is from the last scan."
+   with the last scan's 3 rows already on screen; when the scan ended the progress line gave way to the explanation.
+
+3. Choices are kept: ticked Show every workspace, unticked quiet-two, Close, opened again (a new scan ran):
+   Show every workspace still ticked; [ ] busy 1 change · last commit just now · has commits of its own;
+   [x] quiet-one; [x] quiet-three; [ ] quiet-two; "2 selected"   (T-162-c-every.png)
+
+Remove selected is there but marked not built yet: removing the selection is PROJ-082 (bulk remove, T-149), and the
+PROJ-073 batch review list of kept branches belongs to that batch delete.

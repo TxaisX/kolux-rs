@@ -332,7 +332,7 @@ foundations every later card stands on; the cards they touch are finished in the
 - [x] T-161-c · PROJ-068 Workspace records survive refreshes, renames and re-adds (T-161 split)
 - [x] T-162-a · PROJ-073 Branches stay when a workspace was opened on an existing branch (T-162 split)
 - [x] T-162-b · PROJ-074 Deleted folders go to a hidden trash and are cleared in the background (T-162 split)
-- [ ] T-162-c · PROJ-080 Workspace cleanup: scan for stale and merged workspaces (T-162 split; also the batch review list from T-162-a)
+- [x] T-162-c · PROJ-080 Workspace cleanup: scan for stale and merged workspaces (T-162 split)
 - [ ] T-163 · SESS-005 The user hears about an agent that will not start · SESS-032 The opening prompt reaches the agent exactly once, or the user is told
 - [ ] T-164 · TERM-047 [compat] Reopen a closed tab · TERM-071 Large pastes stay responsive · TERM-090 Scroll position: follow output or stay put · TERM-107 Restored-session banner · TERM-108 Background host updates without losing sessions
 - [ ] T-165 · TERM-109 Host crash containment · TERM-110 Terminal error messages in plain words · TERM-111 Shell exit overlay with restart · TERM-112 Hidden terminals use less memory · TERM-113 Fast startup with many saved terminals

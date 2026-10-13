@@ -13,6 +13,7 @@ use crate::state::Store;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 use tauri::State;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -949,6 +950,54 @@ pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project
     .map_err(create_failure)
 }
 
+/// PROJ-080: one workspace as the cleanup dialog lists it, with plain facts; None where a read
+/// failed or the repository ran out of time.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupRow {
+    #[serde(flatten)]
+    pub worktree: Worktree,
+    /// Uncommitted and untracked changes.
+    pub changes: Option<usize>,
+    /// When its newest commit was made, in milliseconds since 1970.
+    pub last_commit: Option<u64>,
+    /// Has no commits beyond the default branch.
+    pub merged: Option<bool>,
+}
+
+/// PROJ-080: how long one repository's details may take in all; the rows after that say unknown.
+pub const CLEANUP_BUDGET: Duration = Duration::from_secs(20);
+
+pub fn cleanup_rows(git: &Git, project: &Project, all: Vec<Worktree>, budget: Duration) -> Vec<CleanupRow> {
+    let until = Instant::now() + budget;
+    let read = |dir: &Path, args: &[&str]| {
+        let left = until.saturating_duration_since(Instant::now());
+        (!left.is_zero()).then(|| crate::git::run_within(args, Some(dir), left.min(crate::git::LIST_LIMIT)).ok()).flatten()
+    };
+    let base = git.default_branch(Path::new(&project.path));
+    all.into_iter()
+        .filter(|w| !w.is_main)
+        .map(|w| {
+            let dir = Path::new(&w.path);
+            let here = dir.exists();
+            // --no-optional-locks: the scan never takes Git's index lock from the user's own work.
+            let changes = here.then(|| read(dir, &["--no-optional-locks", "status", "--porcelain", "--ignore-submodules=none"])).flatten().map(|s| s.lines().filter(|l| !l.is_empty()).count());
+            let last_commit = here.then(|| read(dir, &["log", "-1", "--format=%ct", "HEAD"])).flatten().and_then(|s| s.trim().parse::<u64>().ok()).map(|s| s * 1000);
+            let merged = base.as_deref().filter(|b| Git::ref_ok(b) && here).and_then(|b| read(dir, &["rev-list", "--count", &format!("{b}..HEAD")])).and_then(|n| n.trim().parse::<u32>().ok()).map(|n| n == 0);
+            CleanupRow { worktree: w, changes, last_commit, merged }
+        })
+        .collect()
+}
+
+/// PROJ-080: one repository's part of a cleanup scan; the window runs one per project at once.
+#[tauri::command(async)]
+pub fn workspace_cleanup_scan(git: State<'_, Git>, store: StoreState<'_>, project_id: String) -> Result<Vec<CleanupRow>, String> {
+    let project = find_project(&*store.lock().map_err(|e| e.to_string())?, &project_id)?;
+    let all = git.worktrees(Path::new(&project.path))?;
+    let all = decorate(&*store.lock().map_err(|e| e.to_string())?, &project, all)?;
+    Ok(cleanup_rows(&git, &project, all, CLEANUP_BUDGET))
+}
+
 /// PROJ-070: what deleting a workspace would lose or run into, read when the question opens.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1516,6 +1565,44 @@ mod tests {
         assert!(same_folder(Path::new(&made.worktree.path), &workspace_path(&place, &project, "fix-login")));
         let bad = Place { prefix_warning: Some("w".into()), ..nested(&root) };
         assert_eq!(create_workspace(&git, &bad, &project, "two", None).unwrap().warnings, vec!["w".to_string()]);
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj080_cleanup_reads_plain_facts_and_a_repository_out_of_time_says_unknown() {
+        let git = Git::detect().unwrap();
+        let profile = temp("clean-p");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("clean-r");
+        let root = temp("clean-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        let old = create_workspace(&git, &place, &project, "old", None).unwrap().worktree.path;
+        fs::write(Path::new(&old).join("o.txt"), "o").unwrap();
+        git_in(Path::new(&old), &["add", "."]);
+        let month_ago = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 30 * 86400;
+        let ok = Command::new("git").args(["commit", "-q", "-m", "old work"]).env("GIT_COMMITTER_DATE", format!("{month_ago} +0000")).current_dir(&old).status().unwrap().success();
+        assert!(ok);
+        let busy = create_workspace(&git, &place, &project, "busy", None).unwrap().worktree.path;
+        fs::write(Path::new(&busy).join("new.txt"), "n").unwrap();
+        let all = git.worktrees(&repo).unwrap();
+        let rows = cleanup_rows(&git, &project, all.clone(), CLEANUP_BUDGET);
+        assert_eq!(rows.len(), 2, "the main checkout is never offered");
+        let row = |p: &str| rows.iter().find(|r| same_folder(Path::new(&r.worktree.path), Path::new(p))).unwrap();
+        assert_eq!(row(&old).changes, Some(0));
+        assert_eq!(row(&old).last_commit, Some(month_ago * 1000));
+        assert_eq!(row(&old).merged, Some(false), "it has a commit main does not");
+        assert_eq!(row(&busy).changes, Some(1));
+        assert_eq!(row(&busy).merged, Some(true), "nothing beyond main");
+        assert!(row(&busy).last_commit.unwrap() > month_ago * 1000);
+        // a repository that runs out of time says unknown instead of holding up the scan
+        let late = cleanup_rows(&git, &project, all, Duration::ZERO);
+        assert!(late.iter().all(|r| r.changes.is_none() && r.last_commit.is_none() && r.merged.is_none()));
+        remove_workspace(&git, &project, &old, true).unwrap();
+        remove_workspace(&git, &project, &busy, true).unwrap();
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);
