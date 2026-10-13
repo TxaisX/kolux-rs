@@ -265,6 +265,13 @@ input { font: inherit; }
 .review-pop { position: fixed; z-index: 45; width: 320px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: 12.5px; }
 .review-where { color: var(--fg-muted); font-size: 11.5px; }
 .review-quote { margin: 0; padding: 2px 8px; border-left: 3px solid var(--line-focus); color: var(--fg-row); max-height: 80px; overflow: auto; white-space: pre-wrap; }
+.needs-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 8px 6px; }
+.needs-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--pane-bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.needs-chip svg { color: var(--working-icon); }
+.needs-chip .why { color: var(--fg-muted); }
+.needs-chip:hover, .needs-chip:focus-visible { border-color: var(--line-focus); }
+.name-field { min-width: 0; width: 14em; max-width: 100%; padding: 1px 5px; border: 1px solid var(--line-focus); border-radius: 4px; background: var(--input-bg); color: var(--fg); font: inherit; font-size: 12px; }
+.tab .name-field { width: 10em; }
 .review-tray { position: fixed; z-index: 44; right: 16px; bottom: 36px; width: 340px; max-height: 50vh; overflow: auto; padding: 8px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 12.5px; }
 .review-head { display: flex; align-items: center; gap: 8px; }
 .review-send { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; }

@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
-import { marksUnread, tabBadge } from "./tabs";
+import { marksUnread, nameKey, newName, waitingInGrid, tabBadge } from "./tabs";
+import { NEEDS_STRIP_FIELD, stripOn } from "../settings/general";
 
 test("a tab shows one badge: spinner, question mark, bell or check; an idle shell shows none (TERM-055)", () => {
   expect(tabBadge("claude", undefined, false, false)).toBe("working");
@@ -27,4 +28,27 @@ test("a running agent whose hook says done shows the check, or the bell when unr
   expect(tabBadge("claude", true, true, false, "done")).toBe("permission");
   expect(tabBadge("claude", true, false, false, "working")).toBe("working");
   expect(tabBadge("claude", true, false, false, "permission")).toBe("working");
+});
+
+test("a name field saves on Enter or Tab and cancels on Escape; an Enter that confirms an IME candidate does nothing (TERM-027, TERM-048)", () => {
+  expect(nameKey({ key: "Enter", isComposing: false, keyCode: 13 })).toBe("save");
+  expect(nameKey({ key: "Tab", isComposing: false, keyCode: 9 })).toBe("save");
+  expect(nameKey({ key: "Escape", isComposing: false, keyCode: 27 })).toBe("cancel");
+  expect(nameKey({ key: "Enter", isComposing: true, keyCode: 13 })).toBeNull();
+  expect(nameKey({ key: "Enter", isComposing: false, keyCode: 229 })).toBeNull();
+  expect(nameKey({ key: "a", isComposing: false, keyCode: 65 })).toBeNull();
+  // A blank name gives the automatic title back; anything else is kept trimmed.
+  expect(newName("  Build server  ")).toBe("Build server");
+  expect(newName("   ")).toBeUndefined();
+  expect(newName("서버")).toBe("서버");
+});
+
+test("the needs-you strip lists this grid's sessions waiting on a permission or a question, in grid order (TERM-029)", () => {
+  const hook = { 1: "permission", 2: "working", 3: "waiting", 4: "blocked", 5: "permission" } as const;
+  expect(waitingInGrid([3, 1, 2, 4], hook)).toEqual([3, 1]);
+  expect(waitingInGrid([2, 4], hook)).toEqual([]);
+  expect(waitingInGrid([], hook)).toEqual([]);
+  // The strip is on unless turned off.
+  expect(stripOn({})).toBe(true);
+  expect(stripOn({ [NEEDS_STRIP_FIELD]: false })).toBe(false);
 });

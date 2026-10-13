@@ -29,6 +29,8 @@ import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { stopLine, type StopInfo } from "./notify";
+import NameField from "./NameField";
+import { Kbd, useLabel } from "../keys/KeymapContext";
 
 type Status = { kind: "starting" } | { kind: "running"; id: number } | { kind: "ended"; code: number | null } | { kind: "failed"; error: string };
 
@@ -67,6 +69,12 @@ type Props = {
   title?: string;
   /** SESS-006: the shell picked in the create menu names itself in the header. */
   shellName?: string;
+  /** TERM-027: the title is one the user (or a seat) set, so Clear Pane Title is offered. */
+  custom?: boolean;
+  /** TERM-027: saves a typed name; undefined gives the automatic title back. */
+  onRename?: (name: string | undefined) => void;
+  /** TERM-027: bumped by the Set Title shortcut to open the name field. */
+  renameAsk?: number;
   /** An opening prompt typed in once the agent is ready (SESS-051 typed route). */
   typed?: string;
   /** Names a pane outside any workspace: "Terminal N". */
@@ -100,7 +108,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
+export default function TerminalPane({ hidden = false, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const box = useRef<HTMLElement>(null);
@@ -116,6 +124,15 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
   const [now, setNow] = useState(() => Date.now());
   const [renderer, setRenderer] = useState<RendererMode | null>(null);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
+  // TERM-027: the pane menu and the inline name field.
+  const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
+  const [naming, setNaming] = useState(false);
+  // The menu shows a shortcut only once one is assigned (both start with none).
+  const setKey = useLabel("terminal.setTitle").length > 0;
+  const clearKey = useLabel("terminal.clearPaneTitle").length > 0;
+  useEffect(() => {
+    if (renameAsk > 0 && onRename) setNaming(true);
+  }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
   const idRef = useRef<number | null>(null);
   const keymap = useKeymap();
   const keys = useRef(keymap);
@@ -316,9 +333,25 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
         <span className="agent-mark" title={agentLabel}>
           <VendorMark agent={agent} size={13} />
         </span>
-        <span className="title" title={cwd ?? undefined}>
-          {title}
-        </span>
+        {naming && onRename ? (
+          <NameField
+            value={title}
+            label="Pane title"
+            onSave={(name) => {
+              setNaming(false);
+              onRename(name);
+              termRef.current?.focus();
+            }}
+            onCancel={() => {
+              setNaming(false);
+              termRef.current?.focus();
+            }}
+          />
+        ) : (
+          <span className="title" title={cwd ?? undefined}>
+            {title}
+          </span>
+        )}
         {branch && (
           <span className="chip" title={branch}>
             {branch}
@@ -352,7 +385,17 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
             <Ring percent={context ?? 0} />
             {Math.round(context ?? 0)}%
           </span>
-          <button className="ib" title="Pane menu (not built yet)">
+          <button
+            className="ib"
+            title="Pane menu"
+            aria-haspopup="menu"
+            aria-expanded={menuAt !== null}
+            disabled={!onRename}
+            onClick={(e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenuAt({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+            }}
+          >
             <Dots size={12} />
           </button>
           <button
@@ -385,6 +428,37 @@ export default function TerminalPane({ hidden = false, cwd = null, branch = null
           </button>
         </span>
       </header>
+      {menuAt && onRename && (
+        <>
+          <div className="menu-backdrop" onClick={() => setMenuAt(null)} aria-hidden="true" />
+          <div className="menu" role="menu" aria-label="Pane" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
+            <button
+              role="menuitem"
+              className="menu-item"
+              onClick={() => {
+                setMenuAt(null);
+                setNaming(true);
+              }}
+            >
+              <span className="name">Set Title…</span>
+              {setKey && <Kbd id="terminal.setTitle" />}
+            </button>
+            {custom && (
+              <button
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenuAt(null);
+                  onRename(undefined);
+                }}
+              >
+                <span className="name">Clear Pane Title</span>
+                {clearKey && <Kbd id="terminal.clearPaneTitle" />}
+              </button>
+            )}
+          </div>
+        </>
+      )}
       {plusAt && (
         <PlusMenu
           agents={agents}

@@ -30,7 +30,7 @@ import { asksBeforeClose, busyCount, closeQuestion } from "./terminal/closing";
 import { applyAppearance, readAppearance } from "./theme";
 import SignInNotice from "./settings/SignInNotice";
 import KeyLostNotice from "./settings/KeyLostNotice";
-import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen } from "./settings/general";
+import { OPEN_PAGE_FIELD, openPageAt, readLook, startScreen, stripOn } from "./settings/general";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
 import WorktreePalette, { dirMark, type PaletteItem } from "./projects/WorktreePalette";
 import { EMPTY_HISTORY, navTarget, travel, visit, type Place } from "./projects/nav";
@@ -80,7 +80,8 @@ import { paneState, strongest, type AgentState, type RowInfo } from "./projects/
 import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
 import { FINISH_FIELD, STOPPED_FIELD } from "./settings/NotificationSwitches";
-import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
+import { marksUnread, tabBadge, waitingInGrid, type Badge } from "./terminal/tabs";
+import NameField from "./terminal/NameField";
 import { Bell, Globe, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
@@ -257,6 +258,10 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [picked, setPicked] = useState<Picked | null>(null);
   const [sendMenu, setSendMenu] = useState(false);
+  // TERM-027: a Set Title shortcut bumps the pane's counter, which opens its name field.
+  const [askName, setAskName] = useState<Record<number, number>>({});
+  // TERM-048: the tab whose name is being edited in the tab strip.
+  const [renamingTab, setRenamingTab] = useState<number | null>(null);
   const toastTimer = useRef<number | null>(null);
   const setToast = (text: string) => {
     setToastText(text);
@@ -653,6 +658,20 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
           const k = nextNeedsYou(panes.filter((p) => p.kind !== "browser").map((p) => p.key), new Set(Object.keys(needs).filter((x) => needs[Number(x)]).map(Number)), focused);
           if (k === null) return;
           openPane(k); // EDIT-041: the same jump as Open in Code
+          break;
+        }
+        case "terminal.setTitle":
+        case "terminal.clearPaneTitle":
+        case "tab.rename": {
+          // TERM-027, TERM-048: name the focused chat or terminal; in a cell with tabs, the tab
+          // strip takes the rename, else the pane header does. No default key on Windows.
+          const p = inFront ? panes.find((x) => x.key === focused && !x.kind) : undefined;
+          if (!p) return;
+          if (hit.id === "terminal.clearPaneTitle") {
+            if (!p.title) return;
+            renamePane(p.key, undefined);
+          } else if (hit.id === "tab.rename" && panes.filter((x) => groupOf(x) === groupOf(p)).length > 1) setRenamingTab(p.key);
+          else setAskName((m) => ({ ...m, [p.key]: (m[p.key] ?? 0) + 1 }));
           break;
         }
         case "terminal.focusNextPane":
@@ -1106,6 +1125,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     showDir(p.cwd);
     setFocused(p.key);
   };
+  const renamePane = (key: number, title: string | undefined) => setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title } : p)));
   const termRename = (handle: string, title: string | null) => {
     const key = keyOfHandle(handle);
     setPanes((ps) => ps.map((p) => (p.key === key ? { ...p, title: title ?? undefined } : p)));
@@ -1514,6 +1534,8 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   rowRef.current = rowStates;
   const cells = cellsOf(panes);
   const shown = cells.filter((c) => sameDir(c.panes[0].cwd, activeDir));
+  // TERM-029: this grid's sessions waiting on a permission or a question, in grid order.
+  const waiting = stripOn(settings) ? waitingInGrid(shown.flatMap((c) => c.panes.map((p) => p.key)), hook).map((k) => panes.find((p) => p.key === k)!) : [];
   const activeOf = (c: (typeof cells)[number]) => (c.panes.some((p) => p.key === activeTab[c.group]) ? activeTab[c.group] : c.panes[c.panes.length - 1].key);
   // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
   const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
@@ -1941,6 +1963,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               <p>No session yet.</p>
             </div>
           )}
+          {terminals && page === null && waiting.length > 0 && (
+            <div className="needs-strip" role="list" aria-label="Sessions that need you">
+              {waiting.map((p) => (
+                <button key={p.key} role="listitem" className="needs-chip" onClick={() => openPane(p.key)} title={VOCAB[hook[p.key]].explain}>
+                  <StatusGlyph glyph="attention" size={11} />
+                  <span className="name">{tabName(p, titles)}</span>
+                  <span className="why">{hook[p.key] === "permission" ? "needs permission" : "asked a question"}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <div
             className={board ? "board" : "grid"}
             hidden={(!terminals && !board) || (terminals && page !== null)}
@@ -1973,11 +2006,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     {c.panes.length > 1 && (
                       <div className="tabs" role="tablist" aria-label="Tabs">
                         {c.panes.map((p) => (
-                          <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)}>
+                          <div key={p.key} role="tab" aria-selected={p.key === active} className="tab" tabIndex={0} onMouseDown={() => setFocused(p.key)} onDoubleClick={() => !p.kind && setRenamingTab(p.key)}>
                             {p.kind === "editor" || p.kind === "preview" || p.kind === "diff" || p.kind === "changes" ? <FileCode size={12} /> : p.kind === "browser" ? <Globe size={12} /> : <VendorMark agent={p.agent} size={12} />}
                             {!p.kind && !p.seats && <TabBadge kind={tabBadge(p.agent, running[p.key], needs[p.key] ?? false, unreadPanes.has(p.key), hook[p.key])} />}
                             {context[p.key] && <Ring percent={contextFill(context[p.key], capOn(settings))} size={10} title={meterText(meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)) ?? {})} />}
-                            <span className="tab-name">{tabName(p, titles)}</span>
+                            {renamingTab === p.key ? (
+                              <NameField value={tabName(p, titles)} label="Tab name" onSave={(name) => (setRenamingTab(null), renamePane(p.key, name))} onCancel={() => setRenamingTab(null)} />
+                            ) : (
+                              <span className="tab-name">{tabName(p, titles)}</span>
+                            )}
                             {dirty[p.key] && <span className="unsaved" title="Unsaved changes" aria-label="Unsaved changes" />}
                             <button className="tab-x" aria-label={`Close ${tabName(p, titles)}`} onMouseDown={(e) => e.stopPropagation()} onClick={() => closePane(p.key)}>
                               ×
@@ -2099,6 +2136,9 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     onFailed={(error) => failedPane(p.key, error)}
                     onSplit={() => splitPane(p.key, "right")}
                     title={p.title || nameOf(names, p.cwd)}
+                    custom={!!p.title}
+                    onRename={(name) => renamePane(p.key, name)}
+                    renameAsk={askName[p.key]}
                     typed={p.typed}
                     shellName={p.word}
                     number={p.key}
