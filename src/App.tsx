@@ -43,7 +43,7 @@ import ArtifactsPage from "./artifacts/ArtifactsPage";
 import { KitGallery, KitSetup, OPEN_KITS } from "./kits/Kits";
 import { KITS, VENDORS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
-import { datedName, matchSeats, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
+import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
 import AllChangesPane from "./editor/AllChangesPane";
 import Explorer from "./editor/Explorer";
@@ -93,10 +93,11 @@ export type ShellTarget = { dir: string | null; branch: string | null };
 /** A pane with `seats` is a chooser (SESS-007): nothing runs in it until Start. */
 /** SKILL-008: a seat waiting for the role it depends on. */
 type KitWait = { role: string; upstream: string; key: number; prompt: string };
-type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number> };
+/** A kit run started in this window; `prompts` are each role's first message, kept for Restart and Move to (SKILL-011). */
+type KitRun = { started: number; seats: (number | null)[] | null; waiting: KitWait[]; sent: Record<string, number>; prompts: string[] };
 /** Which kit AI a pane runs, from its mark or, for Grok, its program. */
 const aiOf = (p: { agent: string; program: string | null }): string | null => (p.agent === "claude" || p.agent === "codex" ? p.agent : /grok/i.test(p.program ?? "") ? "grok" : null);
-type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; staged?: boolean; ask?: string };
+type Pane = { key: number; cwd: string | null; branch: string | null; agent: Agent; program: string | null; args: string[]; env?: [string, string][]; seats?: Seat[]; copies?: Copies; shape?: Shape; task?: string; title?: string; word?: string; batch?: number; typed?: string; group?: number; kind?: "browser" | "editor" | "preview" | "diff" | "changes"; path?: string; kitPreview?: boolean; staged?: boolean; ask?: string };
 
 /** What a tab is called: the seat's title, the agent, the browser page's title, or "Terminal N". */
 function tabName(p: Pane, titles: Record<number, string>): string {
@@ -313,6 +314,12 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const kitRuns = useRef<Record<string, KitRun>>({});
   const [kitTick, setKitTick] = useState(0);
   const [kitFolded, setKitFolded] = useState(false);
+  // SKILL-014: the recent kit runs the gallery lists, read each time it opens.
+  const [kitRecent, setKitRecent] = useState<Past[]>([]);
+  const galleryOpen = kits !== null && kits.kit === null;
+  useEffect(() => {
+    if (galleryOpen) invoke<Past[]>("kit_history").then(setKitRecent, () => setKitRecent([]));
+  }, [galleryOpen]);
   useEffect(() => {
     const show = () => setKits((k) => k ?? { kit: null, sampleDir: null });
     window.addEventListener(OPEN_KITS, show);
@@ -1102,9 +1109,14 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setKits(null);
     const roles = kit.roles.map((r, i) => ({ id: r.id, ai: assigned[i] ?? "" }));
     const earlierName = datedName(before?.record.title ?? "Earlier run", before?.record.started ?? Date.now());
-    const prep = await invoke<{ started: number; earlier: string | null; earlierError: string | null; recordError: string | null }>("kit_prepare", { dir, kit: kit.id, title: kit.title, roles, earlierName }).catch(
-      (err) => ({ started: Date.now(), earlier: null, earlierError: null, recordError: String(err) }),
-    );
+    // SKILL-015: a folder that is not a project or under samples, or an unknown kit, starts nothing.
+    let prep: { started: number; earlier: string | null; earlierError: string | null; recordError: string | null };
+    try {
+      prep = await invoke("kit_prepare", { dir, kit: kit.id, title: kit.title, roles, earlierName });
+    } catch (err) {
+      setToast(`The kit did not start: ${String(err)}`);
+      return;
+    }
     // An idle, empty first tab is reused for the first seat.
     const here = panesIn(panes, dir);
     const first = here.length === 1 && here[0].agent === "shell" && !here[0].program ? here[0] : null;
@@ -1116,9 +1128,11 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const branch = here[0]?.branch ?? null;
     const keys: (number | null)[] = [];
     const waiting: KitWait[] = [];
+    const prompts: string[] = [];
     for (const [i, role] of kit.roles.entries()) {
       const agent = agents.find((x) => x.id === assigned[i] && x.installed);
       const prompt = rolePrompt(kit, role, values);
+      prompts.push(prompt);
       if (!agent) {
         keys.push(null);
         continue;
@@ -1133,7 +1147,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       return;
     }
     // The role-to-session mapping is kept only when every seat started.
-    kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {} };
+    kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {}, prompts };
     setKitTick((n) => n + 1);
     const words = [`${started} ${started === 1 ? "AI is" : "AIs are"} on the kit; most kits need 5 to 20 minutes.`];
     if (prep.earlier) words.push(`The last run's results were copied to kit-results\\${prep.earlier}.`);
@@ -1234,6 +1248,71 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         panesIn(panes, activeDir).filter((p) => !p.kind).map((p) => ({ key: p.key, ai: aiOf(p) })),
       )
     : [];
+  // SKILL-013: Collect results copies every role's declared files into one dated folder.
+  const kitCollect = async () => {
+    if (!activeDir || !kitCheck) return;
+    const kit = KITS.find((k) => k.id === kitCheck.record.kit);
+    if (!kit) return setToast("Kolux does not know this kit any more, so it cannot collect its results.");
+    const roles = kit.roles.map((r) => ({ id: r.id, title: r.title, files: r.delivers }));
+    try {
+      const got = await invoke<{ folder: string; copied: string[]; missing: string[] }>("kit_collect", { dir: activeDir, roles, name: datedName(kit.title, Date.now()) });
+      const miss = got.missing.length ? ` ${got.missing.length} ${got.missing.length === 1 ? "file was" : "files were"} not there: ${got.missing.join(", ")}.` : "";
+      setToast(`Collected ${got.copied.length} ${got.copied.length === 1 ? "file" : "files"} into kit-results\\${got.folder}, with a README and a Results page.${miss}`);
+    } catch (err) {
+      setToast(`Kolux could not collect the results this time: ${String(err)}`);
+    }
+  };
+  // SKILL-012: Preview shows a result beside the role's session, in a split of its own that the
+  // next preview uses again; it never replaces the AI's tab.
+  const kitPreview = (i: number, file: string) => {
+    const role = kitCheck?.record.roles[i];
+    if (!activeDir || !role) return;
+    const path = `${activeDir.replace(/[\\/]+$/, "")}\\kit-results\\${role.id}\\${file}`;
+    const here = panesIn(panes, activeDir);
+    const old = here.find((p) => p.kitPreview);
+    const pane: Pane = { key: nextKey.current++, cwd: activeDir, branch: here[0]?.branch ?? null, agent: "shell", program: null, args: [], kind: previewKind(file), path, kitPreview: true };
+    if (old) {
+      setPanes((ps) => ps.map((p) => (p.key === old.key ? { ...pane, group: groupOf(old) } : p)));
+    } else {
+      const shown = cellsOf(here);
+      if (shown.length >= MAX_PANES) return setToast(`A workspace holds up to ${MAX_PANES} panes; close one to preview ${file}.`);
+      const seat = panes.find((p) => p.key === kitSeats[i]);
+      const at = seat ? splitIndex(shown.map((c) => c.group), groupOf(seat), "right", columnsFor(shown.length + 1, false)) : shown.length;
+      setPanes(insertBefore(panes, shown[at]?.panes[0], pane));
+    }
+    setFocused(pane.key);
+  };
+  const kitOpenFile = (i: number, file: string) => {
+    const role = kitCheck?.record.roles[i];
+    if (activeDir && role) invoke("kit_open_file", { dir: activeDir, role: role.id, file }).catch((err) => setToast(`Kolux could not open ${file}: ${String(err)}`));
+  };
+  // SKILL-011: Restart and Move to start one seat for the role on the chosen AI and make it the
+  // role's session; with the settings unreadable nothing starts.
+  const kitRestart = async (i: number, ai: string) => {
+    const dir = activeDir;
+    const check = kitCheck;
+    const kit = check && KITS.find((k) => k.id === check.record.kit);
+    const role = kit?.roles[i];
+    if (!dir || !check || !kit || !role) return;
+    try {
+      await invoke("get_settings");
+    } catch (err) {
+      return setToast(`Nothing started: Kolux could not read its settings (${String(err)}).`);
+    }
+    const agent = agents.find((x) => x.id === ai && x.installed);
+    if (!agent) return setToast(`${ai} is not installed, so the ${role.title} role cannot start there.`);
+    const run = kitRuns.current[dir];
+    const prompt = run?.started === check.record.started ? run.prompts[i] : undefined;
+    if (!run || prompt === undefined) return setToast("Kolux no longer holds this run's inputs; start the kit again from Starter kits.");
+    const waits = !!role.waitsFor && !roleDone(check, role.waitsFor);
+    const key = await startIn(agent, dir, panesIn(panes, dir)[0]?.branch ?? null, waits ? "" : prompt, true, [], seatTitle(role, agent.id as Vendor));
+    if (key === null) return;
+    run.seats = (run.seats ?? kitSeats).map((k, n) => (n === i ? key : k));
+    run.waiting = run.waiting.filter((w) => w.role !== role.id);
+    if (waits && role.waitsFor) run.waiting.push({ role: role.id, upstream: role.waitsFor, key, prompt });
+    else run.sent[role.id] = Date.now();
+    setKitTick((n) => n + 1);
+  };
   const terminals = screen === "terminals";
   const board = screen === "board";
   const inbox = screen === "inbox";
@@ -1521,12 +1600,17 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
               {page === null && activeDir && kitCheck && (
                 <KitStrip
                   check={kitCheck}
-                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k] }))}
+                  seats={kitSeats.map((k) => (k === null ? null : { key: k, running: running[k], needs: needs[k], ai: aiOf(panes.find((p) => p.key === k) ?? { agent: "shell", program: null }) }))}
                   sent={kitRuns.current[activeDir]?.sent ?? {}}
                   now={Date.now()}
                   folded={kitFolded}
                   onFold={setKitFolded}
-                  onOpen={() => invoke("kit_open_results", { dir: activeDir }).catch((err) => setToast(`Kolux could not open the results folder: ${String(err)}`))}
+                  onOpen={() => invoke("kit_open_results", { dir: activeDir, folder: null }).catch((err) => setToast(`Kolux could not open the results folder: ${String(err)}`))}
+                  connected={kitAIs}
+                  onCollect={() => void kitCollect()}
+                  onPreview={kitPreview}
+                  onOpenFile={kitOpenFile}
+                  onRestart={(i, ai) => void kitRestart(i, ai)}
                   onFocusSeat={(key) => {
                     setActiveDir(activeDir);
                     setFocused(key);
@@ -1651,12 +1735,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
                     )}
                     {c.panes.map((p) =>
                 p.kind === "browser" ? (
-                  <BrowserPane key={p.key} id={p.key} title={titles[p.key]} hidden={!terminals || settingsOpen || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
+                  <BrowserPane key={p.key} id={p.key} url={p.path} title={titles[p.key]} hidden={!terminals || settingsOpen || kits !== null || p.key !== active} focused={p.key === focused} onFocus={() => setFocused(p.key)} onClose={() => closePane(p.key)} />
                 ) : p.kind === "editor" && p.path ? (
                   <EditorPane
                     key={p.key}
                     id={p.key}
                     path={p.path}
+                    readOnly={p.kitPreview}
                     hidden={!terminals || p.key !== active}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
@@ -1790,7 +1875,23 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
         {activeDir ? <Explorer key={activeDir} root={activeDir} hidden={!explorerOpen} focusAsk={explorerFocus} onOpen={openFile} onClose={() => saveRight({ open: false })} /> : explorerOpen && <div className="sb-hint">Open a workspace to browse its files.</div>}
         </RightSidebar>
       </div>
-      {kits && kits.kit === null && <KitGallery connected={kitAIs} onPick={pickKit} onClose={() => setKits(null)} />}
+      {kits && kits.kit === null && (
+        <KitGallery
+          connected={kitAIs}
+          onPick={pickKit}
+          onClose={() => setKits(null)}
+          recent={kitRecent}
+          onResults={(r) => invoke("kit_open_results", { dir: r.dir, folder: r.collected }).catch((err) => (setKits(null), setToast(`Kolux could not open the results of ${r.title}: ${String(err)}`)))}
+          onProject={(r) => {
+            const project = projects.find((p) => sameDir(p.path, r.dir));
+            // The toast shows under the gallery, so the gallery closes for it.
+            setKits(null);
+            if (!project) return setToast(`No project in Kolux matches ${r.dir} any more; add the folder again to open it.`);
+            setScreen("terminals");
+            setActiveDir(project.path);
+          }}
+        />
+      )}
       {kits && kits.kit !== null && (() => {
         const kit = KITS.find((k) => k.id === kits.kit)!;
         return (

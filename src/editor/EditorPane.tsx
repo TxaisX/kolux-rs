@@ -35,9 +35,10 @@ export const look = EditorView.theme(
   { dark: true },
 );
 
-type Props = { id: number; path: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
+/** `readOnly`: typing changes nothing (SKILL-012 previews a kit result this way). */
+type Props = { id: number; path: string; readOnly?: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
 
-export default function EditorPane({ id, path, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
+export default function EditorPane({ id, path, readOnly = false, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,7 +74,7 @@ export default function EditorPane({ id, path, hidden = false, focused = false, 
           doc: text,
           parent: host.current!,
           // A file with Windows line ends is saved with them.
-          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr)))],
+          extensions: [EditorState.lineSeparator.of(text.includes("\r\n") ? "\r\n" : "\n"), EditorState.readOnly.of(readOnly), basicSetup, look, syntaxHighlighting(oneDarkHighlightStyle), lang.of([]), EditorView.updateListener.of((u) => u.transactions.forEach((tr) => relay(path, u.view, tr)))],
         });
         view.current = made;
         attach(path, made, text);

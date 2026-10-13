@@ -38,7 +38,10 @@ shortcuts (`~\.kolux\keybindings.json`, 127 command ids) are the user's own and 
 Source Control panel stages, commits, pushes and pulls. `kolux-dev worktree create / rm` and
 `kolux-dev orchestration worker-start` (flag checking only) drive it from a terminal. Settings has
 AI connections: Claude keys and managed accounts, Codex sign-in, sealed secrets, lapsed sign-ins
-flagged in the main window. A 24 px status bar shows On, memory use, shell and plug counts.
+flagged in the main window. A 24 px status bar shows On, memory use, shell and plug counts. Starter kits
+run three AIs on one job: the strip above the sessions previews or opens each role's files,
+collects them into one dated folder with a README and a Results page, and restarts or moves a
+stopped role; the kit gallery lists the recent runs.
 
 What works today: the window has no Windows title bar; Kolux draws its own 36 px top bar with the
 six-spoke mark, a sidebar toggle, the centred Agents / Board / Terminals switcher (Terminals is the
@@ -1390,6 +1393,15 @@ default, or every local use), a green bar per day, a list by model and the 10 mo
 sessions. Costs are worked out from Anthropic's and OpenAI's public price pages (read 2026-10-12);
 a model with no known price shows n/a and the total is marked partial, a guessed one says inferred.
 
+[accounts] T-206 finishes the kit strip. Each done role lists its files with Preview and Open:
+Preview shows a Markdown file read-only, or a web page in a browser tab, beside the role's
+session in one split that the next preview reuses; Open hands the file to Windows. Collect
+results copies every role's files into one dated folder under kit-results with a README (who made
+what, what was missing, a SHA-256 hash per file) and a Results page that shows the Markdown as
+text with any script or javascript: link taken out. A stopped role can be restarted or moved to
+another connected AI. The kit gallery lists the last 50 runs across projects with Open results
+and Open project. Kits now refuse a folder that is not a project or under the samples folder.
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2533,7 +2545,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-137-a · Prices come from the public pages read 2026-10-12 (platform.claude.com pricing; developers.openai.com pricing, Standard tier) and live in `src/usage/pricing.ts` as dated entries; a later price change adds an entry with its first day. Kolux scope counts a log record when its working folder is a registered project's folder, that project's own workspaces folder or the global workspaces folder (no git call per open). A model is matched after dropping a provider prefix, a context tag such as [1m], a release date and an effort ending (low / medium / high / xhigh / max / minimal / none); "-codex" and "-max" variants then fall back to their base model (gpt-5.1-codex-max to gpt-5.1) and are labelled inferred, and an unknown release takes the nearest known release of its family at or below it, so a newer point release gets the family's current price and an older one never a newer price. A bare alias (opus, sonnet[1m]) takes its tier's newest price, inferred. The current Anthropic page lists no long-context surcharge for any model but Haiku 5.5 (prompts over 100k), so none is charged; OpenAI's long-context prices apply to prompts over 272k, a new fourth prompt-size band in the scan. A model whose page shows no cached price (the pro models) pays the full input price for cached input. Codex cache writes stay inside fresh input at the input price; OpenAI's newest models list a cache-write price 1.25x input, so their estimates can run slightly low. Charts of more than a year draw one bar per week.
 
+- [accounts] T-206 · Move to and Restart show on any stopped kit row (the usage-limit and sign-in states are not in the window yet, T-206-b); both need the run's first messages, which only the window that started the run holds, so after a restart they say to start the kit again. A declared file that is a link, or any path that leaves the role's folder, counts as missing and is never copied. The run history lives in the app store (kv kit_history, newest 50) and in each folder's run record; a record over 256 KB or that does not parse is ignored. Results.html is a standalone page with a no-scripts content policy; Markdown is rendered with pulldown-cmark with raw HTML shown as text. The embedded browser hides while the kits window is open (it drew over it), and the gallery closes before its own error toasts so they can be read.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-206 · done: `kits.rs` kit_collect / kit_history / kit_open_file, the project-or-samples guard on every kit command, the per-folder and app-wide run history; strip Preview / Open / Collect results / Move to / Restart; Recent kit runs in the gallery; read-only editor and start-URL browser panes for previews · evidence/T-206.txt, T-206-*.png
 - 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png
 - 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
 - 2026-10-12 · [core] T-043-d · done: sign-in upkeep switch, lapsed warnings follow it, check on switch-off; Kolux-side renewal dropped (DT-C16); keychain rules → T-043-e; evidence/T-043-d-upkeep.png

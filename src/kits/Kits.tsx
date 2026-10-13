@@ -8,6 +8,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Book, Box, Close, Funnel, Megaphone, Merge, Pulse, Table } from "../chrome/icons";
 import { CATEGORY_NAME, KITS, RESULTS_FOLDER, VENDOR_NAME, assignRoles, extOf, fillEmpty, firstDropped, isWorkbook, recalled, sampleValues, unquote, type Kit, type Vendor } from "./catalog";
 import { sameDir } from "../workspaces";
+import type { Past } from "./run";
 
 export const OPEN_KITS = "kolux-open-kits";
 export const openKits = () => window.dispatchEvent(new CustomEvent(OPEN_KITS));
@@ -32,7 +33,40 @@ function RoleList({ kit, connected }: { kit: Kit; connected: Vendor[] }) {
   );
 }
 
-export function KitGallery({ connected, onPick, onClose }: { connected: Vendor[]; onPick: (id: string) => void; onClose: () => void }) {
+/** SKILL-014: recent kit runs, newest first; nothing at all while there are none. */
+export function RecentRuns({ runs, onResults, onProject }: { runs: Past[]; onResults: (run: Past) => void; onProject: (run: Past) => void }) {
+  if (runs.length === 0) return null;
+  return (
+    <section className="kit-recent" aria-label="Recent kit runs">
+      <h3 className="kit-recent-title">Recent kit runs</h3>
+      <ul className="kit-recent-list">
+        {runs.map((r) => (
+          <li key={`${r.dir}|${r.kit}|${r.started}`} className="kit-recent-row">
+            <span className="kit-icon">
+              <KitIcon id={r.kit} size={16} />
+            </span>
+            <span className="kit-recent-name">
+              <span className="kit-recent-kit">{KITS.find((k) => k.id === r.kit)?.title ?? r.title}</span>
+              <span className="kit-recent-dir" title={r.dir}>
+                {r.dir}
+              </span>
+            </span>
+            <button className="btn small" onClick={() => onResults(r)}>
+              Open results
+            </button>
+            <button className="btn small" onClick={() => onProject(r)}>
+              Open project
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+type GalleryProps = { connected: Vendor[]; onPick: (id: string) => void; onClose: () => void; recent?: Past[]; onResults?: (run: Past) => void; onProject?: (run: Past) => void };
+
+export function KitGallery({ connected, onPick, onClose, recent = [], onResults = () => {}, onProject = () => {} }: GalleryProps) {
   return (
     <div className="ask-backdrop" onMouseDown={onClose}>
       <div className="kits" role="dialog" aria-modal="true" aria-label="Starter kits" onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Escape" && onClose()}>
@@ -59,6 +93,7 @@ export function KitGallery({ connected, onPick, onClose }: { connected: Vendor[]
             </button>
           ))}
         </div>
+        <RecentRuns runs={recent} onResults={onResults} onProject={onProject} />
       </div>
     </div>
   );

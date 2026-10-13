@@ -716,6 +716,18 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .kit-strip-state { color: var(--fg-muted); }
 .kit-strip-row.done .kit-strip-state { color: var(--fg); }
 .kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state { color: var(--warn); }
+.kit-strip-row { flex-wrap: wrap; }
+.kit-strip-files { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: flex-end; flex-basis: 100%; padding-bottom: 4px; }
+.kit-strip-file { display: inline-flex; gap: 4px; align-items: center; }
+.kit-strip-name { color: var(--fg-muted); font-size: 12px; }
+.btn.small { height: 22px; padding: 0 8px; font-size: 12px; }
+.kit-recent { margin-top: 18px; border-top: 1px solid var(--line-subtle); padding-top: 12px; }
+.kit-recent-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; }
+.kit-recent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.kit-recent-row { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.kit-recent-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.kit-recent-kit { font-size: 13px; }
+.kit-recent-dir { font-size: 11px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .first-none { color: var(--fg-muted); }
 .add-project { outline: none; width: min(420px, calc(100vw - 32px)); display: flex; flex-direction: column; gap: 10px; }
 .add-project .ask-title, .add-project .ask-body { margin: 0; }
