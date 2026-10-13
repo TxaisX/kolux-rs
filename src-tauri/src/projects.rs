@@ -10,7 +10,7 @@ use crate::creatures::creature_name;
 use crate::git::{Git, Worktree};
 use crate::names::safe_name;
 use crate::state::Store;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tauri::State;
@@ -629,12 +629,61 @@ fn refresh_base(git: &Git, repo: &Path, base: &str, apply: bool) -> Option<Strin
     moved.err().map(|e| format!("{base} could not be refreshed ({e}), so this workspace starts from the local {base}"))
 }
 
+/// PROJ-020: the answer a create gives when a newer one overtook it.
+pub const OVERTAKEN: &str = "cancelled: a newer workspace creation took its place";
+
+/// PROJ-020: the window's create tickets that a newer create overtook. A ticket can be dropped
+/// before its create even reaches Git (it then makes nothing) or while Git works (what it made
+/// is removed again).
+fn dropped_tickets() -> &'static Mutex<HashSet<u64>> {
+    static DROPPED: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
+    DROPPED.get_or_init(Default::default)
+}
+
+pub fn drop_create(ticket: u64) {
+    dropped_tickets().lock().unwrap_or_else(PoisonError::into_inner).insert(ticket);
+}
+
+pub fn dropped(ticket: Option<u64>) -> bool {
+    ticket.is_some_and(|t| dropped_tickets().lock().unwrap_or_else(PoisonError::into_inner).contains(&t))
+}
+
+/// Forgets a ticket once its create has answered.
+pub fn settle_create(ticket: u64) {
+    dropped_tickets().lock().unwrap_or_else(PoisonError::into_inner).remove(&ticket);
+}
+
+/// PROJ-020: the window cancels a create that a newer one overtook.
+#[tauri::command]
+pub fn workspace_create_cancel(ticket: u64) {
+    drop_create(ticket);
+}
+
+/// Undoes a create that was overtaken after Git made its worktree: the folder goes, and the
+/// branch too unless it existed before (`branch` None).
+fn undo_create(git: &Git, repo: &Path, dest: &Path, branch: Option<&str>) -> String {
+    crate::include::unlink_shared(repo, dest);
+    match git.worktree_remove(repo, dest, branch) {
+        Ok(_) => OVERTAKEN.to_string(),
+        Err(e) => format!("{OVERTAKEN}, but its folder could not be removed: {e}"),
+    }
+}
+
 pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>) -> Result<Created, String> {
+    create_workspace_until(git, place, project, typed_name, start, &|| false)
+}
+
+/// `create_workspace`, asking `overtaken` before Git starts and again once the worktree is made:
+/// a yes before makes nothing, a yes after removes the half-made checkout (PROJ-020).
+pub fn create_workspace_until(git: &Git, place: &Place, project: &Project, typed_name: &str, start: Option<&str>, overtaken: &dyn Fn() -> bool) -> Result<Created, String> {
     // SESS-036: a name that cleans up to nothing becomes "workspace" (numbered when taken).
     let base = safe_name(typed_name).unwrap_or_else(|| "workspace".to_string());
     let repo = Path::new(&project.path);
     let turn = repo_turn(repo);
     let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    if overtaken() {
+        return Err(OVERTAKEN.to_string());
+    }
     let (from, note) = resolve_base(git, repo, project, start)?;
     let refreshed = refresh_base(git, repo, &from, place.refresh);
     // PROJ-021: a name taken by a branch (local or on a remote) or a folder gets a number.
@@ -649,9 +698,13 @@ pub fn create_workspace(git: &Git, place: &Place, project: &Project, typed_name:
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
-    git.worktree_add(repo, &dest, &format!("{}{safe}", place.prefix), &from)?;
+    let new_branch = format!("{}{safe}", place.prefix);
+    git.worktree_add(repo, &dest, &new_branch, &from)?;
     let mut warnings: Vec<String> = place.prefix_warning.iter().cloned().chain(refreshed).collect();
     warnings.extend(crate::include::bring_along(repo, &dest));
+    if overtaken() {
+        return Err(undo_create(git, repo, &dest, Some(&new_branch)));
+    }
     let worktree = git
         .worktrees(repo)?
         .into_iter()
@@ -741,7 +794,14 @@ pub fn remove_worktree(git: &Git, project: &Project, worktree_path: &str, force:
 /// PROJ-030: a workspace on a branch that exists already, locally or only on a remote (Git then
 /// makes the local branch that tracks it). The folder takes `folder` when given, else the
 /// branch's name, numbered when taken; the branch itself never changes and is kept at removal.
+#[cfg(test)]
 pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch: &str, folder: Option<&str>) -> Result<Created, String> {
+    open_branch_workspace_until(git, place, project, branch, folder, &|| false)
+}
+
+/// `open_branch_workspace` with the overtaken checks of `create_workspace_until`; the branch
+/// existed before, so an undo keeps it.
+pub fn open_branch_workspace_until(git: &Git, place: &Place, project: &Project, branch: &str, folder: Option<&str>, overtaken: &dyn Fn() -> bool) -> Result<Created, String> {
     let branch = branch.trim();
     let repo = Path::new(&project.path);
     if branch.is_empty() || !git.branch_taken(repo, branch) {
@@ -750,6 +810,9 @@ pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch
     let base = safe_name(folder.map(str::trim).filter(|f| !f.is_empty()).unwrap_or(branch)).ok_or("that folder name leaves nothing usable; use some letters or digits")?;
     let turn = repo_turn(repo);
     let _turn = turn.lock().unwrap_or_else(PoisonError::into_inner);
+    if overtaken() {
+        return Err(OVERTAKEN.to_string());
+    }
     let dest = (1..)
         .map(|n| workspace_path(place, project, &if n == 1 { base.clone() } else { format!("{base}-{n}") }))
         .find(|d| !d.exists())
@@ -759,6 +822,9 @@ pub fn open_branch_workspace(git: &Git, place: &Place, project: &Project, branch
     }
     crate::git::run(&["worktree", "add", &dest.to_string_lossy(), branch], Some(repo))?;
     let warnings = crate::include::bring_along(repo, &dest);
+    if overtaken() {
+        return Err(undo_create(git, repo, &dest, None));
+    }
     let worktree = git.worktrees(repo)?.into_iter().find(|w| same_folder(Path::new(&w.path), &dest)).ok_or_else(|| "the worktree was created but Git does not list it".to_string())?;
     Ok(Created { worktree, base: branch.to_string(), note: None, warnings })
 }
@@ -776,15 +842,20 @@ pub fn workspace_branches(store: StoreState<'_>, project_id: String) -> Result<V
     branches(Path::new(&project.path))
 }
 
-#[tauri::command]
-pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>) -> Result<Created, String> {
+// PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
+#[tauri::command(async)]
+pub fn workspace_open_branch(git: State<'_, Git>, store: StoreState<'_>, project_id: String, branch: String, folder: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
     let (project, place) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let project = find_project(&store, &project_id)?;
         let place = place_for(&store, &project);
         (project, place)
     };
-    let mut made = open_branch_workspace(&git, &place, &project, &branch, folder.as_deref())?;
+    let made = open_branch_workspace_until(&git, &place, &project, &branch, folder.as_deref(), &|| dropped(ticket));
+    if let Some(t) = ticket {
+        settle_create(t);
+    }
+    let mut made = made?;
     let store = store.lock().map_err(|e| e.to_string())?;
     set_origin(&store, &made.worktree.path, Some(&serde_json::json!({ "madeBy": "app", "existingBranch": true })))?;
     note_seen(&store, &project, &made.worktree.path)?;
@@ -945,13 +1016,18 @@ pub fn workspace_preview(store: StoreState<'_>, name: String, project_id: Option
 /// `kolux-dev worktree create` both come through here). `branch` (the composer's Advanced) names
 /// the branch in place of the name (SESS-037).
 pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>, branch: Option<&str>) -> Result<Created, String> {
+    create_named_until(git, store, project_id, name, base, branch, &|| false)
+}
+
+/// `create_named` with the overtaken checks of `create_workspace_until` (PROJ-020).
+pub fn create_named_until(git: &Git, store: &Mutex<Store>, project_id: &str, name: &str, base: Option<&str>, branch: Option<&str>, overtaken: &dyn Fn() -> bool) -> Result<Created, String> {
     let (project, place) = {
         let store = store.lock().map_err(|e| e.to_string())?;
         let project = find_project(&store, project_id)?;
         let place = place_for(&store, &project);
         (project, place)
     };
-    let mut made = create_workspace(git, &place, &project, non_blank(branch).unwrap_or(name), base)?;
+    let mut made = create_workspace_until(git, &place, &project, non_blank(branch).unwrap_or(name), base, overtaken)?;
     note_seen(&*store.lock().map_err(|e| e.to_string())?, &project, &made.worktree.path)?;
     let typed = name.trim();
     if typed != made.worktree.branch.as_deref().unwrap_or_default() {
@@ -962,9 +1038,15 @@ pub fn create_named(git: &Git, store: &Mutex<Store>, project_id: &str, name: &st
     Ok(made)
 }
 
-#[tauri::command]
-pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>) -> Result<Created, String> {
-    let mut made = create_named(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref())?;
+// PROJ-020: off the main thread, so a newer create (and its cancel) can reach Kolux while Git works.
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+pub fn workspace_create(git: State<'_, Git>, store: StoreState<'_>, project_id: String, name: String, base: Option<String>, branch: Option<String>, parent: Option<String>, ticket: Option<u64>) -> Result<Created, String> {
+    let made = create_named_until(&git, &store, &project_id, &name, base.as_deref(), branch.as_deref(), &|| dropped(ticket));
+    if let Some(t) = ticket {
+        settle_create(t);
+    }
+    let mut made = made?;
     // SESS-037: the parent picked in the composer (PROJ-047 nests it there, PROJ-040 checks it).
     let store = store.lock().map_err(|e| e.to_string())?;
     let project = find_project(&store, &project_id)?;
@@ -1383,6 +1465,47 @@ mod tests {
         assert!(same_folder(Path::new(&made.worktree.path), &workspace_path(&place, &project, "fix-login")));
         let bad = Place { prefix_warning: Some("w".into()), ..nested(&root) };
         assert_eq!(create_workspace(&git, &bad, &project, "two", None).unwrap().warnings, vec!["w".to_string()]);
+        drop(store);
+        for d in [profile, repo, root] {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
+    fn proj020_an_overtaken_create_is_cancelled_and_its_half_made_checkout_removed() {
+        let git = Git::detect().unwrap();
+        let profile = temp("overtaken");
+        let store = Store::open(&profile).unwrap();
+        let repo = temp_repo("overtaken-r");
+        let root = temp("overtaken-root");
+        let project = add_project(&git, &store, &repo).unwrap();
+        let place = nested(&root);
+        // Overtaken while Git was making the worktree: the folder and the new branch both go.
+        let asked = std::cell::Cell::new(0);
+        let late = || {
+            asked.set(asked.get() + 1);
+            asked.get() > 1
+        };
+        let err = create_workspace_until(&git, &place, &project, "first", None, &late).unwrap_err();
+        assert_eq!(err, OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "first").exists(), "the half-made folder is removed");
+        assert!(!git.branch_taken(&repo, "first"), "the half-made branch is removed");
+        assert_eq!(git.worktrees(&repo).unwrap().len(), 1, "only the main checkout is left");
+        // Overtaken before it began: nothing is made at all.
+        assert_eq!(create_workspace_until(&git, &place, &project, "second", None, &|| true).unwrap_err(), OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "second").exists());
+        // An existing branch opened as a workspace keeps its branch when overtaken.
+        git_in(&repo, &["branch", "kept"]);
+        asked.set(0);
+        assert_eq!(open_branch_workspace_until(&git, &place, &project, "kept", None, &late).unwrap_err(), OVERTAKEN);
+        assert!(!workspace_path(&place, &project, "kept").exists());
+        assert!(git.branch_taken(&repo, "kept"), "a branch that existed before stays");
+        // A create nobody overtook is untouched by the tickets of others.
+        drop_create(41);
+        assert!(dropped(Some(41)) && !dropped(Some(42)) && !dropped(None));
+        assert!(create_workspace_until(&git, &place, &project, "third", None, &|| dropped(Some(42))).is_ok());
+        settle_create(41);
+        assert!(!dropped(Some(41)));
         drop(store);
         for d in [profile, repo, root] {
             let _ = fs::remove_dir_all(d);

@@ -22,7 +22,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { GROUP_SETTING, SORT_SETTING, groupFromSetting, groupRows, smartOrder, sortFromSetting, type AgentState, type RowInfo } from "./rows";
 import { pushBadge, type Pushed } from "../scm/model";
-import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens } from "./model";
+import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, type PendingCreate } from "./model";
 import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
@@ -94,6 +94,8 @@ type Props = {
   /** SKILL-036: the Artifacts row opens the library and shows as current while it is up. */
   artifactsOn: boolean;
   onArtifacts: () => void;
+  /** PROJ-020: the creates Git is still working on, for the stand-in tabs beside the panes. */
+  onPending?: (pending: PendingCreate[]) => void;
 };
 
 // SESS-035: the projects the composer last made workspaces in, newest first (this computer only).
@@ -115,7 +117,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts }: Props) {
+export default function ProjectsPanel({ openDirs, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onRemoved, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   const [shutKids, setShutKids] = useState<ReadonlySet<string>>(new Set()); // parent workspaces folded shut (PROJ-047)
   const [projects, setProjects] = useState<Project[]>([]);
@@ -150,7 +152,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   // PROJ-002: the Add Project dialog, from the folder button or the composer's Add project item.
   const [adding, setAdding] = useState(false);
   const [creating, setCreating] = useState<string | null>(null); // project id whose name field is open; "" with no project yet
-  const [pending, setPending] = useState<{ projectId: string; name: string } | null>(null); // the stand-in row while Git works
+  const [pending, setPendingList] = useState<PendingCreate[]>([]); // the stand-in rows while Git works
+  const pendingNow = useRef<PendingCreate[]>([]);
+  const setPending = (next: PendingCreate[]) => {
+    pendingNow.current = next;
+    setPendingList(next);
+    onPending?.(next);
+  };
+  const tickets = useRef(Date.now()); // PROJ-020: one ticket per create, never reused in a session
+  const overtaken = useRef(new Set<number>());
   const shown = useRef(activeDir); // the workspace in front, read when a create finishes
   shown.current = activeDir;
   const [name, setName] = useState("");
@@ -376,8 +386,9 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
 
   // PROJ-020: a stand-in row at once, then the workspace opens with a shell of its own; if the
   // user moved to another workspace meanwhile the create finishes without pulling focus back.
-  // ponytail: one create at a time (the field is disabled while Git works); cancelling an
-  // overtaken create and removing its half-made checkout, and the stand-in tab, are T-013-c.
+  // A newer create overtakes a running one (unless that one was made with Create more): Kolux
+  // cancels it, and Git's half-made checkout is removed; one that finished first stays, in the
+  // background. Each running create shows a stand-in row here and a stand-in tab by the panes.
   // PROJ-038: with a prompt and no agent picked, the default agent runs it, else the first installed.
   const installed = agents.filter((a) => a.installed);
   const fallbackAgent = installed.find((a) => a.id === defaultId) ?? installed[0] ?? null;
@@ -393,8 +404,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     const from = shown.current;
     const prompt = promptDraft.trim();
     const agent = agentDraft ? (installed.find((a) => a.id === agentDraft) ?? null) : prompt ? fallbackAgent : null;
-    setBusy("creating");
-    setPending({ projectId: project.id, name: typed || reuse });
+    const mine: PendingCreate = { ticket: ++tickets.current, projectId: project.id, name: typed || reuse, more: keepOpen };
+    for (const t of overtakenBy(pendingNow.current, mine)) {
+      overtaken.current.add(t);
+      invoke("workspace_create_cancel", { ticket: t }).catch(() => {});
+    }
+    setPending([...pendingNow.current.filter((p) => !overtaken.current.has(p.ticket)), mine]);
     setName("");
     setBranchDraft("");
     setPromptDraft("");
@@ -405,22 +420,25 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     }
     try {
       const wt = reuse
-        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent })
-        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent });
+        ? await invoke<Created>("workspace_open_branch", { projectId: project.id, branch: reuse, folder: existing ? typed || null : null, parent, ticket: mine.ticket })
+        : await invoke<Created>("workspace_create", { projectId: project.id, name: typed, base: base || null, branch: branch || null, parent, ticket: mine.ticket });
+      const lost = overtaken.current.has(mine.ticket);
       noteRecent(project.id);
       const extra = [wt.note, ...wt.warnings].filter(Boolean).join(" · ");
       say(extra ? "warn" : "ok", `created ${worktreeLabel(wt)} in ${wt.path} from ${wt.base}${extra ? ` · ${extra}` : ""}`);
       await reload();
       // The agent's tab is the workspace's first; a shell is only opened when no agent runs. With
       // Create more the new workspace does not take the front, so the next name can be typed.
-      const front = !keepOpen && shown.current === from;
+      // A create overtaken after Git had already finished it stays, but never takes the front.
+      const front = !keepOpen && !lost && shown.current === from;
       if (agent) onStartIn(agent, wt.path, wt.branch, prompt, front);
       else if (front) onSelect(wt.path, wt.branch, true);
     } catch (err) {
-      fail(err);
+      if (overtaken.current.has(mine.ticket)) say("warn", `${mine.name}: ${String(err)}`);
+      else fail(err);
     } finally {
-      setPending(null);
-      setBusy("");
+      overtaken.current.delete(mine.ticket);
+      setPending(pendingNow.current.filter((p) => p.ticket !== mine.ticket));
       if (keepOpen) nameRef.current?.focus();
     }
   };
@@ -929,13 +947,15 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
     );
   };
   const standIn = (p: Project) =>
-    pending?.projectId === p.id && (
-      <div className="sess pending" data-pending={pending.name} aria-busy="true">
-        <span className="dot" role="img" aria-label="creating" />
-        <span className="name">{pending.name}</span>
-        <span className="hint">creating…</span>
-      </div>
-    );
+    pending
+      .filter((c) => c.projectId === p.id)
+      .map((c) => (
+        <div key={c.ticket} className="sess pending" data-pending={c.name} aria-busy="true">
+          <span className="dot" role="img" aria-label="creating" />
+          <span className="name">{c.name}</span>
+          <span className="hint">creating…</span>
+        </div>
+      ));
 
   return (
     <div className="sidebar-wrap">

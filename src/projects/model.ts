@@ -114,6 +114,15 @@ export function createOpens(projectId: string): "name" | "add" {
   return projectId ? "name" : "add";
 }
 
+/** PROJ-020: a create the window has handed to Git and not yet heard back from. */
+export type PendingCreate = { ticket: number; projectId: string; name: string; more: boolean };
+
+/** PROJ-020: the tickets a newer create overtakes: every one still running except itself and
+ * those made with Create more, which asked for several workspaces at once. */
+export function overtakenBy(running: PendingCreate[], next: PendingCreate): number[] {
+  return running.filter((p) => p.ticket !== next.ticket && !p.more).map((p) => p.ticket);
+}
+
 /** The sentence under the name field: where the branch and folder will go, or why it is refused. */
 export function previewSentence(typed: string, preview: Preview | null, project: Project | null): string {
   if (!project) return "Add a project first.";

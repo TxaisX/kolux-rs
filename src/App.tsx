@@ -72,7 +72,7 @@ import { VOCAB, nextNeedsYou, type Crew } from "./terminal/status";
 import { noteTitle, turnNote, type StopInfo, type Turn } from "./terminal/notify";
 import { FINISH_FIELD, STOPPED_FIELD } from "./settings/NotificationSwitches";
 import { marksUnread, tabBadge, type Badge } from "./terminal/tabs";
-import { Bell, Globe, StatusGlyph } from "./chrome/icons";
+import { Bell, Globe, Spinner, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
@@ -82,7 +82,7 @@ import { capOn, contextFill, meterOf, meterText, type ContextReading } from "./u
 import { usePlan } from "./usage/plan";
 import ChooserPane from "./launch/ChooserPane";
 import { clearMissing, defaultCopies, emptySeat, openingPrompt, restoreShape, rulesBlock, SAVED_SHAPES_KEY, TERMINAL, withoutFailed, type Copies, type SavedShape, type Seat, type Shape, applyLineup, LAST_LINEUP_KEY, lineupOf, offeredLineup, removeTarget, seatArgs, type Lineup } from "./launch/seats";
-import { folderName, NESTING_KEY, type CliWorkspace, type Project, type Worktree } from "./projects/model";
+import { folderName, NESTING_KEY, type CliWorkspace, type PendingCreate, type Project, type Worktree } from "./projects/model";
 import { activeAfterRemove, focusIn, panesIn, sameDir, withoutDir, nameOf } from "./workspaces";
 import { KeymapProvider, useKeymap } from "./keys/KeymapContext";
 import { recording } from "./keys/record";
@@ -229,6 +229,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeDir;
   const [createRequest, setCreateRequest] = useState(0); // PROJ-020: Mod+N opens the sidebar's name field
+  const [standIns, setStandIns] = useState<PendingCreate[]>([]); // PROJ-020: creates Git is still working on
   const [stacked, setStacked] = useState<Record<string, boolean>>({}); // TERM-006: a single pane split down makes a stacked pair
   const [createName, setCreateName] = useState(""); // PROJ-057: the palette's typed name, prefilled there
   const [palette, setPalette] = useState(false); // PROJ-057 / VIEW-037: the worktree palette is open
@@ -1497,6 +1498,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onStartIn={startIn}
             artifactsOn={screen === "artifacts"}
             onArtifacts={() => setScreen("artifacts")}
+            onPending={setStandIns}
             onIndex={(list, dirs, typed) => {
               setProjects(list);
               setOwner(dirs);
@@ -1616,6 +1618,19 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             <div className="empty">
               <h2>Board</h2>
               <p>No session yet.</p>
+            </div>
+          )}
+          {terminals && page === null && standIns.length > 0 && (
+            // PROJ-020: a stand-in tab for each workspace Git is still making; it gives way to
+            // the workspace's own tabs once it opens, and never pulls focus.
+            <div className="tabs standins" role="tablist" aria-label="Workspaces being created">
+              {standIns.map((c) => (
+                <div key={c.ticket} role="tab" aria-selected={false} aria-busy="true" className="tab standin" data-standin={c.name} title={`Git is making ${c.name}; it opens when it is ready`}>
+                  <Spinner size={12} />
+                  <span className="tab-name">{c.name}</span>
+                  <span className="hint">creating…</span>
+                </div>
+              ))}
             </div>
           )}
           <div

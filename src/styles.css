@@ -162,6 +162,10 @@ input { font: inherit; }
 .sess:hover .ib { opacity: 1; }
 .sess.sel { background: var(--row-selected); color: var(--fg); }
 .sess.pending { opacity: 0.6; }
+/* PROJ-020: the stand-in tabs above the panes while Git makes a workspace. */
+.tabs.standins { margin: 0 0 6px; }
+.tab.standin { opacity: 0.7; padding-right: 10px; }
+.tab.standin .hint { color: var(--fg-icon-dim); }
 .sess .fold { width: 14px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: #797979; flex: none; }
 .sess .fold:hover { color: var(--fg); }
 .sess .fold.shut svg { transform: rotate(-90deg); }

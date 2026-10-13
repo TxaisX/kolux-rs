@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens } from "./model";
+import { afterScan, prefixSample, folderName, matchLetters, middle, pathHints, rankProjects, shortcodes, openedWorktree, relPath, nestRows, orderWorktrees, parentChoices, placeFieldAction, previewSentence, worktreeLabel, type Worktree, createOpens, overtakenBy, type PendingCreate } from "./model";
 
 const main: Worktree = { path: "C:\\src\\app", branch: "main", head: "aaaaaaa1", isMain: true };
 const zeta: Worktree = { path: "C:\\ws\\app\\zeta", branch: "zeta", head: "bbbbbbb2", isMain: false };
@@ -59,6 +59,18 @@ test("nesting keeps the order it is handed when the list is sorted elsewhere (PR
 test("New workspace with no project yet opens the add-project form instead of a dead name field (T-013-fix-a)", () => {
   expect(createOpens("")).toBe("add");
   expect(createOpens("app-1")).toBe("name");
+});
+
+test("a newer create overtakes every running one not made with Create more (PROJ-020)", () => {
+  const a: PendingCreate = { ticket: 1, projectId: "app", name: "fix-login", more: false };
+  const b: PendingCreate = { ticket: 2, projectId: "app", name: "batch-1", more: true };
+  const c: PendingCreate = { ticket: 3, projectId: "web", name: "docs", more: false };
+  expect(overtakenBy([], c)).toEqual([]);
+  // Another project's create is overtaken too: only one create can take the front.
+  expect(overtakenBy([a, b], c)).toEqual([1]);
+  // Create more asked for several, so its creates are never overtaken.
+  expect(overtakenBy([b], c)).toEqual([]);
+  expect(overtakenBy([a, b, c], c)).toEqual([1]);
 });
 
 test("the workspaces-folder field saves on Enter, reverts on Escape and ignores keys mid-composition (SET-032)", () => {
