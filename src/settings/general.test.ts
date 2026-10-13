@@ -1,5 +1,5 @@
-import { expect, test } from "vitest";
-import { openPageAt, readLook, savedFirst, stampLook, startScreen } from "./general";
+import { expect, test, vi } from "vitest";
+import { lastWriter, openPageAt, readLook, savedFirst, stampLook, startScreen } from "./general";
 
 test("a fresh profile is New, an existing one without the choice is Classic", () => {
   expect(readLook({})).toBe("new");
@@ -8,16 +8,49 @@ test("a fresh profile is New, an existing one without the choice is Classic", ()
   expect(readLook({ uiLook: "fancy", x: 1 })).toBe("classic");
 });
 
-test("the look is written down once, so a fresh profile stays New", () => {
-  expect(stampLook({})).toEqual({ uiLook: "new" });
-  expect(stampLook({ a: 1 })).toEqual({ a: 1, uiLook: "classic" });
-  expect(stampLook({ uiLook: "new" })).toBeNull();
+test("the look is written down once, so a fresh profile stays New; T-418: a missing mode is written Dark", () => {
+  expect(stampLook({})).toEqual({ uiLook: "new", appearanceMode: "dark" });
+  expect(stampLook({ a: 1 })).toEqual({ a: 1, uiLook: "classic", appearanceMode: "dark" });
+  expect(stampLook({ uiLook: "new" })).toEqual({ uiLook: "new", appearanceMode: "dark" });
+  expect(stampLook({ uiLook: "new", appearanceMode: "dim" })).toEqual({ uiLook: "new", appearanceMode: "dark" });
+  expect(stampLook({ uiLook: "classic", appearanceMode: "system" })).toBeNull();
+  expect(stampLook({ uiLook: "new", appearanceMode: "light" })).toBeNull();
 });
 
 test("the first screen counts only under New", () => {
   expect(startScreen({ uiLook: "new", firstScreen: "board" })).toBe("board");
   expect(startScreen({ uiLook: "classic", firstScreen: "board" })).toBe("terminals");
-  expect(savedFirst({ firstScreen: "elsewhere" })).toBe("terminals");
+  expect(savedFirst({ firstScreen: "elsewhere" })).toBe("board");
+  // VIEW-001: a New profile that never chose a screen opens on Board; Classic stays on Terminals.
+  expect(startScreen({ uiLook: "new" })).toBe("board");
+  expect(startScreen({ uiLook: "new", firstScreen: "terminals" })).toBe("terminals");
+  expect(startScreen({ uiLook: "classic" })).toBe("terminals");
+});
+
+test("VIEW-005: the screen left at quit comes back, an unknown one falls back", () => {
+  expect(startScreen({ uiLook: "new", firstScreen: "agents", lastScreen: "board" })).toBe("board");
+  expect(startScreen({ uiLook: "new", lastScreen: "artifacts" })).toBe("artifacts");
+  expect(startScreen({ uiLook: "classic", lastScreen: "inbox" })).toBe("inbox");
+  expect(startScreen({ uiLook: "classic", lastScreen: "board" })).toBe("terminals");
+  expect(startScreen({ uiLook: "new", firstScreen: "agents", lastScreen: "settings" })).toBe("agents");
+  expect(startScreen({ uiLook: "new", lastScreen: 7 })).toBe("board");
+});
+
+test("VIEW-005: quick switches are one write, a close flushes the last one", () => {
+  vi.useFakeTimers();
+  const writes: string[] = [];
+  const w = lastWriter((v: string) => writes.push(v), 400);
+  w.set("board");
+  w.set("agents");
+  vi.advanceTimersByTime(399);
+  expect(writes).toEqual([]);
+  vi.advanceTimersByTime(1);
+  expect(writes).toEqual(["agents"]);
+  w.set("inbox");
+  w.flush();
+  w.flush();
+  expect(writes).toEqual(["agents", "inbox"]);
+  vi.useRealTimers();
 });
 
 test("VIEW-011: the page open at quit comes back", () => {

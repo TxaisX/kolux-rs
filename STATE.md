@@ -3,7 +3,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 3                   (Phase 1 was done by the dirty-room team on 2026-10-06; Phase 2, the plan, on 2026-10-07)
 Budget: 6 passes per day   (today: 25, date: 2026-10-09)
 Next task: T-152 · Hooks go only to agents that are installed and switched on, and installing them never damages the user's own settings (STAT-004, STAT-005; first open task on the cutline)
-Done: 295 / 546 tasks  ·  P0 parity: 6 / 228 cards  ·  cutline 12 / 17 left  ·  merge gate 54 waiting  (node scripts/plan-check.mjs --write-state)
+Done: 303 / 550 tasks  ·  P0 parity: 6 / 228 cards  ·  cutline 9 / 17 left  ·  merge gate 47 waiting  (node scripts/plan-check.mjs --write-state)
 
 How to read this: `PLAN.md` holds the 533 tasks in build order; each names the spec cards it must
 make pass. Progress is counted in tasks ticked there and in P0 cards whose acceptance boxes all pass.
@@ -27,7 +27,7 @@ today. Agents report their own state through hooks Kolux installs for Claude Cod
 (permission, question, working, done, blocked, interrupted; subagents under their lead), with
 one status vocabulary for every dot, chip and label, desktop notifications on finish and
 permission, a quiet-terminal alert, tab and workspace unread marks, and a pane header with the
-agent mark, name, branch, program, status word and gauge. Dragging the line between two panes resizes them live (the 6 px divider of DT-A7), a release outside the window ends the drag where it was, and a narrow pane drops its branch chip, program word, buttons and status word in that order while the dot, mark and name stay. A tab's right-click menu closes it, the others, those to its right or left, or all (Ctrl+Alt+W), middle-click closes a tab, and closing the active tab goes back to the tab used before it. The command line answers in tens of milliseconds over the loopback port and an ask or waiting check stays up for minutes; removing a worktree ends its shells and everything they started, proves them gone, and refuses (unless forced) when one stays. Claude Code in a pane is made to ask before a force-push to main, a hard reset or forced clean, a database drop or truncate, a Stripe change, an infrastructure apply or destroy and a production deploy, each rule switchable in settings.json (the Safety page follows). A recursive delete aimed outside the workspace asks too, and every protected rule sees through wrappers, chains, substitutions, nested shells and encoded PowerShell. Paths on other machines are refused as text before any disk call, and a file handed to the system is revealed in its folder instead of run when it is a program. Discarding work in Source Control asks first, worded for what goes, and never follows a link out of the repository. File access stays inside your projects: a path outside them, or leading out through a link, is refused before the disk is touched, and one file at a time can be allowed for the run. The local endpoints agents' tools use answer only Kolux's own tools: a web page, another host or a bare connection gets nothing. The app keeps a short, capped, user-only log of its own starts, exits and terminal sessions; Settings > General > Diagnostics copies it with secrets masked or writes a review copy to look at and throw away. Settings > General > Privacy says the work stays on the computer, lists every connection the app makes, and Send feedback opens a pre-filled GitHub issue page in the browser instead of sending anything. Quit and reopen: every workspace's tabs and layout come back, a damaged saved entry is dropped on its own and the rest kept, and the workspace and tab that were active are active again while they still exist. A Claude Code or Codex tab comes back on its own session (the agent's resume command with the id its hooks last reported), after a quit or a kill alike.
+agent mark, name, branch (a detached checkout shows its short commit; a plain folder no chip), program, status word and gauge. Its "..." button or a right-click opens the pane menu (expand, split right or down, close); expand or Ctrl+Shift+Enter makes the pane fill the workspace and the same again restores every pane, terminals and their scrollback untouched. Dragging the line between two panes resizes them live (the 6 px divider of DT-A7), a release outside the window ends the drag where it was, and a narrow pane drops its branch chip, program word, buttons and status word in that order while the dot, mark and name stay. A tab's right-click menu closes it, the others, those to its right or left, or all (Ctrl+Alt+W), middle-click closes a tab, and closing the active tab goes back to the tab used before it. The command line answers in tens of milliseconds over the loopback port and an ask or waiting check stays up for minutes; removing a worktree ends its shells and everything they started, proves them gone, and refuses (unless forced) when one stays. Claude Code in a pane is made to ask before a force-push to main, a hard reset or forced clean, a database drop or truncate, a Stripe change, an infrastructure apply or destroy and a production deploy, each rule switchable in settings.json (the Safety page follows). A recursive delete aimed outside the workspace asks too, and every protected rule sees through wrappers, chains, substitutions, nested shells and encoded PowerShell. Paths on other machines are refused as text before any disk call, and a file handed to the system is revealed in its folder instead of run when it is a program. Discarding work in Source Control asks first, worded for what goes, and never follows a link out of the repository. File access stays inside your projects: a path outside them, or leading out through a link, is refused before the disk is touched, and one file at a time can be allowed for the run. The local endpoints agents' tools use answer only Kolux's own tools: a web page, another host or a bare connection gets nothing. The app keeps a short, capped, user-only log of its own starts, exits and terminal sessions; Settings > General > Diagnostics copies it with secrets masked or writes a review copy to look at and throw away. Settings > General > Privacy says the work stays on the computer, lists every connection the app makes, and Send feedback opens a pre-filled GitHub issue page in the browser instead of sending anything. Quit and reopen: every workspace's tabs and layout come back, a damaged saved entry is dropped on its own and the rest kept, and the workspace and tab that were active are active again while they still exist. A Claude Code or Codex tab comes back on its own session (the agent's resume command with the id its hooks last reported), after a quit or a kill alike.
 
 The sidebar lists projects (Git repositories, added by typing or browsing; nothing else is pulled
 in) with their main checkout and workspaces (worktrees), grouped by project, status or pull
@@ -37,7 +37,9 @@ opens it with a shell (a stand-in row and tab show while Git works; a newer crea
 running and removes what it had made); Remove asks first and deletes folder and branch. Clicking a row switches
 workspaces instantly, each keeping its panes as they were. The plus menu lists only agents that
 are really installed and starts one in a fresh pre-trusted worktree or as a tab; empty panes ask
-what to run. Where workspaces live, how a new one starts (nested or flat, base branch) and the
+what to run, and on the New look a new session is chosen on a full-page New session sheet over the
+workspace (count and folders from the project's last launch, Ctrl+Enter starts a complete lineup,
+Escape closes). Where workspaces live, how a new one starts (nested or flat, base branch) and the
 shortcuts (`~\.kolux\keybindings.json`, 127 command ids) are the user's own and remembered. A
 Source Control panel stages, commits, pushes and pulls. `kolux-dev worktree create / rm` and
 `kolux-dev orchestration worker-start` (flag checking only) drive it from a terminal. Settings has
@@ -124,7 +126,10 @@ know, keeps the default for any entry with a bad chord, drops a custom chord tha
 another in the same place, and shows a red notice when the file will not parse while leaving the
 file alone. The search box chips and "Next that needs you" read their keys from that map (an
 override shows at once at the next start; unbound shows "Unassigned"). Ctrl+B hides and shows the
-sidebar and Ctrl+Alt+V cycles Agents / Board / Terminals through the keymap. The app icon and the
+sidebar (closed, it takes no width and the first tab stays in view), its right edge drags between
+220 and 480 px and the width is kept (a bad saved width falls back), Ctrl+Shift+0 opens it and puts
+focus on its list, and each workspace lists its running sessions as rows with their own agent mark
+and name plus a count that skips ended ones; a click on a row shows that pane (T-051), and Ctrl+Alt+V cycles Agents / Board / Terminals through the keymap. The app icon and the
 top-left mark are now Txais's own (design/icon/).
 
 T-006 makes the sidebar rows a switch: a click on a workspace row (main checkout or worktree)
@@ -203,8 +208,8 @@ T-010 gives every grid cell tabs (TERM-040, TERM-041, TERM-068). The strip's "Ne
 Ctrl+T) opens a shell as a tab beside the focused pane, started in the workspace folder and ready
 to type; the menu also lists every installed agent, each with its own `tab.newAgent.<id>` command
 (unbound unless the shortcuts file says otherwise) that opens a tab with that agent starting in the
-workspace folder; outside any workspace an agent still gets a fresh worktree. A cell with one tab
-shows no tab strip (the clean look); with two or more, the strip sits above the pane and each tab
+workspace folder; outside any workspace an agent still gets a fresh worktree. On the New look a cell with one tab
+shows no tab strip and sessions are 14 px rounded windows with gaps (T-048); Classic keeps square panes edge to edge and always shows the strip; with two or more, the strip sits above the pane and each tab
 closes from its own x, the next tab taking over. A requested start folder for a new terminal may
 be relative to the workspace or absolute, and a missing one falls back to the workspace folder.
 Paste (Ctrl+V, Ctrl+Shift+V, Shift+Insert) goes through the focused pane's own text area, so it
@@ -578,6 +583,13 @@ nothing) or deletes it, and a delete leaves "Deleted Review crew. Undo" for eigh
 40 teams, 60-character names, 12 seats, 4000-character prompts. Teams are kept in settings.json
 under `savedShapes`. Carrying a conversation to another agent and starting an agent from failing
 checks or an issue wait on T-187-b.
+
+[look] T-069-a: Kolux reopens on the screen left at quit (Agents, Board, Terminals, Artifacts or
+Inbox; Agents and Board only under New) with the page that was open, Tasks included; picking a
+first screen in General sets the next start's screen. A run of quick switches is written once, and
+a pending one before the window closes; an unreadable settings file opens on Board with no
+error. With no screen ever chosen a New profile opens on Board (T-049-a). Closing the window with unsaved editor text asks first (Keep working / Quit without
+saving). Workspaces and tabs coming back after a restart is T-069-b.
 
 [orchestration] T-189-a adds the Automations title-bar button and asks an agent to resolve
 merge conflicts (VIEW-011, VIEW-069). Settings > Appearance has a Title bar card whose
@@ -1397,8 +1409,9 @@ flash before the interface loads is gone too.
 
 [accounts] Settings now has its ten pages (General, Appearance, Accounts & keys, Agents, Terminal &
 sessions, Git & worktrees, Safety, Notifications, Shortcuts, Usage) plus one small page per
-repository, and opens on the page used last (T-054). Appearance has a Mode switch: System (the
-default, follows Windows while the app runs), Light or Dark, and terminals turn light with the
+repository, and opens on the page used last (T-054). Appearance has a Mode switch: System
+(follows Windows while the app runs), Light or Dark; a profile that never chose starts on Dark
+(T-418), and terminals turn light with the
 app unless that is switched off. General has the Classic or New look and the screen that opens
 first; under Classic the Agents / Board / Terminals switcher is gone and the window stays on
 Terminals. Pages with nothing built yet say so.

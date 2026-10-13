@@ -80,3 +80,10 @@ export function nextNeedsYou(keys: number[], needs: Set<number>, focused: number
   const i = keys.indexOf(focused);
   return [...keys.slice(i + 1), ...keys.slice(0, i + 1)].find((k) => needs.has(k)) ?? null;
 }
+
+/** TERM-022: the header chip: the branch, else the short commit of a detached HEAD; none outside git. */
+export function branchChip(git: { branch: string | null; head: string | null } | null): { text: string; tip: string } | null {
+  if (!git) return null;
+  if (git.branch) return { text: git.branch, tip: git.branch };
+  return git.head ? { text: git.head.slice(0, 7), tip: `Detached at ${git.head}` } : null;
+}

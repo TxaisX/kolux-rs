@@ -130,7 +130,8 @@ export function readAppearance(s: Record<string, unknown>): Appearance {
     saturation: clampNum(s[FIELD.saturation], SPAN.saturation),
     depth: clampNum(s[FIELD.depth], SPAN.depth),
     terminal,
-    mode: s[FIELD.mode] === "light" || s[FIELD.mode] === "dark" ? (s[FIELD.mode] as Mode) : "system",
+    // T-418 (DECISIONS DT-L1, amending SET-005): no saved mode means Dark; a saved System is kept.
+    mode: s[FIELD.mode] === "light" || s[FIELD.mode] === "dark" || s[FIELD.mode] === "system" ? (s[FIELD.mode] as Mode) : "dark",
     lightTerminal: s[FIELD.lightTerminal] !== false,
     // Match keeps following the app in light mode until a light scheme is picked.
     lightScheme: knownScheme(s[FIELD.lightScheme], custom, terminal === "match" ? "match" : "tango-light"),

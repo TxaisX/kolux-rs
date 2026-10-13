@@ -1,6 +1,6 @@
 // The pane grid's arithmetic (TERM-001, TERM-004, TERM-006, TERM-040, VIEW-026), pure so it runs without a browser.
 import { expect, test } from "vitest";
-import { blocking, cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, freeCell, PANE_COUNTS, seedCount } from "./grid";
+import { blocking, cellsOf, clampCount, columnsFor, insertBefore, MAX_PANES, neighbourTab, resizePlan, rowsFor, splitIndex, toggleCard, freeCell, PANE_COUNTS, seedCount, canExpand, toggleZoom, zoomedGroup } from "./grid";
 
 const started = (key: number) => ({ key, started: true });
 const empty = (key: number) => ({ key, started: false });
@@ -156,4 +156,25 @@ test("TERM-007: a new session fills the first empty pane, and none when every ce
   expect(freeCell(cellsOf([shell, chooser]))).toBe(chooser);
   expect(freeCell(cellsOf([shell, ...tabbed]))).toBeUndefined();
   expect(freeCell(cellsOf([shell]))).toBeUndefined();
+});
+
+test("TERM-013: expanding a cell fills the grid, the same cell again restores, one per workspace", () => {
+  let z = toggleZoom({}, "C:/w", 4, 3);
+  expect(zoomedGroup(z, [1, 4, 7])).toBe(4);
+  z = toggleZoom(z, "C:/w", 7, 3);
+  expect(zoomedGroup(z, [1, 4, 7])).toBe(7);
+  expect(toggleZoom(z, "C:/w", 7, 3)).toEqual({});
+  // Another workspace keeps its own expanded cell.
+  z = toggleZoom(toggleZoom({}, "C:/w", 4, 3), "C:/v", 9, 2);
+  expect(zoomedGroup(z, [9, 10])).toBe(9);
+  expect(zoomedGroup(z, [1, 4, 7])).toBe(4);
+  // A pane added or closed since restores the layout; expanding again expands rather than restores.
+  expect(zoomedGroup(z, [1, 4, 7, 8])).toBeNull();
+  expect(zoomedGroup(toggleZoom(z, "C:/w", 4, 4), [1, 4, 7, 8])).toBe(4);
+});
+
+test("TERM-025: a lone pane cannot expand in the classic look; the clean look expands its window", () => {
+  expect(canExpand(1, true)).toBe(false);
+  expect(canExpand(1, false)).toBe(true);
+  expect(canExpand(2, true)).toBe(true);
 });

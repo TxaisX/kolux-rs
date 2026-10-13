@@ -3,7 +3,8 @@
 // The card and its header follow design/DESIGN.md section 7: status icon, agent mark, title,
 // branch chip, program, status word; then gauge, more, expand, split, close on the right.
 import { useEffect, useRef, useState } from "react";
-import { crewLabel, crewLine, headerOf, type Crew } from "./status";
+import { branchChip, crewLabel, crewLine, headerOf, type Crew } from "./status";
+import PaneMenu from "./PaneMenu";
 import type { Chip } from "../board/chip";
 import type { AgentState } from "../projects/rows";
 import { invoke } from "@tauri-apps/api/core";
@@ -30,7 +31,7 @@ import Ring from "../usage/Ring";
 import { meterText, shortTokens, tone as toneOf, type Meter } from "../usage/meter";
 import PlusMenu, { programWord, shellWord, type AgentInfo } from "../launch/PlusMenu";
 import { useKeymap } from "../keys/KeymapContext";
-import { matchEvent } from "../keys/keymap";
+import { labelOf, matchEvent } from "../keys/keymap";
 import { attachPaste } from "./paste";
 import { stopLine, type StopInfo } from "./notify";
 import NameField from "./NameField";
@@ -122,7 +123,9 @@ type Props = {
   onSetDefault?: (id: string) => void;
   onChoose?: () => void;
   /** TERM-006: the header split button opens a shell beside this pane, in the same folder. */
-  onSplit?: () => void;
+  onSplit?: (dir: "right" | "down") => void;
+  /** TERM-013: the grid's expand: `on` while this pane's cell fills the grid; `can` is false for a lone classic pane. */
+  expand?: { on: boolean; can: boolean; toggle: () => void };
   /** VIEW-026: on the Board this pane is a card; expanded shows the live terminal inside it. */
   card?: {
     expanded: boolean;
@@ -138,7 +141,7 @@ type Props = {
   };
 };
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, card, account, notice = null, restored = false }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false }: Props) {
   const host = useRef<HTMLDivElement>(null);
   // TERM-096: the link provider is set up once, so it reads the newest opener through a ref.
   const handleRef = useRef(findHandle);
@@ -164,8 +167,8 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
     return () => clearTimeout(t);
   }, [flash]);
   const [plusAt, setPlusAt] = useState<{ top: number; right: number } | null>(null);
-  // TERM-027 / TERM-116: the pane menu and the inline name field.
-  const [menuAt, setMenuAt] = useState<{ top: number; right: number } | null>(null);
+  // TERM-025 / TERM-027: the pane menu, opened by "..." or a right-click on the header, and the inline name field.
+  const [menuAt, setMenuAt] = useState<{ top: number; left: number } | null>(null);
   const [naming, setNaming] = useState(false);
   // The menu shows a shortcut only once one is assigned (both start with none).
   const setKey = useLabel("terminal.setTitle").length > 0;
@@ -173,6 +176,19 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   useEffect(() => {
     if (renameAsk > 0 && onRename) setNaming(true);
   }, [renameAsk]); // eslint-disable-line react-hooks/exhaustive-deps
+  // TERM-022: the branch (or detached commit) of the pane's folder, read when it shows and on focus.
+  const [git, setGit] = useState<{ branch: string | null; head: string | null } | null | undefined>(undefined);
+  useEffect(() => {
+    if (!cwd || hidden) return;
+    let live = true;
+    invoke<{ branch: string | null; head: string | null } | null>("scm_head", { dir: cwd }).then(
+      (h) => live && setGit(h),
+      () => live && setGit(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [cwd, hidden, focused]);
   const idRef = useRef<number | null>(null);
   const isHidden = useRef(hidden);
   isHidden.current = hidden;
@@ -226,6 +242,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       fontSize: 13,
       theme: currentTerminal(),
       allowProposedApi: true,
+      // TERM-013: ConPTY repaints the screen itself after a resize, so a taller pane gets blank rows
+      // rather than history pulled down for ConPTY to paint over (expand then restore kept scrollback).
+      ...(navigator.userAgent.includes("Windows") ? { windowsPty: { backend: "conpty" as const } } : {}),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -516,10 +535,25 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
   const agentLabel = name ?? (agent === "shell" ? "Plain shell" : programWord(agent));
   // SET-028: a pane started with a model (a seat's pick or a worker's tier) names it.
   const model = agent === "shell" ? null : modelOf(args);
+  // TERM-022: before git answers, the branch the pane was opened on; a folder outside git has none.
+  const chip = git === undefined ? (branch ? { text: branch, tip: branch } : null) : branchChip(git);
+  // TERM-013 / TERM-025: on the Board, expand opens the card; in the grid it fills the grid.
+  const onExpand = card ? card.onToggle : expand?.toggle;
+  const expanded = card ? card.expanded : !!expand?.on;
+  const canExpand = card ? true : !!expand?.can;
+  const expandKey = labelOf(keymap, "terminal.expandPane").join("+") || "no shortcut";
+  const openMenu = (x: number, y: number) => setMenuAt({ top: Math.min(y, window.innerHeight - 160), left: Math.min(x, window.innerWidth - 240) });
 
   return (
     <section ref={box} className={`pane${focused ? " focused" : ""}${glow || unread ? " glow" : ""}${unread ? " unread" : ""}${card ? " card" : ""}${card?.expanded ? " expanded" : ""}`} hidden={hidden} aria-label={`${title} pane`} onMouseDown={onFocus} data-agent={agent} style={card?.column ? { gridColumn: card.column } : undefined}>
-      <header className="pane-head">
+      <header
+        className="pane-head"
+        onContextMenu={(e) => {
+          if ((e.target as Element).closest?.(".address")) return;
+          e.preventDefault();
+          openMenu(e.clientX, e.clientY);
+        }}
+      >
         <span className={`st ${tone || "idle"}`} role="img" aria-label={`status: ${word}`} data-tip={[explain, drawing].filter(Boolean).join(" · ")}>
           <StatusGlyph glyph={glyph} size={glyph === "spinner" ? 11 : 12} />
         </span>
@@ -545,9 +579,9 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             {title}
           </span>
         )}
-        {branch && (
-          <span className="chip" title={branch}>
-            {branch}
+        {chip && (
+          <span className="chip" title={chip.tip}>
+            {chip.text}
           </span>
         )}
         {/* SESS-025: the start line shown back leaves out the rules block of a side-by-side launch. */}
@@ -595,21 +629,23 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             aria-expanded={menuAt !== null}
             onClick={(e) => {
               const r = e.currentTarget.getBoundingClientRect();
-              setMenuAt({ top: r.bottom + 4, right: Math.max(8, window.innerWidth - r.right) });
+              openMenu(r.left, r.bottom + 4);
             }}
           >
             <Dots size={12} />
           </button>
           <button
             className="ib"
-            onClick={card?.onToggle}
+            onClick={onExpand}
+            disabled={!canExpand}
             aria-expanded={card ? card.expanded : undefined}
-            title={card ? (card.expanded ? "Collapse: the terminal goes back to its grid slot" : "Expand: show this session's live terminal in the card") : "Expand (not built yet)"}
+            aria-pressed={card ? undefined : expanded}
+            title={card ? (card.expanded ? "Collapse: the terminal goes back to its grid slot" : "Expand: show this session's live terminal in the card") : !canExpand ? "Expand: the only pane already fills the grid" : expanded ? `Restore: the other panes come back (${expandKey})` : `Expand: this pane fills the grid (${expandKey})`}
           >
             <Expand size={12} />
           </button>
           {onSplit && (
-            <button className="ib" onClick={onSplit} title="Split right: a shell in the same folder (Ctrl+Shift+D; Alt+Shift+D splits down)">
+            <button className="ib" onClick={() => onSplit("right")} title="Split right: a shell in the same folder (Ctrl+Shift+D; Alt+Shift+D splits down)">
               <SplitRight size={12} />
             </button>
           )}
@@ -631,63 +667,60 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         </span>
       </header>
       {menuAt && (
-        <>
-          <div className="menu-backdrop" onClick={() => setMenuAt(null)} onContextMenu={(e) => (e.preventDefault(), setMenuAt(null))} aria-hidden="true" />
-          <div className="menu" role="menu" aria-label="Pane menu" style={menuAt} onKeyDown={(e) => e.key === "Escape" && setMenuAt(null)}>
-            {onRename && (
-              <button
-                role="menuitem"
-                className="menu-item"
-                onClick={() => {
-                  setMenuAt(null);
-                  setNaming(true);
-                }}
-              >
-                <span className="name">Set Title…</span>
-                {setKey && <Kbd id="terminal.setTitle" />}
-              </button>
-            )}
-            {onRename && custom && (
-              <button
-                role="menuitem"
-                className="menu-item"
-                onClick={() => {
-                  setMenuAt(null);
-                  onRename(undefined);
-                }}
-              >
-                <span className="name">Clear Pane Title</span>
-                {clearKey && <Kbd id="terminal.clearPaneTitle" />}
-              </button>
-            )}
-            {onCopyId &&
-              COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => (
-                <button
-                  key={what}
-                  role="menuitem"
-                  className="menu-item"
-                  onClick={() => {
-                    setMenuAt(null);
-                    onCopyId(what);
-                  }}
-                >
-                  <span className="name">{label}</span>
-                </button>
-              ))}
+        <PaneMenu style={menuAt} expanded={expanded} canExpand={canExpand} onExpand={onExpand} onSplit={onSplit} onClose={close} onDismiss={() => setMenuAt(null)}>
+          {onRename && (
             <button
               role="menuitem"
               className="menu-item"
-              title="A scrubbed snapshot of this pane for a bug report, to the clipboard"
               onClick={() => {
                 setMenuAt(null);
-                void copyDiagnostics();
+                setNaming(true);
               }}
             >
-              <span className="agent-mark" />
-              <span className="name">Copy terminal diagnostics</span>
+              <span className="name">Set Title…</span>
+              {setKey && <Kbd id="terminal.setTitle" />}
             </button>
-          </div>
-        </>
+          )}
+          {onRename && custom && (
+            <button
+              role="menuitem"
+              className="menu-item"
+              onClick={() => {
+                setMenuAt(null);
+                onRename(undefined);
+              }}
+            >
+              <span className="name">Clear Pane Title</span>
+              {clearKey && <Kbd id="terminal.clearPaneTitle" />}
+            </button>
+          )}
+          {onCopyId &&
+            COPY_IDS.filter(([what]) => sessionKnown || what !== "session").map(([what, label]) => (
+              <button
+                key={what}
+                role="menuitem"
+                className="menu-item"
+                onClick={() => {
+                  setMenuAt(null);
+                  onCopyId(what);
+                }}
+              >
+                <span className="name">{label}</span>
+              </button>
+            ))}
+          <button
+            role="menuitem"
+            className="menu-item"
+            title="A scrubbed snapshot of this pane for a bug report, to the clipboard"
+            onClick={() => {
+              setMenuAt(null);
+              void copyDiagnostics();
+            }}
+          >
+            <span className="agent-mark" />
+            <span className="name">Copy terminal diagnostics</span>
+          </button>
+        </PaneMenu>
       )}
       {plusAt && (
         <PlusMenu
@@ -708,7 +741,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
             onSplit &&
             (() => {
               setPlusAt(null);
-              onSplit();
+              onSplit("right");
             })
           }
           onManage={() => {
