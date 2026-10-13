@@ -79,8 +79,11 @@ export const claudeDisconnect = {
   confirm: "Disconnect",
 };
 
-function ClaudeCard() {
+/** `onConnected`: told whether Claude counts as connected each time that changes (ONB-003). */
+export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: boolean) => void } = {}) {
   const [status, setStatus] = useState<KeyStatus | null>(null);
+  const on = ["connected", "warning"].includes(keyCard(status).state);
+  useEffect(() => onConnected(on), [onConnected, on]);
   const [own, setOwn] = useState<OwnSignIn | null>(null);
   const [resume, setResume] = useState(false);
   const [busy, setBusy] = useState(false);

@@ -23,6 +23,7 @@ mod keybindings;
 mod kits;
 mod names;
 mod notifications;
+mod onboarding;
 mod orchestration;
 mod procs;
 mod resources;
@@ -114,6 +115,7 @@ pub fn run() {
             let store = Store::open(&dir)?;
             let starts: u64 = store.get("start_count")?.and_then(|v| v.parse().ok()).unwrap_or(0) + 1;
             store.set("start_count", &starts.to_string())?;
+            onboarding::first_start(&store, starts)?;
             // ACCT-010: a key this computer can no longer open is cleared before the window asks.
             secrets::drop_unreadable(&store, &dir);
             app.manage(Mutex::new(store));
@@ -303,6 +305,9 @@ pub fn run() {
             kits::kit_collect,
             kits::kit_history,
             kits::kit_open_file,
+            onboarding::onboarding_get,
+            onboarding::onboarding_step,
+            onboarding::onboarding_close,
             files::file_read,
             files::file_write,
             files::md_list,

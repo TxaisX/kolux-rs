@@ -163,8 +163,11 @@ export function GrokKeyDialog({ open, onSubmit, onClose }: { open: boolean; onSu
   );
 }
 
-export default function GrokCard() {
+/** `onConnected`: told whether Grok counts as connected each time that changes (ONB-003). */
+export default function GrokCard({ onConnected = () => {} }: { onConnected?: (on: boolean) => void } = {}) {
   const [view, setView] = useState<GrokView | null>(null);
+  const on = !!view && grokState(view) === "connected";
+  useEffect(() => onConnected(on), [onConnected, on]);
   const [pending, setPending] = useState<GrokAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState(false);

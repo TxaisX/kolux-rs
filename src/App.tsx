@@ -40,8 +40,10 @@ import { baseName, keyOf } from "./editor/buffers";
 import PreviewPane from "./editor/PreviewPane";
 import FilePicker, { quickOpenList, type Pick } from "./editor/FilePicker";
 import ArtifactsPage from "./artifacts/ArtifactsPage";
-import { KitGallery, KitSetup, OPEN_KITS } from "./kits/Kits";
-import { KITS, VENDORS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
+import { KitGallery, KitSetup, OPEN_KITS, startValues } from "./kits/Kits";
+import Wizard from "./onboarding/Wizard";
+import { ADD_PROJECT, kitLaunch, openAt } from "./onboarding/firstRun";
+import { KITS, VENDORS, RECALL_KEY, assignRoles, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip, { useKitCheck } from "./kits/KitStrip";
 import { datedName, matchSeats, previewKind, roleDone, rolePrompt, seatTitle, type Past, type RunCheck } from "./kits/run";
 import DiffPane, { diffNav } from "./editor/DiffPane";
@@ -332,13 +334,15 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     setKits({ kit: id, sampleDir: null });
     invoke<string>("kit_samples_dir", { kit: id }).then((d) => setKits((k) => (k?.kit === id ? { ...k, sampleDir: d } : k)), () => {});
   };
+  // ONB-004 opens a sample the same way, with no launch window (select opens one plain tab).
+  const openSamples = async (id: string) => {
+    const p = await invoke<{ path: string; name: string }>("kit_samples", { kit: id });
+    setRefresh((n) => n + 1);
+    select(p.path, null);
+  };
   const trySamples = (id: string) => {
     setSamplesBusy(true);
-    invoke<{ path: string; name: string }>("kit_samples", { kit: id })
-      .then((p) => {
-        setRefresh((n) => n + 1);
-        select(p.path, null);
-      })
+    openSamples(id)
       .catch((err) => setToast(`Kolux could not set up the sample data: ${String(err)}`))
       .finally(() => setSamplesBusy(false));
   };
@@ -1098,12 +1102,13 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
   // SKILL-006: Start kit. One titled seat per role in the project's own checkout (never a
   // worktree), the waiting roles idle with no prompt; earlier results kept in a dated copy and the
   // run recorded first. A folder holding another kit's run asks inline before anything starts.
-  const startKit = async (kit: Kit, values: Record<string, string>, assigned: (Vendor | null)[], dir: string) => {
+  /** Resolves true once at least one of the kit's AIs started. */
+  const startKit = async (kit: Kit, values: Record<string, string>, assigned: (Vendor | null)[], dir: string): Promise<boolean> => {
     const before = await invoke<RunCheck | null>("kit_check", { dir }).catch(() => null);
     if (before && before.record.kit !== kit.id && kitConflict === null) {
       const other = KITS.find((k) => k.id === before.record.kit)?.title ?? before.record.title;
       setKitConflict(`This folder holds the results of \u201c${other}\u201d. Starting \u201c${kit.title}\u201d here puts both kits' results side by side.`);
-      return;
+      return false;
     }
     setKitConflict(null);
     setKits(null);
@@ -1115,7 +1120,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
       prep = await invoke("kit_prepare", { dir, kit: kit.id, title: kit.title, roles, earlierName });
     } catch (err) {
       setToast(`The kit did not start: ${String(err)}`);
-      return;
+      return false;
     }
     // An idle, empty first tab is reused for the first seat.
     const here = panesIn(panes, dir);
@@ -1144,7 +1149,7 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     const started = keys.filter((k) => k !== null).length;
     if (started === 0) {
       setToast("Not one AI started for the kit, so nothing is running.");
-      return;
+      return false;
     }
     // The role-to-session mapping is kept only when every seat started.
     kitRuns.current[dir] = { started: prep.started, seats: started === keys.length ? keys : null, waiting, sent: {}, prompts };
@@ -1155,6 +1160,38 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
     if (prep.recordError) words.push(`Kolux could not write the kit's run record, so its results may not be tracked: ${prep.recordError}`);
     if (started < keys.length) words.push(`${keys.length - started} of its roles did not start.`);
     setToast(words.join(" "));
+    return true;
+  };
+
+  // ONB-001..005: the first-run wizard floats over the app while its record says it is open.
+  const [wizard, setWizard] = useState<number | null>(null);
+  const wizardSetup = useRef(false);
+  useEffect(() => {
+    invoke<{ step: number } | null>("onboarding_get").then((r) => setWizard(openAt(r)), () => {});
+  }, []);
+  const endWizard = (outcome: "completed" | "dismissed") => {
+    setWizard(null);
+    wizardSetup.current = false;
+    invoke("onboarding_close", { outcome }).catch(() => {});
+  };
+  // ONB-005: Start kit launches at once in the kit's own sample folder with an AI ready; otherwise
+  // the setup dialog opens, the wizard hides behind it, and a start from there completes it.
+  const wizardKit = async (id: string) => {
+    const kit = KITS.find((k) => k.id === id);
+    if (!kit) return;
+    const sampleDir = await invoke<string>("kit_samples_dir", { kit: id }).catch(() => null);
+    if (activeDir && kitLaunch(activeDir, sampleDir, kitAIs) === "launch") {
+      if (await startKit(kit, startValues(kit, activeDir, sampleDir, settings), assignRoles(kit, kitAIs), activeDir)) return endWizard("completed");
+    } else setKitConflict(null);
+    wizardSetup.current = true;
+    setKits({ kit: id, sampleDir });
+  };
+  // ONB-005: one plain session on the first available agent (the default first), empty prompt;
+  // nothing without an agent and a workspace.
+  const wizardSession = async () => {
+    const agent = menuAgents(offeredAgents(agents, settings), defaultAgentId(settings))[0];
+    if (!agent || !activeDir) return;
+    if ((await startIn(agent, activeDir, null, "", true)) !== null) endWizard("completed");
   };
 
   // SKILL-008: a waiting role gets its prompt once the role it waits on has written this run's
@@ -1912,16 +1949,35 @@ function Window({ initial }: { initial: Record<string, unknown> }) {
             onClose={() => {
               setKitConflict(null);
               setKits(null);
+              wizardSetup.current = false;
             }}
             onStart={(values, assigned) => {
+              const fromWizard = wizardSetup.current;
               // SKILL-005: real inputs are remembered for this workspace; a sample workspace's are not.
               const real = !!activeDir && !sameDir(activeDir, kits.sampleDir);
               if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
-              if (activeDir) void startKit(kit, values, assigned, activeDir);
+              if (activeDir) void startKit(kit, values, assigned, activeDir).then((ok) => ok && fromWizard && endWizard("completed"));
             }}
           />
         );
       })()}
+      {wizard !== null && (
+        <Wizard
+          start={wizard}
+          vendors={kitAIs}
+          ping={settings[FINISH_FIELD] !== false}
+          onPing={(on) => saveSetting(FINISH_FIELD, on)}
+          hidden={kits !== null}
+          onSample={openSamples}
+          onKit={(id) => void wizardKit(id)}
+          onSession={() => void wizardSession()}
+          onPickFolder={() => {
+            endWizard("completed");
+            window.dispatchEvent(new CustomEvent(ADD_PROJECT));
+          }}
+          onClose={() => endWizard("dismissed")}
+        />
+      )}
       <UpdateCenter />
       {readStatusBar(settings).visible && (
       <StatusBar

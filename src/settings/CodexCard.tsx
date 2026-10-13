@@ -213,8 +213,11 @@ export function CodexCardView({ view, error, confirming = null, pending = false,
   );
 }
 
-export default function CodexCard() {
+/** `onConnected`: told whether Codex counts as connected each time that changes (ONB-003). */
+export default function CodexCard({ onConnected = () => {} }: { onConnected?: (on: boolean) => void } = {}) {
   const [view, setView] = useState<CodexView | null>(null);
+  const on = !!view && codexState(view) === "connected";
+  useEffect(() => onConnected(on), [onConnected, on]);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [pending, setPending] = useState(false);

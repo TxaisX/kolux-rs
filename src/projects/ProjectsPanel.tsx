@@ -27,6 +27,7 @@ import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
+import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
 import { chromeShown } from "../chrome/chromeItems";
@@ -142,6 +143,12 @@ export default function ProjectsPanel({ openDirs, states, unread, onUnread, sett
   const [showAdd, setShowAdd] = useState(false);
   // PROJ-002: the Add Project dialog, from the folder button or the composer's Add project item.
   const [adding, setAdding] = useState(false);
+  // ONB-004: the first-run wizard's 'Pick a folder' opens Add Project here.
+  useEffect(() => {
+    const open = () => setAdding(true);
+    window.addEventListener(ADD_PROJECT, open);
+    return () => window.removeEventListener(ADD_PROJECT, open);
+  }, []);
   const [creating, setCreating] = useState<string | null>(null); // project id whose name field is open; "" with no project yet
   const [pending, setPending] = useState<{ projectId: string; name: string } | null>(null); // the stand-in row while Git works
   const shown = useRef(activeDir); // the workspace in front, read when a create finishes

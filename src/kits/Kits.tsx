@@ -66,6 +66,24 @@ export function RecentRuns({ runs, onResults, onProject }: { runs: Past[]; onRes
 
 type GalleryProps = { connected: Vendor[]; onPick: (id: string) => void; onClose: () => void; recent?: Past[]; onResults?: (run: Past) => void; onProject?: (run: Past) => void };
 
+/** One kit's card; `selected` makes it a choice that shows pressed (the first-run wizard, ONB-005). */
+export function KitCard({ kit: k, connected, selected, onPick }: { kit: Kit; connected: Vendor[]; selected?: boolean; onPick: (id: string) => void }) {
+  return (
+    <button className="kit-card" aria-label={k.title} aria-pressed={selected} onClick={() => onPick(k.id)}>
+      <span className="kit-top">
+        <span className="kit-icon">
+          <KitIcon id={k.id} />
+        </span>
+        <span className="kit-badge">{CATEGORY_NAME[k.category]}</span>
+        <span className="kit-time">about {k.minutes} min</span>
+      </span>
+      <span className="kit-title">{k.title}</span>
+      <span className="kit-sum">{k.summary}</span>
+      <RoleList kit={k} connected={connected} />
+    </button>
+  );
+}
+
 export function KitGallery({ connected, onPick, onClose, recent = [], onResults = () => {}, onProject = () => {} }: GalleryProps) {
   return (
     <div className="ask-backdrop" onMouseDown={onClose}>
@@ -79,18 +97,7 @@ export function KitGallery({ connected, onPick, onClose, recent = [], onResults 
         <p className="ask-body">A ready-made job for three AIs, each in its own role, on your own files.</p>
         <div className="kit-grid">
           {KITS.map((k) => (
-            <button key={k.id} className="kit-card" aria-label={k.title} onClick={() => onPick(k.id)}>
-              <span className="kit-top">
-                <span className="kit-icon">
-                  <KitIcon id={k.id} />
-                </span>
-                <span className="kit-badge">{CATEGORY_NAME[k.category]}</span>
-                <span className="kit-time">about {k.minutes} min</span>
-              </span>
-              <span className="kit-title">{k.title}</span>
-              <span className="kit-sum">{k.summary}</span>
-              <RoleList kit={k} connected={connected} />
-            </button>
+            <KitCard key={k.id} kit={k} connected={connected} onPick={onPick} />
           ))}
         </div>
         <RecentRuns runs={recent} onResults={onResults} onProject={onProject} />

@@ -41,7 +41,9 @@ AI connections: Claude keys and managed accounts, Codex sign-in, sealed secrets,
 flagged in the main window. A 24 px status bar shows On, memory use, shell and plug counts. Starter kits
 run three AIs on one job: the strip above the sessions previews or opens each role's files,
 collects them into one dated folder with a README and a Results page, and restarts or moves a
-stopped role; the kit gallery lists the recent runs.
+stopped role; the kit gallery lists the recent runs. A brand-new profile opens a four-screen
+first-run card (welcome, connect an AI, your work, choose a kit) that can start a kit on sample
+data.
 
 What works today: the window has no Windows title bar; Kolux draws its own 36 px top bar with the
 six-spoke mark, a sidebar toggle, the centred Agents / Board / Terminals switcher (Terminals is the
@@ -1402,6 +1404,18 @@ text with any script or javascript: link taken out. A stopped role can be restar
 another connected AI. The kit gallery lists the last 50 runs across projects with Open results
 and Open project. Kits now refuse a folder that is not a project or under the samples folder.
 
+[accounts] T-207 adds the first-run wizard. A brand-new profile opens a card over the dimmed,
+blurred app: Kolux mark, four progress bars with tooltips, one of four, a heading, a scrolling
+body and a footer whose main button carries a Ctrl+Enter chip (the chord fires it, never from a
+text field or mid-composition, never while it is off). Welcome shows Claude, Codex and Grok tiles
+with pulsing dots (still under reduced motion). Connect an AI reuses the Settings Connect cards and
+keeps Continue locked until one reports connected; I'll do this later moves on. Your work offers
+Pick a folder (closes as completed and opens Add project) or the six samples, spreadsheet first;
+Try with sample data opens the sample as the workspace with one plain tab and pre-selects its kit.
+Choose a kit shows the kit cards with their roles, the app-wide finish switch, Start kit (straight
+launch in the kit's own sample folder with an AI ready, else the setup dialog, behind which the
+wizard hides) and Just open a session. Progress is kept in the store (kv onboarding, version 7).
+
 ## Needs Txais
 
 13 open decisions in `DECISIONS.md` section 2 are marked "confirm". The loop builds each one's
@@ -2547,7 +2561,10 @@ recorded default until told otherwise; nothing here blocks a pass.
 
 - [accounts] T-206 · Move to and Restart show on any stopped kit row (the usage-limit and sign-in states are not in the window yet, T-206-b); both need the run's first messages, which only the window that started the run holds, so after a restart they say to start the kit again. A declared file that is a link, or any path that leaves the role's folder, counts as missing and is never copied. The run history lives in the app store (kv kit_history, newest 50) and in each folder's run record; a record over 256 KB or that does not parse is ignored. Results.html is a standalone page with a no-scripts content policy; Markdown is rendered with pulldown-cmark with raw HTML shown as text. The embedded browser hides while the kits window is open (it drew over it), and the gallery closes before its own error toasts so they can be read.
 
+- [accounts] T-207 · The wizard record is kv `onboarding` {version 7, step = last screen finished (-1 none), closedAt, outcome completed|dismissed}; only start one with no record writes it, so older profiles never see the wizard (the migration of older progress is T-208); a close is final. The wizard opens after the last finished screen. Connected means: Claude's key card connected or about to run out, Codex's card connected, Grok's card connected. Start kit launches straight away only when the open workspace is that kit's own sample folder (which fills every input) and an AI is installed; any other case opens the setup dialog, and a start from there closes the wizard as completed. Just open a session takes the default agent first, else the first installed one that is not switched off, in the open workspace with no branch. The corner close button closes as dismissed with no question for now (ONB 006's ask is T-208). Ctrl+Enter still fires from a checkbox, radio or button, since those take no typing.
+
 ## Last 10 passes  (date · task · result · evidence)
+- 2026-10-12 · [accounts] T-207 · done: `onboarding.rs` record and onboarding_get / _step / _close; `src/onboarding/` Wizard (four screens) and firstRun.ts rules; Connect cards report connected; KitCard split out of the gallery; Add project opens on a window event · evidence/T-207.txt, T-207-*.png
 - 2026-10-12 · [accounts] T-206 · done: `kits.rs` kit_collect / kit_history / kit_open_file, the project-or-samples guard on every kit command, the per-folder and app-wide run history; strip Preview / Open / Collect results / Move to / Restart; Recent kit runs in the gallery; read-only editor and start-URL browser panes for previews · evidence/T-206.txt, T-206-*.png
 - 2026-10-12 · [core] T-018-c · done: Source Control bulk bar, click/Ctrl/Shift selection, Esc clears, Stage k and Unstage m in one git call; evidence/T-018-c-bulk.png
 - 2026-10-12 · [core] T-017-c · done, decision only: Cursor and Copilot pre-trust dropped (DT-C17), no documented trust file or interactive flag
