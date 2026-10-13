@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import { chordFires, closer, firstFolderAgent, kitLaunch, leaveKey, oneClick, openAt, SCREENS, type Outcome } from "./firstRun";
+import { chordFires, closer, firstFolderAgent, kitLaunch, leaveKey, milestone, oneClick, openAt, SCREENS, type Outcome } from "./firstRun";
 import { WizardView } from "./Wizard";
 import { jargon } from "../glossary";
 
@@ -154,4 +154,11 @@ test("ONB-010: the first folder starts only the saved default agent, never a gue
 test("ONB-009: clicks on Onboarding less than half a second apart count as one", () => {
   const click = oneClick();
   expect([click(1000), click(1300), click(1700), click(2300), click(2799), click(3300)]).toEqual([true, false, false, true, false, true]);
+});
+
+test("ONB-011: a milestone goes to onboarding.rs by name, and a failed write shows nothing", async () => {
+  const sent: unknown[] = [];
+  await milestone("aiConnected", async (cmd, args) => void sent.push([cmd, args]));
+  expect(sent).toEqual([["onboarding_milestone", { name: "aiConnected" }]]);
+  await expect(milestone("kitLaunched", () => Promise.reject(new Error("disk full")))).resolves.toBeUndefined();
 });
