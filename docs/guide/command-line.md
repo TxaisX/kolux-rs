@@ -48,6 +48,8 @@ The running app listens on a random port of your own computer (address `127.0.0.
 
 With `--json` the word is in `result.state`, and the command counts as worked in every case. The exit code still says whether Kolux is ready.
 
+Kolux answers the command line one request at a time. If it is busy with another one (a workspace being created with its setup, for example), `kolux status` waits about 2.5 seconds and then says `running: Kolux is up, busy with another request` (exit 0; with `--json`, `result.detail` reads "busy with another request"). It never waits the 5 minutes other commands allow. If it stays busy for many minutes with nothing long running, Kolux may be stuck.
+
 `kolux diagnostics memory` prints the Resource Manager's memory figures: Kolux itself, then each terminal session together with every program running inside it, then the total, then free memory. Each row has two numbers:
 
 | Column | Means |
@@ -111,9 +113,9 @@ A pane is one terminal. Each has a handle (its name for scripts) that looks like
 | `kolux terminal rename --terminal <handle> --title <t>` | Renames it. Without `--title` the default name returns |
 | `kolux terminal switch --terminal <handle>` | Focuses it (also `focus`) |
 | `kolux terminal close --terminal <handle>` | Closes it. `--tab` closes the whole tab; `--worktree <selector> --all` closes every pane of a workspace |
-| `kolux terminal read` | Prints what the pane showed. `--cursor` and `--limit` page through output; `--screen` gives the frame visible now |
-| `kolux terminal send` | Types into a pane: `--text`, `--enter`, `--interrupt`, `--wait-submit <seconds>` |
-| `kolux terminal wait --for exit\|tui-idle` | Waits until the program ends, or a full-screen program stops moving. `--timeout-ms` sets the limit |
+| `kolux terminal read` | Prints what the pane showed. `--cursor` and `--limit` page through output; `--screen` gives the frame visible now. `--screen` and `--cursor` cannot be combined (a screen has no history). When older lines are no longer kept, a warning says which cursor to read on from. In the output form, PowerShell may show a typed command twice because it redraws the line as you type; `--screen` shows it once |
+| `kolux terminal send` | Types into a pane: `--text`, `--enter`, `--interrupt`. With none of them it refuses. When it sends a prompt to an agent, it watches 3 seconds (`--wait-submit <seconds>` changes this) and reports whether the agent began its turn, or warns that Enter may have been lost. With `--retry-request <id>`, sending the same id to the same pane again answers with the first receipt and types nothing (until Kolux restarts) |
+| `kolux terminal wait --for exit\|tui-idle` | Waits until the program ends, or a full-screen program stops moving. `--timeout-ms` sets the limit; if it passes first, the command fails (exit 1) and names the state the pane is in ("term-3 did not reach exit within 60000 ms (it is running)"). With no status hooks reporting, `tui-idle` means 3 seconds without output, and a warning says so |
 
 Examples:
 
@@ -188,4 +190,4 @@ A mistyped command is caught before Kolux is contacted, with a suggestion: "no c
 
 These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, and registering `kolux` on the PATH for the whole computer.
 
-<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, PLAN.md (T-250-a, T-250-b) at 3786a3f -->
+<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, PLAN.md (T-250-a, T-250-b) at 42c6fc6 -->

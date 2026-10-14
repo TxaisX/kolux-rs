@@ -160,6 +160,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-073-c | Diff view saves also check for newer edits and offer Reload or Keep mine. | [Files and browser](files-and-browser.md) |
 | T-073-e | Your own save no longer sets off the changed-on-disk banner, and the banner leaves once the file matches again. | [Files and browser](files-and-browser.md) |
 | T-076 | `kolux status` says whether the app is running, not running, left behind (stale) or still loading. | [Command line](command-line.md) |
+| T-076-b | kolux status answers within about 2.5 seconds and says busy while Kolux handles another request. | [Command line](command-line.md) |
 
 ### P0 · theme 11 · Orchestration and automations (31 cards)
 
@@ -168,6 +169,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-077 | Child workspaces nest under their parent. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-078 | Launch shapes Solo, Pair, Workbench and Swarm assign roles to agents. | [Getting started](getting-started.md) |
 | T-079 | Terminal commands in the kolux command line list and control terminals. | [Command line](command-line.md) |
+| T-079-b | Terminal show, read, send and wait in the command line, with time limits, warnings and safe retries. | [Command line](command-line.md) |
 | T-081 | Pick model tiers per provider for worker agents. | [Settings](settings.md) |
 | T-082 | A coordinator opens a Run and its terminal becomes the Run's home. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-083 | Answer a message, browse recent mail, and make tasks wait on each other. | [Board, Agents and Inbox](board-agents-inbox.md) |
