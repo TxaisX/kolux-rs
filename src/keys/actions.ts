@@ -22,9 +22,12 @@ export type Action = {
   keywords?: string[];
   /** The chord's last key is a digit 1; the action covers 1 to 9. */
   index?: boolean;
+  /** SET-014: still fires while a terminal has focus when the policy is Terminal first. */
+  terminalSafe?: boolean;
 };
 
-const agents: Array<[string, string]> = [
+/** Every agent's id and name (TERM-041's new-tab commands; the settings search finds agents by them). */
+export const agents: Array<[string, string]> = [
   ["claude", "Claude"],
   ["claude-agent-teams", "Claude Agent Teams"],
   ["openclaude", "OpenClaude"],
@@ -66,7 +69,7 @@ const a = (id: string, title: string, scope: Scope, win32: string[], extra: Part
 
 export const actions: Action[] = [
   a("worktree.quickOpen", "Go to File", "global", ["Mod+P"]),
-  a("app.settings", "Open Settings", "global", ["Mod+Comma"], { group: "menu", keywords: ["preferences", "options"] }),
+  a("app.settings", "Open Settings", "global", ["Mod+Comma"], { group: "menu", keywords: ["preferences", "options"], terminalSafe: true }),
   a("app.forceReload", "Force Reload", "global", ["Mod+Shift+R"], { group: "menu" }),
   a("worktree.palette", "Switch worktree", "global", ["Mod+Shift+J"], { darwin: ["Mod+J"] }),
   a("worktree.navigateUp", "Previous worktree", "global", ["Mod+Shift+ArrowUp"]),
@@ -87,7 +90,7 @@ export const actions: Action[] = [
   a("sidebar.ports.toggle", "Show Ports", "global", [], { darwin: ["Mod+Shift+I"] }),
   a("sidebar.sleepingWorkspaces.toggle", "Toggle Sleeping Workspaces", "global", []),
   a("sidebar.focusWorktreeList", "Focus worktree list", "global", ["Mod+Shift+0"]),
-  a("floatingTerminal.toggle", "Toggle Floating Terminal", "global", ["Mod+Alt+A"]),
+  a("floatingTerminal.toggle", "Toggle Floating Terminal", "global", ["Mod+Alt+A"], { terminalSafe: true }),
   a("floatingWorkspace.maximize", "Maximize Floating Workspace Panel", "global", [], { darwin: ["Mod+Alt+Shift+A"] }),
   a("view.inbox", "Show Inbox", "global", []),
   a("view.tower", "Show Tower", "global", []),
@@ -95,9 +98,9 @@ export const actions: Action[] = [
   a("view.floor", "Show Floor", "global", []),
   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),
   a("floatingWorkspace.minimize", "Minimize Floating Workspace Panel", "global", []),
-  a("zoom.in", "Zoom In", "global", ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"]),
-  a("zoom.out", "Zoom Out", "global", ["Mod+Minus", "Mod+NumpadSubtract"]),
-  a("zoom.reset", "Reset Size", "global", ["Mod+0"]),
+  a("zoom.in", "Zoom In", "global", ["Mod+Equal", "Mod+Shift+Plus", "Mod+NumpadAdd"], { terminalSafe: true }),
+  a("zoom.out", "Zoom Out", "global", ["Mod+Minus", "Mod+NumpadSubtract"], { terminalSafe: true }),
+  a("zoom.reset", "Reset Size", "global", ["Mod+0"], { terminalSafe: true }),
   a("worktree.history.back", "Worktree History Back", "global", ["Mod+Alt+ArrowLeft"]),
   a("worktree.history.forward", "Worktree History Forward", "global", ["Mod+Alt+ArrowRight"]),
   a("tab.newTerminal", "New terminal tab", "tabs", ["Mod+T"]),
@@ -111,14 +114,14 @@ export const actions: Action[] = [
   // T-543-b: ships unbound until T-164-b wires the closed-tab ring (src/terminal/closedTabs.ts) into the window;
   // with Mod+Shift+T it was a shortcut that did nothing. Its default chord was ["Mod+Shift+T"].
   a("tab.reopenClosed", "Reopen closed tab", "tabs", []),
-  a("tab.nextSameType", "Next tab (same type)", "tabs", ["Mod+Alt+BracketRight"]),
-  a("tab.previousSameType", "Previous tab (same type)", "tabs", ["Mod+Alt+BracketLeft"]),
-  a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"]),
-  a("tab.previousAllTypes", "Previous tab (all types)", "tabs", ["Mod+Shift+BracketLeft"]),
-  a("tab.previousRecent", "Previous recent tab", "tabs", ["Ctrl+Tab"]),
-  a("tab.nextTerminal", "Next terminal tab", "tabs", ["Ctrl+PageDown"]),
-  a("tab.previousTerminal", "Previous terminal tab", "tabs", ["Ctrl+PageUp"]),
-  a("tab.selectByIndex", "Select Tab 1–9", "tabs", ["Alt+1"], { darwin: ["Ctrl+1"], index: true }),
+  a("tab.nextSameType", "Next tab (same type)", "tabs", ["Mod+Alt+BracketRight"], { terminalSafe: true }),
+  a("tab.previousSameType", "Previous tab (same type)", "tabs", ["Mod+Alt+BracketLeft"], { terminalSafe: true }),
+  a("tab.nextAllTypes", "Next tab (all types)", "tabs", ["Mod+Shift+BracketRight"], { terminalSafe: true }),
+  a("tab.previousAllTypes", "Previous tab (all types)", "tabs", ["Mod+Shift+BracketLeft"], { terminalSafe: true }),
+  a("tab.previousRecent", "Previous recent tab", "tabs", ["Ctrl+Tab"], { terminalSafe: true }),
+  a("tab.nextTerminal", "Next terminal tab", "tabs", ["Ctrl+PageDown"], { terminalSafe: true }),
+  a("tab.previousTerminal", "Previous terminal tab", "tabs", ["Ctrl+PageUp"], { terminalSafe: true }),
+  a("tab.selectByIndex", "Select Tab 1–9", "tabs", ["Alt+1"], { darwin: ["Ctrl+1"], index: true, terminalSafe: true }),
   a("browser.find", "Find in Browser", "browser", ["Mod+F"]),
   a("browser.back", "Go Back in Browser", "browser", ["Alt+ArrowLeft"]),
   a("browser.forward", "Go Forward in Browser", "browser", ["Alt+ArrowRight"]),
@@ -142,9 +145,9 @@ export const actions: Action[] = [
   a("fileExplorer.copyRelativePath", "Copy relative file path", "explorer", ["Mod+Alt+Shift+C"]),
   a("fileExplorer.delete", "Delete file", "explorer", ["Delete"], { darwin: ["Delete", "Mod+Backspace"] }),
   a("settings.search", "Search Settings", "settings", ["Mod+F"]),
-  a("terminal.copySelection", "Copy terminal selection", "terminal", ["Ctrl+Shift+C", "Ctrl+C"]),
+  a("terminal.copySelection", "Copy terminal selection", "terminal", ["Ctrl+Shift+C", "Ctrl+C"], { terminalSafe: true }),
   a("terminal.selectAll", "Select all terminal text", "terminal", ["Ctrl+Shift+A"]),
-  a("terminal.paste", "Paste into terminal", "terminal", ["Ctrl+V", "Ctrl+Shift+V", "Shift+Insert"]),
+  a("terminal.paste", "Paste into terminal", "terminal", ["Ctrl+V", "Ctrl+Shift+V", "Shift+Insert"], { terminalSafe: true }),
   a("terminal.search", "Search active pane", "terminal", ["Mod+F"]),
   a("terminal.clear", "Clear active pane", "terminal", ["Mod+K"], { keywords: ["cls", "clear screen"] }),
   a("terminal.focusNextPane", "Focus next pane", "terminal", ["Mod+BracketRight"]),
@@ -154,8 +157,8 @@ export const actions: Action[] = [
   a("terminal.setTitle", "Set Title…", "terminal", []),
   a("terminal.clearPaneTitle", "Clear Pane Title", "terminal", []),
   a("terminal.closePane", "Close active pane", "terminal", ["Mod+W"]),
-  a("terminal.splitRight", "Split terminal right", "terminal", ["Mod+Shift+D"], { darwin: ["Mod+D"] }),
-  a("terminal.splitDown", "Split terminal down", "terminal", ["Alt+Shift+D"], { darwin: ["Mod+Shift+D"] }),
+  a("terminal.splitRight", "Split terminal right", "terminal", ["Mod+Shift+D"], { darwin: ["Mod+D"], terminalSafe: true }),
+  a("terminal.splitDown", "Split terminal down", "terminal", ["Alt+Shift+D"], { darwin: ["Mod+Shift+D"], terminalSafe: true }),
   a("terminal.switchInputSource", "Switch input source / language (native)", "terminal", []),
   a("view.cycleWorkspaceView", "Cycle Workspace View (Agents / Board / Terminals)", "global", ["Mod+Alt+V"]),
   a("sessions.add", "Add a Session", "global", []),

@@ -8,6 +8,8 @@ export const CHROME = [
   { id: "titleBarAppName", label: "Show app name in the title bar", short: "App name", dflt: false },
   { id: "tasksButton", label: "Show Tasks button", short: "Tasks", dflt: true },
   { id: "automationsButton", label: "Show Automations row in the sidebar", short: "Automations", dflt: true },
+  // SKILL-018: hidden on a fresh install; this switch is the way to turn it on (SKILL-019 cut the Skills section).
+  { id: "skillsButton", label: "Show Skills button in the sidebar", short: "Skills", dflt: false },
 ] as const;
 export type ChromeItem = (typeof CHROME)[number]["id"];
 

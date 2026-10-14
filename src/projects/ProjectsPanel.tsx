@@ -25,23 +25,26 @@ import { GROUP_SETTING, HIDE_AUTOMATION_SETTING, PIN_COPIES_SETTING, PIN_SETTING
 import { linkedPrs, pushBadge, SCM_LINKED_PR_KEY, type Pushed } from "../scm/model";
 import { mergePoll, nextDelay, pollItems, STALE_MS, type PrPoll } from "../scm/poll";
 import { afterScan, matchLetters, middle, nestRows, openedWorktree, parentChoices, pathHints, rankProjects, shortcodes, type ProjectMatch, orderWorktrees, relPath, placeFieldAction, previewSentence, worktreeLabel, type Created, type PlaceInfo, type Preview, type Project, type VisSource, type Worktree, createOpens, overtakenBy, prItems, waitsForSetup, workItem, keepOnSwitch, itemLabel, bound, stoppedNote, type Linked, type PendingCreate, type PrHead, type SetupLine, type SetupWhere } from "./model";
-import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, Help, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
+import { ArrowRight, Bell, ChevronDown, Close, EyeOff, FileCode, FolderPlus, Gear, List, Plus, Rail, Refresh, Rocket, Sliders, Target, Box, Pin, Moon } from "../chrome/icons";
 import AddProject from "./AddProject";
 import Picker, { type PickItem } from "./Picker";
 import StartGit, { type FirstFile } from "./StartGit";
 import { openKits } from "../kits/Kits";
-import { ADD_PROJECT, REOPEN_WIZARD } from "../onboarding/firstRun";
+import { ADD_PROJECT } from "../onboarding/firstRun";
 import PlusMenu, { type AgentInfo } from "../launch/PlusMenu";
 import { openSettings as openSettingsPage } from "../settings/pages";
 import AutomationsRow from "./AutomationsRow";
+import SkillsRow from "./SkillsRow";
 import { chromeShown } from "../chrome/chromeItems";
 import { VOCAB } from "../terminal/status";
 import type { AgentPass } from "../launch/agents";
 import { KeyText } from "../keys/KeymapContext";
 import { requestUpdateCheck } from "../update/UpdateCenter";
 import { GLOSSARY } from "../glossary";
+import HelpMenu from "../onboarding/HelpMenu";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import ImportSetup, { refusedLine, type SetupImport } from "./ImportSetup";
+import { issueCommand } from "../setup/IssueCommand";
 import { NO_GROUPS, groupChoices, groupTree, keepNewer, type Group, type Groups, type Node } from "./groups";
 
 /** The pages that open over the content column from the sidebar footer. */
@@ -110,6 +113,9 @@ type Props = {
   /** SKILL-036: the Artifacts row opens the library and shows as current while it is up. */
   artifactsOn: boolean;
   onArtifacts: () => void;
+  /** SKILL-018: the Skills button opens the Skills page and shows as current while it is up. */
+  skillsOn?: boolean;
+  onSkills?: () => void;
   /** PROJ-020: the creates Git is still working on, for the stand-in tabs beside the panes. */
   onPending?: (pending: PendingCreate[]) => void;
   /** PROJ-033: open a Setup terminal in a new workspace; `then` runs once it has ended. */
@@ -137,7 +143,7 @@ const noteRecent = (id: string) => {
   }
 };
 
-export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup }: Props) {
+export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onOpenSession = () => {}, states, unread, onUnread, settings, onSetting, activeDir, onSelect, onAdded = () => {}, onRemoved, onSleep, agents, launching, onLaunch, defaultId, onSetDefault, onChoose, onTerminal, allOff, pass, onRefresh, page, onPage, refresh, onIndex, createRequest, createName = "", deleteRequest, onStartIn, nest, onNest, artifactsOn, onArtifacts, onPending, onSetup, skillsOn = false, onSkills = () => {} }: Props) {
   const [moving, setMoving] = useState<string | null>(null); // the workspace whose parent picker is open (PROJ-048)
   // EDIT-041: coming from the Inbox the workspace rows can take seconds to list, so each render
   // looks for the selected row until it is there, then scrolls to it once.
@@ -192,7 +198,6 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
   const [showAdd, setShowAdd] = useState(false);
   // PROJ-002: the Add Project dialog, from the folder button or the composer's Add project item.
   const [adding, setAdding] = useState(false);
-  const [help, setHelp] = useState<DOMRect | null>(null);
   // ONB-004: the first-run wizard's 'Pick a folder' opens Add Project here.
   useEffect(() => {
     const open = () => setAdding(true);
@@ -664,6 +669,9 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
         else if (front) onSelect(wt.path, wt.branch, true);
         if (setup && onSetup) onSetup(wt.path, wt.branch, setup, setupWhere, false);
       }
+      // PROJ-036: a workspace made from a linked issue runs the project's issue command in a tab.
+      const run = setupSkip || !onSetup ? null : await issueCommand(project.path, wt.path, issue).catch((err) => (say("warn", String(err)), null));
+      if (run && onSetup) onSetup(wt.path, wt.branch, run.line, "tab", false);
     } catch (err) {
       if (stopped.current.has(mine.ticket)) {
         const n = stoppedNote(mine.name, String(err));
@@ -1549,6 +1557,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
             Starter kits
           </button>
           {chromeShown(settings, "automationsButton") && <AutomationsRow open={page === "automations"} onOpen={() => onPage("automations")} onHide={() => onSetting("automationsButton", false)} />}
+          {chromeShown(settings, "skillsButton") && <SkillsRow open={skillsOn} onOpen={onSkills} onHide={() => onSetting("skillsButton", false)} />}
         </nav>
 
         <div className="sb-section">
@@ -1771,29 +1780,7 @@ export default function ProjectsPanel({ reveal = 0, openDirs, sessions = [], onO
           <button className="ib" title="Model routing: the model and effort for each worker tier" aria-pressed={page === "routing"} onClick={() => onPage("routing")}>
             <Sliders size={14} />
           </button>
-          {/* APP-010: the help menu; only Onboarding (ONB-009) so far, the rest of its items are T-248. */}
-          <button className="ib" title="Help" aria-haspopup="menu" aria-expanded={help !== null} onClick={(e) => setHelp(help ? null : e.currentTarget.getBoundingClientRect())}>
-            <Help />
-          </button>
-          {help && (
-            <>
-              <div className="menu-backdrop" onClick={() => setHelp(null)} />
-              <div className="menu" role="menu" aria-label="Help" style={{ left: help.left, bottom: window.innerHeight - help.top + 4 }} onKeyDown={(e) => e.key === "Escape" && setHelp(null)}>
-                <div className="menu-title">Help</div>
-                <button
-                  className="menu-item"
-                  role="menuitem"
-                  autoFocus
-                  onClick={() => {
-                    setHelp(null);
-                    window.dispatchEvent(new CustomEvent(REOPEN_WIZARD));
-                  }}
-                >
-                  <span className="name">Onboarding</span>
-                </button>
-              </div>
-            </>
-          )}
+          <HelpMenu />
           <button className="upd" title="Check for a newer version of Kolux RS" onClick={requestUpdateCheck}>
             <Refresh size={13} />
             Check for updates

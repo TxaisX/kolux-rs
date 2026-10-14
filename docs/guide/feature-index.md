@@ -85,6 +85,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-032 | Review a plan in sections and comment before Claude approves it. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-033 | Source Control lists changes by section and opens a change for review. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-033-b | Source Control, diffs and All Changes update within about a second of a change, instead of polling. | [Projects and worktrees](projects-and-worktrees.md) |
+| T-033-c | Choose which split a diff opens in; All Changes compares the branch with its base, keeps a default layout and has a commit box; files Git ignores no longer refresh the list. | [Files and browser](files-and-browser.md) |
 | T-034 | Leave review notes on diff lines and send them to the agent. | [Files and browser](files-and-browser.md) |
 | T-035 | Open in Code and Answer in Code jump to the agent's pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-036 | Settings page for choosing agents, the default agent and how they start. | [Settings](settings.md) |
@@ -274,7 +275,10 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-120-a | Settings switch and kolux agent hooks commands control agent status hooks. | [Settings](settings.md) |
 | T-123 | Status shows background work being watched, the question an agent is waiting on, and Interrupted for a stopped turn; /clear and compacting are not counted as finished work. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-123-c | Interrupted goes back to Working when the agent starts a new step after Esc or Ctrl+C. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-123-b | A Codex agent's reply text reaches its card from its finish report, as Claude Code's does. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-123-c-b | With Claude Code, a finish after Esc or Ctrl+C shows Done, not Interrupted. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-124 | No recent update after 30 minutes without status; the terminal title stands in before hooks report; programs can report status in band. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-124-c | Approve and Deny on a card only for a permission the agent's hooks reported; "no status for" names how long since the last status. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-123-d | A waiting agent's card shows every question it asked, not only the first. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-127 | A Checks panel and pull request comments show in the sidebar. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-128-a | Kolux recognises which agent runs in each pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
@@ -303,6 +307,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-116-a-fix | Branch prefix and compare base settings moved into Settings. | [Settings](settings.md) |
 | T-139-a | Choose a model per agent from built-in lists. | [Settings](settings.md) |
 | T-139-b | A resumed session keeps its account; changing Codex account offers a restart. | [Settings](settings.md) |
+| T-140 | A finished automation run keeps its last output and shows its tokens and cost. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-141 | kolux account add and account list manage accounts from the command line. | [Command line](command-line.md) |
 
 ### P1 · theme 7 · Redesign and the new look (18 cards)
@@ -441,6 +446,12 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-233-c | The GitHub API budget is shown on the Git and worktrees page. | [Settings](settings.md) |
 | T-250-a | Help on every command level, plus a version flag, in the command line. | [Command line](command-line.md) |
 
+### P2 · theme 3 · Knowing what each agent is doing (7 cards)
+
+| Task | Feature | Guide page |
+|---|---|---|
+| T-260 | The Floor shows each agent's working, waiting and idle time on a timeline; on a Mac, the first start asks for notification permission. | [Board, Agents and Inbox](board-agents-inbox.md) |
+
 ### P2 · theme 4 · Accounts, sign-in and usage limits (9 cards)
 
 | Task | Feature | Guide page |
@@ -489,4 +500,4 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
 | T-546 | The Tower: every agent on one full-width screen, needs-you first, one click to its pane, usage per program across the top. | [Board, Agents and Inbox](board-agents-inbox.md) |
-<!-- generated from PLAN.md at cf61e3f -->
+<!-- generated from PLAN.md at f424c27 -->
