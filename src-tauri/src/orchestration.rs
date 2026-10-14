@@ -195,6 +195,34 @@ pub fn task_in(tasks: &[Value], id: &str, run: Option<&str>) -> Result<usize, Fa
     tasks.iter().position(|t| t["id"] == id && t["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no task {id}")))
 }
 
+/// ORCH-016 / ORCH-017: whether worker-start may hand task `id` to a new worker: a task that still
+/// has a worker, or is done, is turned away. A failed start's way out (stop, then start again)
+/// goes through this same check, so the offered commands are ones that work.
+#[allow(dead_code)] // FIX-1: worker-start calls it once the cli-lane hunk lands (evidence/orchestration-FIX-1-cli.patch)
+pub fn start_check(tasks: &[Value], id: &str, run: Option<&str>) -> Result<usize, Fail> {
+    let i = task_in(tasks, id, run)?;
+    match tasks[i]["status"].as_str().unwrap_or_default() {
+        "dispatched" => Err(Fail::new("failed", format!("{id} already has a worker ({})", tasks[i]["dispatchId"].as_str().unwrap_or("?")))),
+        "completed" => Err(Fail::new("failed", format!("{id} is already completed"))),
+        _ => Ok(i),
+    }
+}
+
+/// ORCH-016 (council FIX-1 S1): which of the terminals that appeared in the worker's worktree
+/// during the wait is the worker's: `fresh` lists each with the agent Kolux credits it to (none for
+/// a shell or another program). Only a terminal running the worker's own agent counts, and only
+/// when exactly one does: a tab the user opened there during the wait makes it ambiguous, and then
+/// none is recorded, so a release or a stop can never close the user's tab. Stamping the start's
+/// own session is T-172-e.
+#[allow(dead_code)] // FIX-1: wait_ready calls it once the cli-lane hunk lands (evidence/orchestration-FIX-1-cli.patch)
+pub fn worker_terminal(fresh: &[(u32, Option<String>)], agent: &str) -> Option<u32> {
+    let mut mine = fresh.iter().filter(|(_, a)| a.as_deref() == Some(agent)).map(|(id, _)| *id);
+    match (mine.next(), mine.next()) {
+        (Some(id), None) => Some(id),
+        _ => None,
+    }
+}
+
 /// ORCH-023: fences dispatch `id` off. Its worker can no longer report on it, and its task can be
 /// handed on again; no process is stopped, no pane closes and nothing on disk changes. A dispatch
 /// of another Run reads as missing. Abandoning twice answers the same.
@@ -310,9 +338,20 @@ pub fn report(tasks: &mut [Value], dispatches: &mut [Value], from: &str, a: &Val
 /// still holds it. The worktree and every other terminal stay, and its task can be handed on
 /// again. A terminal from an earlier start of Kolux reads as unverifiable, never as ended.
 /// Stopping twice answers the same.
+/// Council FIX-1 S2: a terminal that is not the worker's own (see keep_open) is left running,
+/// and the receipt says why; the process then reads as unverifiable, since Kolux did not end it.
 // ponytail: a terminal the user has typed into is ended like any other; ORCH-036 keeps it open.
+#[allow(dead_code)] // worker-stop moves to stop_with with the FIX-1 cli hunk (evidence/orchestration-FIX-1-cli.patch)
 pub fn stop(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option<&str>, now: u64) -> Result<(Value, Option<u32>), Fail> {
-    let d = dispatches.iter_mut().find(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    stop_with(tasks, dispatches, id, run, now, &|_| None)
+}
+
+/// ORCH-022 as stop, told what each terminal runs now (`agent_of`, as keep_open reads it), so a
+/// terminal that runs another agent than the worker's, or a plain shell, is never ended.
+pub fn stop_with(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option<&str>, now: u64, agent_of: &dyn Fn(&str) -> Option<Option<String>>) -> Result<(Value, Option<u32>), Fail> {
+    let i = dispatches.iter().position(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
+    let left_open = keep_open(dispatches, &dispatches[i], agent_of);
+    let d = &mut dispatches[i];
     let was = d["status"].as_str().unwrap_or_default().to_string();
     let term = terminal_of(d);
     let mut kill = None;
@@ -324,6 +363,9 @@ pub fn stop(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option
             "ended"
         } else if term.is_none() {
             "unverifiable"
+        } else if let Some(why) = &left_open {
+            d["terminalLeftOpen"] = json!(why);
+            "unverifiable"
         } else {
             kill = d["terminal"].as_u64().map(|t| t as u32);
             "ended"
@@ -333,7 +375,7 @@ pub fn stop(tasks: &mut [Value], dispatches: &mut [Value], id: &str, run: Option
         d["process"] = json!(process);
     }
     let task = d["taskId"].as_str().unwrap_or_default().to_string();
-    let receipt = json!({ "dispatchId": id, "taskId": task, "status": "stopped", "terminal": term, "process": d["process"], "worktree": d["worktree"], "worktreeKept": true });
+    let receipt = json!({ "dispatchId": id, "taskId": task, "status": "stopped", "terminal": term, "process": d["process"], "worktree": d["worktree"], "worktreeKept": true, "terminalLeftOpen": d["terminalLeftOpen"] });
     if let Some(t) = tasks.iter_mut().find(|t| t["id"] == task.as_str() && t["dispatchId"] == id && status(t) == "dispatched") {
         t["status"] = json!("ready");
         if let Some(o) = t.as_object_mut() {
@@ -439,6 +481,13 @@ pub fn retain(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool, id: &str, r
 /// way to let it go, so a kept mark does not block it.
 #[allow(dead_code)] // T-089-c: the CLI calls it once the cli-lane hunk lands (evidence/T-089-c.txt)
 pub fn release(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool, id: &str, run: Option<&str>, now: u64) -> Result<(Value, Option<String>), Fail> {
+    release_with(dispatches, live, id, run, now, &|_| None)
+}
+
+/// ORCH-024 as release, told what each terminal runs now (`agent_of`, as keep_open reads it), so a
+/// terminal that runs another agent than the worker's, or a plain shell, is left open (FIX-1 S1).
+#[allow(dead_code)] // FIX-1: worker-release calls it once the cli-lane hunk lands (evidence/orchestration-FIX-1-cli.patch)
+pub fn release_with(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool, id: &str, run: Option<&str>, now: u64, agent_of: &dyn Fn(&str) -> Option<Option<String>>) -> Result<(Value, Option<String>), Fail> {
     let i = dispatches.iter().position(|d| d["id"] == id && d["runId"].as_str() == run).ok_or_else(|| Fail::new("not_found", format!("no dispatch {id}")))?;
     if dispatches[i]["released"] == true {
         return Ok((release_receipt(&dispatches[i], true), None));
@@ -449,7 +498,7 @@ pub fn release(dispatches: &mut [Value], live: &dyn Fn(&str) -> bool, id: &str, 
     let handle = terminal_of(&dispatches[i]).filter(|h| live(h));
     // ORCH-024 (T-172-c): only the worker's own terminal is closed; one it was handed, or one
     // another dispatch still claims, is left open and the receipt says why.
-    let left_open = handle.as_ref().and_then(|_| keep_open(dispatches, &dispatches[i]));
+    let left_open = handle.as_ref().and_then(|_| keep_open(dispatches, &dispatches[i], agent_of));
     let d = &mut dispatches[i];
     d["releaseAt"] = json!(now);
     if let Some(why) = &left_open {
@@ -517,10 +566,19 @@ fn release_receipt(d: &Value, already: bool) -> Value {
 /// (a dispatch to it, which records how the brief went in); and Kolux's records may show another
 /// dispatch, still working or kept on purpose, naming the very same terminal. Closing it then
 /// could close someone else's work, so it stays. A claim already released does not count.
-fn keep_open(dispatches: &[Value], d: &Value) -> Option<String> {
+/// FIX-1 S1: and what the terminal runs now must be the worker's own agent. `agent_of` answers
+/// None when Kolux cannot tell (then its records decide), Some(None) for a shell or a program that
+/// is no agent, Some(Some(id)) for an agent; anything but the worker's agent stays open.
+fn keep_open(dispatches: &[Value], d: &Value, agent_of: &dyn Fn(&str) -> Option<Option<String>>) -> Option<String> {
     let h = terminal_of(d)?;
-    if !d["mode"].is_null() || d["launch"] == "reused_terminal" {
+    if !d["mode"].is_null() {
         return Some(format!("{h} was already open when the worker was handed it, so it is not the worker's own to close"));
+    }
+    let agent = d["agent"].as_str().unwrap_or("its agent");
+    match agent_of(&h) {
+        Some(Some(now)) if now != agent => return Some(format!("{h} now runs {now}, not the worker's {agent}, so it is not the worker's own to close")),
+        Some(None) => return Some(format!("{h} runs no agent now (a shell or another program), so it is not the worker's own to close")),
+        _ => {}
     }
     dispatches
         .iter()
@@ -530,7 +588,7 @@ fn keep_open(dispatches: &[Value], d: &Value) -> Option<String> {
 
 /// ORCH-017 (T-172-c): the receipt of a worker start that did not come up. `stage` is the step it
 /// reached ("setup" when the setup script failed, "worker" when the agent did not answer in time)
-/// and `setup` the setup script's result. A failed setup is a failure and a worker that did not
+/// and `setup` the setup script's result (the CLI records a failed setup's task as failed first). A failed setup is a failure and a worker that did not
 /// answer is an unknown outcome; the CLI exits 1 for both. Every terminal the start opened is
 /// listed as left over, never closed, and so is a worktree it made; `next` says how to clean up
 /// (release a failed worker, stop one that may still be starting, remove the new worktree) and how
@@ -545,12 +603,20 @@ pub fn start_failed(receipt: &mut Value, stage: &str, setup: Value) {
     let mut effects = vec![format!("{task} was handed to {id}")];
     effects.extend(made.iter().map(|p| format!("worktree {p} was made")));
     effects.extend(terminals.iter().map(|t| format!("terminal {t} was opened")));
+    // FIX-1 B1: in this order, each runnable after the one before. A worker that did not answer is
+    // still working as far as Kolux knows, and its task still dispatched, so it is stopped first
+    // (which frees the task) whether or not a terminal was seen. A failed setup is recorded failed
+    // by the CLI, which settles the worker, so a terminal it left is released. The retry is a plain
+    // worker-start of the same task (start_check), which makes its own placement.
     let mut next = Vec::new();
-    if !terminals.is_empty() {
-        next.push(if failed { format!("{CLI} orchestration worker-release --dispatch {id}") } else { format!("{CLI} orchestration worker-stop --dispatch {id}") });
+    if !failed {
+        next.push(format!("{CLI} orchestration worker-stop --dispatch {id}"));
+    } else if !terminals.is_empty() {
+        next.push(format!("{CLI} orchestration worker-release --dispatch {id}"));
     }
-    next.push(format!("{CLI} orchestration worker-start --retry-of {id} --task {task}"));
-    next.extend(made.iter().map(|p| format!("{CLI} worktree rm --worktree path:{p} --force")));
+    next.push(format!("{CLI} orchestration worker-start --task {task}"));
+    // Council AFTER A2: the path is quoted, so a folder with a space pastes as one word.
+    next.extend(made.iter().map(|p| format!("{CLI} worktree rm --worktree \"path:{p}\" --force")));
     receipt["status"] = json!(if failed { "failed" } else { "unknown" });
     receipt["stage"] = json!(stage);
     receipt["setup"] = setup;
@@ -577,7 +643,9 @@ pub fn write_archive(dir: &std::path::Path, id: &str, lines: &[String]) -> Resul
 /// hold its terminal, or ending it failed). Called on every stop receipt, and again by the CLI
 /// after a failed kill turns the process verdict to unverifiable.
 pub fn stop_warning(receipt: &mut Value) {
-    if receipt["process"] == "unverifiable" {
+    if let Some(why) = receipt["terminalLeftOpen"].as_str().filter(|_| receipt["process"] == "unverifiable") {
+        receipt["warning"] = json!(format!("the worker's process was left running: {why}; close it by hand if it should stop"));
+    } else if receipt["process"] == "unverifiable" {
         let term = receipt["terminal"].as_str().unwrap_or("its terminal").to_string();
         receipt["warning"] = json!(format!("the worker's process was kept alive: Kolux could not end {term}, so it may still be running; close it by hand if it is"));
     }
@@ -656,11 +724,23 @@ pub fn attention(d: &Value, live: &dyn Fn(&str) -> bool, hook: Option<&str>, now
 /// preview of its text. Before the task is known, the preview comes from the brief's task section
 /// (after the first divider, so task text imitating it changes nothing); never the wrapper text.
 pub fn worker_label(tasks: &[Value], d: &Value) -> Option<String> {
-    let fold = |s: &str| Some(cut(&s.split_whitespace().collect::<Vec<_>>().join(" "), 60)).filter(|s| !s.is_empty());
+    let field = |t: &Value, k: &str| one_line(t[k].as_str().unwrap_or_default());
     match tasks.iter().find(|t| t["id"] == d["taskId"]) {
-        Some(t) => t["displayName"].as_str().or(t["title"].as_str()).map(str::to_string).or_else(|| fold(t["spec"].as_str().unwrap_or_default())),
-        None => fold(d["brief"].as_str()?.split_once(DIVIDER)?.1),
+        Some(t) => field(t, "displayName").or_else(|| field(t, "title")).or_else(|| field(t, "spec")),
+        None => one_line(d["brief"].as_str()?.split_once(DIVIDER)?.1),
     }
+}
+
+/// ORCH-066 (council FIX-1 S4): a name as one short line fit for a tab title: colour and cursor
+/// codes dropped, every other control character and invisible direction or width mark turned to
+/// a space, whitespace folded, at most 60 characters; None when nothing is left.
+fn one_line(s: &str) -> Option<String> {
+    let invisible = |c: char| c.is_control() || ('\u{200b}'..='\u{200f}').contains(&c) || ('\u{202a}'..='\u{202e}').contains(&c) || ('\u{2066}'..='\u{2069}').contains(&c) || c == '\u{feff}';
+    // Line breaks and other control characters become spaces first (the code stripper drops them,
+    // which would glue words together); the escape that starts a code is kept for it to find.
+    let spaced: String = s.chars().map(|c| if c != '\u{1b}' && invisible(c) { ' ' } else { c }).collect();
+    let plain: String = crate::terminal::strip_ansi(&spaced).chars().map(|c| if invisible(c) { ' ' } else { c }).collect();
+    Some(cut(&plain.split_whitespace().collect::<Vec<_>>().join(" "), 60)).filter(|s| !s.is_empty())
 }
 
 /// ORCH-066: the label for each terminal a worker of this start of Kolux is on, by handle; the
@@ -2418,8 +2498,8 @@ mod tests {
         assert_eq!(r["leftovers"]["worktree"], "C:/w/fresh-otter");
         let next: Vec<&str> = r["next"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         assert_eq!(next[0], format!("{CLI} orchestration worker-stop --dispatch dispatch-2"));
-        assert!(next.contains(&format!("{CLI} orchestration worker-start --retry-of dispatch-2 --task task-1").as_str()), "{next:?}");
-        assert!(next.iter().any(|n| n.contains("worktree rm --worktree path:C:/w/fresh-otter")), "{next:?}");
+        assert_eq!(next[1], format!("{CLI} orchestration worker-start --task task-1"));
+        assert!(next.iter().any(|n| n.contains("worktree rm --worktree \"path:C:/w/fresh-otter\"")), "{next:?}");
         let effects = r["effects"].to_string();
         assert!(effects.contains("task-1") && effects.contains("C:/w/fresh-otter") && effects.contains("term-3"), "{effects}");
         // The setup script failed: a failure, setup named as the stage, a release offered.
@@ -2429,11 +2509,12 @@ mod tests {
         assert_eq!(s["setup"]["exitCode"], 1);
         assert_eq!(s["leftovers"]["terminals"], json!(["term-3"]), "a leftover terminal is listed, never closed");
         assert_eq!(s["next"][0], format!("{CLI} orchestration worker-release --dispatch dispatch-2"));
-        // No terminal opened in a worktree that was already there: only the retry is offered.
+        // No terminal opened in a worktree that was already there: still the stop first, since the
+        // task is still dispatched and a retry alone would be turned away; nothing to remove.
         let mut n = json!({ "dispatchId": "dispatch-3", "taskId": "task-2", "status": "unknown", "worktree": { "path": "C:/w/main", "created": false }, "terminals": [] });
         start_failed(&mut n, "worker", json!("not_configured"));
         assert_eq!(n["leftovers"], json!({ "terminals": [], "worktree": null }));
-        assert_eq!(n["next"], json!([format!("{CLI} orchestration worker-start --retry-of dispatch-3 --task task-2")]));
+        assert_eq!(n["next"], json!([format!("{CLI} orchestration worker-stop --dispatch dispatch-3"), format!("{CLI} orchestration worker-start --task task-2")]));
     }
 
     #[test]
@@ -2603,5 +2684,185 @@ mod tests {
             json!({ "id": "dispatch-4", "taskId": "task-1", "status": "running", "terminal": 7, "runtime": me + 1 }),
         ];
         assert_eq!(labels_by_terminal(&tasks, &d), json!({ "term-4": "New task" }));
+    }
+    /// FIX-1 B1: splits an offered command line into words, a double-quoted word kept whole.
+    fn words(n: &str) -> Vec<String> {
+        let (mut out, mut cur, mut quoted) = (Vec::new(), String::new(), false);
+        for c in n.chars() {
+            match c {
+                '"' => quoted = !quoted,
+                c if c.is_whitespace() && !quoted => {
+                    if !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                }
+                c => cur.push(c),
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    /// FIX-1 B1: runs a failed start's offered commands in order against the handlers they name,
+    /// the way the CLI would; each must go through. Answers what each one did.
+    fn run_way_out(tasks: &mut [Value], d: &mut [Value], next: &Value, run: Option<&str>) -> Vec<String> {
+        let live = |_: &str| true;
+        next.as_array().unwrap().iter().map(|n| {
+            let n = n.as_str().unwrap();
+            let w = words(n);
+            assert_eq!(w[0], CLI, "{n}");
+            let flag = |f: &str| w.iter().position(|x| x == f).map(|i| w[i + 1].clone()).unwrap_or_else(|| panic!("{n} has no {f}"));
+            match (w[1].as_str(), w[2].as_str()) {
+                ("orchestration", "worker-stop") => {
+                    stop(tasks, d, &flag("--dispatch"), run, 10).unwrap_or_else(|e| panic!("{n}: {}", e.message));
+                    "stopped".to_string()
+                }
+                ("orchestration", "worker-release") => {
+                    release(d, &live, &flag("--dispatch"), run, 10).unwrap_or_else(|e| panic!("{n}: {}", e.message));
+                    "released".to_string()
+                }
+                ("orchestration", "worker-start") => {
+                    assert!(!n.contains("--retry-of"), "--retry-of is read by nothing: {n}");
+                    start_check(tasks, &flag("--task"), run).unwrap_or_else(|e| panic!("{n}: {}", e.message));
+                    "restartable".to_string()
+                }
+                ("worktree", "rm") => format!("rm {}", flag("--worktree")),
+                _ => panic!("not a command the CLI has: {n}"),
+            }
+        }).collect()
+    }
+
+    #[test]
+    fn orch017_the_way_out_of_a_failed_start_runs_in_order() {
+        let me = std::process::id();
+        let dispatched = || {
+            let mut tasks = Vec::new();
+            task_create(&mut tasks, &json!({ "spec": "a" }), Some("run-1".into()), 1).unwrap();
+            tasks[0]["status"] = json!("dispatched");
+            tasks[0]["dispatchId"] = json!("dispatch-1");
+            tasks
+        };
+        let receipt = |terminals: Value| json!({ "dispatchId": "dispatch-1", "taskId": "task-1", "worktree": { "path": "C:/w/my otter", "created": true }, "terminals": terminals });
+        // Timed out with no terminal seen: the task is still dispatched, so a retry on its own is
+        // turned away; the stop that comes first frees it, and the worktree path survives a space.
+        let mut tasks = dispatched();
+        let mut d = vec![json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "unknown", "terminal": null, "runtime": me, "worktree": "C:/w/my otter" })];
+        assert_eq!(start_check(&tasks, "task-1", Some("run-1")).unwrap_err().code, "failed");
+        let mut r = receipt(json!([]));
+        start_failed(&mut r, "worker", json!("not_configured"));
+        assert_eq!(run_way_out(&mut tasks, &mut d, &r["next"], Some("run-1")), ["stopped", "restartable", "rm path:C:/w/my otter"]);
+        assert_eq!(tasks[0]["status"], "ready");
+        // A terminal was seen: the same order.
+        let mut tasks = dispatched();
+        let mut d = vec![json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "unknown", "terminal": 3, "runtime": me, "worktree": "C:/w/my otter" })];
+        let mut r = receipt(json!([{ "id": 3, "role": "worker" }]));
+        start_failed(&mut r, "worker", json!("not_configured"));
+        assert_eq!(run_way_out(&mut tasks, &mut d, &r["next"], Some("run-1")), ["stopped", "restartable", "rm path:C:/w/my otter"]);
+        // The setup script failed: the CLI records the task failed, which settles the worker, so
+        // the release and then the retry both go through.
+        let mut tasks = dispatched();
+        let mut d = vec![json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "running", "terminal": 3, "runtime": me, "worktree": "C:/w/my otter" })];
+        task_update(&mut tasks, &mut d, "task-1", "failed", None, Some("run-1"), None, 5).unwrap();
+        let mut s = receipt(json!([{ "id": 3, "role": "setup" }]));
+        start_failed(&mut s, "setup", json!({ "result": "failed", "exitCode": 1 }));
+        assert_eq!(run_way_out(&mut tasks, &mut d, &s["next"], Some("run-1")), ["released", "restartable", "rm path:C:/w/my otter"]);
+    }
+
+    #[test]
+    fn orch022_a_stop_never_ends_a_terminal_that_is_not_the_workers_own() {
+        let me = std::process::id();
+        let task = |n: u32| json!({ "id": format!("task-{n}"), "runId": "run-1", "status": "dispatched", "dispatchId": format!("dispatch-{n}") });
+        let mut tasks: Vec<Value> = (1..=5).map(task).collect();
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "running", "terminal": 4, "runtime": me, "mode": "inject", "agent": "claude" }),
+            json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-2", "status": "running", "terminal": 5, "runtime": me, "agent": "claude" }),
+            json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-3", "status": "completed", "terminal": 5, "runtime": me, "retained": true, "agent": "claude" }),
+            json!({ "id": "dispatch-4", "runId": "run-1", "taskId": "task-4", "status": "running", "terminal": 6, "runtime": me, "agent": "claude" }),
+            json!({ "id": "dispatch-5", "runId": "run-1", "taskId": "task-5", "status": "running", "terminal": 7, "runtime": me, "agent": "claude" }),
+        ];
+        // Handed a terminal that was already open: stopped, the terminal left running, and said so.
+        let (r, kill) = stop(&mut tasks, &mut d, "dispatch-1", Some("run-1"), 5).unwrap();
+        assert_eq!(kill, None, "{r}");
+        assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("term-4 was already open"), "{r}");
+        assert!(r["warning"].as_str().unwrap_or_default().contains("term-4"), "{r}");
+        assert_eq!((r["status"].as_str(), tasks[0]["status"].as_str()), (Some("stopped"), Some("ready")));
+        // Another worker keeps the same terminal on purpose: left open.
+        let (r, kill) = stop(&mut tasks, &mut d, "dispatch-2", Some("run-1"), 6).unwrap();
+        assert_eq!(kill, None, "{r}");
+        assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("dispatch-3"), "{r}");
+        // The terminal now runs another agent than the worker's: not the worker's to end.
+        let agent_of = |h: &str| match h {
+            "term-6" => Some(Some("codex".to_string())),
+            "term-7" => Some(Some("claude".to_string())),
+            _ => None,
+        };
+        let (r, kill) = stop_with(&mut tasks, &mut d, "dispatch-4", Some("run-1"), 7, &agent_of).unwrap();
+        assert_eq!(kill, None, "{r}");
+        assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("codex"), "{r}");
+        // Its own terminal, running its own agent, is ended as before.
+        let (r, kill) = stop_with(&mut tasks, &mut d, "dispatch-5", Some("run-1"), 8, &agent_of).unwrap();
+        assert_eq!((kill, r["terminalLeftOpen"].is_null()), (Some(7), true), "{r}");
+    }
+
+    #[test]
+    fn orch024_a_release_leaves_open_a_terminal_that_runs_something_else() {
+        let me = std::process::id();
+        let mut d = vec![
+            json!({ "id": "dispatch-1", "runId": "run-1", "taskId": "task-1", "status": "completed", "terminal": 4, "runtime": me, "agent": "claude" }),
+            json!({ "id": "dispatch-2", "runId": "run-1", "taskId": "task-2", "status": "completed", "terminal": 5, "runtime": me, "agent": "claude" }),
+            json!({ "id": "dispatch-3", "runId": "run-1", "taskId": "task-3", "status": "completed", "terminal": 6, "runtime": me, "agent": "gemini" }),
+            json!({ "id": "dispatch-4", "runId": "run-1", "taskId": "task-4", "status": "completed", "terminal": 8, "runtime": me, "agent": "gemini", "launch": "reused_terminal" }),
+        ];
+        let live = |_: &str| true;
+        let agent_of = |h: &str| match h {
+            "term-4" => Some(Some("codex".to_string())),
+            "term-5" => Some(Some("claude".to_string())),
+            "term-6" => Some(None),
+            _ => None,
+        };
+        // Another agent in it now: left open, and the receipt names what runs there.
+        let (r, h) = release_with(&mut d, &live, "dispatch-1", Some("run-1"), 1, &agent_of).unwrap();
+        assert_eq!(h, None, "{r}");
+        assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("codex"), "{r}");
+        // Its own agent: saved, then closed as usual.
+        let (r, h) = release_with(&mut d, &live, "dispatch-2", Some("run-1"), 2, &agent_of).unwrap();
+        assert_eq!((r["terminalState"].as_str(), h.as_deref()), (Some("release_pending"), Some("term-5")));
+        // A plain shell where the worker's agent ran: a tab of the user's, left open.
+        let (r, h) = release_with(&mut d, &live, "dispatch-3", Some("run-1"), 3, &agent_of).unwrap();
+        assert_eq!(h, None, "{r}");
+        assert!(r["terminalLeftOpen"].as_str().unwrap_or_default().contains("no agent"), "{r}");
+        // Kolux cannot tell what runs there: it goes by its records, as before.
+        let (_, h) = release_with(&mut d, &live, "dispatch-4", Some("run-1"), 4, &agent_of).unwrap();
+        assert_eq!(h.as_deref(), Some("term-8"));
+    }
+
+    #[test]
+    fn orch016_a_tab_the_user_opens_during_the_wait_is_never_recorded() {
+        let s = |a: &str| Some(a.to_string());
+        assert_eq!(worker_terminal(&[(3, s("claude"))], "claude"), Some(3));
+        // The user opened the same agent in the same worktree during the wait: which one is the
+        // worker's cannot be told, so none is recorded.
+        assert_eq!(worker_terminal(&[(3, s("claude")), (4, s("claude"))], "claude"), None);
+        // A shell or another agent opened there does not count.
+        assert_eq!(worker_terminal(&[(4, None), (3, s("claude")), (5, s("codex"))], "claude"), Some(3));
+        assert_eq!(worker_terminal(&[(5, s("codex"))], "claude"), None);
+        assert_eq!(worker_terminal(&[], "claude"), None);
+    }
+
+    #[test]
+    fn orch066_a_label_is_one_clean_short_line_whatever_the_task_names_hold() {
+        let label = |t: Value| worker_label(std::slice::from_ref(&t), &json!({ "taskId": t["id"] })).unwrap();
+        let clean = |l: &str| !l.chars().any(|c| c.is_control() || ('\u{200b}'..='\u{200f}').contains(&c) || ('\u{202a}'..='\u{202e}').contains(&c) || ('\u{2066}'..='\u{2069}').contains(&c));
+        assert_eq!(label(json!({ "id": "task-1", "displayName": "Fix\nlogin\r\n\t now" })), "Fix login now");
+        let esc = label(json!({ "id": "task-1", "displayName": "Fix \u{1b}[31mred\u{1b}[0m login\u{7}" }));
+        assert_eq!(esc, "Fix red login");
+        let c1 = label(json!({ "id": "task-1", "title": "a\u{9b}b\u{85}c\u{7f}d\u{202e}e\u{200b}f" }));
+        assert!(clean(&c1) && c1.contains('a') && c1.contains('f'), "{c1:?}");
+        let long = label(json!({ "id": "task-1", "title": "word ".repeat(200) }));
+        assert!(long.chars().count() <= 60, "{}", long.chars().count());
+        // A name that is nothing but control characters falls through to the next one.
+        assert_eq!(label(json!({ "id": "task-1", "displayName": "\u{1b}[0m\n", "title": "Real title" })), "Real title");
     }
 }
