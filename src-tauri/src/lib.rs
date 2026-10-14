@@ -157,11 +157,19 @@ fn dev_inject() -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     diag::catch_panics();
+    // T-552: the config's windows are opened by tools::guarded_setup instead, which waits out a
+    // quitting Kolux whose WebView2 processes still hold the profile folder, and turns any setup
+    // failure into a plain native message instead of a panic.
+    let mut context = tauri::generate_context!();
+    let windows: Vec<String> = context.config().app.windows.iter().filter(|w| w.create).map(|w| w.label.clone()).collect();
+    for w in &mut context.config_mut().app.windows {
+        w.create = false;
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
+        .setup(move |app| tools::guarded_setup(app, &windows, |app| {
             // APP-053: everything the app starts from here on ends with it; outside its own job (a job the
             // launcher owns without breakaway, say) the children would outlive a crash, so that is logged.
             let job_ok = procs::app_job_start();
@@ -295,7 +303,7 @@ pub fn run() {
                 }
             });
             Ok(())
-        })
+        }))
         // The Artifacts viewer (SKILL-036) loads stored pages through this scheme, one entry at a time.
         // T-500: only the app's own web view may read artifacts; a Browser pane page gets nothing.
         .register_uri_scheme_protocol(artifacts::SCHEME, |ctx, req| {
@@ -392,6 +400,8 @@ pub fn run() {
             projects::git_start,
             setup::workspace_setup,
             setup::workspace_issue_command,
+            setup::script_trust_needed,
+            setup::script_trust_grant,
             setup::setup_imports_list,
             setup::setup_import,
             agents::agent_list,
@@ -548,8 +558,8 @@ pub fn run() {
             usage_alerts::usage_alerts_fired,
             usage_alerts::usage_alert_send
         ])
-        .build(tauri::generate_context!())
-        .unwrap_or_else(|e| diag::fatal(&e.to_string()))
+        .build(context)
+        .unwrap_or_else(|e| tools::startup_failed(&e.to_string()))
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 // USAGE-011: open turns end and the counts are written; no batched save follows.
@@ -571,7 +581,13 @@ pub fn run() {
                     }
                 }
                 app.state::<Terminals>().kill_all();
+                // T-552: the window's WebView2 processes let go of the profile folder before the app
+                // ends (up to 3 s), so a relaunch right after finds it free.
+                let webviews_left = tools::wait_webviews_closed();
                 if let Ok(dir) = app.path().app_data_dir() {
+                    if webviews_left > 0 {
+                        diag::write(&dir, &format!("app exit: {webviews_left} WebView2 process(es) still running after 3 s (T-552)"));
+                    }
                     diag::write(&dir, "app exit");
                     let _ = std::fs::remove_file(dir.join(cli::FILE));
                     let _ = std::fs::remove_file(dir.join(hooks::ENDPOINT_FILE));

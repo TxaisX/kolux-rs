@@ -639,13 +639,32 @@ pub fn status_command(script: &str, prev: &str) -> String {
 /// start. Delayed expansion is off, the agent's home path loses quotes and a trailing backslash,
 /// and no parenthesised block holds a path, so `!`, `&` and `)` in paths change nothing.
 /// `prints` (SAFE-009): Kolux's answer goes to stdout for the agent to read instead of to NUL.
+///
+/// FIX-2 (S7, COMPAT 3.1): the held line is `route|identity|config|` (KR) and a small JSON object
+/// of only the fields the status rules read, made by Windows PowerShell (every Windows has it):
+/// the event, tool and session names, a few short flags and ids, `cwd`, whether the background
+/// lists were empty, and the time it was held. The tool's input and output, the prompt and the
+/// reply never reach the file. It runs only when Kolux cannot take the event; anything it cannot
+/// read is dropped, not held.
+pub(crate) const SPOOL_LINE: &str = concat!(
+    r#"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -NonInteractive -Command ""#,
+    r#"$ErrorActionPreference='Stop'; try { $e=[IO.File]::ReadAllText($env:KF,[Text.Encoding]::UTF8) | ConvertFrom-Json; $o=[ordered]@{}; "#,
+    r#"foreach ($k in 'hook_event_name','tool_name','session_id','agent_id','agent_type','model','source','trigger','error','is_interrupt','cwd','conversationId','fullyIdle') "#,
+    r#"{ $v=$e.$k; if ($v -is [string]) { $o[$k]=$v.Substring(0,[Math]::Min($v.Length,300)) } elseif ($v -is [bool]) { $o[$k]=$v } }; "#,
+    r#"$n=$e.toolCall.name; if ($n -is [string]) { $o['toolCall']=@{name=$n.Substring(0,[Math]::Min($n.Length,300))} }; "#,
+    r#"foreach ($k in 'background_tasks','session_crons') { if ($null -ne $e.$k -and @($e.$k).Count -gt 0) { $o[$k]=@(1) } }; "#,
+    r#"$o['spooled_at']=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); "#,
+    r#"[IO.File]::AppendAllText($env:KS, $env:KR + (ConvertTo-Json -InputObject $o -Compress -Depth 3) + [char]13 + [char]10, (New-Object Text.UTF8Encoding $false)) } catch { }""#,
+    r#" <NUL >NUL 2>&1"#
+);
+
 fn script(agent: &str, route: &str, prints: bool) -> String {
     let head = format!("rem Kolux RS agent hook for {agent}. Written by Kolux RS; edits are overwritten.");
     let (out, after) = if prints { ("", "2>NUL") } else { ("-o NUL ", ">NUL 2>&1") };
     let post = format!("%SystemRoot%\\System32\\curl.exe -s -m 1.5 --connect-timeout 0.5 --noproxy \"*\" -X POST -H \"Content-Type: application/json\" -H \"X-Kolux-Token: %KT%\" -H \"X-Kolux-Pane: %KOLUX_HOOK_IDENTITY%\" -H \"X-Kolux-Config: %KC%\" --data-binary \"@%KF%\" {out}\"http://127.0.0.1:%KP%/{route}\" {after}");
     // A status-line reading is only worth its moment: it is never held for later.
     let spool = route != "claude-status";
-    let record = format!("<nul set /p \"={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\" >\"%KF%.line\"");
+    let record = format!("set \"KR={route}|%KOLUX_HOOK_IDENTITY%|%KC%|\"");
     let keep = format!("for %%d in (\"%KE%\") do set \"KS=%%~dpd{}\"", agent_hooks::saved::SPOOL_FILE);
     let mut lines = vec![
         "@echo off",
@@ -660,8 +679,13 @@ fn script(agent: &str, route: &str, prints: bool) -> String {
         "rem The endpoint file names the Kolux running now, so a pane outlives a Kolux restart.",
         "if defined KE if exist \"%KE%\" for /f \"usebackq tokens=1,2\" %%a in (\"%KE%\") do (set \"KP=%%a\" & set \"KT=%%b\")",
         "set \"KC=%CLAUDE_CONFIG_DIR%\"",
-        "if defined KC set \"KC=%KC:\"=%\"",
-        "if defined KC if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        // FIX-2: an unset variable's `%KC:...%` is not empty text but a broken line that stops
+        // the whole script, so the edits run only on lines reached when KC is set.
+        "if not defined KC goto config",
+        "set \"KC=%KC:\"=%\"",
+        "if not defined KC goto config",
+        "if \"%KC:~-1%\"==\"\\\" set \"KC=%KC:~0,-1%\"",
+        ":config",
         "set \"KN=%TIME::=%\"",
         "set \"KN=%KN:.=%\"",
         "set \"KN=%KN:,=%\"",
@@ -683,12 +707,11 @@ fn script(agent: &str, route: &str, prints: bool) -> String {
             "for %%z in (\"%KF%\") do if %%~zz==0 goto done",
             keep.as_str(),
             record.as_str(),
-            "type \"%KF%\" >>\"%KF%.line\"",
-            "echo(>>\"%KF%.line\"",
-            "type \"%KF%.line\" >>\"%KS%\"",
+            "rem Only what the status needs is held: never the tool's input or output, the prompt or the reply.",
+            SPOOL_LINE,
         ]);
     }
-    lines.extend([":done", "del \"%KF%\" \"%KF%.line\" >NUL 2>&1", "exit /b 0", ""]);
+    lines.extend([":done", "del \"%KF%\" >NUL 2>&1", "exit /b 0", ""]);
     lines.join("\r\n")
 }
 
