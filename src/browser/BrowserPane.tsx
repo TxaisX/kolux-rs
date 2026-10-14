@@ -100,7 +100,11 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       if (!alive) return;
       try {
         const first = url ? resolveAddress(url) : null;
-        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(host.current!), background: backgroundBehind(host.current) });
+        // A tab opened behind (its section hidden, so no size) starts off screen: its page may not
+        // open tabs or send chords until it is shown (council FIX-2).
+        const body = host.current!;
+        const shown = body.clientWidth > 0 && body.clientHeight > 0;
+        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(body), background: backgroundBehind(body), shown });
         opened.current = true;
         if (alive) {
           setOpen(true);
