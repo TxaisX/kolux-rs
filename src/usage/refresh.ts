@@ -32,7 +32,7 @@ export const fresh = (): Sched => ({ lastTry: null, lastOk: null, failures: 0, r
 export const backoffMs = (failures: number): number => BACKOFF_MS[Math.min(Math.max(failures, 1), BACKOFF_MS.length) - 1];
 
 /** Whether a read should start now for this reason. */
-export function shouldFetch(s: Sched, reason: Reason, now: number): boolean {
+export function shouldFetch(s: Sched, reason: Reason, now: number, moments: number = MOMENTS_MS): boolean {
   if (s.inFlight) return false;
   if (reason === "manual") return true; // ignores the debounce and the provider's retry-after alike
   if (s.retryAfter !== null && now < s.retryAfter) return false;
@@ -40,7 +40,7 @@ export function shouldFetch(s: Sched, reason: Reason, now: number): boolean {
   if (reason === "timer") return true;
   if (s.lastTry === null) return true; // the first focus after a delayed start
   if (s.failures > 0) return now - s.lastTry >= backoffMs(s.failures);
-  return now - s.lastTry >= MOMENTS_MS;
+  return now - s.lastTry >= moments;
 }
 
 export const began = (s: Sched, now: number): Sched => ({ ...s, inFlight: true, lastTry: now });
@@ -67,6 +67,8 @@ export type RunnerOptions<T> = {
   /** Where focus and visibility events come from; the window and document by default, none in tests. */
   focus?: Listener | null;
   visibility?: (Listener & { visibilityState?: string }) | null;
+  /** FIX-2 (council P6): how soon after a read a focus may read again; MOMENTS_MS by default. */
+  focusDebounceMs?: number;
 };
 export type Runner = { start(): void; stop(): void; kick(reason: Reason): boolean; state(): Sched };
 
@@ -117,7 +119,7 @@ export function runner<T>(o: RunnerOptions<T>): Runner {
       });
   };
   const kick = (reason: Reason) => {
-    if (!shouldFetch(s, reason, now())) return false;
+    if (!shouldFetch(s, reason, now(), o.focusDebounceMs)) return false;
     set(began(s, now()));
     run(gen, 0);
     return true;
@@ -132,7 +134,8 @@ export function runner<T>(o: RunnerOptions<T>): Runner {
       live.add(me);
       if (dev) dev.runners[o.name] = me;
       states.set(o.name, s);
-      timer = setInterval(() => void kick("timer"), EVERY_MS);
+      // FIX-2 (council P6): no background reads while the window is hidden; showing it reads again.
+      timer = setInterval(() => void (visibility?.visibilityState !== "hidden" && kick("timer")), EVERY_MS);
       focus?.addEventListener("focus", onFocus);
       visibility?.addEventListener("visibilitychange", onVisible);
       kick("start");

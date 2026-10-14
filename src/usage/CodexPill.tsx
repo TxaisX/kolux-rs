@@ -13,6 +13,9 @@ import { tone } from "./meter";
 import { publishCodex, readPlan, usePlan, useResetTick } from "./plan";
 import { codexFetched, runner, useRefresh } from "./refresh";
 
+/** How soon after a read a window focus may read Codex again. */
+export const CODEX_FOCUS_MS = 2 * 60_000;
+
 /** USAGE-008: drawn only for an installed Codex with a known weekly window (or a refused sign-in). */
 export function CodexPillView({ usage, installed = true, trouble = false }: { usage: CodexUsage | null; installed?: boolean; trouble?: boolean }) {
   const warn = usage?.state === "sign-in-again";
@@ -35,6 +38,8 @@ export default function CodexPill({ installed }: { installed?: boolean }) {
     const r = runner<CodexUsage>({
       name: "codex",
       fetch: () => invoke<CodexUsage>("codex_usage").then(codexFetched),
+      // FIX-2 (council P6): a Codex read starts a helper process, so a focus reads at most every two minutes.
+      focusDebounceMs: CODEX_FOCUS_MS,
       onOk: (u) => {
         publishCodex(u);
         publishLaunch(u);

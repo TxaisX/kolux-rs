@@ -80,3 +80,15 @@ taken as kept. evidence/FIX-2-hooks-carried.patch (hooks lane, not committed) ma
 - tsc 0; vitest related paste.ts + ClaudePill.tsx: 22 files, 142 tests passed.
 LIVE PROOF PENDING (4): paste a 1 MB text into a code file and paste again at once: a toast says the
 last paste is still going in; the first paste lands whole and one Ctrl+Z takes it out.
+
+== 5. P6 usage timers, P7 pill click test (P4, P5 not done this pass) ==
+P6 refresh.ts: the five-minute timer skips its read while the document is hidden (showing the window
+already reads through the visibilitychange focus kick); RunnerOptions.focusDebounceMs sets how soon
+after a read a focus may read again, and CodexPill uses CODEX_FOCUS_MS = 2 min (a Codex read starts
+a helper process), Claude keeps MOMENTS_MS.
+- Test: refresh.test.ts "skips timer reads while hidden, reads when shown, and keeps a longer focus
+  debounce". Not run against the old code this pass (budget); on it the hidden timer reads and the
+  1-minute focus reads, so the call counts 1 and 1 would come back 4 and 2.
+P7 UsagePill.test.ts: the click test now takes the button UsagePill renders and calls its own onClick.
+- tsc 0; vitest related refresh.ts + UsagePill.tsx + CodexPill.tsx: 18 files, 114 tests passed.
+Open: P4 (kill a superseded rg child) and P5 (clamp Hit.text, --max-filesize 10M) for the next pass.

@@ -88,6 +88,43 @@ describe("runner", () => {
     return { r, oks, fails, seen };
   };
 
+  // FIX-2 (council P6): a hidden window makes no background reads, and showing it reads at once; a
+  // provider with a longer focus debounce (Codex) is not re-read by a focus a minute after a read.
+  it("skips timer reads while hidden, reads when shown, and keeps a longer focus debounce", async () => {
+    const make2 = (debounce?: number) => {
+      const fl = new Map<string, () => void>();
+      const ev = { visibilityState: "hidden", addEventListener: (t: string, f: () => void) => void fl.set(t, f), removeEventListener: (t: string) => void fl.delete(t) };
+      let calls = 0;
+      const r = runner<number>({ name: "h", fetch: () => (calls++, Promise.resolve({ kind: "ok", value: 1 })), onOk: () => {}, focus: ev, visibility: ev, focusDebounceMs: debounce });
+      return { r, ev, fl, calls: () => calls };
+    };
+    const h = make2();
+    h.r.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.calls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(3 * EVERY_MS);
+    expect(h.calls()).toBe(1);
+    h.ev.visibilityState = "visible";
+    h.fl.get("visibilitychange")?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.calls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(EVERY_MS);
+    expect(h.calls()).toBe(3);
+    h.r.stop();
+    const c = make2(2 * 60_000);
+    c.ev.visibilityState = "visible";
+    c.r.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    c.fl.get("focus")?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(c.calls()).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    c.fl.get("focus")?.();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(c.calls()).toBe(2);
+    c.r.stop();
+  });
+
   it("fetches at start, then every five minutes; stop ends it", async () => {
     const st = stub(() => ({ kind: "ok", value: 1 }));
     const { r, oks } = make(st);

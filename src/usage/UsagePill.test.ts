@@ -2,7 +2,10 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
 import { OPEN_SETTINGS } from "../settings/pages";
-import { openAccounts, PILL_TITLE, UsagePillView } from "./UsagePill";
+import UsagePill, { PILL_TITLE, UsagePillView } from "./UsagePill";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(async () => []) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn(async () => {}) }));
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -27,6 +30,12 @@ test("T-550: a click on the pill opens Settings at Accounts & keys", () => {
   vi.stubGlobal("window", target);
   const seen: unknown[] = [];
   target.addEventListener(OPEN_SETTINGS, (e) => seen.push((e as CustomEvent).detail));
-  openAccounts();
+  // FIX-2 (council P7): the click goes through the button the pill renders, not the handler alone
+  type El = { type: unknown; props: { onClick?: () => void; onOpen?: () => void; [k: string]: unknown } };
+  const pill = UsagePill({ hidden: false, claudeOn: true, codexOn: true }) as unknown as El;
+  expect(pill.type).toBe(UsagePillView);
+  const button = UsagePillView(pill.props as unknown as Parameters<typeof UsagePillView>[0]) as unknown as El;
+  expect(button.type).toBe("button");
+  button.props.onClick?.();
   expect(seen).toEqual([{ page: "accounts", section: undefined }]);
 });
