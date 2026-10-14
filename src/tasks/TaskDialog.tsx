@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { Close } from "../chrome/icons";
+import { type IssueAction, runAction } from "./issueActions";
 import MentionField from "./MentionField";
 import { duplicateQuery, eventLine, issueNumber, type Task, type TaskDetail, type TaskLabel, type TaskPage, taskKind } from "./model";
 import type { Person } from "./repoFacts";
@@ -183,7 +184,7 @@ export default function TaskDialog({ task, host, onClose, onLabels, onState }: {
 /** GIT-047: close an issue (completed, not planned, or a duplicate of another number), reopen it, and
  * comment on it. A duplicate target is checked by github.rs before anything is sent; issues sharing
  * words of the title are offered as targets. */
-function IssueActions({ host, task, state, title, onDone }: { host: string; task: Task; state: string; title: string; onDone: () => void }) {
+function IssueActions({ host, task, state, title, onDone }: { host: string; task: Task; state: string; title: string; onDone: () => Promise<unknown> }) {
   const [reason, setReason] = useState("completed");
   const [dup, setDup] = useState("");
   const [like, setLike] = useState<Task[]>([]);
@@ -202,20 +203,12 @@ function IssueActions({ host, task, state, title, onDone }: { host: string; task
       live = false;
     };
   }, [reason, host, task.repo, task.number, title]);
-  const run = (p: Promise<unknown>, after?: () => void) => {
-    setBusy(true);
-    setError(null);
-    p.then(() => {
-      after?.();
-      onDone();
-    })
-      .catch((e) => setError(String(e)))
-      .finally(() => setBusy(false));
-  };
+  // FIX-1 (council FS 2): busy until the refreshed issue is back; a timeout says the write may have landed.
+  const run = (what: IssueAction, send: Promise<unknown>, after?: () => void) => void runAction({ send, refresh: onDone, after, setBusy, setError, what });
   const dupNumber = issueNumber(dup);
   const close = () => {
     if (reason === "duplicate" && dupNumber === null) return setError("Give the number of the issue this one duplicates, such as 12 or #12.");
-    run(invoke("github_issue_state", { ...args, open: false, reason, duplicateOf: reason === "duplicate" ? dupNumber : null }));
+    run("close", invoke("github_issue_state", { ...args, open: false, reason, duplicateOf: reason === "duplicate" ? dupNumber : null }));
   };
   return (
     <div className="task-issue" data-issue-actions>
@@ -238,7 +231,7 @@ function IssueActions({ host, task, state, title, onDone }: { host: string; task
             </button>
           </>
         ) : (
-          <button className="btn" disabled={busy} onClick={() => run(invoke("github_issue_state", { ...args, open: true, reason: "", duplicateOf: null }))}>
+          <button className="btn" disabled={busy} onClick={() => run("reopen", invoke("github_issue_state", { ...args, open: true, reason: "", duplicateOf: null }))}>
             Reopen issue
           </button>
         )}
@@ -253,7 +246,7 @@ function IssueActions({ host, task, state, title, onDone }: { host: string; task
         </div>
       )}
       <textarea className="field task-comment" aria-label="Comment" placeholder="Leave a comment" value={comment} disabled={busy} onChange={(e) => setComment(e.target.value)} />
-      <button className="btn primary" disabled={busy || !comment.trim()} onClick={() => run(invoke("github_issue_comment", { ...args, body: comment }), () => setComment(""))}>
+      <button className="btn primary" disabled={busy || !comment.trim()} onClick={() => run("comment", invoke("github_issue_comment", { ...args, body: comment }), () => setComment(""))}>
         Comment
       </button>
     </div>

@@ -8,7 +8,7 @@ import { Fragment, useEffect, useState } from "react";
 import { Refresh } from "../chrome/icons";
 import type { Project as KoluxProject } from "../projects/model";
 import Timeline from "./RoadmapTimeline";
-import { cellEditable, cellText, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, cellText, GROUPABLE, groupItems, labelChange, openingView, parseProjectRef, type Project, projectHostRefused, type ProjectField, type ProjectItem, projectKey, type ProjectRef, pushRecent, refsFrom, type Scope, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 type Settings = Record<string, unknown> | null;
 type Save = (patch: Record<string, unknown>) => Promise<unknown> | void;
@@ -70,13 +70,15 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
   const [error, setError] = useState<string | null>(null);
   const [typed, setTyped] = useState("");
   const [browseOwner, setBrowseOwner] = useState(owner);
-  const [browsed, setBrowsed] = useState<{ owner: string; number: number; title: string; closed: boolean }[] | null>(null);
+  const [browsed, setBrowsed] = useState<{ projects: { owner: string; number: number; title: string; closed: boolean }[]; more: boolean } | null>(null);
   const [sort, setSort] = useState(kept.sort);
   const [group, setGroup] = useState(kept.group);
   const [scope, setScope] = useState<Scope>(kept.scope);
   const [inKolux, setInKolux] = useState<string[]>([]);
   const [editing, setEditing] = useState<{ item: string; field: string } | null>(null);
   const [cellError, setCellError] = useState<string | null>(null);
+  // FIX-1 (council FS 1): the cells whose edit is still on its way to GitHub (a call can take 30 s).
+  const [saving, setSaving] = useState<string[]>([]);
   Object.assign(kept, { ref, sort, group, scope });
 
   useEffect(() => setBrowseOwner(owner), [owner]);
@@ -113,6 +115,8 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
   useEffect(() => load(), [ref ? projectKey(ref) : ""]);
 
   const open = (text: string) => {
+    const away = projectHostRefused(text, host);
+    if (away) return setError(`Kolux opens projects on github.com or on this workspace's host (${host}), not on ${away}.`);
     const p = parseProjectRef(text, host);
     if (!p) return setError("Paste a project address (…/orgs/<owner>/projects/<number>) or an owner and a number, such as acme 3.");
     const r = { host: p.host, owner: p.owner, number: p.number, title: "" };
@@ -129,7 +133,7 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
   const browse = () => {
     setBrowsed(null);
     setError(null);
-    invoke<{ owner: string; number: number; title: string; closed: boolean }[]>("github_projects", { host, owner: browseOwner.trim() || "@me" })
+    invoke<{ projects: { owner: string; number: number; title: string; closed: boolean }[]; more: boolean }>("github_projects", { host, owner: browseOwner.trim() || "@me" })
       .then(setBrowsed)
       .catch((e) => setError(String(e)));
   };
@@ -147,16 +151,12 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
         .catch((e) => setCellError(`${item.title}: ${String(e)}`));
       return;
     }
+    const key = `${item.id} ${field.id}`;
+    setSaving((s) => [...s, key]);
     invoke("github_project_set", { host: ref.host, project: project.id, item: item.id, field: field.id, kind: field.kind, value })
-      .then(() => {
-        const option = field.options.find((o) => o.id === value);
-        const cell = value.trim() === "" ? null : option ? { text: option.name, id: option.id, start: option.start, days: option.days } : { text: value.trim(), id: "", start: field.kind === "date" ? value.trim() : "", days: 0 };
-        const values = { ...item.values };
-        if (cell) values[field.id] = cell;
-        else delete values[field.id];
-        put({ values });
-      })
-      .catch((e) => setCellError(`${item.title}: ${String(e)}`));
+      .then(() => setProject((p) => p && applyCellEdit(p, item.id, field, value)))
+      .catch((e) => setCellError(`${item.title}: ${String(e)}`))
+      .finally(() => setSaving((s) => s.filter((k) => k !== key)));
   };
 
   const current = project?.views.find((v) => v.number === view) ?? null;
@@ -199,6 +199,7 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
         return (
           <td key={f.id} data-kind={f.kind} className={can ? "editable" : undefined} tabIndex={can ? 0 : undefined} onClick={() => can && setEditing({ item: it.id, field: f.id })} onKeyDown={(e) => can && e.key === "Enter" && setEditing({ item: it.id, field: f.id })}>
             {isEditing ? <CellEditor item={it} field={f} onDone={(v) => edit(it, f, v)} /> : cellText(it, f)}
+            {saving.includes(`${it.id} ${f.id}`) && <span className="tasks-kind" data-saving title="Saving to GitHub">{" "}saving…</span>}
           </td>
         );
       })}
@@ -237,8 +238,8 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
       </div>
       {browsed && (
         <ul className="projects-browsed" data-browsed>
-          {browsed.length === 0 && <li className="autos-none">No projects.</li>}
-          {browsed.map((b) => (
+          {browsed.projects.length === 0 && <li className="autos-none">No projects.</li>}
+          {browsed.projects.map((b) => (
             <li key={`${b.owner}/${b.number}`}>
               <button
                 className="btn"
@@ -251,6 +252,7 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
               </button>
             </li>
           ))}
+          {browsed.more && <li className="tasks-count" data-browse-more>Showing the 30 most recently changed projects; paste a project's address to open one that is not listed.</li>}
         </ul>
       )}
       {error && (
@@ -371,9 +373,10 @@ export default function ProjectsView({ host, owner, settings, save }: { host: st
                 </tbody>
               </table>
               {rows.length === 0 && <div className="autos-none tasks-none">No items{scope.mode !== "all" ? " in these repositories" : ""}.</div>}
-              {project.more && <div className="tasks-count tasks-window">This project has more items than Kolux reads (the first 500 are shown).</div>}
             </div>
           )}
+          {/* FIX-1 (council FS 3): the cut-off shows under the table and the timeline alike. */}
+          {project.more && <div className="tasks-count tasks-window" data-more>This project has more items than Kolux reads (the first 500 are shown).</div>}
         </>
       )}
     </div>

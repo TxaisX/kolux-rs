@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cellEditable, groupItems, labelChange, openingView, parseProjectRef, type ProjectField, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
+import { applyCellEdit, cellEditable, groupItems, labelChange, openingView, parseProjectRef, type Project, type ProjectField, projectHostRefused, type ProjectItem, pushRecent, refsFrom, scopeItems, sortItems, togglePin, viewLabel, viewSupport, viewUrl } from "./projects";
 
 const status: ProjectField = { id: "F_s", name: "Status", kind: "single_select", options: [{ id: "o1", name: "Todo", start: "", days: 0 }, { id: "o2", name: "Done", start: "", days: 0 }] };
 const points: ProjectField = { id: "F_p", name: "Points", kind: "number", options: [] };
@@ -11,7 +11,7 @@ const cell = (text: string, id = "") => ({ text, id, start: "", days: 0 });
 describe("T-314-c GitHub Projects", () => {
   it("reads a pasted project URL or an owner and number, and nothing else", () => {
     expect(parseProjectRef("https://github.com/orgs/acme/projects/3/views/2", "x")).toEqual({ host: "github.com", owner: "acme", number: 3, view: 2 });
-    expect(parseProjectRef("https://GHE.example.com/users/ana-b/projects/12", "github.com")).toEqual({ host: "ghe.example.com", owner: "ana-b", number: 12, view: null });
+    expect(parseProjectRef("https://GHE.example.com/users/ana-b/projects/12", "ghe.example.com")).toEqual({ host: "ghe.example.com", owner: "ana-b", number: 12, view: null });
     for (const t of ["acme 3", "acme/3", "acme#3", "@acme 3"]) expect(parseProjectRef(t, "github.com")).toEqual({ host: "github.com", owner: "acme", number: 3, view: null });
     for (const t of ["", "acme", "acme 0", "-acme 3", "ac--me 3", "a\"b 3", "https://github.com/acme/app/issues/3", "http://github.com/orgs/acme/projects/3"]) expect(parseProjectRef(t, "github.com")).toBeNull();
   });
@@ -79,5 +79,30 @@ describe("T-314-c GitHub Projects", () => {
   it("opens a view on GitHub only from an https project address", () => {
     expect(viewUrl({ url: "https://github.com/orgs/acme/projects/3" }, 2)).toBe("https://github.com/orgs/acme/projects/3/views/2");
     expect(viewUrl({ url: "javascript:alert(1)" }, 2)).toBeNull();
+  });
+});
+
+describe("FIX-1 (council review of 674122c)", () => {
+  it("opens a pasted project address only on github.com or this workspace's own host", () => {
+    expect(parseProjectRef("https://evil.example/orgs/x/projects/1", "github.com")).toBeNull();
+    expect(projectHostRefused("https://evil.example/orgs/x/projects/1", "github.com")).toBe("evil.example");
+    expect(parseProjectRef("https://ghe.corp/orgs/x/projects/1", "github.com")).toBeNull();
+    expect(parseProjectRef("https://github.com/orgs/x/projects/1", "ghe.corp")).toEqual({ host: "github.com", owner: "x", number: 1, view: null });
+    expect(parseProjectRef("https://GHE.corp/orgs/x/projects/1", "ghe.corp")?.host).toBe("ghe.corp");
+    expect(projectHostRefused("https://github.com/orgs/x/projects/1", "ghe.corp")).toBeNull();
+    expect(projectHostRefused("acme 3", "github.com")).toBeNull();
+  });
+
+  it("a saved cell lands on the row as it is now, so two edits on one row both stay", () => {
+    const due: ProjectField = { id: "F_d", name: "Due", kind: "date", options: [] };
+    const start: Project = { id: "P", owner: "acme", number: 1, title: "", url: "", closed: false, views: [], fields: [status, points, due], more: false, items: [item("a", { values: { F_d: { text: "2026-10-01", id: "", start: "2026-10-01", days: 0 } } }), item("b")] };
+    // Both edits were started from `start`; their answers arrive one after the other.
+    const afterStatus = applyCellEdit(start, "a", status, "o2");
+    const afterBoth = applyCellEdit(afterStatus, "a", points, "5");
+    expect(afterBoth.items[0].values).toEqual({ F_s: { text: "Done", id: "o2", start: "", days: 0 }, F_p: cell("5"), F_d: { text: "2026-10-01", id: "", start: "2026-10-01", days: 0 } });
+    const cleared = applyCellEdit(afterBoth, "a", due, " ");
+    expect(Object.keys(cleared.items[0].values).sort()).toEqual(["F_p", "F_s"]);
+    expect(cleared.items[1]).toBe(start.items[1]);
+    expect(start.items[0].values.F_s).toBeUndefined();
   });
 });

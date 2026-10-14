@@ -12,17 +12,47 @@ export type ProjectRef = { host: string; owner: string; number: number; title: s
 
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9_]|-(?=[A-Za-z0-9_]))*$/;
 
-/** GIT-056: a pasted project URL (`https://<host>/orgs|users/<owner>/projects/<n>[/views/<v>]`) or an
- * owner and number (`acme 3`, `acme/3`, `acme#3`); null when it is neither. */
+const PROJECT_URL = /^https:\/\/([A-Za-z0-9.:-]+)\/(?:orgs|users)\/([^/\s]+)\/projects\/(\d+)(?:\/views\/(\d+))?\/?(?:[?#].*)?$/;
+
+/** FIX-1 (council FB 1): the host of a pasted project address when it is neither github.com nor this
+ * workspace's own host, which Kolux does not open (gh would send it a request, maybe with an
+ * Enterprise token); null otherwise. */
+export function projectHostRefused(text: string, host: string): string | null {
+  const h = PROJECT_URL.exec(text.trim())?.[1]?.toLowerCase();
+  return h && h !== "github.com" && h !== host.toLowerCase() ? h : null;
+}
+
+/** GIT-056: a pasted project URL (`https://<host>/orgs|users/<owner>/projects/<n>[/views/<v>]`) on
+ * github.com or this workspace's own host, or an owner and number (`acme 3`, `acme/3`, `acme#3`);
+ * null when it is neither. */
 export function parseProjectRef(text: string, host: string): { host: string; owner: string; number: number; view: number | null } | null {
   const t = text.trim();
-  const url = /^https:\/\/([A-Za-z0-9.:-]+)\/(?:orgs|users)\/([^/\s]+)\/projects\/(\d+)(?:\/views\/(\d+))?\/?(?:[?#].*)?$/.exec(t);
+  if (projectHostRefused(t, host)) return null;
+  const url = PROJECT_URL.exec(t);
   const short = /^@?([^/\s#]+)\s*[\s/#]\s*(\d+)$/.exec(t);
   const [h, owner, n, v] = url ? [url[1], url[2], url[3], url[4]] : short ? [host, short[1], short[2], undefined] : [];
   if (!owner || !n || !LOGIN.test(owner) || owner.length > 79) return null;
   const number = Number(n);
   if (!Number.isSafeInteger(number) || number < 1) return null;
   return { host: h!.toLowerCase(), owner, number, view: v ? Number(v) : null };
+}
+
+/** FIX-1 (council FS 1): one saved cell written onto the row as it is now (not as it was when the edit
+ * began), so two edits on one row that finish one after the other both stay. An empty value clears. */
+export function applyCellEdit(p: Project, itemId: string, field: ProjectField, value: string): Project {
+  const v = value.trim();
+  const option = field.options.find((o) => o.id === v);
+  const cell = v === "" ? null : option ? { text: option.name, id: option.id, start: option.start, days: option.days } : { text: v, id: "", start: field.kind === "date" ? v : "", days: 0 };
+  return {
+    ...p,
+    items: p.items.map((x) => {
+      if (x.id !== itemId) return x;
+      const values = { ...x.values };
+      if (cell) values[field.id] = cell;
+      else delete values[field.id];
+      return { ...x, values };
+    }),
+  };
 }
 
 export const projectKey = (r: { host: string; owner: string; number: number }) => `${r.host}/${r.owner.toLowerCase()}/${r.number}`;

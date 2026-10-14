@@ -47,6 +47,7 @@ pub fn login_ok(login: &str) -> bool {
 }
 
 fn gh_json(gh: &Path, host: &str, path: &str, extra: &[&str]) -> Result<serde_json::Value, String> {
+    host_allowed(gh, host)?;
     let args: Vec<&str> = ["api", path, "--hostname", host].into_iter().chain(extra.iter().copied()).collect();
     let text = gh_run(gh, &std::env::temp_dir(), &args, None).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
     serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))
@@ -122,13 +123,66 @@ pub async fn github_people(host: String, repo: String) -> Result<Vec<Person>, St
 
 /// A plain host name: what `repo_path` and every GraphQL call check before gh sees it.
 fn host_ok(host: &str) -> bool {
-    !host.is_empty() && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
+    !host.is_empty() && !host.starts_with('-') && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')
+}
+
+/// FIX-1 (council FB 1): the one gate in front of every gh call this file makes. Kolux talks only to
+/// github.com, to the host GH_HOST names, or to a host gh is signed in to (gh keeps a user for it in
+/// its own config: `gh config get -h <host> user`, which reads gh's config and goes nowhere). Any
+/// other host, from a pasted project address or from a repository's remote, is refused before gh
+/// runs, so gh never sends an Enterprise token or even a bare request to it.
+pub(crate) fn host_allowed(gh: &Path, host: &str) -> Result<(), String> {
+    host_allowed_with(gh, host, std::env::var("GH_HOST").ok().as_deref())
+}
+
+fn host_allowed_with(gh: &Path, host: &str, gh_host: Option<&str>) -> Result<(), String> {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    if !host_ok(host) {
+        return Err("This repository's GitHub host cannot be read".into());
+    }
+    let h = host.to_ascii_lowercase();
+    if h == "github.com" || gh_host.is_some_and(|g| g.trim().eq_ignore_ascii_case(&h)) {
+        return Ok(());
+    }
+    // A host found signed in stays allowed for this run; a refusal is asked again next time, so
+    // signing in with gh takes effect without a restart.
+    static SIGNED_IN: OnceLock<Mutex<HashSet<(std::path::PathBuf, String)>>> = OnceLock::new();
+    let known = SIGNED_IN.get_or_init(Default::default);
+    let key = (gh.to_path_buf(), h.clone());
+    if known.lock().map(|k| k.contains(&key)).unwrap_or(false) {
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new(gh);
+    cmd.args(["config", "get", "-h", &h, "user"]).current_dir(std::env::temp_dir()).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
+    cmd.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    let signed = cmd.output().map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
+    if !signed {
+        return Err(format!("Kolux only talks to GitHub hosts gh is signed in to, and {h} is not one of them (gh auth login --hostname {h} signs in)."));
+    }
+    if let Ok(mut k) = known.lock() {
+        k.insert(key);
+    }
+    Ok(())
 }
 
 /// A GraphQL node id as GitHub gives them (letters, digits, `_`, `-`, `=`), so an id from the page
 /// can never change the request it goes into.
 pub fn node_id_ok(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '=')
+}
+
+/// FIX-1 (council FS 4): one browse answer: the 30 most recently changed projects, and
+/// whether the owner has more than that, so the page can say the list stops there.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ProjectList {
+    pub projects: Vec<ProjectRef>,
+    pub more: bool,
 }
 
 /// One project in a picker list (GIT-056: browsing an owner's projects).
@@ -229,16 +283,14 @@ fieldValues(first:50){nodes{__typename ...on ProjectV2ItemFieldTextValue{text fi
 ...on ProjectV2ItemFieldIterationValue{title iterationId startDate duration field{...F}}}}}}} \
 fragment F on ProjectV2FieldConfiguration{...on ProjectV2FieldCommon{id}}";
 
-const PROJECTS_OF_OWNER: &str = "query($owner:String!){repositoryOwner(login:$owner){login ...on Organization{projectsV2(first:30,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title closed url}}} ...on User{projectsV2(first:30,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title closed url}}}}}";
-const PROJECTS_OF_VIEWER: &str = "query{viewer{login projectsV2(first:30,orderBy:{field:UPDATED_AT,direction:DESC}){nodes{number title closed url}}}}";
+const PROJECTS_OF_OWNER: &str = "query($owner:String!){repositoryOwner(login:$owner){login ...on Organization{projectsV2(first:30,orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage} nodes{number title closed url}}} ...on User{projectsV2(first:30,orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage} nodes{number title closed url}}}}}";
+const PROJECTS_OF_VIEWER: &str = "query{viewer{login projectsV2(first:30,orderBy:{field:UPDATED_AT,direction:DESC}){pageInfo{hasNextPage} nodes{number title closed url}}}}";
 const SET_FIELD: &str = "mutation($project:ID!,$item:ID!,$field:ID!,$value:ProjectV2FieldValue!){updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,fieldId:$field,value:$value}){projectV2Item{id}}}";
 const CLEAR_FIELD: &str = "mutation($project:ID!,$item:ID!,$field:ID!){clearProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,fieldId:$field}){projectV2Item{id}}}";
 
 /// One GraphQL request through gh; the answer's `data`.
 fn graphql(gh: &Path, host: &str, query: &str, variables: serde_json::Value) -> Result<serde_json::Value, String> {
-    if !host_ok(host) {
-        return Err("This repository's GitHub host cannot be read".into());
-    }
+    host_allowed(gh, host)?;
     let body = serde_json::json!({ "query": query, "variables": variables }).to_string();
     let text = gh_run(gh, &std::env::temp_dir(), &["api", "graphql", "--hostname", host, "--input", "-"], Some(&body)).map_err(|e| format!("{host}: {}", gh_words(&e)))?;
     let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("gh answered in a form Kolux cannot read: {e}"))?;
@@ -368,7 +420,7 @@ pub fn read_project(gh: &Path, host: &str, owner: &str, number: u64) -> Result<P
 }
 
 /// GIT-056 browsing: an owner's projects, newest change first; `@me` lists the signed-in account's.
-pub fn list_projects(gh: &Path, host: &str, owner: &str) -> Result<Vec<ProjectRef>, String> {
+pub fn list_projects(gh: &Path, host: &str, owner: &str) -> Result<ProjectList, String> {
     let holder = if owner == "@me" {
         graphql(gh, host, PROJECTS_OF_VIEWER, serde_json::json!({}))?["viewer"].clone()
     } else if login_ok(owner) {
@@ -377,12 +429,13 @@ pub fn list_projects(gh: &Path, host: &str, owner: &str) -> Result<Vec<ProjectRe
         return Err("That project owner cannot be read".into());
     };
     let login = holder["login"].as_str().filter(|l| login_ok(l)).ok_or_else(|| format!("{host} has no account or organization called {owner}"))?;
-    Ok(holder["projectsV2"]["nodes"]
+    let projects = holder["projectsV2"]["nodes"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|p| Some(ProjectRef { owner: login.into(), number: p["number"].as_u64()?, title: s(&p["title"]), closed: p["closed"].as_bool().unwrap_or(false), url: s(&p["url"]) }))
-        .collect())
+        .collect();
+    Ok(ProjectList { projects, more: holder["projectsV2"]["pageInfo"]["hasNextPage"].as_bool().unwrap_or(false) })
 }
 
 /// GIT-056: the GraphQL value for one edited cell; None for an empty value (the cell is cleared).
@@ -430,7 +483,7 @@ pub async fn github_project(host: String, owner: String, number: u64) -> Result<
 }
 
 #[tauri::command]
-pub async fn github_projects(host: String, owner: String) -> Result<Vec<ProjectRef>, String> {
+pub async fn github_projects(host: String, owner: String) -> Result<ProjectList, String> {
     tauri::async_runtime::spawn_blocking(move || list_projects(&gh_program()?, &host, &owner)).await.map_err(|e| e.to_string())?
 }
 
@@ -618,11 +671,13 @@ mod tests {
         fs::write(dir.join("answer.json"), answer.to_string()).unwrap();
         let gh = if cfg!(windows) {
             let f = dir.join("gh.cmd");
-            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nmore >>\"%~dp0body.txt\"\r\ntype \"%~dp0answer.json\"\r\n").unwrap();
+            // FIX-1 (council FS 5): call n answers with answer<n>.json when there is one, so a test can
+            // tell one call's answer from the next; answer.json otherwise.
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nmore >>\"%~dp0body.txt\"\r\nset /a n=0\r\nif exist \"%~dp0n.txt\" set /p n=<\"%~dp0n.txt\"\r\nset /a n+=1\r\n>\"%~dp0n.txt\" echo %n%\r\nif exist \"%~dp0answer%n%.json\" (type \"%~dp0answer%n%.json\") else (type \"%~dp0answer.json\")\r\n").unwrap();
             f
         } else {
             let f = dir.join("gh");
-            fs::write(&f, "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\ncat >> \"$d/body.txt\"\necho >> \"$d/body.txt\"\ncat \"$d/answer.json\"\n").unwrap();
+            fs::write(&f, "#!/bin/sh\nd=\"$(dirname \"$0\")\"\necho \"$*\" >> \"$d/calls.txt\"\ncat >> \"$d/body.txt\"\necho >> \"$d/body.txt\"\nn=$(( $(cat \"$d/n.txt\" 2>/dev/null || echo 0) + 1 ))\necho $n > \"$d/n.txt\"\nif [ -f \"$d/answer$n.json\" ]; then cat \"$d/answer$n.json\"; else cat \"$d/answer.json\"; fi\n").unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -723,30 +778,90 @@ mod tests {
 
     #[test]
     fn browsing_lists_an_owner_s_projects_or_the_signed_in_account_s() {
-        let (gh, dir) = graphql_stand_in("github-projects", &json!({ "data": { "repositoryOwner": { "login": "acme", "projectsV2": { "nodes": [{ "number": 3, "title": "Roadmap", "closed": false, "url": "https://github.com/orgs/acme/projects/3" }] } } } }));
+        let (gh, dir) = graphql_stand_in("github-projects", &json!({ "data": { "repositoryOwner": { "login": "acme", "projectsV2": { "pageInfo": { "hasNextPage": true }, "nodes": [{ "number": 3, "title": "Roadmap", "closed": false, "url": "https://github.com/orgs/acme/projects/3" }] } } } }));
         let list = list_projects(&gh, "github.com", "acme").unwrap();
-        assert_eq!((list.len(), list[0].owner.as_str(), list[0].number), (1, "acme", 3));
+        assert_eq!((list.projects.len(), list.projects[0].owner.as_str(), list.projects[0].number), (1, "acme", 3));
+        assert!(list.more, "an owner with more than 30 projects says the list stops there (FIX-1, council FS 4)");
         assert!(list_projects(&gh, "github.com", "@me").is_err(), "the owner answer has no viewer");
         let body = fs::read_to_string(dir.join("body.txt")).unwrap();
-        assert!(body.contains("viewer{login projectsV2"), "{body}");
+        assert!(body.contains("viewer{login projectsV2") && body.contains("pageInfo{hasNextPage}"), "{body}");
         let (gh, _keep) = graphql_stand_in("github-projects-none", &json!({ "data": { "repositoryOwner": null } }));
         let err = list_projects(&gh, "github.com", "ghost").unwrap_err();
         assert!(err.contains("no account or organization called ghost"), "{err}");
     }
     #[test]
     fn an_issue_closes_as_a_duplicate_only_after_the_target_is_checked_and_reopens_and_takes_comments() {
-        let issue = json!({ "data": { "repository": { "issueOrPullRequest": { "__typename": "Issue", "id": "I_kw1", "state": "OPEN" } }, "closeIssue": { "issue": { "state": "CLOSED" } }, "reopenIssue": { "issue": { "state": "OPEN" } } } });
-        let (gh, dir) = graphql_stand_in("github-issue-dup", &issue);
+        // FIX-1 (council FS 5): every call gets its own answer, so the target (#3, I_dup3) and the
+        // issue itself (#7, I_kw7) are told apart and the order of the three calls is checked.
+        let close = json!({ "data": { "closeIssue": { "issue": { "state": "CLOSED" } } } });
+        let (gh, dir) = graphql_stand_in("github-issue-dup", &close);
+        fs::write(dir.join("answer1.json"), json!({ "data": { "repository": { "issueOrPullRequest": { "__typename": "Issue", "id": "I_dup3", "state": "OPEN" } } } }).to_string()).unwrap();
+        fs::write(dir.join("answer2.json"), json!({ "data": { "repository": { "issueOrPullRequest": { "__typename": "Issue", "id": "I_kw7", "state": "OPEN" } } } }).to_string()).unwrap();
         assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "duplicate", Some(3)).unwrap(), "closed");
         let calls = fs::read_to_string(dir.join("calls.txt")).unwrap();
         assert_eq!(calls.lines().count(), 3, "the target, the issue, then the close: {calls}");
         let body = fs::read_to_string(dir.join("body.txt")).unwrap();
-        assert!(body.contains("\"number\":3") && body.contains("\"reason\":\"DUPLICATE\"") && body.contains("\"dup\":\"I_kw1\""), "{body}");
+        let sent: Vec<serde_json::Value> = body.lines().filter(|l| l.trim_start().starts_with('{')).map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(sent.len(), 3, "{body}");
+        assert_eq!(sent[0]["variables"]["number"], 3, "the duplicate target is checked first: {body}");
+        assert_eq!(sent[1]["variables"]["number"], 7, "then the issue itself: {body}");
+        assert!(sent[2]["query"].as_str().unwrap().contains("closeIssue"), "{body}");
+        assert_eq!((sent[2]["variables"]["id"].as_str(), sent[2]["variables"]["dup"].as_str(), sent[2]["variables"]["reason"].as_str()), (Some("I_kw7"), Some("I_dup3"), Some("DUPLICATE")), "the issue is closed as a duplicate of the target, not the other way round");
+
+        let issue = json!({ "data": { "repository": { "issueOrPullRequest": { "__typename": "Issue", "id": "I_kw1", "state": "OPEN" } }, "closeIssue": { "issue": { "state": "CLOSED" } }, "reopenIssue": { "issue": { "state": "OPEN" } } } });
+        let (gh, dir) = graphql_stand_in("github-issue-more", &issue);
         assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, true, "", None).unwrap(), "open");
         assert_eq!(set_issue_state(&gh, "github.com", "acme/app", 7, false, "not_planned", None).unwrap(), "closed");
         comment_issue(&gh, "github.com", "acme/app", 7, "Fixed in \"main\"; see `x`").unwrap();
         let body = fs::read_to_string(dir.join("body.txt")).unwrap();
         assert!(body.contains("reopenIssue") && body.contains("\"reason\":\"NOT_PLANNED\"") && body.contains("addComment") && body.contains("Fixed in \\\"main\\\""), "{body}");
+    }
+
+    /// FIX-1 (council FB 1): a stand-in gh that is signed in to ghe.corp only (gh config get -h
+    /// <host> user answers a login there and fails everywhere else) and keeps every call.
+    fn gate_stand_in(name: &str) -> (std::path::PathBuf, crate::test_dir::TempDir) {
+        let dir = crate::test_dir::temp(name);
+        let gh = if cfg!(windows) {
+            let f = dir.join("gh.cmd");
+            fs::write(&f, "@echo off\r\necho %*>>\"%~dp0calls.txt\"\r\nif \"%1\"==\"config\" goto config\r\necho {\"fork\":false,\"data\":{}}\r\nexit /b 0\r\n:config\r\nif /i \"%4\"==\"ghe.corp\" (echo ana& exit /b 0)\r\nexit /b 1\r\n").unwrap();
+            f
+        } else {
+            let f = dir.join("gh");
+            fs::write(&f, "#!/bin/sh\necho \"$*\" >> \"$(dirname \"$0\")/calls.txt\"\nif [ \"$1\" = config ]; then [ \"$4\" = ghe.corp ] && echo ana && exit 0; exit 1; fi\necho '{\"fork\":false,\"data\":{}}'\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&f, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            f
+        };
+        (gh, dir)
+    }
+
+    #[test]
+    fn a_host_gh_is_not_signed_in_to_never_gets_a_request() {
+        let (gh, dir) = gate_stand_in("github-host-gate");
+        let api_calls = || fs::read_to_string(dir.join("calls.txt")).unwrap_or_default().lines().filter(|l| l.starts_with("api")).map(String::from).collect::<Vec<_>>();
+        // A pasted project address on an unknown host: reads and writes are refused before gh runs.
+        let err = read_project(&gh, "evil.example", "acme", 3).unwrap_err();
+        assert!(err.contains("signed in to"), "{err}");
+        assert!(list_projects(&gh, "evil.example", "acme").is_err());
+        assert!(set_project_field(&gh, "Evil.Example", "PVT_1", "PVTI_a", "F_status", "single_select", "o2").is_err());
+        assert!(comment_issue(&gh, "evil.example", "acme/app", 7, "hello").is_err());
+        // The same gate covers a host taken from a repository's remote (the fork parent and people reads).
+        assert!(repo_parent(&gh, "evil.example", "acme/app").unwrap_err().contains("signed in to"));
+        assert!(repo_people(&gh, "evil.example", "acme/app").is_err());
+        assert!(read_project(&gh, "-x.corp", "acme", 3).is_err(), "a host that starts with a dash is not a host");
+        assert_eq!(api_calls(), Vec::<String>::new(), "nothing reached gh api for a host it is not signed in to");
+        let before = fs::read_to_string(dir.join("calls.txt")).unwrap_or_default().lines().count();
+        assert!(host_allowed_with(&gh, "env.corp", Some("ENV.corp")).is_ok() && host_allowed_with(&gh, "GitHub.com", None).is_ok(), "GH_HOST and github.com need no check");
+        assert!(host_allowed_with(&gh, "env.corp", Some("other.corp")).is_err());
+        assert_eq!(fs::read_to_string(dir.join("calls.txt")).unwrap_or_default().lines().count(), before + 1, "only the refused env.corp asked gh config");
+        // A host gh is signed in to goes through.
+        assert_eq!(repo_parent(&gh, "ghe.corp", "acme/app").unwrap(), None);
+        let _ = read_project(&gh, "ghe.corp", "acme", 3);
+        let got = api_calls();
+        assert!(got.iter().any(|c| c.starts_with("api repos/acme/app --hostname ghe.corp")) && got.iter().any(|c| c.starts_with("api graphql --hostname ghe.corp")), "{got:?}");
     }
 
     #[test]
