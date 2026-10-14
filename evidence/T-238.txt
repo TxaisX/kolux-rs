@@ -55,27 +55,35 @@ occurrences of one word and two links, e.g. a local probe page served from a scr
 Hunk for the coordinator (src/App.tsx, out of this lane's scope): app-side presses (keyboard in
 the address bar or the find bar) of Mod+F and the zoom keys reach the tab only with this; presses
 inside the page work without it.
+(Regenerated 2026-10-14 by council FIX-1 (d): the earlier hunk had no line numbers. This is
+`git diff` output against main fb322d5; the same text is evidence/browser-FIX-1-App.patch, and
+`git show lane/browser:evidence/browser-FIX-1-App.patch > x.patch; git apply --check x.patch`
+passes on a clean checkout of fb322d5. Mod+F needs the find case; the zoom case uses the focused
+pane kind already computed above the switch.)
+diff --git a/src/App.tsx b/src/App.tsx
+index f593fb0..803b0ae 100644
 --- a/src/App.tsx
 +++ b/src/App.tsx
-@@ case "browser.focusAddressBar":
-         case "browser.focusAddressBar":
+@@ -481,6 +481,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
          case "browser.back":
          case "browser.forward":
          case "browser.reload":
 +        case "browser.find":
            browserAction(focused, hit.id.slice("browser.".length));
            break;
-@@ case "zoom.in":
+         case "app.settings":
+@@ -579,6 +580,11 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
          case "zoom.in":
          case "zoom.out":
          case "zoom.reset":
 +          // BROW-012: a browser tab zooms its own page in its own steps.
-+          if (panes.find((p) => p.key === focused)?.kind === "browser") {
++          if (kind === "browser") {
 +            browserAction(focused, hit.id === "zoom.in" ? "zoomIn" : hit.id === "zoom.out" ? "zoomOut" : "zoomReset");
 +            break;
 +          }
            zoomTerm(focused, hit.id === "zoom.in" ? "in" : hit.id === "zoom.out" ? "out" : "reset"); // TERM-078
            break;
+         case "tab.newTerminal":
 
 Not in this part (T-238-b): address bar suggestions from history (BROW 004) and downloads into the
 Downloads folder (BROW 013). Known limits: the in-page chords use the default keys, not customised
