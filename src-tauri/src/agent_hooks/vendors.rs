@@ -232,8 +232,22 @@ fn refuse_shape(file: &Path, v: &Value, events: &[&str]) -> Result<(), String> {
 /// quoted path is only printed. So the script is called with `&` on a single-quoted path, any `'`
 /// doubled. Called this way it reads the agent's own stdin byte for byte; piping `$input` into it
 /// would re-encode the event through the console code page.
+///
+/// FIX-2 (A4): PowerShell also takes the curly single quotes (U+2018, U+2019, U+201A, U+201B) as
+/// quotes, so each of those is doubled too. A5: elsewhere Gemini CLI runs the command through a
+/// POSIX shell, where `&` is a syntax error; there the path is single-quoted the POSIX way.
 pub fn gemini_command(script: &str) -> String {
-    format!("& '{}'", script.replace('\'', "''"))
+    if !cfg!(windows) {
+        return format!("'{}'", script.replace('\'', "'\\''"));
+    }
+    let mut quoted = String::with_capacity(script.len() + 4);
+    for c in script.chars() {
+        quoted.push(c);
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+            quoted.push(c);
+        }
+    }
+    format!("& '{quoted}'")
 }
 
 /// Gemini CLI: one Kolux group under each event; the user's own hooks stay.
@@ -638,6 +652,36 @@ mod tests {
         assert!(!String::from_utf8_lossy(&out.stdout).contains(GEMINI_SCRIPT), "the command is run, not printed: {}", String::from_utf8_lossy(&out.stdout));
         let got = fs::read(dir.join("got.txt")).expect("the script ran");
         assert!(got.starts_with(payload.as_bytes()), "{:?}", String::from_utf8_lossy(&got));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// FIX-2 (A4): PowerShell reads the curly single quotes as quotes too, so a home like
+    /// `O’Brien` has each of them doubled; A5: the `&` form is Windows only, a POSIX shell gets
+    /// a plain single-quoted path.
+    #[test]
+    fn fix_2_a4_a5_the_gemini_command_quotes_every_single_quote_powershell_knows() {
+        let path = "C:/Users/O'Brien \u{2018}x\u{2019} \u{201a}y\u{201b}/gemini.cmd";
+        if cfg!(windows) {
+            assert_eq!(gemini_command(path), "& 'C:/Users/O''Brien \u{2018}\u{2018}x\u{2019}\u{2019} \u{201a}\u{201a}y\u{201b}\u{201b}/gemini.cmd'");
+        } else {
+            assert_eq!(gemini_command("/home/o'b/gemini.cmd"), "'/home/o'\\''b/gemini.cmd'");
+        }
+    }
+
+    /// FIX-2 (A4): run under PowerShell, the command with curly quotes in the path runs the script.
+    #[cfg(windows)]
+    #[test]
+    fn fix_2_a4_a_curly_quote_in_the_home_still_runs_the_gemini_script() {
+        use std::process::Command;
+        let home = scratch("fix2-ps-o\u{2019}q");
+        let dir = home.join(crate::hooks::SCRIPT_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        let script = dir.join(GEMINI_SCRIPT);
+        fs::write(&script, "@echo off\r\necho ran>\"%~dp0ran.txt\"\r\nexit /b 0\r\n").unwrap();
+        let command = gemini_command(&script.to_string_lossy().replace('\\', "/"));
+        let out = Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &format!("{command}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}")]).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(dir.join("ran.txt").exists(), "the script ran: {}", String::from_utf8_lossy(&out.stderr));
         let _ = fs::remove_dir_all(&home);
     }
 

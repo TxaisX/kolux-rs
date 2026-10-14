@@ -74,3 +74,33 @@ For the coordinator: COMPAT 3.1 says tool events are not spooled (macOS/Linux wo
 they are now held with names only. Whether to reword COMPAT is yours.
 What the user sees: nothing new on screen; a prompt, a command or its output never lands in
 Kolux's holding file, and on a PC without CLAUDE_CONFIG_DIR the panes' status dots work at all.
+
+(c) A4/A5: the Gemini CLI hook command quotes every single quote PowerShell treats as one
+Bug: gemini_command wrapped the script path in PowerShell `& '...'` and doubled only the ASCII
+apostrophe. PowerShell also ends a single-quoted string at U+2018, U+2019, U+201A and U+201B, so a
+home folder holding a curly quote (O’Brien) broke every Gemini CLI hook; on macOS/Linux the
+PowerShell form was emitted too.
+Fix (src-tauri/src/agent_hooks/vendors.rs gemini_command): on Windows every one of the five quote
+characters is doubled; elsewhere the path is POSIX single-quoted with '\''.
+Tests (red on the old code, then green):
+- agent_hooks::vendors::tests::fix_2_a4_a5_the_gemini_command_quotes_every_single_quote_powershell_knows
+  RED: left `& 'C:/Users/O''Brien ‘x’ ‚y‛/gemini.cmd'` (curly quotes not doubled).
+- agent_hooks::vendors::tests::fix_2_a4_a_curly_quote_in_the_home_still_runs_the_gemini_script
+  RED: PowerShell "The string is missing the terminator: '." (TerminatorExpectedAtEndOfString).
+GREEN: cargo test --lib hooks: 74 passed, 0 failed (all 7 fix_2 tests ok); clippy -D warnings clean.
+What the user sees: Gemini CLI's status dot works for a Windows user whose name has a curly quote.
+
+(d) LIVE PROOF PENDING (no app launch in this pass, by the brief)
+- Run fix1_the_gemini_command_runs_the_script_through_powershell_with_stdin_intact's command and
+  payload under `pwsh -NoProfile -Command` (PowerShell 7) as well as Windows PowerShell 5.1.
+- In a scratch-home Kolux pane, one real `gemini` turn moves the status dot working -> idle and no
+  script path is printed.
+- With Kolux closed, one agent turn: the holding file shows names only (no prompt or tool text);
+  after a restart the pane's status comes back from it.
+
+Seen, not fixed (out of this pass's scope or coordinator-owned):
+- A1 environment redaction of hook output; A2 XDG_CONFIG_HOME for Gemini/Antigravity homes;
+  A3 COMPAT drift; A6 re-check of the kept copy's hash on removal.
+- T-120-c Antigravity shell form; T-126 still open.
+- COMPAT 3.1 wording on the holding file (tool events now held on Windows, names only): coordinator.
+- S6 / app070 EXACT map: already on main, nothing to do here.
