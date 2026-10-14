@@ -53,19 +53,21 @@ export function forecast(list: Reading[], resetsAt: number | null, now: number):
   return { kind: "at", at };
 }
 
-/** The hover line for a forecast, or "" when there is none. */
-export function forecastLine(f: Forecast | null, now: number): string {
+/** The hover line for a forecast, or "" when there is none. A run-out already past reads "used up
+ * now" (FIX-1), and "before the reset" is said only when the reset time is known (`resetsAt`;
+ * left out, it counts as known). */
+export function forecastLine(f: Forecast | null, now: number, resetsAt?: number | null): string {
   if (!f) return "";
-  if (f.kind === "now") return "At this rate: used up now";
+  if (f.kind === "now" || (f.kind === "at" && f.at <= now)) return "At this rate: used up now";
   if (f.kind === "lasts") return "At this rate: lasts until it resets";
-  return `At this rate: runs out in ${countdown(f.at, now)}, before the reset`;
+  return `At this rate: runs out in ${countdown(f.at, now)}${resetsAt === null ? "" : ", before the reset"}`;
 }
 
 /** Records a reading and returns the hover line for that window. */
 export function noteAndForecast(key: string, used: number, resetsAt: number | null, now: number): string {
   record(key, used, resetsAt, now);
-  return forecastLine(forecast(readingsOf(key), resetsAt, now), now);
+  return forecastLine(forecast(readingsOf(key), resetsAt, now), now, resetsAt);
 }
 
 /** The hover line for window `key` from the readings so far, without adding one. */
-export const lineFor = (key: string, resetsAt: number | null, now: number = Date.now()): string => forecastLine(forecast(readingsOf(key), resetsAt, now), now);
+export const lineFor = (key: string, resetsAt: number | null, now: number = Date.now()): string => forecastLine(forecast(readingsOf(key), resetsAt, now), now, resetsAt);

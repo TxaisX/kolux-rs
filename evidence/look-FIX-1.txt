@@ -55,3 +55,24 @@ LIVE PROOF PENDING (B, batched): open a .md note in the rich view and paste abou
   and paste the same text: it goes in and the window keeps drawing. In a code tab paste about 3 MB
   and press keys while it goes in: none of them land inside the pasted text, and one Ctrl+Z removes
   the whole paste.
+
+C. Usage forecast (USAGE-031, src/usage): FIX-SOON 3, AFTER 1
+- Before: the stored last status-line report (read at start, on the 5-minute timer, on a focus and
+  on a manual refresh) was recorded as a forecast reading stamped with the current time, though it
+  can be a day old: yesterday's 40% then today's live 52% read as "runs out in 39m". Now only a
+  report the status line pushes live is a forecast reading; the stored one still fills the pill,
+  the plan line and the launch warning.
+- Before: a run-out already past read "runs out in now, before the reset", and "before the reset"
+  was said even with no reset time known. Now it reads "At this rate: used up now", and "before the
+  reset" is said only when the reset time is known.
+Tests (pnpm exec vitest run src/usage src/editor: 31 files, 170 tests passed; tsc 0):
+- src/usage/ClaudePill.test.ts "FIX-1 (USAGE-031): the stored last report is never a forecast
+  reading stamped now; live reports are" (new; failed on the old code: the stored handler did not
+  exist apart from the live one, the single handler recorded both).
+- src/usage/forecast.test.ts "USAGE-031 (FIX-1): a run-out already past reads 'used up now', and an
+  unknown reset time is never named" (new; failed on the old code: "runs out in now, before...").
+LIVE PROOF PENDING (C, batched): with a stored Claude usage report from an earlier day in the
+  profile (state key of the last status-line limits), start the app and hover the Claude pill: no
+  "At this rate" line yet. Push two live claude-status reports at least 5 minutes apart (40% then
+  41% of the weekly window): the hover gains "At this rate: runs out in ..., before the reset".
+  With no reset time in the reports the line has no "before the reset".

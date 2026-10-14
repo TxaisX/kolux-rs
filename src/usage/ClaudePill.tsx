@@ -15,11 +15,20 @@ import { publishClaude as publishPlan, usePlan, useResetTick } from "./plan";
 import { claudeFetched, runner, useRefresh } from "./refresh";
 import { lineFor, record } from "./forecast";
 
-/** The top bar's read goes to the plan line and the launch screen's warning alike. */
-const publishClaude = (limits: ClaudeLimit[]) => {
-  for (const l of limits) record(`claude:${l.kind}`, l.usedPercent, l.resetsAt, Date.now()); // USAGE-031
+/** The top bar's read goes to the plan line and the launch screen's warning alike. This is the
+ * stored last report (at start, on the timer, on a focus, on a manual refresh): it carries no time
+ * of its own and may be a day old, so it is never a forecast reading (FIX-1: stamped now, yesterday's
+ * 40% then today's live 52% would read as a steep climb). */
+export const publishStored = (limits: ClaudeLimit[]) => {
   publishPlan(limits);
   publishLaunch(limits);
+};
+
+/** A report the status line pushed just now: the same, and a forecast reading at the time it
+ * arrived (USAGE-031). */
+export const publishLive = (limits: ClaudeLimit[], now: number = Date.now()) => {
+  for (const l of limits) record(`claude:${l.kind}`, l.usedPercent, l.resetsAt, now);
+  publishStored(limits);
 };
 
 /** USAGE-023: the steady mark's words while the last read failed; the figures shown are the last good ones. */
@@ -52,10 +61,10 @@ export default function ClaudePill({ installed }: { installed?: boolean }) {
   const { claude: limits } = usePlan();
   const sched = useRefresh("claude");
   useEffect(() => {
-    const r = runner<ClaudeLimit[]>({ name: "claude", fetch: () => invoke<ClaudeLimit[]>("claude_usage").then(claudeFetched), onOk: publishClaude });
+    const r = runner<ClaudeLimit[]>({ name: "claude", fetch: () => invoke<ClaudeLimit[]>("claude_usage").then(claudeFetched), onOk: publishStored });
     r.start();
     const off = listen<{ limits: ClaudeLimit[] }>("claude-usage", (e) => {
-      if (e.payload.limits.length) publishClaude(e.payload.limits);
+      if (e.payload.limits.length) publishLive(e.payload.limits);
     });
     return () => {
       r.stop();

@@ -55,3 +55,14 @@ test("USAGE-031: the pill's hover line reads the window's readings without addin
   expect(lineFor("claude:seven_day", resets, T0 + 10 * MIN)).toBe("At this rate: runs out in 50m, before the reset");
   expect(readingsOf("claude:seven_day")).toHaveLength(2);
 });
+
+test("USAGE-031 (FIX-1): a run-out already past reads 'used up now', and an unknown reset time is never named", () => {
+  // the last reading is an hour old and the climb ran out half an hour ago
+  expect(forecastLine({ kind: "at", at: T0 - 30 * MIN }, T0)).toBe("At this rate: used up now");
+  expect(forecastLine({ kind: "at", at: T0 }, T0)).toBe("At this rate: used up now");
+  expect(forecastLine({ kind: "at", at: T0 + 50 * MIN }, T0, null)).toBe("At this rate: runs out in 50m");
+  record("k", 40, null, T0);
+  record("k", 50, null, T0 + 10 * MIN);
+  expect(lineFor("k", null, T0 + 10 * MIN)).toBe("At this rate: runs out in 50m");
+  expect(noteAndForecast("k", 55, null, T0 + 15 * MIN)).not.toContain("reset");
+});
