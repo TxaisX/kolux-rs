@@ -76,6 +76,10 @@ User sees: one of a frozen set of words: working, needs you, done, stopped, idle
 Rules: a stale working reading is never shown as working; an unreachable host shows a can't-reach
   word instead of the last known state; a pane with no process yet shows starting; a preset that was
   never launched shows not started.
+  (Kolux RS, T-028-b: the rail row's word is the status vocabulary's word for the same signal the
+  Board chip reads, so a stale working reading shows the vocabulary's stale word and a queued turn
+  its queued word, alongside the set above; a process that ends without a done signal reads stopped
+  at once; the cannot-reach word has no remote host to show yet, DT-C21.)
 Acceptance:
   - [ ] Kill the agent's process without a done signal → label leaves working within the staleness
         window.
@@ -169,6 +173,8 @@ User does: looks at the selected session's usage line.
 User sees: a rounded percentage of the plan's 5-hour window and the local time it resets.
 Rules: follows the user's used-or-remaining display preference; never prints a not-a-number value;
   stays blank for a provider without a 5-hour window.
+  (Kolux RS, T-040-b: the line is the Agents rail's footer, "Claude 38% used · resets today 15:00",
+  in the reset words the Codex pill uses; a broken provider value reads 0.)
 Acceptance:
   - [ ] Claude at 37.6 % used, preference used → shows 38 % and a local reset time.
   - [ ] Provider with no 5-hour window → the usage line stays empty.
@@ -249,6 +255,10 @@ Rules: plain shell terminals are never listed; on first open the first agent wit
   is labelled with its task's display name or title, failing that with the task text taken from the
   dispatch prompt, and only as a last resort with the raw prompt; the dispatch boilerplate never
   shows.
+  (Kolux RS, T-050: the rail stands where the worktree sidebar does; the saved agents are the
+  switched-on, installed ones from Settings > Agents, in that order; a row reads the task title the
+  launcher gave the session, else its folder's name; the task-text and raw-prompt fallbacks for an
+  orchestrator session without a title come with T-050-b.)
 Acceptance:
   - [ ] One saved agent with two sessions plus one unmatched Codex session → two groups; the
         unmatched one sits under Other sessions.
@@ -268,6 +278,9 @@ Rules: chat shows for supported agents even when the global chat experiment is o
   terminal-grid message bar was removed on 2026-10-05; a live agent detected in the pane decides
   chat or terminal, over what the session was launched as; plain shells and unsupported agents get
   the terminal.
+  (Kolux RS, T-050: the terminal body and the chooser for a not-started session are built; the chat
+  thread, the composer and the Show terminal switch wait for the transcript and chat tasks, T-050-b,
+  so every session shows its terminal until then.)
 Acceptance:
   - [ ] Select a Claude session → chat body; flip Show terminal → raw terminal.
   - [ ] Select a plain shell → terminal body, no switch.
@@ -281,6 +294,8 @@ User does: clicks + on an agent group, or sees the empty state on a fresh profil
 User sees: a new not-yet-started session preset appears under that agent; with no agents an empty
   state invites building one.
 Rules: the preset waits for the user to pick and start it.
+  (Kolux RS, T-050: + adds a chooser pane with that agent already in its seat; the user picks the
+  model and presses Start; the empty state's button opens Settings > Agents.)
 Acceptance:
   - [ ] Click + under an agent → a not-started row appears and is selected.
   - [ ] Fresh profile with no saved agents → an empty state shows instead of a blank rail.
@@ -294,6 +309,8 @@ User sees: one card per terminal pane in tab-group order; panes that were never 
   chooser cards; cards use the saved agent's name.
 Rules: editor and browser tabs never become cards; a background tab's pane is not borrowed into
   another card.
+  (Kolux RS, T-050: the Board's lanes and empty state count terminal panes only; pane headers, on
+  the Board and in the grid, show the saved agent's name in place of the program word.)
 Acceptance:
   - [ ] Two tabs, one split into two panes → three cards in tab order.
   - [ ] Open an editor tab and a browser tab → neither gets a card.

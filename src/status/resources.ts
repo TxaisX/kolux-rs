@@ -3,7 +3,7 @@
 import { underDir } from "../workspaces";
 
 export type Usage = { bytes: number; cpu: number; processes: number };
-export type SessionUsage = Usage & { id: number; dir: string | null };
+export type SessionUsage = Usage & { id: number; pid: number | null; dir: string | null };
 export type Resources = { app: Usage; sessions: SessionUsage[]; free: number | null; total: number | null };
 export type Row = SessionUsage & { name: string; shown: boolean };
 export type Group = { label: string; dir: string | null; rows: Row[] };

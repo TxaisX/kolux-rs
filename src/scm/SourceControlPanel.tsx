@@ -1,6 +1,8 @@
-// The Source Control card on the right of the content (spec 11; GIT-002 / GIT-004 / GIT-006 /
-// GIT-007): the changes of the workspace in front under conflicts, staged, changes and untracked,
-// each section with its count and a stage-all / unstage-all control, plus or minus on every row,
+// The Source Control card on the right of the content (spec 11; GIT-002 / GIT-003 / GIT-004 /
+// GIT-006 / GIT-007): the changes of the workspace in front under conflicts, staged, changes and
+// untracked, each section with its count, a stage-all / unstage-all control and a discard-all
+// control, plus or minus and a discard arrow on every row (GIT-003: discarding asks first, worded
+// for what goes, with the untracked list scrolling inside the question),
 // a commit box (Ctrl+Enter commits while focus is in here), the main button that always proposes
 // the next step, a remote menu whose labels carry counts and whose disabled items say why, and a
 // notice when an action fails or a hook refuses a commit, with a Fix with AI action. The draft
@@ -10,18 +12,19 @@
 // the base and the lines changed, split into source, tests and generated).
 // Rows select on click (Ctrl adds, Shift spans), and a bulk bar above the list says how many of
 // the selected rows Stage and Unstage will each cover (T-018-c); Escape clears the selection.
-// ponytail: the list refreshes after each action and every 4 s while the panel is open; the
-// watcher that shows a commit typed in a terminal at once comes with GIT-001 (T-033). GIT-021 / GIT-023: the pull-request step looks the
+// GIT-001 (T-033-b): the list refreshes after each action and whenever git state moves, a commit
+// or checkout typed in a terminal included, through the git status watcher (watch.ts). GIT-021 / GIT-023: the pull-request step looks the
 // branch's pull request up through gh once it is published, and Create pull request opens a composer.
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
-import { ChevronDown, Close, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
+import { ChevronDown, Close, FileCode, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
+import { watchStatus } from "./watch";
 import { openInBrowser } from "../browser/BrowserPane";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -53,6 +56,15 @@ type Props = {
   /** GIT-025: the pull request linked by hand to this workspace, and saving or removing it. */
   linkedPr: string | null;
   onLinkPr: (url: string | null) => void;
+  /** GIT-001: the flat list (the default) or the folder tree, remembered as a setting. */
+  view?: "list" | "tree";
+  onView?: (view: "list" | "tree") => void;
+  /** GIT-037: a plain click on a changed file opens its diff in the cell's preview tab. */
+  onOpenDiff?: (path: string, staged: boolean) => void;
+  /** GIT-038: every change in one scrolling tab. */
+  onAllChanges?: () => void;
+  /** GIT-041: the review notes section, drawn above History. */
+  notesSection?: ReactNode;
 };
 
 type Asking = { agent: string; prompt: string; remember: boolean; title?: string };
@@ -79,8 +91,10 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr }: Props) {
+export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
+  // GIT-003: the rows waiting for a yes before their work is thrown away.
+  const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const starting = useRef(false);
   const [busyAgent, setBusyAgent] = useState(false);
@@ -120,6 +134,15 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     if (agents.length === 0) return setAgentError("No agent was found on this computer, so nothing can explain this commit.");
     setAsking({ agent: agents[0].id, prompt, remember: false, title: "Explain changes with an agent" });
   };
+  // GIT-016: Review changes asks an agent to check the branch, naming the base and the changed files.
+  const review = () => {
+    const base = summary?.against ?? status?.base ?? "the base branch";
+    const prompt = reviewPrompt(base, summary?.committed ?? [], summary?.files ?? 0, status ? [...new Set(rowOrder(status))] : []);
+    if (prompt === null) return setInfo("This branch has no changes to look at yet, so no agent was started.");
+    if (saved) return void runAgent(saved, prompt);
+    if (agents.length === 0) return setAgentError("No agent was found on this computer, so nothing can review this branch.");
+    setAsking({ agent: agents[0].id, prompt, remember: false, title: "Review changes with an agent" });
+  };
   const confirmAsk = () => {
     const a = asking && agents.find((x) => x.id === asking.agent);
     if (!asking || !a || !asking.prompt.trim()) return;
@@ -134,6 +157,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
   const [busy, setBusy] = useState(false);
   const [menu, setMenu] = useState<{ left: number; top: number } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  const [closedDirs, setClosedDirs] = useState<Set<string>>(new Set());
   const [anchor, setAnchor] = useState<string | null>(null);
   const remoteButton = useRef<HTMLButtonElement>(null);
   const [discarding, setDiscarding] = useState<(DiscardAsk & { section: Section }) | null>(null);
@@ -159,9 +183,12 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     setAnchor(null);
     setDiscarding(null);
     void load();
-    const timer = window.setInterval(() => void load(), 4000);
-    return () => window.clearInterval(timer);
-  }, [load]);
+    if (dir === null) return;
+    return watchStatus(dir, (s) => {
+      setStatus(s);
+      setError(null);
+    });
+  }, [load, dir]);
 
   // VIEW-068: the branch summary is measured while the panel is open, when HEAD moves and at
   // least every 30 s; the last one stays on screen while the next is worked out.
@@ -239,6 +266,13 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     setDiscarding(null);
     const section = d.section === "Changes" ? "changed" : d.section.toLowerCase();
     void guarded(() => invoke("scm_discard", { worktree: dir, section, paths: d.paths }));
+  };
+  // GIT-003: rows picked across sections go through the section-free discard.
+  const discardRows = (rows: Change[]) => rows.length > 0 && !busy && setDiscardingRows(rows);
+  const confirmDiscard = () => {
+    const rows = discardingRows ?? [];
+    setDiscardingRows(null);
+    void guarded(() => invoke("scm_discard", { worktree: dir, paths: rows.map((r) => r.path) }));
   };
   const commit = () =>
     canCommit(status, draft) &&
@@ -435,6 +469,55 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     if (!e.shiftKey) setAnchor(path);
   };
   const chosen = status ? bulk(status, selected) : { present: [], stage: [], unstage: [] };
+  const plan = discardingRows && discardPlan(discardingRows);
+  const rowsOf = (paths: string[]): Change[] => {
+    const all = status ? [...status.conflicts, ...status.staged, ...status.changed, ...status.untracked] : [];
+    return paths.flatMap((p) => all.find((c) => c.path === p) ?? []);
+  };
+
+  // GIT-001: a file's lines added and removed in this section; a binary file shows none.
+  const countsOf = (name: "Conflicts" | Section, path: string) => (name === "Staged" ? status?.lines?.staged : name === "Changes" ? status?.lines?.changed : name === "Untracked" ? status?.lines?.untracked : undefined)?.[path];
+  const fileRow = (name: "Conflicts" | Section, r: Change, on: boolean, depth: number, label: string) => {
+    const n = countsOf(name, r.path);
+    return (
+      <div
+        key={r.path}
+        className="scm-row"
+        aria-selected={selected.includes(r.path)}
+        style={depth ? { paddingLeft: 6 + depth * 12 + 12 } : undefined}
+        title={r.from ? `${r.from} → ${r.path}` : r.path}
+        onClick={(e) => {
+          pick(r.path, e);
+          if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpenDiff?.(r.path, name === "Staged");
+        }}
+      >
+        <span className="letter">{r.status}</span>
+        <span className="path">{label}</span>
+        {n && (
+          <span className="scm-lines" title={`${n[0]} added, ${n[1]} removed`}>
+            {n[0] > 0 && <span className="add">+{n[0]}</span>}
+            {n[1] > 0 && <span className="del">−{n[1]}</span>}
+          </span>
+        )}
+        {name !== "Conflicts" && (
+          <button className="ib" title="Discard" aria-label={`Discard ${r.path}`} disabled={busy} onClick={(e) => { e.stopPropagation(); askDiscard(name, [r], false); }}>
+            <Undo />
+          </button>
+        )}
+        <button
+          className="ib"
+          title={on ? "Stage" : "Unstage"}
+          disabled={busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            void stage([r.path], on);
+          }}
+        >
+          {on ? <Plus /> : <Minus />}
+        </button>
+      </div>
+    );
+  };
 
   const section = (name: "Conflicts" | Section, rows: Change[], on: boolean) =>
     rows.length > 0 && (
@@ -451,28 +534,31 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
             {on ? <Plus /> : <Minus />}
           </button>
         </div>
-        {rows.map((r) => (
-          <div key={r.path} className="scm-row" aria-selected={selected.includes(r.path)} title={r.from ? `${r.from} → ${r.path}` : r.path} onClick={(e) => pick(r.path, e)}>
-            <span className="letter">{r.status}</span>
-            <span className="path">{r.from ? `${r.from} → ${r.path}` : r.path}</span>
-            {name !== "Conflicts" && (
-              <button className="ib" title="Discard" aria-label={`Discard ${r.path}`} disabled={busy} onClick={(e) => { e.stopPropagation(); askDiscard(name, [r], false); }}>
-                <Undo />
-              </button>
-            )}
-            <button
-              className="ib"
-              title={on ? "Stage" : "Unstage"}
-              disabled={busy}
-              onClick={(e) => {
-                e.stopPropagation();
-                void stage([r.path], on);
-              }}
-            >
-              {on ? <Plus /> : <Minus />}
-            </button>
-          </div>
-        ))}
+        {view === "tree"
+          ? fileTree(rows, new Set([...closedDirs].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)))).map((i) =>
+              i.kind === "file" ? (
+                fileRow(name, i.change, on, i.depth, i.name)
+              ) : (
+                <div key={`dir:${i.path}`} className="scm-row scm-dir" style={{ paddingLeft: 6 + i.depth * 12 }} title={i.path} onClick={() => setClosedDirs((c) => { const n = new Set(c); if (!n.delete(name + "/" + i.path)) n.add(name + "/" + i.path); return n; })}>
+                  <span className={closedDirs.has(name + "/" + i.path) ? "chev shut" : "chev"} aria-hidden="true"><ChevronDown size={10} /></span>
+                  <span className="path">{i.name}</span>
+                  <span className="count">{i.files.length}</span>
+                  <button
+                    className="ib"
+                    title={on ? `Stage the ${i.files.length} in ${i.path}` : `Unstage the ${i.files.length} in ${i.path}`}
+                    aria-label={`${on ? "Stage" : "Unstage"} folder ${i.path}`}
+                    disabled={busy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void stage(i.files, on);
+                    }}
+                  >
+                    {on ? <Plus /> : <Minus />}
+                  </button>
+                </div>
+              ),
+            )
+          : rows.map((r) => fileRow(name, r, on, 0, r.from ? `${r.from} → ${r.path}` : r.path))}
       </div>
     );
 
@@ -495,6 +581,21 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
           <span>Source Control</span>
           {status && <span className="count">{changeCount(status)}</span>}
           <div className="icons">
+            {dir !== null && (
+              <button className="ib" title="Review changes: an agent checks the branch before it ships" aria-label="Review changes" disabled={busyAgent} onClick={review}>
+                <Spark />
+              </button>
+            )}
+            {onAllChanges && (
+              <button className="ib" title="All changes: every changed file's diff in one tab" aria-label="All changes" onClick={onAllChanges}>
+                <FileCode />
+              </button>
+            )}
+            {onView && (
+              <button className="ib" title={view === "tree" ? "View as list" : "View as tree"} aria-label={view === "tree" ? "View as list" : "View as tree"} aria-pressed={view === "tree"} onClick={() => onView(view === "tree" ? "list" : "tree")}>
+                <List />
+              </button>
+            )}
             <button className="ib" title="Refresh" onClick={() => void load()}>
               <Refresh />
             </button>
@@ -880,6 +981,9 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 <button className="btn" disabled={busy || chosen.unstage.length === 0} title={`Unstage the ${chosen.unstage.length} selected staged rows`} onClick={() => void stage(chosen.unstage, false)}>
                   Unstage {chosen.unstage.length}
                 </button>
+                <button className="btn" disabled={busy} title={`Discard the ${chosen.present.length} selected rows`} onClick={() => discardRows(rowsOf(chosen.present))}>
+                  Discard {chosen.present.length}
+                </button>
                 <button className="ib" title="Clear selection (Esc)" onClick={() => setSelected([])}>
                   <Close />
                 </button>
@@ -892,6 +996,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                   g === "conflicts" ? conflictCards() : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true),
                 )}
             </div>
+            {notesSection}
             <details className="scm-history" open={histOpen} onToggle={(e) => setHistOpen((e.target as HTMLDetailsElement).open)}>
               <summary>
                 <span>History</span>
@@ -990,6 +1095,26 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
           </>
         )}
       </div>
+      {discardingRows && plan && (
+        <Ask
+          title={plan.title}
+          body={
+            <>
+              <p>{plan.body}</p>
+              {discardingRows.length > 1 && (
+                <ul className="ask-list" aria-label="files affected">
+                  {discardingRows.map((r) => (
+                    <li key={r.path}>{r.from ? `${r.from} → ${r.path}` : r.path}</li>
+                  ))}
+                </ul>
+              )}
+            </>
+          }
+          confirm={plan.button}
+          onConfirm={confirmDiscard}
+          onCancel={() => setDiscardingRows(null)}
+        />
+      )}
     </aside>
   );
 }

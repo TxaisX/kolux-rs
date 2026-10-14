@@ -79,7 +79,8 @@ Acceptance:
         taking focus.
 Compat: Keybinding id workspace.create.
   (Kolux RS, T-013-fix-a: with no project, Mod+N and the New workspace button open the add-project
-  form; the overtaken-create and stand-in tab rules are T-013-c.)
+  form; T-013-c built the overtaken-create and stand-in tab rules: a create made with Create more
+  is never overtaken, and one Git finished before the cancel reached it stays, in the background.)
 Source: D-01-020
 
 ### PROJ-021 · Workspace names become safe branch and folder names
@@ -246,7 +247,10 @@ User does: quits and reopens Kolux.
 User sees: every workspace returns with its tabs and layout; saved state that is damaged is rescued
   in part rather than lost.
 Rules: parts that cannot be read are dropped and the rest is kept; the workspace and tab that were
-  active come back if they still exist.
+  active come back if they still exist. (Kolux RS, T-065: the tabs, the active tab per cell, the focus,
+  the active workspace and the stacked cells are written to the saved-layout setting as they change; an
+  agent tab comes back at its prompt in its folder, the session itself is SESS-030; a browser tab comes
+  back as a fresh tab; tabs whose folder is gone are dropped.)
 Acceptance:
   - [ ] Corrupt one tab's saved entry → the other tabs still come back.
   - [ ] Quit with workspace B active → B is active after reopening.

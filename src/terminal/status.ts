@@ -59,7 +59,11 @@ export function ageLabel(finishedAt: number, now: number): string {
 }
 
 /** The header is the vocabulary applied to what the pane knows; a shell keeps its own neutral words (TERM-020). */
-export function headerOf(agent: string, kind: Kind, code: number | null | undefined, needs: boolean, finishedAt: number | null, now: number, hook?: AgentState): Header {
+/** ACCT-050: the agent a shell pane's header shows for one the user started by hand; an agent the
+ *  header has no mark for, or an unclear answer, leaves the pane a shell. */
+export const foundAgent = (a: string | null): "claude" | "codex" | null => (a === "claude" || a === "codex" ? a : null);
+
+export function headerOf(agent: string, kind: Kind, code: number | null | undefined, needs: boolean, finishedAt: number | null, now: number, hook?: AgentState | "background"): Header {
   const h = (state: StatusKey, over: Partial<Header> = {}): Header => ({ ...VOCAB[state], state, age: "", needsYou: VOCAB[state].tone === "attention", ...over });
   const done = () => h("done", { age: finishedAt === null ? "" : ageLabel(finishedAt, now) });
   if (kind === "failed") return h("failed");
@@ -69,14 +73,39 @@ export function headerOf(agent: string, kind: Kind, code: number | null | undefi
     if (hook === "blocked" || hook === "interrupted" || hook === "waiting") return h(hook);
     if (needs || hook === "permission") return h("permission");
     if (hook === "done") return done();
+    // STAT-024: the turn is over but its background tasks run on; Kolux keeps watching.
+    if (hook === "background") return h("background");
     return h("working");
   }
   if (agent !== "shell" && !code) return done();
   return h("stopped", { word: `Ended${code ? ` (${code})` : ""}`, explain: stoppedLabel(code ? `exit code ${code}` : "exited") });
 }
 
+/** STAT-033: the state a terminal title stands in for while no hook reports: a braille spinner
+ *  (U+2800..U+28FF) or a quarter-circle busy mark means working; the words ready, idle, done and
+ *  finished mean done; permission, approve, allow, waiting and "needs you" mean needs you; working,
+ *  thinking, running and a trailing ellipsis mean working. A title that looks like a file path, or
+ *  says nothing recognisable, gives null, so the last known reading holds (a non-agent title
+ *  appearing mid-turn never ends the working state). */
+export function titleState(title: string): AgentState | null {
+  const t = title.trim();
+  if (t === "" || /^(~|[a-zA-Z]:[\\/]|\\\\|\.{0,2}\/)/.test(t) || (/[\\/]/.test(t) && !/\s/.test(t))) return null;
+  if (/[⠀-⣿]/.test(t) || /[◐◓◑◒]/.test(t)) return "working";
+  if (/\b(permission|approve|allow|waiting|needs? (you|input))\b/i.test(t)) return "permission";
+  if (/\b(ready|idle|done|finished|complete)\b/i.test(t)) return "done";
+  if (/\b(working|thinking|running|building|generating)\b/i.test(t) || /(…|\.\.\.)$/.test(t)) return "working";
+  return null;
+}
+
 /** The next pane after `focused` (in grid order, wrapping) that needs the user; null with none. */
 export function nextNeedsYou(keys: number[], needs: Set<number>, focused: number): number | null {
   const i = keys.indexOf(focused);
   return [...keys.slice(i + 1), ...keys.slice(0, i + 1)].find((k) => needs.has(k)) ?? null;
+}
+
+/** TERM-022: the header chip: the branch, else the short commit of a detached HEAD; none outside git. */
+export function branchChip(git: { branch: string | null; head: string | null } | null): { text: string; tip: string } | null {
+  if (!git) return null;
+  if (git.branch) return { text: git.branch, tip: git.branch };
+  return git.head ? { text: git.head.slice(0, 7), tip: `Detached at ${git.head}` } : null;
 }

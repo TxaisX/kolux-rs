@@ -13,6 +13,10 @@
 
 use std::path::{Path, PathBuf};
 
+// ORCH-060: the session tab inventory (T-262).
+#[path = "inventory.rs"]
+pub mod inventory;
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentInfo {
@@ -28,17 +32,23 @@ pub struct AgentInfo {
     pub installed: bool,
     /// Where the program was found, when it was.
     pub path: Option<String>,
+    /// SESS-017: Kolux knows the agent's own documentation page (`install_page`).
+    pub docs: bool,
 }
 
 /// id, name, program names (the first is the main one, the rest also count), fixed arguments.
 type Entry = (&'static str, &'static str, &'static [&'static str], &'static [&'static str]);
+
+/// DT-C46: what Codex starts with under Yolo: no approval prompts, but its sandbox still keeps writes
+/// inside the project folder. Never the flag that turns the sandbox off.
+const CODEX_YOLO: &[&str] = &["--sandbox", "workspace-write", "--ask-for-approval", "never"];
 
 /// The 34 visible agents in SESS-001 order. Claude Agent Teams (SESS-042) is skipped
 /// (DECISIONS.md), and OpenCode is retired (SESS-043).
 pub const CATALOGUE: [Entry; 34] = [
     ("claude", "Claude Code", &["claude"], &["--permission-mode", "auto"]),
     ("openclaude", "OpenClaude", &["openclaude"], &[]),
-    ("codex", "Codex", &["codex"], &["--dangerously-bypass-approvals-and-sandbox"]),
+    ("codex", "Codex", &["codex"], CODEX_YOLO),
     ("autohand", "Autohand Code", &["autohand"], &[]),
     ("ante", "Ante", &["ante"], &[]),
     // `traecli`, not `trae`: an unrelated tool ships a program with the near-identical name.
@@ -94,6 +104,7 @@ pub fn catalogue() -> Vec<AgentInfo> {
                 args: args.iter().map(|a| a.to_string()).collect(),
                 installed: found.is_some(),
                 path: found.map(|(_, f)| f.display().to_string()),
+                docs: install_page(id).is_some(),
             }
         })
         .collect()
@@ -161,11 +172,15 @@ fn shell_path_dirs() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
-        return [(HKEY_LOCAL_MACHINE, MACHINE_ENVIRONMENT), (HKEY_CURRENT_USER, "Environment")]
+        let found: Vec<String> = [(HKEY_LOCAL_MACHINE, MACHINE_ENVIRONMENT), (HKEY_CURRENT_USER, "Environment")]
             .into_iter()
             .filter_map(|(root, key)| registry_string(root, key, "Path"))
-            .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
             .collect();
+        // STAT-004: an unreadable shell environment falls back to the inherited PATH, with a warning.
+        if found.is_empty() {
+            eprintln!("kolux-rs: the shell's search path could not be read; using the inherited PATH");
+        }
+        return found.iter().flat_map(|p| std::env::split_paths(p).collect::<Vec<_>>()).collect();
     }
     #[allow(unreachable_code)]
     Vec::new()
@@ -337,7 +352,7 @@ pub fn start_args(id: &str, extra: &[String], prompt: &str) -> Result<StartLine,
 fn prompt_skips(id: &str) -> &'static [&'static str] {
     match id {
         "claude" => &["--permission-mode", "auto"],
-        "codex" => &["--dangerously-bypass-approvals-and-sandbox"],
+        "codex" => CODEX_YOLO,
         _ => &[],
     }
 }
@@ -518,10 +533,42 @@ pub fn agent_start_line(store: tauri::State<'_, std::sync::Mutex<crate::state::S
 /// ACCT-013 "Open install page": the agent's own install page in the default browser. Only these
 /// fixed addresses are ever opened.
 pub fn install_page(agent: &str) -> Option<&'static str> {
+    // SESS-017 (T-201-c): each address checked against the agent's own site or repository on
+    // 2026-10-13. Trae has none yet: no official TRAE CLI page could be found (T-201-d).
     match agent {
         "claude" => Some("https://code.claude.com/docs/en/setup"),
         "codex" => Some("https://developers.openai.com/codex/cli"),
         "grok" => Some("https://x.ai/cli"),
+        "openclaude" => Some("https://github.com/Twigpine/openclaude"),
+        "autohand" => Some("https://docs.autohand.ai/guides/cli-quick-start"),
+        "ante" => Some("https://docs.antigma.ai/"),
+        "mimo-code" => Some("https://mimo.xiaomi.com/mimocode/install"),
+        "pi" => Some("https://github.com/earendil-works/pi"),
+        "omp" => Some("https://github.com/can1357/oh-my-pi"),
+        "prime-agent" => Some("https://github.com/PrimeIntellect-ai/prime-agent"),
+        "gemini" => Some("https://geminicli.com/docs/"),
+        "antigravity" => Some("https://antigravity.google/docs/getting-started?tab=cli"),
+        "aider" => Some("https://aider.chat/docs/install.html"),
+        "goose" => Some("https://goose-docs.ai/docs/getting-started/installation"),
+        "amp" => Some("https://ampcode.com/docs"),
+        "kilo" => Some("https://kilo.ai/docs/code-with-ai/platforms/cli"),
+        "kiro" => Some("https://kiro.dev/docs/cli/"),
+        "crush" => Some("https://github.com/charmbracelet/crush"),
+        "aug" => Some("https://docs.augmentcode.com/cli/overview"),
+        "cline" => Some("https://docs.cline.bot/usage/cli-overview"),
+        "codebuff" => Some("https://www.codebuff.com/docs/help/quick-start"),
+        "command-code" => Some("https://commandcode.ai/docs"),
+        "continue" => Some("https://docs.continue.dev/cli/overview"),
+        "cursor" => Some("https://cursor.com/docs/cli/overview"),
+        "droid" => Some("https://docs.factory.com/droid-cli/quickstart"),
+        "kimi" => Some("https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started"),
+        "mistral-vibe" => Some("https://github.com/mistralai/mistral-vibe"),
+        "qwen-code" => Some("https://github.com/QwenLM/qwen-code"),
+        "rovo" => Some("https://support.atlassian.com/rovo/docs/install-and-run-rovo-dev-cli-on-your-device/"),
+        "hermes" => Some("https://github.com/NousResearch/hermes-agent"),
+        "openclaw" => Some("https://docs.openclaw.ai/"),
+        "copilot" => Some("https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli"),
+        "devin" => Some("https://docs.devin.ai/cli"),
         _ => None,
     }
 }
@@ -564,6 +611,16 @@ mod tests {
     }
 
     #[test]
+    fn sess_017_every_catalogue_agent_but_trae_links_to_its_own_page() {
+        for (id, ..) in CATALOGUE {
+            let page = install_page(id);
+            assert_eq!(page.is_some(), id != "trae", "{id}");
+            assert!(page.is_none_or(|p| p.starts_with("https://") && !p.contains(' ')), "{id}: {page:?}");
+        }
+        assert!(catalogue().iter().all(|a| a.docs == install_page(&a.id).is_some()));
+    }
+
+    #[test]
     fn set027_options_and_permission_mode_shape_the_start_line() {
         let none = serde_json::json!({});
         let yolo = start_line(&none, "claude", &[], "go", true).unwrap();
@@ -583,7 +640,7 @@ mod tests {
         // a blank override counts as none
         let blank = serde_json::json!({ "agentOptions": { "codex": { "args": "  ", "command": "" } } });
         let codex = start_line(&blank, "codex", &[], "", false).unwrap();
-        assert_eq!((codex.args, codex.program), (s(&["--dangerously-bypass-approvals-and-sandbox"]), None));
+        assert_eq!((codex.args, codex.program), (s(CODEX_YOLO), None));
         assert_eq!(split_args(r#"a "" b"#), s(&["a", "", "b"]));
     }
 
@@ -607,8 +664,26 @@ mod tests {
         assert_eq!(line.args, s(&["--permission-mode", "auto", "--model", "haiku", "Fix the build"]));
         assert_eq!(line.typed, None);
         let codex = start_args("codex", &[], "Review").unwrap();
-        assert_eq!(codex.args, s(&["--dangerously-bypass-approvals-and-sandbox", "Review"]));
+        assert_eq!(codex.args, s(&["--sandbox", "workspace-write", "--ask-for-approval", "never", "Review"]));
         assert_eq!(start_args("command-code", &[], "go").unwrap().args, s(&["--trust", "go"]));
+    }
+
+    #[test]
+    fn dt_c46_codex_under_yolo_is_sandboxed_and_never_bypassed() {
+        // every saved mode (no value, the two the Agents page writes, and any other one) and with or without a prompt
+        let modes = [serde_json::json!({}), serde_json::json!({ "agentPermissions": "manual" }), serde_json::json!({ "agentPermissions": "auto" }), serde_json::json!({ "agentPermissions": "yolo" })];
+        for set in &modes {
+            for prompt in ["", "Review"] {
+                let line = start_line(set, "codex", &[], prompt, false).unwrap();
+                assert!(!line.args.iter().any(|a| a.contains("dangerously-bypass")), "{set} {prompt:?}: {:?}", line.args);
+            }
+        }
+        assert!(!catalogue().iter().find(|a| a.id == "codex").unwrap().args.iter().any(|a| a.contains("dangerously-bypass")));
+        // Yolo: exactly the sandbox and no-approval flags, then the prompt; Manual: neither
+        let yolo = serde_json::json!({ "agentPermissions": "yolo" });
+        assert_eq!(start_line(&yolo, "codex", &[], "Review", false).unwrap().args, s(&["--sandbox", "workspace-write", "--ask-for-approval", "never", "Review"]));
+        let manual = serde_json::json!({ "agentPermissions": "manual" });
+        assert_eq!(start_line(&manual, "codex", &[], "Review", false).unwrap().args, s(&["Review"]));
     }
 
     #[test]
@@ -753,7 +828,7 @@ mod tests {
         assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), 34, "every id once");
         let by = |id: &str| list.iter().find(|a| a.id == id).unwrap();
         assert_eq!(by("claude").args, vec!["--permission-mode", "auto"]);
-        assert_eq!(by("codex").args, vec!["--dangerously-bypass-approvals-and-sandbox"]);
+        assert_eq!(by("codex").args, vec!["--sandbox", "workspace-write", "--ask-for-approval", "never"]);
         assert_eq!(by("kiro").args, vec!["chat", "--tui"]);
         assert_eq!(by("command-code").args, vec!["--trust"]);
         assert_eq!(by("hermes").args, vec!["--tui"]);

@@ -3,12 +3,13 @@
 // buffer remembers what is on disk, so a tab is unsaved only while its text differs from that by
 // more than trailing whitespace; a save writes the file once and leaves every view clean.
 import { Annotation, type Transaction, type ChangeSet, type EditorState } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 
 /** Marks a change Kolux made itself (a copy from the twin view, a reload), not the user's typing. */
 export const synced = Annotation.define<boolean>();
 
 /** The part of an editor view a buffer needs; EditorView fits it, and the tests use plain states. */
-export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string }; annotations: Annotation<boolean> }) => void };
+export type View = { state: EditorState; dispatch: (spec: { changes: ChangeSet | { from: number; to: number; insert: string }; annotations: Annotation<unknown> | readonly Annotation<unknown>[] }) => void };
 
 /** Text equal to the disk copy except for whitespace at the ends of lines (and of the file). */
 export function sameText(a: string, b: string): boolean {
@@ -78,22 +79,39 @@ export function isDirty(path: string): boolean {
   return !!v && !sameText(v.state.sliceDoc(), b.disk);
 }
 
-/** Writes the file once, from the buffer's text; every view of it is clean afterwards. */
-export async function save(path: string, write: (text: string) => Promise<void>): Promise<void> {
+/** EDIT-003 (T-073-a): lowercase hex SHA-256 of a text's UTF-8 bytes. file_read returns the file's
+ *  bytes unchanged, so this is the hash of the disk copy the buffer holds; file_write's optional
+ *  `loaded_hash` is compared with the file's bytes before writing. */
+export async function hashOf(text: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return Array.from(d, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+/** file_write's typed refusal when the file changed on disk since it was loaded: error kind
+ *  `stale`, as an object's `kind` or as the start of the error text. */
+export const isStale = (e: unknown): boolean => (typeof e === "object" && e !== null && (e as { kind?: unknown }).kind === "stale") || String(e).startsWith("stale");
+
+/** Writes the file once, from the buffer's text; every view of it is clean afterwards. The write
+ *  gets the hash of the disk copy the buffer was loaded from, so a file changed meanwhile is
+ *  refused; `force` (Keep mine) leaves the hash out and overwrites. */
+export async function save(path: string, write: (text: string, loadedHash?: string) => Promise<unknown>, force = false): Promise<void> {
   const b = buf(path);
   const v = [...b.views][0];
   if (!v) return;
   const text = v.state.sliceDoc();
-  await write(text);
+  await write(text, force ? undefined : await hashOf(b.disk));
   b.disk = text;
   tell(b);
 }
 
-/** Text Kolux puts in itself (a reload): every view shows it and none is unsaved. */
-export function replaceAll(path: string, text: string): void {
+/** Text Kolux puts in itself (a reload): every view shows it and none is unsaved. `undoable`
+ *  (EDIT-003's Reload) makes it one step of its own in each view's undo history, so Ctrl+Z or the
+ *  toast's Undo brings the edits back. */
+export function replaceAll(path: string, text: string, undoable = false): void {
   const b = buf(path);
   b.disk = text;
-  for (const v of b.views) if (v.state.sliceDoc() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, annotations: synced.of(true) });
+  const annotations = undoable ? [synced.of(true), isolateHistory.of("full")] : synced.of(true);
+  for (const v of b.views) if (v.state.sliceDoc() !== text) v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, annotations });
   tell(b);
 }
 

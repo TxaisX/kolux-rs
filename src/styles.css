@@ -68,14 +68,14 @@ input { font: inherit; }
 
 /* ---- body ---- */
 .body { flex: 1; min-height: 0; display: flex; }
-.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--fg-muted); }
 .empty h2 { margin: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
 .empty p { margin: 0; font-size: 12px; }
 
 /* ---- 5. sidebar card: x 8, y 44, 289 wide ---- */
 .sidebar-wrap { flex: none; display: flex; padding: 8px 0 8px 8px; }
-.sidebar { width: 289px; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
+.sidebar { width: var(--sidebar-w, 289px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
 /* EDIT-033: the explorer, a card on the right matching the sidebar; rows are fixed 22px and virtualized. */
 .explorer { flex: none; width: 280px; margin: 8px 8px 8px 0; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; overflow: hidden; }
 .explorer-head { flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
@@ -138,7 +138,9 @@ input { font: inherit; }
 .proj:hover .ib, .proj .ib.on { opacity: 1; }
 .branch { display: flex; align-items: center; height: 32px; padding: 0 12px 0 8px; gap: 8px; border-radius: 6px; font-size: 14px; font-weight: 500; color: var(--fg-row); width: 100%; text-align: left; white-space: nowrap; }
 .branch .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.branch .count { font-size: 11px; color: var(--fg); }
+.branch .count, .sess .count { font-size: 11px; color: var(--fg); }
+.sess.pane-row { height: 26px; gap: 8px; font-size: 12px; }
+.sess.pane-row .name { overflow: hidden; text-overflow: ellipsis; }
 .branch .dot { margin-right: 2px; }
 .branch .chev { color: #797979; display: inline-flex; }
 .branch:hover { background: #1f1f1f; }
@@ -157,16 +159,26 @@ input { font: inherit; }
 .sb-group .chev { display: inline-flex; margin-left: auto; transition: transform 0.15s; }
 .sb-group[aria-expanded="false"] .chev { transform: rotate(-90deg); }
 .sess .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sess .ib { opacity: 0; width: 22px; height: 22px; }
+.sess input.rename { flex: 1; min-width: 0; height: 22px; padding: 0 6px; border-radius: 5px; border: 1px solid var(--line-focus); background: var(--input-bg); color: var(--fg); font: inherit; }
+/* The row actions take no room until the row is hovered or focused, so names show in full at rest. */
+.sess .ib { display: none; width: 22px; height: 22px; }
 .sess:hover { background: #1f1f1f; }
-.sess:hover .ib { opacity: 1; }
+.sess:hover .ib, .sess:focus-within .ib { display: inline-flex; }
 .sess.sel { background: var(--row-selected); color: var(--fg); }
 .sess.pending { opacity: 0.6; }
+/* PROJ-020: the stand-in tabs above the panes while Git makes a workspace. */
+.tabs.standins { margin: 0 0 6px; }
+.tab.standin { opacity: 0.7; padding-right: 10px; }
+.tab.standin .hint { color: var(--fg-icon-dim); }
 .sess .fold { width: 14px; height: 22px; display: inline-flex; align-items: center; justify-content: center; color: #797979; flex: none; }
 .sess .fold:hover { color: var(--fg); }
 .sess .fold.shut svg { transform: rotate(-90deg); }
 .sb-form .check { display: flex; align-items: center; gap: 8px; }
 .sess .hint { font-size: 11px; color: var(--fg-muted); }
+/* SET-059: the prompt-cache countdown; yellow in the final minute, a red icon once it runs out. */
+.sess .cache-timer { font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums; display: inline-flex; align-items: center; }
+.sess .cache-timer.last { color: var(--warn); }
+.sess .cache-timer.gone { color: var(--danger); }
 /* GIT-065: the badge sits where the row buttons appear on hover, so it never squeezes the name. */
 .sess .hint.push { position: absolute; right: 8px; white-space: nowrap; pointer-events: none; }
 .sess:hover .hint.push,
@@ -188,6 +200,8 @@ input { font: inherit; }
 .btn.danger { border-color: #7a3b1e; color: #f0a07a; }
 .btn.danger:hover:not(:disabled) { background: #2a1911; }
 .btn-row { display: flex; gap: 6px; }
+.conn-list { margin: 0 0 8px; padding-left: 18px; }
+.conn-list li { margin: 2px 0; }
 .note { font-size: 12px; padding: 4px 9px; word-break: normal; overflow-wrap: anywhere; line-height: 1.4; }
 .note.ok { color: var(--done); }
 .note.warn { color: #e2c06a; }
@@ -265,8 +279,21 @@ input { font: inherit; }
 .review-pop { position: fixed; z-index: 45; width: 320px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: 12.5px; }
 .review-where { color: var(--fg-muted); font-size: 11.5px; }
 .review-quote { margin: 0; padding: 2px 8px; border-left: 3px solid var(--line-focus); color: var(--fg-row); max-height: 80px; overflow: auto; white-space: pre-wrap; }
+.needs-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 8px 6px; }
+.needs-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--pane-bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer; }
+.needs-chip svg { color: var(--working-icon); }
+.needs-chip .why { color: var(--fg-muted); }
+.needs-chip:hover, .needs-chip:focus-visible { border-color: var(--line-focus); }
+.name-field { min-width: 0; width: 14em; max-width: 100%; padding: 1px 5px; border: 1px solid var(--line-focus); border-radius: 4px; background: var(--input-bg); color: var(--fg); font: inherit; font-size: 12px; }
+.tab .name-field { width: 10em; }
 .review-tray { position: fixed; z-index: 44; right: 16px; bottom: 36px; width: 340px; max-height: 50vh; overflow: auto; padding: 8px; background: var(--pane-bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); font-size: 12.5px; }
 .review-head { display: flex; align-items: center; gap: 8px; }
+.review-send { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; }
+.review-send-item { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border: none; border-radius: 6px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.review-send-item:hover, .review-send-item:focus-visible { background: var(--row-selected); }
+.review-send-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy-hint { position: fixed; z-index: 40; padding: 2px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--pane-bg); color: var(--fg-faint); font-size: 11px; pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
+.copy-hint.done { color: var(--fg); border-color: var(--line-focus); }
 .review-count { flex: 1; text-align: left; font-weight: 600; color: var(--fg); }
 .review-md { margin: 8px 0 4px; padding: 8px; max-height: 200px; overflow: auto; background: var(--input-bg); border-radius: 6px; font-size: 11.5px; white-space: pre-wrap; user-select: text; }
 .review-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -320,18 +347,23 @@ input { font: inherit; }
 .layouts button:hover:not([aria-pressed="true"]):not(:disabled) { background: var(--row-selected); }
 
 /* ---- 7. pane grid and pane cards ---- */
-.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: var(--divider-width, 6px); grid-template-columns: 1fr; background: var(--divider, transparent); border-radius: 12px; }
+.grid { flex: 1; min-height: 0; margin: 8px; display: grid; gap: var(--divider-width, 6px); grid-template-columns: 1fr; background: var(--divider, transparent); border-radius: 14px; }
 /* SET-023: panes not in focus fade to the chosen opacity (100% = no dim, the default). The content fades
    over the pane's own ground, so a divider colour behind the grid never shows through. */
 .grid .pane > * { transition: opacity 140ms ease; }
 .grid .pane:not(.focused) > * { opacity: var(--pane-dim, 1); }
 .strip .newtab { margin-left: auto; margin-right: 12px; height: 28px; }
-/* a cell holds tabs (TERM-040); the tab strip shows only for two tabs or more (TERM-028 clean look) */
+/* a cell holds tabs (TERM-040); on the New (clean) look the tab strip shows only for two tabs or more,
+   on Classic always (TERM-028) */
 .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 4px; }
 .cell[hidden] { display: none; }
 /* VIEW-026: the Board is the same cells as cards, one per pane; the panes never move in the DOM,
    so an expanded card shows the live terminal and a collapsed one only its header. */
 .grid[hidden], .board[hidden], .board .tabs { display: none; }
+/* TERM-013: an expanded pane fills the whole workspace area, edge to edge. TERM-028: Classic keeps the
+   older flat chrome, square panes edge to edge with only the dividers between them. */
+.grid.zoomed, .grid.classic { margin: 0; border-radius: 0; }
+.grid.zoomed .pane, .grid.classic .pane { border-radius: 0; }
 /* VIEW-023: the Board is one column per status lane; cards stack in their lane in session order. */
 .board { flex: 1; min-height: 0; margin: 8px; overflow-y: auto; display: grid; grid-auto-flow: row dense; grid-auto-rows: max-content; align-items: start; gap: 8px; }
 .board .lane { grid-row: 1; margin: 0; padding: 2px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-muted); }
@@ -392,7 +424,8 @@ input { font: inherit; }
 .tab .tab-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .tab .tab-x { width: 18px; height: 18px; border-radius: 4px; color: var(--fg-muted); line-height: 1; }
 .tab .tab-x:hover { background: var(--row-selected); color: var(--fg); }
-.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
+.pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--pane-bg); border: 1px solid var(--line-subtle); border-radius: 14px; box-shadow: inset 0 0 0 1px var(--line-inner); overflow: hidden; }
 .pane.focused { border-color: var(--line-focus); }
 /* TERM-023: a soft, static green glow on a pane whose agent finished while it was not focused. */
 .pane.glow { border-color: var(--done); box-shadow: inset 0 0 0 1px var(--line-inner), 0 0 18px rgba(1, 200, 143, 0.3); }
@@ -526,6 +559,11 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .autos-runs .auto-output { flex-basis: 100%; min-width: 0; max-height: 120px; overflow: auto; margin: 0 0 6px 44px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: var(--fg-faint); white-space: pre-wrap; overflow-wrap: anywhere; }
 .autos-runs .num { width: 34px; color: var(--fg-label); }
 .autos-runs .muted, .autos-none { color: var(--fg-faint); font-size: 12px; }
+.autos-runs:focus-visible { outline: 1px solid var(--line-focus); outline-offset: 2px; }
+.autos-runs li[aria-selected="true"] { background: var(--row-selected); color: var(--fg); }
+.autos-runs li .btn { height: 22px; padding: 0 8px; font-size: 11px; }
+.autos-snapshot { flex-basis: 100%; min-width: 0; margin: 0 0 6px 44px; }
+.autos-snapshot .auto-output { margin-left: 0; }
 /* AUTO-015: the Runs dashboard and a run's own page. */
 .runs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .runs[hidden] { display: none; }
@@ -604,7 +642,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .conn-chip.connecting { color: var(--working); }
 .conn-headline { font-size: 13px; color: var(--fg-row); }
 .conn-detail { margin: 0; font-size: 12px; color: var(--fg-muted); }
-.conn-detail.warn { color: #fdc030; }
+.conn-detail.warn, .conn-switch small.warn { color: #fdc030; }
 /* ACCT-001 Connect grid, ACCT-003 install progress */
 .conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; align-items: stretch; max-width: 1100px; }
 .conn-grid .conn-card { max-width: none; height: 100%; box-sizing: border-box; }
@@ -688,7 +726,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 /* SET-005: the colours written as literals above, as tokens in light mode (dark keeps the measured
    values as they are). */
 [data-mode="light"] .usage-part.warn, [data-mode="light"] .conn-chip.expired, [data-mode="light"] .conn-chip.attention,
-[data-mode="light"] .conn-detail.warn, [data-mode="light"] .note.warn, [data-mode="light"] .signin-notice span { color: var(--warn); }
+[data-mode="light"] .conn-detail.warn, [data-mode="light"] .conn-switch small.warn, [data-mode="light"] .note.warn, [data-mode="light"] .signin-notice span { color: var(--warn); }
 [data-mode="light"] .note.error, [data-mode="light"] .btn.danger, [data-mode="light"] .notice { color: var(--danger); }
 [data-mode="light"] .btn.danger, [data-mode="light"] .notice, [data-mode="light"] .sb-form.warn, [data-mode="light"] .signin-notice { border-color: var(--danger-line); }
 [data-mode="light"] .btn.danger:hover:not(:disabled), [data-mode="light"] .branch:hover, [data-mode="light"] .sess:hover { background: var(--kbd-bg); }
@@ -736,6 +774,12 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .ask.start-git { width: min(520px, calc(100vw - 32px)); }
 .first-files { list-style: none; margin: 0 0 8px; padding: 6px; max-height: 18rem; overflow: auto; border: 1px solid var(--line-subtle); border-radius: 6px; font-size: 12px; }
 .first-files label { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; min-width: 0; }
+/* VIEW-112: setup commands offered from another tool's file */
+.import-offer { border: 1px solid var(--line-subtle); border-radius: 6px; padding: 8px 10px; margin: 0 0 10px; min-width: 0; }
+.import-file { font-weight: 600; font-size: 12px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.import-label { font-size: 11px; color: var(--fg-muted); margin: 6px 0 2px; }
+.import-script { margin: 0; padding: 6px 8px; max-height: 10rem; overflow: auto; font-size: 12px; border-radius: 4px; background: var(--input-bg); font-family: var(--mono-font); white-space: pre; }
+.import-refused { color: var(--warn); }
 .first-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--fg-row); }
 .first-secret { margin-left: auto; flex: none; color: var(--fg-muted); font-size: 11px; }
 /* SKILL-002..005: the starter-kit gallery and a kit's setup */
@@ -778,7 +822,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .kit-strip-row.can:hover, .kit-strip-row.can:focus-visible { background: var(--row-selected); outline: none; }
 .kit-strip-state { color: var(--fg-muted); }
 .kit-strip-row.done .kit-strip-state { color: var(--fg); }
-.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state { color: var(--warn); }
+.kit-strip-row.needs .kit-strip-state, .kit-strip-row.stopped .kit-strip-state, .kit-strip-row.limit .kit-strip-state, .kit-strip-row.signin .kit-strip-state { color: var(--warn); }
 .kit-strip-row { flex-wrap: wrap; }
 .kit-strip-files { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: flex-end; flex-basis: 100%; padding-bottom: 4px; }
 .kit-strip-file { display: inline-flex; gap: 4px; align-items: center; }
@@ -802,7 +846,16 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .add-choice-hint { font-size: 11px; opacity: 0.75; }
 .add-more { display: flex; gap: 8px; }
 .add-more .add-choice { flex: 1; }
+.add-form { display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.add-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-muted); }
+.add-label .field { margin: 0; }
+.add-progress { font: 11px var(--mono-font); overflow-wrap: anywhere; }
+.add-error { margin: 0; font-size: 12px; color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .ask-check { display: flex; align-items: center; gap: 6px; margin: -6px 0 14px; font-size: 12px; color: var(--fg-muted); }
+.ask-list { margin: 0 0 14px; padding: 0 0 0 18px; max-height: min(40vh, 240px); overflow: auto; font: 11.5px var(--mono-font); color: var(--fg-muted); }
+.ask-list li { overflow-wrap: anywhere; }
+/* ACCT-064: a question over one pane's terminal, not the window. */
+.pane-ask { position: absolute; inset: 0; z-index: 5; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.35); }
 .agent-row { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-top: 1px solid var(--chip-bg); min-width: 0; }
 .agent-on { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .agent-name { font-size: 13px; color: var(--fg-row); }
@@ -813,6 +866,12 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 /* APP-054 Resource Manager */
 .statusbar .res-open { color: inherit; font: inherit; padding: 0 4px; border-radius: 4px; }
 .statusbar .res-open:hover, .statusbar .res-open[aria-expanded="true"] { background: var(--row-selected); color: var(--fg); }
+/* VIEW-100: the app update item; green dot when ready, red when it failed. */
+.statusbar .upd-item { color: var(--fg); font: inherit; padding: 0 4px; border-radius: 4px; }
+.statusbar .upd-item:hover { background: var(--row-selected); }
+.statusbar .upd-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); }
+.statusbar .upd-item.error { color: var(--danger); }
+.statusbar .upd-item.error .dot { background: var(--meter-danger); }
 .res-pop { right: 16px; bottom: 32px; width: min(460px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow-y: auto; }
 .res-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-right: 8px; }
 .res-free { font-size: 12px; color: var(--fg-muted); }
@@ -837,6 +896,9 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .pick-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .pick-item .hint { margin-left: auto; flex: none; font-size: 11px; color: var(--fg-muted); }
 .pick-item mark { background: none; color: var(--fg); font-weight: 700; text-decoration: underline; }
+/* SESS-036: the issues and pull requests the composer name field suggests. */
+button.pick-item { width: 100%; text-align: left; font: inherit; }
+button.pick-item:hover, button.pick-item:focus-visible { background: var(--input-bg); outline: 1px solid var(--line-focus); }
 .composer-advanced { display: flex; flex-direction: column; gap: 6px; }
 .field.multi.grow { field-sizing: content; max-height: 160px; resize: none; }
 .composer .btn-row { flex-wrap: wrap; align-items: center; }
@@ -888,6 +950,7 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .pane-head .path { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg-faint); font: 11px var(--mono-font); }
 .unsaved { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--working-icon); }
 .notice.load-failed .btn { margin-left: auto; }
+.notice.save-stale .btn:first-of-type { margin-left: auto; }
 
 /* EDIT-012: markdown tabs have a Rich | Source switch; rich and preview share one document look. */
 .view-switch { flex: none; display: flex; gap: 1px; padding: 1px; border: 1px solid var(--line-subtle); border-radius: 6px; }
@@ -927,11 +990,23 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .picker-list .menu-item.at { background: var(--row-selected); }
 .picker-list .menu-item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; max-width: 60%; }
 .picker-folder { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-faint); }
+/* VIEW-040: a palette row's agent mark and age, coloured as on the tab. */
+.palette-mark { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.palette-mark .badge { display: inline-flex; }
+.palette-mark .badge.working, .palette-mark .badge.unread, .palette-mark .badge.permission { color: var(--working-icon); }
+.palette-mark .badge.done { color: var(--done-icon); }
+.palette-mark .badge.dot { width: 7px; height: 7px; margin: 0 2px; border-radius: 50%; background: var(--working-icon); }
+.palette-age { font-size: 11px; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
 .picker-tip { position: fixed; z-index: 60; max-width: min(640px, 70vw); padding: 4px 8px; border: 1px solid var(--line-focus); border-radius: 6px; background: var(--pane-bg); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); font-size: 12px; color: var(--fg); overflow-wrap: anywhere; pointer-events: none; }
 .picker-tip-folder { color: var(--fg-muted); }
 /* PROJ-057 / VIEW-037: the worktree palette's section headings and matched letters. */
 .palette-section { padding: 6px 10px 2px; font-size: 11px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.04em; }
 .palette mark { background: none; color: var(--fg); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+/* VIEW-041: the palette's filter chips; VIEW-042: an action that needs an open worktree. */
+.palette-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px; }
+.palette-chips select { font-size: 12px; color: var(--fg-muted); background: none; border: 1px solid var(--line-subtle); border-radius: 6px; padding: 1px 4px; }
+.palette-chip { font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--row-selected); color: var(--fg); }
+.picker-list .menu-item.off { color: var(--fg-disabled); cursor: default; }
 .md-preview li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
 
 /* EDIT-027: the diff tab. Its body scrolls (both columns move together in side by side). */
@@ -1027,7 +1102,9 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
    and Source Control cards fill it. */
 .rside { flex: none; position: relative; display: flex; flex-direction: column; min-width: 0; padding: 8px 8px 8px 0; }
 .rside-grip { position: absolute; left: -4px; top: 8px; bottom: 8px; width: 8px; cursor: col-resize; z-index: 2; touch-action: none; }
-.rside-grip:hover { background: linear-gradient(to right, transparent 3px, var(--line-focus) 3px, var(--line-focus) 5px, transparent 5px); }
+/* VIEW-050: the left sidebar's drag edge sits over the gap between it and the workspace, taking no room. */
+.lside-grip { flex: none; width: 8px; margin: 8px -4px; cursor: col-resize; z-index: 2; touch-action: none; }
+.rside-grip:hover, .lside-grip:hover { background: linear-gradient(to right, transparent 3px, var(--line-focus) 3px, var(--line-focus) 5px, transparent 5px); }
 .rside-tabs { flex: none; display: flex; gap: 2px; padding: 0 2px 6px; overflow: hidden; }
 .rside-tab { flex: none; height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: none; color: var(--fg-muted); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .rside-tab:hover { color: var(--fg); }
@@ -1154,3 +1231,117 @@ tr[data-id]:focus-visible { outline: 1px solid var(--line-focus); outline-offset
 .task-labels { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
 .task-x { margin-left: 2px; color: var(--fg-faint); font-size: 12px; line-height: 1; }
 .task-x:hover:not(:disabled) { color: var(--fg); }
+
+/* SESS-018: the New session page fills the workspace area (8 px gutter, like the grid). */
+.sheet-wrap { position: absolute; inset: 8px; z-index: 20; display: flex; }
+.pane.chooser.sheet { flex: 1; border-radius: 12px; }
+.pane.chooser.sheet .chooser-body { padding: 16px 24px; font-size: 13px; max-width: 1080px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+.pane.chooser.sheet .chooser-foot { padding: 10px 24px; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.sheet-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 24px; border-bottom: 1px solid var(--line-subtle); }
+.sheet-title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.sheet-title h2 { margin: 0; font-size: 16px; font-weight: 600; color: var(--fg); }
+.sheet-project { font-size: 13px; color: var(--fg); }
+.sheet-path { font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sheet-keys { margin-left: 8px; gap: 4px; }
+.chooser-count.warn { color: var(--warn); }
+/* VIEW-015: the Agents rail, a 268px card in the New look, a flat 240px rail under Classic. */
+.rail { width: 268px; padding: 4px; overflow-y: auto; }
+.rail.classic { width: 240px; border-radius: 0; border-width: 0 1px 0 0; }
+.rail-wrap.classic { padding: 0; }
+.rail .proj .ib { opacity: 1; }
+.grid.agents .tabs { display: none; }
+/* VIEW-017: the row's status word, one of the fixed set; what needs you is amber, working green, done teal. */
+.sess .status { flex: none; font-size: 11px; color: var(--fg-muted); }
+.sess .status.attention { color: var(--working-icon); }
+.sess .status.working { color: var(--dot-live); }
+.sess .status.done { color: var(--done-icon); }
+/* USAGE-004: a context ring on rail rows that have a reading; the plan footer under the groups. */
+.sess .ring { flex: none; color: var(--gauge); }
+.sess .ring.warn { color: var(--working-icon); }
+.sess .ring.danger { color: var(--meter-danger); }
+.rail-group { flex: none; }
+.rail-foot { margin-top: auto; padding: 10px 8px 4px; font-size: 11px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-head .right .meter-plan { margin-right: 8px; font-size: 11px; color: var(--fg-muted); }
+/* TERM-010: the grid's gap is the divider (width and light / dark colours from Appearance, DT-A7);
+   while one is dragged the whole window keeps the resize cursor and nothing gets selected. */
+.grid { touch-action: none; }
+html[data-divider="col"], html[data-divider="col"] * { cursor: col-resize !important; user-select: none; }
+html[data-divider="row"], html[data-divider="row"] * { cursor: row-resize !important; user-select: none; }
+/* TERM-024: a narrow pane drops header items in a set order; the dot, mark and name always stay. */
+.pane { container-type: inline-size; }
+.pane-head .title { min-width: 0; }
+@container (max-width: 344px) { .pane-head .chip { display: none; } }
+@container (max-width: 264px) { .pane-head .word { display: none; } }
+@container (max-width: 204px) { .pane-head .right .ib { display: none; } }
+@container (max-width: 134px) { .pane-head .status, .pane-head .right { display: none; } }
+/* SAFE-002..004: the plan review sheet, from the right edge over the window. */
+.plan-sheet { position: fixed; z-index: 46; top: calc(env(safe-area-inset-top, 0px) + 40px); right: 0; bottom: 24px; width: min(520px, 100vw); display: flex; flex-direction: column; background: var(--pane-bg); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35); font-size: 13px; }
+.plan-sheet-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.plan-sheet-head h3 { margin: 0; font-size: 14px; color: var(--fg); }
+.plan-sheet-head .muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-sheet-body { flex: 1; min-height: 0; overflow: auto; padding: 6px 14px; }
+.plan-sheet-note { margin: 8px 14px 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px; }
+.plan-block { padding: 6px 0 10px; border-bottom: 1px solid var(--line); }
+.plan-block-head { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; }
+.plan-block .md-preview { padding: 0; user-select: text; }
+.plan-comment { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; padding: 4px 8px; border-left: 2px solid var(--line-focus); background: var(--chip-bg); border-radius: 4px; }
+.plan-comment span { flex: 1; min-width: 0; white-space: pre-wrap; }
+.plan-write { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.plan-write textarea, .plan-sheet-foot textarea { width: 100%; min-height: 54px; resize: vertical; font: inherit; color: var(--fg); background: var(--input-bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+.plan-sheet-foot { padding: 10px 14px; border-top: 1px solid var(--line); }
+.plan-sheet-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.plan-review-btn { height: 20px; padding: 0 8px; font-size: 11.5px; }
+/* GIT-001: each file's lines added and removed, and the tree view's folder rows. */
+.scm-lines { display: flex; gap: 4px; flex: none; font: 11px var(--mono-font); }
+.scm-lines .add { color: #73c991; }
+.scm-lines .del { color: #f14c4c; }
+.scm-dir .chev { display: inline-flex; flex: none; width: 10px; color: var(--fg-muted); }
+.scm-dir .chev.shut { transform: rotate(-90deg); }
+.scm-dir .count { flex: none; font-size: 11px; color: var(--fg-muted); }
+
+/* GIT-040 / GIT-041: review notes on diff lines and their Source Control section. */
+.cm-note-gutter .cm-gutterElement { width: 14px; text-align: center; cursor: pointer; }
+.cm-note-gutter .note-plus { opacity: 0; display: inline-block; width: 14px; border-radius: 3px; color: var(--fg); background: var(--line-focus); font-weight: 600; line-height: 1.2; }
+.cm-note-gutter .cm-gutterElement:hover .note-plus { opacity: 1; }
+.diff-note { margin: 4px 12px 6px 8px; padding: 6px 10px; border: 1px solid var(--line-focus); border-left: 3px solid #4f8fd8; border-radius: 6px; background: var(--pane-bg); font-family: var(--ui-font, system-ui, sans-serif); font-size: 12.5px; white-space: pre-wrap; }
+.diff-note-head { display: flex; align-items: center; gap: 6px; color: var(--fg-label); font-size: 11.5px; }
+.diff-note-head .what { flex: 1; }
+.diff-note-edit { width: auto; padding: 0 6px; font-size: 11.5px; }
+.diff-note-text { color: var(--fg); margin-top: 2px; }
+.diff-note-pop { position: fixed; z-index: 41; width: 320px; padding: 10px; display: flex; flex-direction: column; gap: 8px; background: var(--pane-bg); border: 1px solid var(--line-focus); border-radius: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: 13px; }
+.diff-note-pop .what { color: var(--fg-label); font-size: 12px; }
+.diff-note-pop textarea { min-height: 72px; resize: vertical; }
+.scm-notes .btn-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.scm-note-file { margin-top: 6px; }
+.scm-note-path { display: flex; align-items: center; gap: 4px; color: var(--fg-label); }
+.scm-note-path .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-note { display: flex; align-items: flex-start; gap: 4px; padding-left: 8px; }
+.scm-note-open { flex: 1; min-width: 0; display: flex; gap: 6px; padding: 2px 4px; border: 0; border-radius: 4px; background: none; color: var(--fg); text-align: left; font: inherit; cursor: pointer; }
+.scm-note-open:hover { background: var(--line); }
+.scm-note-open .line { color: var(--fg-label); font-variant-numeric: tabular-nums; }
+.scm-note-open .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-note-open .sent { color: #73c991; font-size: 11px; }
+.scm-note .ib { width: auto; padding: 0 4px; font-size: 11.5px; }
+/* VIEW-073: the Checks tab. A check's details open under it and can be dragged taller. */
+.checks-sum { padding-top: 4px; }
+.checks-panel { overflow-y: auto; }
+.checks-list { margin: 0 8px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.check-row > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 3px 2px; border-radius: 4px; min-width: 0; }
+.check-row > summary:hover { background: var(--chip-bg); }
+.check-row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.check-row .wf { color: var(--fg-faint); }
+.check-row .word.failed { color: var(--danger); }
+.check-row .word.passed { color: var(--done); }
+.check-row .word.unresolved { color: var(--working-icon); }
+.check-row .word.running, .check-row .word.skipped, .check-row .word.cancelled { color: var(--fg-label); }
+.check-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--fg-faint); }
+.check-dot.passed { background: var(--done-icon); }
+.check-dot.failed { background: var(--danger); }
+.check-dot.running { background: transparent; box-sizing: border-box; border: 1.5px solid var(--fg-label); }
+.check-dot.unresolved { background: var(--working-icon); }
+.check-detail { margin: 2px 0 6px 14px; padding: 6px 8px; border-left: 1px solid var(--divider); color: var(--fg-label); display: flex; flex-direction: column; gap: 4px; align-items: flex-start; resize: vertical; overflow: auto; min-height: 40px; max-height: 60vh; line-height: 1.4; }
+.check-detail .btn { padding: 2px 8px; font-size: 12px; }
+/* PROJ-014: project groups in the sidebar */
+.sb-group-row { display: flex; align-items: center; gap: 2px; padding-right: 4px; }
+.sb-group-row .sb-group { flex: 1; min-width: 0; }
+.proj-group-kids { padding-left: 8px; }

@@ -3,11 +3,11 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import ChooserPane, { seatAgents } from "./ChooserPane";
+import ChooserPane, { seatAgents, sheetKey } from "./ChooserPane";
 import type { AgentInfo } from "./PlusMenu";
-import { defaultCopies, pickShape, TERMINAL, type Copies, type SavedShape, type Seat, type Shape } from "./seats";
+import { defaultCopies, pickShape, sheetStart, TERMINAL, type Copies, type SavedShape, type Seat, type Shape } from "./seats";
 
-const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:\\bin\\claude.exe" };
+const claude: AgentInfo = { id: "claude", name: "Claude Code", program: "claude", args: [], installed: true, path: "C:\\bin\\claude.exe", docs: true };
 const render = (seats: Seat[], closable = true, inGit = true, copies: Copies = defaultCopies(seats.length, inGit), shape: Shape = "custom", task = "", saved: SavedShape[] = []) =>
   renderToString(createElement(ChooserPane, { number: 2, agents: [claude], seats, onSeats: () => {}, onLineup: () => {}, shape, task, onTask: () => {}, onStart: () => {}, copies, inGit, onCopies: () => {}, closable, onClose: () => {}, saved, onSaved: () => {}, onPickSaved: () => {} }));
 const radio = (html: string, label: string) => html.split("<label").find((l) => l.includes(label))!;
@@ -147,7 +147,7 @@ test("SESS-021: Use last lineup shows only when offered, naming the remembered a
   expect(renderToString(createElement(ChooserPane, { ...props, lastLineup: null }))).not.toContain("Use last lineup");
 });
 
-const agent = (id: string, name: string, installed: boolean): AgentInfo => ({ id, name, program: id, args: [], installed, path: installed ? `C:/bin/${id}.exe` : null });
+const agent = (id: string, name: string, installed: boolean): AgentInfo => ({ id, name, program: id, args: [], installed, path: installed ? `C:/bin/${id}.exe` : null, docs: ["claude", "codex", "grok"].includes(id) });
 const renderWith = (agents: AgentInfo[], detecting = false, seats: Seat[] = [{ agent: null, model: null }]) =>
   renderToString(createElement(ChooserPane, { saved: [], onSaved: () => {}, onPickSaved: () => {}, number: 2, agents, detecting, seats, onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "shared", inGit: true, onCopies: () => {}, closable: true, onClose: () => {} }));
 
@@ -169,6 +169,13 @@ test("SESS-017: Claude, Codex and Grok come first; a missing one is greyed with 
   expect(renderWith(list, false, [{ agent: "aider", model: null }])).toContain("Aider");
   // Agents with a known page link out to it.
   expect(html).toContain("Claude Code docs");
+});
+
+test("T-201-c SESS-017: any agent with its own page links out to it, the folded ones too", () => {
+  const list = [claude, agent("codex", "Codex", true), agent("grok", "Grok", true), { ...agent("aider", "Aider", true), docs: true }, agent("trae", "Trae", true)];
+  const html = renderWith(list, false, [{ agent: "aider", model: null }]);
+  expect(html).toContain("Aider docs");
+  expect(html).not.toContain("Trae docs");
 });
 
 test("SESS-017: nothing reads not installed while detection runs, and finding no AI at all says so", () => {
@@ -216,4 +223,45 @@ test("SESS-019: the footer counts the sessions and names the first seat still la
   const ready = withKit([{ agent: "claude", model: "opus" }], null);
   expect(ready).toContain("1 session");
   expect(ready).not.toContain("still needs");
+});
+
+test("SESS-018: the New session page shows the project and its path, the add-agents link, Cancel and the launch shortcut", () => {
+  const html = renderToString(createElement(ChooserPane, { number: 7, agents: [claude], seats: [{ agent: null, model: null }], onSeats: () => {}, onLineup: () => {}, shape: "custom", task: "", onTask: () => {}, onStart: () => {}, copies: "separate", inGit: true, onCopies: () => {}, closable: true, onClose: () => {}, saved: [], onSaved: () => {}, onPickSaved: () => {}, sheet: { project: "demo", path: "G:\Temp\demo" } }));
+  expect(html).toContain("New session");
+  expect(html).toContain("demo");
+  expect(html).toContain("G:\Temp\demo");
+  expect(html).not.toContain("Session 7");
+  expect(html).toContain("Add more agents");
+  expect(html).not.toMatch(/OpenCode/i);
+  expect(html).toContain(">Cancel<");
+  expect(startButton(html)).toContain("disabled");
+  expect(html).toContain("Ctrl");
+  expect(html).toContain("Seat 1 still needs an AI");
+  // The older look keeps its pane: no page heading there.
+  expect(render([{ agent: null, model: null }])).not.toContain("New session");
+});
+
+test("SESS-018: Ctrl+Enter launches only a complete lineup, Escape closes the page", () => {
+  const blank = [{ agent: null, model: null }];
+  const done = [{ agent: TERMINAL, model: null }];
+  expect(sheetKey({ key: "Enter", ctrlKey: true, metaKey: false }, blank, false)).toBe("blocked");
+  expect(sheetKey({ key: "Enter", ctrlKey: true, metaKey: false }, done, false)).toBe("launch");
+  expect(sheetKey({ key: "Enter", ctrlKey: false, metaKey: true }, done, true)).toBe("launch");
+  expect(sheetKey({ key: "Enter", ctrlKey: true, metaKey: false }, done, true)).toBe(null);
+  expect(sheetKey({ key: "Enter", ctrlKey: false, metaKey: false }, done, false)).toBe(null);
+  expect(sheetKey({ key: "Escape", ctrlKey: false, metaKey: false }, done, false)).toBe("close");
+});
+
+test("SESS-018: the page starts with the project's last count and files choice, every seat blank", () => {
+  const last = { shape: "custom" as const, copies: "shared" as const, seats: [{ agent: "claude", model: "opus" }, { agent: "codex", model: null }, { agent: TERMINAL, model: null }] };
+  const start = sheetStart(last, true);
+  expect(start.seats).toHaveLength(3);
+  expect(start.seats.every((s) => s.agent === null && s.model === null)).toBe(true);
+  expect(start.copies).toBe("shared");
+  // No earlier launch: one blank seat and the usual default.
+  const none = sheetStart(undefined, true);
+  expect(none.seats).toEqual([{ agent: null, model: null }]);
+  expect(none.copies).toBe(defaultCopies(1, true));
+  // Separate copies need Git: outside it the shared folder is the only choice.
+  expect(sheetStart({ ...last, copies: "separate" }, false).copies).toBe("shared");
 });

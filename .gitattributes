@@ -1,2 +1,4 @@
 # CLI-006: cmd misreads labels in a batch file saved with bare LF line ends.
 *.cmd text eol=crlf
+# T-152-c: bash misreads a script saved with CRLF line ends (scripts/evidence/proof.sh).
+*.sh text eol=lf

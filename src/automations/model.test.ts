@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { confirmDelete, keepSelection, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, statusWord, triggerLabel, upcoming, GRACE, graceWord, PRECHECK, precheckWord, type Automation, type Names, type Run } from "./model";
+import { confirmDelete, keepSelection, runActions, runStep, pageKey, dashboardRows, onScreen, RUN_BATCH, runTiles, findNext, lastRun, matches, normalizeQuery, noFilters, passes, preselect, PROMPT_SEARCH_CHARS, sortRows, statusWord, triggerLabel, upcoming, GRACE, graceWord, PRECHECK, precheckWord, type Automation, type Names, type Run } from "./model";
 
 const names: Names = { project: (id) => ({ p1: "shop", p2: "blog" })[id] ?? id, agent: (id) => ({ claude: "Claude Code", codex: "Codex" })[id] ?? id };
 const auto = (id: string, name: string, extra: Partial<Automation> = {}): Automation => ({ id, name, prompt: "", provider: "claude", projectId: "p1", enabled: true, ...extra });
@@ -129,6 +129,10 @@ test("AUTO-007 grace choices and why a run was skipped read in words", () => {
   // AUTO-012: the same refusal again and again is one entry with a count.
   expect(statusWord({ ...r, cause: "unavailable", repeats: 12 })).toBe("Skipped (unavailable) · 12 times");
   expect(statusWord({ ...r, cause: "unavailable", repeats: 1 })).toBe("Skipped (unavailable)");
+  // AUTO-012 (T-072-b): a run handed to its agent that then stopped failed; it did not fail to start.
+  expect(statusWord({ ...r, status: "failed" })).toBe("Failed to start");
+  expect(statusWord({ ...r, status: "failed", dispatchedAt: 5 })).toBe("Failed");
+  expect(statusWord({ ...r, status: "completed", dispatchedAt: 5 })).toBe("Completed");
 });
 
 test("AUTO-008 the precheck's limits and its skip read in words", () => {
@@ -138,4 +142,31 @@ test("AUTO-008 the precheck's limits and its skip read in words", () => {
   expect(statusWord({ ...r, exitCode: 1 })).toBe("Skipped (precheck failed)");
   expect(statusWord({ ...r, timedOut: true })).toBe("Skipped (precheck timed out)");
   expect([precheckWord(undefined), precheckWord(300)]).toEqual(["1 minute", "5 minutes"]);
+});
+
+test("AUTO-013: a run offers View run while its terminal is live, Resume workspace after, its snapshot once the worktree is gone, and Rerun only when it failed", () => {
+  const r = (o: Partial<Run>): Run => ({ ...run("a", 1), ...o });
+  const wt = { worktree: "C:/w", worktreeName: "w" };
+  expect(runActions(r({ ...wt, status: "dispatched" }), { live: true, exists: true })).toEqual(["view"]);
+  expect(runActions(r({ ...wt, status: "completed" }), { live: false, exists: true })).toEqual(["resume"]);
+  expect(runActions(r({ ...wt, worktreeGone: true }), { live: false, exists: true })).toEqual(["snapshot"]);
+  expect(runActions(r({ ...wt, status: "failed" }), { live: false, exists: true })).toEqual(["resume", "rerun"]);
+  expect(runActions(r({ status: "failed" }), { live: false, exists: false })).toEqual([]);
+  // Skipped runs, and runs that never got a workspace, show their details only.
+  expect(runActions(r({ status: "skipped", cause: "precheck" }), { live: false, exists: true })).toEqual([]);
+  expect(runActions(r({ status: "failed" }), { live: false, exists: true })).toEqual(["rerun"]);
+});
+
+test("AUTO-013: Up and Down step through runs, Down with none selected picks the first, Enter opens; modifiers and composition do nothing", () => {
+  const k = (key: string, at: number | null, o: { mods?: boolean; composing?: boolean } = {}) => runStep({ key, mods: false, composing: false, ...o }, at, 3);
+  expect(k("ArrowDown", null)).toBe(0);
+  expect(k("ArrowDown", 0)).toBe(1);
+  expect(k("ArrowDown", 2)).toBe(2);
+  expect(k("ArrowUp", 1)).toBe(0);
+  expect(k("ArrowUp", 0)).toBe(0);
+  expect(k("Enter", 1)).toBe("open");
+  expect(k("Enter", null)).toBe(null);
+  expect(k("ArrowDown", 0, { mods: true })).toBe(null);
+  expect(k("ArrowDown", 0, { composing: true })).toBe(null);
+  expect(runStep({ key: "ArrowDown", mods: false, composing: false }, null, 0)).toBe(null);
 });

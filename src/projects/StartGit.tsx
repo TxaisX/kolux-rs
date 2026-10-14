@@ -1,6 +1,7 @@
 // GIT-061: a plain folder added as a project can start Git here. The dialog previews the first
 // commit; a file whose name looks like a secret starts unticked and is left out unless chosen.
 import { useState } from "react";
+import { GLOSSARY } from "../glossary";
 
 export type FirstFile = { path: string; secret: boolean };
 
@@ -36,7 +37,7 @@ export default function StartGit({ folder, files, busy, onStart, onCancel }: { f
       >
         <h2 className="ask-title">Start Git in this folder?</h2>
         <p className="ask-body">
-          {folder} is not a Git repository yet. Kolux can start Git here and make a first commit of the files ticked below. Files that look like secrets are left out unless you tick them.
+          {folder} is not a <span title={GLOSSARY.repository.hover}>Git {GLOSSARY.repository.plain}</span> yet. Kolux can start Git here and make a first commit of the files ticked below. Files that look like secrets are left out unless you tick them.
         </p>
         <ul className="first-files" aria-label="first commit files">
           {files.map((f) => (

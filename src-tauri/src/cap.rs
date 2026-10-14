@@ -88,9 +88,9 @@ mod tests {
     #[test]
     fn codex_gets_two_overrides_before_the_terminator_and_only_once() {
         let mut env = vec![];
-        let mut args = s(&["--dangerously-bypass-approvals-and-sandbox", "--", "Review"]);
+        let mut args = s(&["--sandbox", "workspace-write", "--ask-for-approval", "never", "--", "Review"]);
         apply(Some("codex"), &mut args, &mut env, false);
-        assert_eq!(args, s(&["--dangerously-bypass-approvals-and-sandbox", "-c", "model_context_window=200000", "-c", "model_auto_compact_token_limit=180000", "--", "Review"]));
+        assert_eq!(args, s(&["--sandbox", "workspace-write", "--ask-for-approval", "never", "-c", "model_context_window=200000", "-c", "model_auto_compact_token_limit=180000", "--", "Review"]));
         assert!(env.is_empty(), "Codex gets no variable");
         let before = args.clone();
         apply(Some("codex"), &mut args, &mut env, false);

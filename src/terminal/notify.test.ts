@@ -1,7 +1,9 @@
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { noteTitle, preview, stopLine, turnNote } from "./notify";
 
 const turn = (state: string, extra: object = {}) => ({ state, interrupted: false, boundary: false, ...extra }) as Parameters<typeof turnNote>[1];
+
+afterEach(() => void vi.useRealTimers());
 
 test("a finish, a permission request and a block are notes; boundaries, replays and plain progress are not (STAT-041)", () => {
   expect(turnNote("working", turn("done", { reply: "All tests pass.\n\nNext: ship it." }))).toEqual({ what: "finished", body: "All tests pass. Next: ship it." });
@@ -27,7 +29,7 @@ test("the title carries the repository only when several have agents; long repli
 });
 
 test("a stop names its cause and the reset time, never reads like a finish, and is one note per episode (STAT-022, STAT-023)", () => {
-  const at = new Date(2026, 9, 12, 15, 5).getTime();
+  const at = new Date().setHours(15, 5, 0, 0); // today at 3:05 PM, whatever the date
   expect(turnNote("working", turn("blocked", { stop: { cause: "limit", resetsAt: at } }))).toEqual({ what: "stopped: limit reached", body: "Resets at 3:05 PM", stopped: true });
   expect(turnNote("working", turn("blocked", { stop: { cause: "signin", detail: "authentication_failed" } }))).toEqual({ what: "stopped: sign in again", body: "authentication_failed", stopped: true });
   expect(turnNote("blocked", turn("blocked", { stop: { cause: "signin" } }))).toBeNull();

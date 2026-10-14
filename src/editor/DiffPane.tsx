@@ -2,21 +2,26 @@
 // inline, with whitespace-only changes hidden and long lines unwrapped; the actions menu turns
 // either on. F7 and Shift+F7 (App's shortcut router, `diffNav`) step through the changes. An
 // unstaged diff's right side is the working file itself, kept in the shared buffer (buffers.ts), so
-// it can be edited and Mod+S writes the file. The sides are read again every two seconds while the
-// tab is in front, so a change made in a terminal, or a stage made elsewhere, shows without
-// reopening. A markdown file's diff is source text, never the rich view.
+// it can be edited and Mod+S writes the file. The sides are read again whenever git state moves
+// (the git status watcher, scm/watch.ts) while the tab is in front, or when it comes to the front
+// after a move, so a change made in a terminal, or a stage made elsewhere, shows without
+// reopening. A markdown file's diff is source text, never the rich view. GIT-040: a review note
+// hangs under a line of the new side, in both layouts; the plus in the note gutter or Mod+Shift+A
+// on a selection opens the note popover.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { basicSetup } from "codemirror";
-import { EditorView } from "@codemirror/view";
-import { ChangeSet, Compartment, EditorState, type Extension } from "@codemirror/state";
+import { Decoration, EditorView, GutterMarker, WidgetType, gutter, keymap, type DecorationSet } from "@codemirror/view";
+import { ChangeSet, Compartment, EditorState, Prec, StateEffect, StateField, type Extension } from "@codemirror/state";
 import { LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { diff, getChunks, getOriginalDoc, goToNextChunk, goToPreviousChunk, MergeView, originalDocChangeEffect, unifiedMergeView } from "@codemirror/merge";
-import { ChevronDown, Close, Dots, FileCode } from "../chrome/icons";
-import { attach, baseName, detach, isDirty, relay, replaceAll, save, subscribe, textOf } from "./buffers";
-import { editors, look } from "./EditorPane";
+import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons";
+import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
+import { editors, look, saveFile, StaleNotice } from "./EditorPane";
+import { editedText, type LineNote } from "./diffNotes";
+import { watchStatus } from "../scm/watch";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
 export const diffNav = new Map<number, (dir: 1 | -1) => void>();
@@ -27,9 +32,104 @@ const squash = (s: string) => s.replace(/\s+/g, "");
 /** The diff with whitespace-only changes left out, which is how a diff tab starts. */
 export const withoutWhitespace = (a: string, b: string) => diff(a, b).filter((c) => squash(a.slice(c.fromA, c.toA)) !== squash(b.slice(c.fromB, c.toB)));
 
-type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void };
+// GIT-040: the note cards are block widgets under their line, so their height is part of the
+// document's layout and the lines below never jump when a card draws.
+type NoteActions = { add: (line: number, end: number, at: { x: number; y: number }) => void; edit: (n: LineNote, at: { x: number; y: number }) => void; remove: (n: LineNote) => void };
+const setNotes = StateEffect.define<LineNote[]>();
+const noteSpan = (n: LineNote) => (n.end && n.end !== n.line ? `lines ${n.line}-${n.end}` : `line ${n.line}`);
+class NoteCard extends WidgetType {
+  constructor(
+    readonly note: LineNote,
+    readonly act: NoteActions,
+  ) {
+    super();
+  }
+  eq(o: NoteCard) {
+    return o.note.id === this.note.id && o.note.text === this.note.text && o.note.sent === this.note.sent && o.note.line === this.note.line;
+  }
+  get estimatedHeight() {
+    return 56;
+  }
+  ignoreEvent() {
+    return true;
+  }
+  toDOM() {
+    const el = (tag: string, cls: string, text?: string) => Object.assign(document.createElement(tag), { className: cls, ...(text === undefined ? {} : { textContent: text }) });
+    const card = el("div", "diff-note");
+    card.dataset.note = this.note.id;
+    const head = el("div", "diff-note-head");
+    head.append(el("span", "what", `Note on ${noteSpan(this.note)}${this.note.sent ? " · sent" : ""}`));
+    const edit = el("button", "ib diff-note-edit", "Edit") as HTMLButtonElement;
+    edit.title = "Edit this note";
+    edit.onclick = (e) => this.act.edit(this.note, { x: e.clientX, y: e.clientY });
+    const del = el("button", "ib diff-note-del") as HTMLButtonElement;
+    del.title = "Delete this note";
+    del.setAttribute("aria-label", "Delete note");
+    del.innerHTML = `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${TRASH_PATH}"/></svg>`;
+    del.onclick = () => this.act.remove(this.note);
+    head.append(edit, del);
+    card.append(head, el("div", "diff-note-text", this.note.text));
+    return card;
+  }
+}
+const noteField = (act: NoteActions) =>
+  // A note belongs to a line number, so the cards are laid out again from the notes whenever the
+  // text changes (a new read of the file replaces it whole).
+  StateField.define<{ notes: LineNote[]; deco: DecorationSet }>({
+    create: () => ({ notes: [], deco: Decoration.none }),
+    update(was, tr) {
+      const set = tr.effects.find((e) => e.is(setNotes));
+      if (!set && !tr.docChanged) return was;
+      const notes = set ? (set.value as LineNote[]) : was.notes;
+      const doc = tr.state.doc;
+      const at = (n: LineNote) => Math.min(n.end ?? n.line, doc.lines);
+      const ranges = notes.filter((n) => n.line >= 1 && n.line <= doc.lines).map((n) => Decoration.widget({ widget: new NoteCard(n, act), block: true, side: 1 }).range(doc.line(at(n)).to));
+      return { notes, deco: Decoration.set(ranges, true) };
+    },
+    provide: (f) => EditorView.decorations.from(f, (v) => v.deco),
+  });
+class Plus extends GutterMarker {
+  toDOM() {
+    return Object.assign(document.createElement("span"), { className: "note-plus", textContent: "+", title: "Add a review note on this line" });
+  }
+}
+const plus = new Plus();
+/** The note gutter, the shortcut and the cards, for the new side of a diff. */
+const noteTools = (act: NoteActions): Extension => [
+  noteField(act),
+  gutter({
+    class: "cm-note-gutter",
+    lineMarker: () => plus,
+    initialSpacer: () => plus,
+    domEventHandlers: {
+      mousedown: (view, line, ev) => {
+        const n = view.state.doc.lineAt(line.from).number;
+        act.add(n, n, { x: (ev as MouseEvent).clientX, y: (ev as MouseEvent).clientY });
+        return true;
+      },
+    },
+  }),
+  Prec.highest(
+    keymap.of([
+      {
+        key: "Mod-Shift-a",
+        run: (view) => {
+          const sel = view.state.selection.main;
+          const doc = view.state.doc;
+          const end = doc.lineAt(sel.to).number;
+          const c = view.coordsAtPos(doc.line(end).to);
+          act.add(doc.lineAt(sel.from).number, end, { x: c?.left ?? 200, y: c?.bottom ?? 200 });
+          return true;
+        },
+      },
+    ]),
+  ),
+];
+type Pop = { line: number; end: number; note?: LineNote; text: string; x: number; y: number; refused?: boolean };
 
-export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast }: Props) {
+type Props = { id: number; path: string; staged: boolean; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void; onDirty?: (dirty: boolean) => void; onToast?: (text: string) => void; notes?: LineNote[]; onSaveNote?: (n: LineNote) => void; onDeleteNote?: (n: LineNote) => void; jump?: { line: number; at: number } };
+
+export default function DiffPane({ id, path, staged, hidden = false, focused = false, onFocus, onClose, onDirty, onToast, notes = [], onSaveNote, onDeleteNote, jump }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const [sides, setSides] = useState<Sides | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +140,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   const [menu, setMenu] = useState(false);
   const [changes, setChanges] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [stale, setStale] = useState(false); // EDIT-003 (T-073-c): the last save was refused, the file moved on
   const views = useRef<{ a: EditorView | null; b: EditorView } | null>(null);
   const shown = useRef<Sides | null>(null); // the sides the views were last given
   const report = useRef({ onDirty, onToast });
@@ -48,8 +149,25 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   front.current = !hidden;
   const lang = useRef(new Compartment());
   const ready = sides !== null;
+  const [pop, setPop] = useState<Pop | null>(null);
+  const noteRef = useRef({ notes, onDeleteNote, canNote: !!onSaveNote });
+  noteRef.current = { notes, onDeleteNote, canNote: !!onSaveNote };
+  const act = useRef<NoteActions>({
+    add: (line, end, at) => noteRef.current.canNote && setPop({ line, end, text: "", ...at }),
+    edit: (note, at) => setPop({ line: note.line, end: note.end ?? note.line, note, text: note.text, ...at }),
+    remove: (note) => noteRef.current.onDeleteNote?.(note),
+  });
+  const notesKey = JSON.stringify(notes);
 
-  // The sides, now and every two seconds while the tab is in front.
+  // The sides, now and whenever git state moves; a move while the tab is hidden is read on its return.
+  const missed = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!hidden && missed.current) {
+      const f = missed.current;
+      missed.current = null;
+      f();
+    }
+  }, [hidden]);
   useEffect(() => {
     let alive = true;
     setError(null);
@@ -59,11 +177,14 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
         (err) => alive && setError(String(err)),
       );
     void fetch();
-    // ponytail: a 2 s poll stands in for a git status watcher; swap in Source Control's watcher once it exists
-    const t = window.setInterval(() => front.current && void fetch(), 2000);
+    const stop = watchStatus(path, () => {
+      if (front.current) void fetch();
+      else missed.current = () => void fetch();
+    });
     return () => {
       alive = false;
-      window.clearInterval(t);
+      missed.current = null;
+      stop();
     };
   }, [path, staged, tries]);
 
@@ -79,6 +200,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
       ...common,
       EditorState.lineSeparator.of(modified.includes("\r\n") ? "\r\n" : "\n"),
       staged ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
+      noteTools(act.current),
       EditorView.updateListener.of((u) => {
         count(u.state);
         if (!staged) u.transactions.forEach((tr) => relay(path, u.view, tr));
@@ -96,6 +218,7 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
       b = new EditorView({ doc: modified, parent: host.current, extensions: [...right, unifiedMergeView({ original: s.original, mergeControls: false, gutter: true, diffConfig })] });
     }
     views.current = { a, b };
+    b.dispatch({ effects: setNotes.of(noteRef.current.notes) });
     count(b.state);
     if (!staged) attach(path, b, s.modified);
     LanguageDescription.matchFilename(languages, baseName(path))
@@ -131,7 +254,8 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
     }
   }, [sides, path, staged]);
 
-  // Unsaved marker and Mod+S, for an unstaged diff.
+  // Unsaved marker and Mod+S, for an unstaged diff. The save carries the loaded hash like an editor
+  // tab's (EDIT-003, T-073-c), so an agent's edit made behind the diff is never overwritten unseen.
   useEffect(() => {
     if (staged) return;
     const off = subscribe(path, () => {
@@ -139,18 +263,29 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
       setDirty(d);
       report.current.onDirty?.(d);
     });
-    editors.set(id, async () => {
-      try {
-        await save(path, (text) => invoke("file_write", { path, text }));
-      } catch (err) {
-        report.current.onToast?.(`${baseName(path)} was not saved: ${String(err)}`);
-      }
-    });
+    setStale(false);
+    editors.set(id, () => saveFile(path, setStale, report.current.onToast));
     return () => {
       off();
       editors.delete(id);
     };
   }, [id, path, staged]);
+
+  // GIT-040 / GIT-041: the cards follow the notes; opening a note from Source Control scrolls to it.
+  useEffect(() => views.current?.b.dispatch({ effects: setNotes.of(noteRef.current.notes) }), [notesKey]);
+  useEffect(() => {
+    const b = views.current?.b;
+    if (!b || !jump) return;
+    const at = b.state.doc.line(Math.min(Math.max(jump.line, 1), b.state.doc.lines)).from;
+    b.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) });
+  }, [jump?.at, ready, split]);
+  const savePop = () => {
+    if (!pop) return;
+    const text = editedText(pop.text);
+    if (text === null) return setPop({ ...pop, refused: true });
+    onSaveNote?.(pop.note ? { ...pop.note, text, sent: undefined } : { id: crypto.randomUUID(), path, line: pop.line, ...(pop.end !== pop.line ? { end: pop.end } : {}), text, staged });
+    setPop(null);
+  };
 
   useEffect(() => {
     diffNav.set(id, (dir) => {
@@ -228,8 +363,38 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
           </button>
         </div>
       )}
+      {stale && !staged && <StaleNotice path={path} onDone={() => setStale(false)} onToast={report.current.onToast} />}
       {ready && !changes && <div className="notice md-banner" role="status">No {staged ? "staged" : "unstaged"} changes in this file right now.</div>}
       <div ref={host} className="pane-body diff-body" />
+      {pop && (
+        <>
+          <div className="menu-backdrop" onMouseDown={() => setPop(null)} />
+          <div className="diff-note-pop" role="dialog" aria-label={pop.note ? "Edit review note" : "Add review note"} style={{ left: Math.max(8, Math.min(pop.x, window.innerWidth - 336)), top: Math.max(8, Math.min(pop.y + 12, window.innerHeight - 190)) }}>
+            <div className="what">{`${pop.note ? "Edit the note on" : "Note on"} ${pop.end !== pop.line ? `lines ${pop.line}-${pop.end}` : `line ${pop.line}`}`}</div>
+            <textarea
+              autoFocus
+              aria-label="review note"
+              className="field multi"
+              value={pop.text}
+              placeholder="What should change here?"
+              onChange={(e) => setPop({ ...pop, text: e.target.value, refused: false })}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setPop(null);
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) savePop();
+              }}
+            />
+            {pop.refused && <div className="note error">A note needs some text. To remove it, use the bin on its card.</div>}
+            <div className="btn-row">
+              <button className="btn primary" onClick={savePop} disabled={!pop.note && !pop.text.trim()}>
+                {pop.note ? "Save" : "Add note"}
+              </button>
+              <button className="btn" onClick={() => setPop(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </section>
   );
 }

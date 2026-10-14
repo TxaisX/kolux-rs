@@ -1,9 +1,0 @@
-﻿kolux vm
-
-Usage: kolux vm <command> [options]
-
-Commands:
-  recipe doctor      Validate a per-workspace environment recipe without provisioning by default
-
-Run `kolux vm <command> --help` for command-specific usage.
-

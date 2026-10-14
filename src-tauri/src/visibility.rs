@@ -1,10 +1,12 @@
 //! Which worktrees the sidebar shows (PROJ-042, PROJ-044, SET-032). Kolux's own records make a
 //! worktree managed wherever it sits; every other one is external and takes its visibility from its
-//! source: Claude Code's worktree folder, an extra root folder the user added, or anywhere else.
+//! source: made by GSD, Claude Code's worktree folder, an extra root folder the user added, or anywhere
+//! else.
 //! Each source has a global choice (hidden unless shown) and a project may hold its own, which the
 //! global choice never overwrites. A worktree the user showed or hid by hand keeps that.
-//! ponytail: GSD's worktree folder is not a source yet; its path is not documented anywhere public
-//! this pass could find, so its worktrees count as "elsewhere on disk" until T-108-b.
+//! GSD has no folder of its own: its executors run in Claude Code's isolation worktrees and leave
+//! `gsd-spawn-toplevel` in the worktree's own Git folder (GSD's public reference
+//! `references/worktree-path-safety.md`), so that file is what marks a worktree as GSD's.
 
 use crate::git::Worktree;
 use crate::projects::{name_key, non_blank, origin, workspaces_dir, Project, WORKSPACES_DIR_ENV, WORKSPACES_DIR_SETTING};
@@ -15,6 +17,7 @@ use std::path::Path;
 const KEY: &str = "worktreeVisibility";
 pub const MAX_ROOTS: usize = 32;
 pub const CLAUDE: &str = "claude";
+pub const GSD: &str = "gsd";
 pub const OTHER: &str = "other";
 
 /// One source as the visibility lists show it.
@@ -65,6 +68,12 @@ fn under(path: &str, base: &str) -> bool {
     p == b || p.strip_prefix(&b).is_some_and(|rest| rest.starts_with('\\'))
 }
 
+/// GSD's mark: `gsd-spawn-toplevel` in the Git folder the worktree's `.git` file points at.
+fn made_by_gsd(path: &str) -> bool {
+    let Ok(link) = std::fs::read_to_string(Path::new(path).join(".git")) else { return false };
+    link.trim().strip_prefix("gitdir:").is_some_and(|dir| Path::new(path).join(dir.trim()).join("gsd-spawn-toplevel").is_file())
+}
+
 /// The global choice for `source` (shown?), then the project's own over it.
 fn shown(v: &Value, project: &Project, source: &str) -> bool {
     v["projects"][&project.id][source].as_bool().or_else(|| v["global"][source].as_bool()).unwrap_or(false)
@@ -103,7 +112,9 @@ pub fn apply(store: &Store, project: &Project, hidden_by_hand: &Map<String, Valu
                 return Some(w);
             }
             let in_chosen = chosen.as_deref().is_some_and(|c| under(&w.path, c));
-            let source = if in_chosen {
+            let source = if made_by_gsd(&w.path) {
+                GSD.to_string()
+            } else if in_chosen {
                 OTHER.to_string()
             } else if under(&w.path, &claude) {
                 CLAUDE.to_string()
@@ -125,7 +136,7 @@ pub fn apply(store: &Store, project: &Project, hidden_by_hand: &Map<String, Valu
 /// The sources with their global choice and, for `project`, its own.
 pub fn sources(store: &Store, project: Option<&Project>) -> Vec<Source> {
     let v = ensure(store, &crate::projects::load_projects(store)).unwrap_or(Value::Null);
-    let mut out = vec![(CLAUDE.to_string(), "Made by Claude Code".to_string(), None), (OTHER.to_string(), "Elsewhere on disk".to_string(), None)];
+    let mut out = vec![(CLAUDE.to_string(), "Made by Claude Code".to_string(), None), (GSD.to_string(), "Made by GSD".to_string(), None), (OTHER.to_string(), "Elsewhere on disk".to_string(), None)];
     out.extend(roots(&v).into_iter().map(|r| (root_key(&r), r.clone(), Some(r))));
     out.into_iter()
         .map(|(key, label, root)| Source { global: v["global"][&key].as_bool().unwrap_or(false), own: project.and_then(|p| v["projects"][&p.id][&key].as_bool()), key, label, root })

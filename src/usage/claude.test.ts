@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { expect, test } from "vitest";
-import { countdown, pillDetail, pillText, weeklyOf, type ClaudeLimit } from "./claude";
+import { countdown, nextTick, pillDetail, pillText, weeklyLine, weeklyOf, type ClaudeLimit } from "./claude";
 import { ClaudePillView } from "./ClaudePill";
 
 const now = new Date(2026, 9, 12, 20, 0).getTime();
@@ -37,4 +37,28 @@ test("the pill tints on the 70/90 scale of used and only shows for an installed 
   expect(renderToString(createElement(ClaudePillView, { limits: [{ kind: "seven_day", usedPercent: 95, resetsAt: null }] }))).toContain('class="usage-part danger"');
   expect(renderToString(createElement(ClaudePillView, { limits: [limits[0]] }))).toBe("");
   expect(renderToString(createElement(ClaudePillView, { limits, installed: false }))).toBe("");
+});
+
+test("T-263 USAGE-024: reset countdowns drop zero parts and tick by themselves, the nearest reset setting the rhythm", () => {
+  const now = Date.UTC(2026, 9, 13, 10, 0, 0);
+  const min = 60_000, hour = 3_600_000, day = 86_400_000;
+  expect(countdown(now + 2 * day, now)).toBe("2d");
+  expect(countdown(now + 4 * hour, now)).toBe("4h");
+  expect(countdown(now + 2 * day + 30 * min, now)).toBe("2d");
+  expect(countdown(now + 90_000, now)).toBe("1m");
+  expect(countdown(now, now)).toBe("now");
+  // The last minute: never "resets in now" while the reset is still ahead.
+  expect(countdown(now + 33_000, now)).toBe("under 1m");
+  expect(weeklyLine(30, now + 33_000, now)).toBe("Weekly limit: 70% left, resets in under 1m");
+  expect(weeklyLine(30, now, now)).toBe("Weekly limit: 70% left, resets now");
+  // 90 seconds off: the next change is just after the 30 seconds that leave one minute, then at the due moment.
+  expect(nextTick([now + 90_000], now)).toBeGreaterThanOrEqual(30_000);
+  expect(nextTick([now + 90_000], now)).toBeLessThan(31_000);
+  expect(nextTick([now + 60_000], now)).toBeLessThan(61_000);
+  // Two days off: on the hour only.
+  expect(nextTick([now + 2 * day + 20 * min], now)).toBeGreaterThanOrEqual(20 * min);
+  expect(nextTick([now + 2 * day + 20 * min], now)).toBeLessThan(20 * min + 1_000);
+  // Several on screen: the nearest sets the rhythm; past or missing ones never tick.
+  expect(nextTick([now + 2 * day + 20 * min, now + 3 * hour + 45_000, null], now)).toBeLessThan(46_000);
+  expect(nextTick([now - 1, null], now)).toBeNull();
 });

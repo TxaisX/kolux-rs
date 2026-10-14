@@ -1,13 +1,27 @@
 // GIT-042: the note popover beside the selection and the tray that keeps the notes until they are
-// copied as one Markdown block.
+// copied as one Markdown block. EDIT-020: or sent to an agent running in this worktree, picked
+// from the Send menu.
 import { useState } from "react";
 import { Close } from "../chrome/icons";
 import { baseName } from "./buffers";
-import { notesMarkdown, type Note, type Picked } from "./notes";
+import { notesMarkdown, type Note, type Picked, type SendTarget } from "./notes";
 
-type Props = { picked: Picked | null; notes: Note[]; onAdd: (n: Note) => void; onCancel: () => void; onRemove: (i: number) => void; onClear: () => void };
+type Props = {
+  picked: Picked | null;
+  notes: Note[];
+  onAdd: (n: Note) => void;
+  onCancel: () => void;
+  onRemove: (i: number) => void;
+  onClear: () => void;
+  /** EDIT-020: the Send menu's agents, and whether the menu is open. */
+  targets: SendTarget[];
+  menu: boolean;
+  onMenu: (open: boolean) => void;
+  /** Sends every note to that agent; the promise gives the reason when nothing was sent. */
+  onSend: (key: number) => Promise<string | null>;
+};
 
-export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, onClear }: Props) {
+export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, onClear, targets, menu, onMenu, onSend }: Props) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [said, setSaid] = useState<string | null>(null);
@@ -57,6 +71,9 @@ export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, 
             <button className="review-count" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
               {notes.length === 1 ? "1 review note" : `${notes.length} review notes`}
             </button>
+            <button className="btn primary" aria-expanded={menu} onClick={() => onMenu(!menu)}>
+              Send…
+            </button>
             <button className="btn" data-notes-copy onClick={() => void copy()}>
               Copy as Markdown
             </button>
@@ -64,6 +81,25 @@ export default function ReviewNotes({ picked, notes, onAdd, onCancel, onRemove, 
               <Close size={12} />
             </button>
           </div>
+          {menu && (
+            <div className="review-send" role="menu" aria-label="Send the notes to">
+              {targets.length === 0 && <div className="sb-hint">No agent is running in this worktree. Start one, or copy the notes instead.</div>}
+              {targets.map((t) => (
+                <button
+                  key={t.key}
+                  role="menuitem"
+                  className="review-send-item"
+                  onClick={async () => {
+                    onMenu(false);
+                    setSaid(await onSend(t.key));
+                  }}
+                >
+                  <span className="name">{t.label}</span>
+                  <span className="muted">{t.since}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {said && <div className="sb-hint">{said}</div>}
           {open && <pre className="review-md" data-notes-markdown>{notesMarkdown(notes)}</pre>}
           {open &&

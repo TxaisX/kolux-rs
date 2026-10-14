@@ -53,6 +53,11 @@ Rules: logs go to local files that rotate, can be read only by the user, and are
   list of known secret key names, and masking text that is already masked changes nothing; the user
   can create a review copy, open it and throw it away before sharing; writing a diagnostic record
   can never make the action it records fail.
+  (Kolux RS, T-064-a: the terminals run inside the app, so the "terminal service" log is the app's own
+  log file in the profile logs folder (app start and exit, each session's start and end, what background passes refused;
+  never a session's output or arguments); files move aside past 512 KB and the oldest go past 2 MB in
+  all; the logs folder inherits the profile folder's user-only permission (ACCT-009); the copy, the
+  review copy and its discard live in Settings > General > Diagnostics.)
 Acceptance:
   - [ ] Run a command containing a fake API key, then copy diagnostics → the key is absent from the
         clipboard text.
@@ -75,6 +80,11 @@ Rules: there is no usage telemetry, analytics or diagnostic upload, and the buil
   account the user set up, AI providers the user connected (using the user's credentials), and
   sites the user opens in the browser pane; Send Feedback and Report Crash submit nothing
   themselves, the browser does it after the user has read the text.
+  (Kolux RS, T-064-b: the statement sits in Settings > General > Privacy with the whole list of connections,
+  including the WebView2 runtime's own startup checks to Microsoft, which belong to the Edge engine the
+  window runs in and which the app cannot switch off (DT-C25); a privacy audit test fails the
+  build on any network client the list does not cover; the feedback link itself is here, the message box is
+  the Send Feedback card's task.)
 Acceptance:
   - [ ] Watch a normal session with a network monitor → every connection goes to one of the listed
         destinations; none goes to an analytics or telemetry host.

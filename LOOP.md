@@ -22,9 +22,11 @@ not his. So:
 - `G:\Dev\backups\` (copies of the old repo live there)
 - The installed app's program folder (`%LOCALAPPDATA%\Programs\kolux`): its bundled scripts and
   resources are old code
-- `provenance\dirty-room\` **in this repo**: the extraction team's raw evidence (test titles, source
-  pointers, pre-scrub cards). It is kept for the legal record only. `.claude\settings.json` denies it
-  and a hook blocks shell access; if a tool call is refused, the refusal is correct, move on.
+- `provenance\dirty-room\` **in this repo's history only**: the extraction team's raw evidence (test titles,
+  source pointers, pre-scrub cards). It was removed from the tree at the freeze commit on 2026-10-13
+  (last tree 452b1163bf3145a81420688ea0f4f0d74a6652e2, see PROVENANCE.md) and is kept in history for the legal
+  record only. `.claude\settings.json` still denies it and a hook blocks shell access; never read it
+  from history (`git show`, `git checkout`, `git log -p`); if a tool call is refused, the refusal is correct, move on.
 - Orca's source on GitHub or npm, or any fork of it
 - Any vault page section that quotes file paths, function names or code from the old repo
 - The hook scripts the old app installed under `~\.kolux\agent-hooks\` (they are old code, not data)
@@ -59,7 +61,8 @@ page, a public doc), append a dated line. This file is the evidence that the wor
 Keep it honest.
 
 **Licenses of dependencies:** only MIT, Apache-2.0, BSD, ISC, Zlib, MPL-2.0 or Unicode. Enforce with
-`cargo deny check licenses` and a JS license check in CI. Third-party libraries are fine; they keep
+`cargo deny check` and a JS license check, run locally as part of the merge gate: there is no CI,
+the repository has no remote (freeze 2026-10-13). Third-party libraries are fine; they keep
 their own notices inside their packages and do not change who owns this code.
 
 `LICENSE` at the repo root reads exactly:
@@ -138,7 +141,7 @@ Then build `BEYOND.md` items one per pass, same rules as Phase 3.
 3. Take the next unchecked task. Read only the files it needs (grep first, then read with offset/limit).
 4. Write the failing test or acceptance check first, then the code.
 5. **Prove it**, fresh, this pass: `cargo build`, `cargo clippy -- -D warnings`, `cargo test`,
-   `pnpm test`, `cargo deny check licenses`, and for anything visible, launch the app and take a
+   `pnpm test`, `cargo deny check`, and for anything visible, launch the app and take a
    screenshot into `evidence/<task-id>.png`. "Should work" is not proof. If a check fails, fix it
    or revert, never skip or weaken a test.
 6. Commit locally with a message saying what the user can now do. End the message with:
@@ -163,7 +166,7 @@ Status: RUNNING            (RUNNING | PAUSED | BLOCKED: reason)
 Phase: 2                   (Phase 1 was done by the dirty-room team on 2026-10-06)
 Budget: 6 passes per day   (today: 0, date: YYYY-MM-DD)
 Next task: ...
-Done: <count> / <total> tasks  ·  P0 parity: <n>/<m>
+Done: <count> / <total> tasks  ·  P0 cards passing: <n>/<m>
 
 ## Needs Txais
 ## Decisions made for Txais

@@ -19,7 +19,8 @@ const names = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1
 export function shortcutRows(map: Keymap): Row[] {
   const p = map.platform;
   const title = (id: string) => map.bindings.get(id)?.action.title ?? id;
-  return [...map.bindings.values()].map(({ action, chords, custom, dropped }) => {
+  // T-543-b: Reopen closed tab does nothing until T-164-b wires it, so its row is not offered for a key.
+  return [...map.bindings.values()].filter(({ action }) => action.id !== "tab.reopenClosed").map(({ action, chords, custom, dropped }) => {
     const defaults = defaultsFor(action, p);
     const disabled = custom && chords.length === 0 && defaults.length > 0;
     const modified = custom && chords.join() !== defaults.join();
