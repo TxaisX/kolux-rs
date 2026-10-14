@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { attach, detach, hashOf, isDirty, type View } from "./buffers";
-import { bannerUp, canUndo, checkOnce, forget, keep, readFresh, reloadNow, remember, sameStamp, verdict, type Io, type Stamp } from "./diskChange";
+import { bannerUp, beginSave, canUndo, checkOnce, endSave, forget, keep, readFresh, reloadNow, remember, sameStamp, verdict, type Io, type Stamp } from "./diskChange";
 
 // EDIT-003 (T-073): the disk-change check behind the banner. The stamp (modified time + size) is
 // advisory; the save's hash check (T-073-a) is the guard, and the last block proves it still
@@ -104,6 +104,38 @@ describe("checkOnce", () => {
     expect(raised).toHaveBeenCalledWith(s(2, 5));
     expect(bannerUp(P)).toBe(true);
     await reloadNow(P, t);
+    expect(bannerUp(P)).toBe(false);
+  });
+  // T-073-e (council MERGE 33 A1): Kolux's own save is in flight, the disk already carries the new
+  // stamp but the buffer is still dirty until the write answers; a poll landing then must not flash.
+  it("a check that runs while the tab's own save is still writing gives none, not the banner", async () => {
+    remember(P, s(1, 4));
+    const t = io({ dirty: () => true });
+    const raised = vi.fn();
+    beginSave(P);
+    expect(await checkOnce(P, t, raised)).toBe("none");
+    expect(raised).not.toHaveBeenCalled();
+    expect(bannerUp(P)).toBe(false);
+    endSave(P);
+    expect(await checkOnce(P, t, raised)).toBe("banner");
+  });
+  // T-073-e (council MERGE 33 A2): bannerUp must not stick once the verdict is no longer "banner"
+  // (the file put back, or the tab cleaned up), because T-177 autosave reads it.
+  it("a verdict of none or reload takes the banner flag down again", async () => {
+    remember(P, s(1, 4));
+    const dirty = { v: true };
+    const t = io({ dirty: () => dirty.v });
+    expect(await checkOnce(P, t, () => undefined)).toBe("banner");
+    expect(bannerUp(P)).toBe(true);
+    t.disk.stamp = s(1, 4);
+    expect(await checkOnce(P, t, () => undefined)).toBe("none");
+    expect(bannerUp(P)).toBe(false);
+    t.disk.stamp = s(3, 6);
+    expect(await checkOnce(P, t, () => undefined)).toBe("banner");
+    expect(bannerUp(P)).toBe(true);
+    dirty.v = false;
+    t.disk.stamp = s(4, 7);
+    expect(await checkOnce(P, t, () => undefined)).toBe("reload");
     expect(bannerUp(P)).toBe(false);
   });
 });

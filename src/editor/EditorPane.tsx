@@ -23,7 +23,7 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Close, FileCode } from "../chrome/icons";
 import { undo } from "@codemirror/commands";
 import { attach, baseName, detach, isDirty, isStale, loadText, relay, replaceAll, save, subscribe, textOf } from "./buffers";
-import { canUndo, checkOnce, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
+import { beginSave, canUndo, checkOnce, endSave, forget, keep, POLL_MS, readFresh, reloadNow, remember, setBanner as markBanner, UNDO_TOAST_MS, type Io, type Stamp, type UndoEntry } from "./diskChange";
 import { CompareView, DiskBanner, UndoToast } from "./DiskBanner";
 import { changeBetween, isMarkdown, mountRich, RICH_LIMIT, unsupported } from "./markdown";
 import { domPick, noteDraft, selections } from "./notes";
@@ -50,8 +50,15 @@ export const stampOne = (path: string): Promise<Stamp | null> =>
  *  looks like someone else's change (EDIT-003). */
 async function writeRemembering(path: string, force: boolean): Promise<void> {
   let wrote: Stamp | null | undefined;
-  await save(path, async (text, loadedHash) => void (wrote = await invoke<Stamp | null>("file_write", force ? { path, text } : { path, text, loadedHash })), force);
-  remember(path, wrote ?? (await stampOne(path)));
+  // T-073-e (council A1): while the write is out the disk check treats this file as unchanged, so
+  // a poll landing between the write and remember() cannot flash the banner on the user's own save.
+  beginSave(path);
+  try {
+    await save(path, async (text, loadedHash) => void (wrote = await invoke<Stamp | null>("file_write", force ? { path, text } : { path, text, loadedHash })), force);
+    remember(path, wrote ?? (await stampOne(path)));
+  } finally {
+    endSave(path);
+  }
 }
 
 export async function saveFile(path: string, onStale: (stale: boolean) => void, onToast?: (text: string) => void): Promise<void> {
@@ -243,6 +250,10 @@ export default function EditorPane({ id, path, root = null, readOnly = false, hi
         .finally(() => (busy = false));
     };
     check();
+    // ponytail: each poll's file_stamps runs fence.allow, which lists worktrees about every 4 s
+    // (TREES_FRESH 3 s) under the fence mutex while an agent-worktree file is open (council MERGE 33
+    // A3, folded into the MERGE 29 A1 fence fast path by origin record); the upgrade is that fast
+    // path, or a fence decision cached per open tab, not a slower poll.
     const timer = window.setInterval(check, POLL_MS);
     window.addEventListener("focus", check);
     return () => {
