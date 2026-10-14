@@ -283,6 +283,11 @@ const SKILLS: &[Skill] = &[
     },
 ];
 
+/// SKILL-017: the built-in guides, by name, for the Skills page.
+pub fn bundled() -> Vec<(&'static str, &'static str)> {
+    SKILLS.iter().map(|s| (s.name, s.guide)).collect()
+}
+
 /// The text after the `---` header block, and the header's description line.
 fn split(md: &str) -> (&str, &str) {
     let md = md.trim_start_matches('\u{feff}');

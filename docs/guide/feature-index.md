@@ -85,6 +85,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-032 | Review a plan in sections and comment before Claude approves it. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-033 | Source Control lists changes by section and opens a change for review. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-033-b | Source Control, diffs and All Changes update within about a second of a change, instead of polling. | [Projects and worktrees](projects-and-worktrees.md) |
+| T-033-c | Choose which split a diff opens in; All Changes compares the branch with its base, keeps a default layout and has a commit box; files Git ignores no longer refresh the list. | [Files and browser](files-and-browser.md) |
 | T-034 | Leave review notes on diff lines and send them to the agent. | [Files and browser](files-and-browser.md) |
 | T-035 | Open in Code and Answer in Code jump to the agent's pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-036 | Settings page for choosing agents, the default agent and how they start. | [Settings](settings.md) |
@@ -251,6 +252,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-109-a | The new workspace composer picks the project and names from a branch or item. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-109-b | The composer suggests GitHub issues and pull requests. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-109-c | A failed worktree creation retries by policy; cancelling mid-way cleans up. | [Projects and worktrees](projects-and-worktrees.md) |
+| T-110-a | Setup scripts get the workspace's folders as variables, .bat scripts run under Command Prompt, and a half-active conda environment is cleared. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-111-a | See a branch summary against its base branch. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-111-b | Shortcuts delete a workspace and rename a tab. | [Terminals](terminals.md) |
 | T-111-c | The palette ranks results, filters by repository, creates worktrees and runs quick actions. | [Projects and worktrees](projects-and-worktrees.md) |
@@ -274,7 +276,11 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-120-a | Settings switch and kolux agent hooks commands control agent status hooks. | [Settings](settings.md) |
 | T-123 | Status shows background work being watched, the question an agent is waiting on, and Interrupted for a stopped turn; /clear and compacting are not counted as finished work. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-123-c | Interrupted goes back to Working when the agent starts a new step after Esc or Ctrl+C. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-123-b | A Codex agent's reply text reaches its card from its finish report, as Claude Code's does. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-123-c-b | With Claude Code, a finish after Esc or Ctrl+C shows Done, not Interrupted. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-123-c-c | With Claude Code, Esc while a tool is finishing still settles Interrupted, not Working. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-124 | No recent update after 30 minutes without status; the terminal title stands in before hooks report; programs can report status in band. | [Board, agents and inbox](board-agents-inbox.md) |
+| T-124-c | Approve and Deny on a card only for a permission the agent's hooks reported; "no status for" names how long since the last status. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-123-d | A waiting agent's card shows every question it asked, not only the first. | [Board, agents and inbox](board-agents-inbox.md) |
 | T-127 | A Checks panel and pull request comments show in the sidebar. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-128-a | Kolux recognises which agent runs in each pane. | [Board, Agents and Inbox](board-agents-inbox.md) |
@@ -303,6 +309,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-116-a-fix | Branch prefix and compare base settings moved into Settings. | [Settings](settings.md) |
 | T-139-a | Choose a model per agent from built-in lists. | [Settings](settings.md) |
 | T-139-b | A resumed session keeps its account; changing Codex account offers a restart. | [Settings](settings.md) |
+| T-140 | A finished automation run keeps its last output and shows its tokens and cost. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-141 | kolux account add and account list manage accounts from the command line. | [Command line](command-line.md) |
 
 ### P1 · theme 7 · Redesign and the new look (18 cards)
@@ -317,6 +324,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-145-a | Terminals use Kolux dark colours by default and a light scheme in light mode. | [Settings](settings.md) |
 | T-145-b | Terminal colour answers to programs are measured and match what programs ask. | [Terminals](terminals.md) |
 | T-146-a | The right sidebar opens, closes, resizes and remembers its tab. | [Getting started](getting-started.md) |
+| T-146-b | The right sidebar's Checks tab, a More menu for tabs that do not fit, and Try again when a panel breaks. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-146-c | Settings sets a different theme per screen under Appearance, Mode. | [Settings](settings.md) |
 | T-146-f | Escape inside a text field never leaves a full page. | [Getting started](getting-started.md) |
 | T-147 | The status bar can be shown, hidden and its items chosen. | [Settings](settings.md) |
@@ -439,7 +447,18 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-233-a | The Git and worktrees settings page is available. | [Settings](settings.md) |
 | T-233-b | Order the Source Control groups on the Git and worktrees page. | [Settings](settings.md) |
 | T-233-c | The GitHub API budget is shown on the Git and worktrees page. | [Settings](settings.md) |
+| T-243 | A Skills page lists every skill your AIs can see, from a sidebar button that is off until you turn it on in Settings. | [Getting started](getting-started.md) |
+| T-244 | A Getting Started guide with a progress ring, an Enable Kolux CLI step, an Explore Kolux walk and startup tips. | [Getting started](getting-started.md) |
+| T-245 | Contextual tours: small callouts with Back, Next, Skip and Done that show once and can be replayed from the Help menu. | [Getting started](getting-started.md) |
+| T-246 | Search every setting at once, open or reload the keybindings file, choose Kolux first or Terminal first for shortcuts, and zoom the whole interface. | [Settings](settings.md) |
+| T-247 | The Terminal settings cover text, cursor, scrolling, clipboard and the Windows default shell; a Confirmations card brings skipped questions back. | [Settings](settings.md) |
 | T-250-a | Help on every command level, plus a version flag, in the command line. | [Command line](command-line.md) |
+
+### P2 · theme 3 · Knowing what each agent is doing (7 cards)
+
+| Task | Feature | Guide page |
+|---|---|---|
+| T-260 | The Floor shows each agent's working, waiting and idle time on a timeline; on a Mac, the first start asks for notification permission. | [Board, Agents and Inbox](board-agents-inbox.md) |
 
 ### P2 · theme 4 · Accounts, sign-in and usage limits (9 cards)
 
@@ -453,6 +472,7 @@ Tasks not yet ticked off in the build plan are not listed.
 
 | Task | Feature | Guide page |
 |---|---|---|
+| T-273 | Kolux finds Claude's saved sessions for each workspace on Windows (no screen lists them yet). | internal |
 | T-277 | Resource Manager lists terminals picked up after a reload. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-278 | Fast output never freezes a pane; memory caps scale with the machine. | [Troubleshooting](troubleshooting.md) |
 | T-278-c | Big pastes arrive whole and in order without slowing other panes; Ctrl+C or Esc stops one. | [Terminals](terminals.md) |
@@ -462,6 +482,7 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-284 | An interrupted skill delete is undone or finished on restart. | [Troubleshooting](troubleshooting.md) |
 | T-286 | Startup failures and stray background errors never silently kill the app. | [Troubleshooting](troubleshooting.md) |
 | T-287 | `kolux diagnostics memory` shows resident and committed memory for Kolux, each session and the total. | [Command line](command-line.md) |
+| T-287-b | The Resource Manager shows committed memory beside resident. | [Command line](command-line.md) |
 | T-441 | Kolux settings cannot be wiped by a failed read. | [Safety](safety.md) |
 | T-441-b | A settings change never starts from an empty set. | [Safety](safety.md) |
 | T-441-c | Trust file writes keep what the caller read; further data-loss fixes. | [Safety](safety.md) |
@@ -474,6 +495,7 @@ Tasks not yet ticked off in the build plan are not listed.
 
 | Task | Feature | Guide page |
 |---|---|---|
+| T-288 | A workspace made from a linked issue runs the project's issue command with the issue number filled in. | [Projects and worktrees](projects-and-worktrees.md) |
 | T-289 | Copy session, terminal and pane IDs; links point to other terminals and tasks. | [Terminals](terminals.md) |
 | T-290 | Kolux checks whether each agent has the orchestration skill. | [Board, Agents and Inbox](board-agents-inbox.md) |
 | T-291-a | An Automations row in the sidebar, off by default; hide automation worktrees. | [Projects and worktrees](projects-and-worktrees.md) |
@@ -489,4 +511,4 @@ Tasks not yet ticked off in the build plan are not listed.
 | T-298 | Reopen the wizard from the sidebar help menu; first successes are recorded locally. | [Getting started](getting-started.md) |
 
 | T-546 | The Tower: every agent on one full-width screen, needs-you first, one click to its pane, usage per program across the top. | [Board, Agents and Inbox](board-agents-inbox.md) |
-<!-- generated from PLAN.md at cf61e3f -->
+<!-- generated from PLAN.md at d1de182 -->

@@ -7,6 +7,8 @@ import App from "./App";
 import { applyAppearance, cachedAppearance, followSystemMode, readAppearance } from "./theme";
 import { stampLook } from "./settings/general";
 import { applyLanguage, LANGUAGE_FIELD } from "./language";
+import { applyZoom, ZOOM_FIELD } from "./settings/zoom";
+import { followText } from "./terminal/text";
 import { LAYOUT_FIELD, restoreLayout, resumeArgs, stillThere } from "./terminal/layout";
 import "./styles.css";
 
@@ -27,6 +29,10 @@ async function start() {
   if (saved) applyAppearance(readAppearance(stamped || saved));
   // SET-017: the saved language is in force before the first frame draws.
   applyLanguage(saved?.[LANGUAGE_FIELD]);
+  // SET-019: and so is the saved interface zoom.
+  applyZoom(saved?.[ZOOM_FIELD]);
+  // SET-022 / SET-025: terminals open with the saved text settings and follow every save.
+  followText(saved);
   // PROJ-067: the saved tabs come back, less those whose folder is gone. VIEW-107 (T-069-b): App is
   // told whether the settings answered, so a slow start saves no layout over the saved tabs.
   let layout = restoreLayout((stamped || saved || {})[LAYOUT_FIELD]);

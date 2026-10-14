@@ -8,7 +8,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, ArrowRight, Close, Globe, Refresh, Stop } from "../chrome/icons";
 import { BLANK, resolveAddress } from "./address";
+import { backgroundBehind } from "./colour";
+import "./browser.css";
 import { can as canGo, fresh, started, type Pending } from "./history";
+import { zoomFactor } from "../settings/zoom";
 
 /** `url`: the page or file the tab opens on instead of a blank page (SKILL-012 previews a kit result). */
 type Props = { id: number; url?: string; title?: string; hidden?: boolean; focused?: boolean; onFocus?: () => void; onClose?: () => void };
@@ -19,8 +22,10 @@ export const OPEN_IN_BROWSER = "kolux-open-in-browser";
 export const openInBrowser = (url: string) => window.dispatchEvent(new CustomEvent(OPEN_IN_BROWSER, { detail: url }));
 
 function spot(el: HTMLElement) {
+  // SET-019: the window places the page in unzoomed pixels, so a zoomed rect is scaled back.
   const r = el.getBoundingClientRect();
-  return { x: r.left, y: r.top, w: r.width, h: r.height };
+  const z = zoomFactor();
+  return { x: r.left * z, y: r.top * z, w: r.width * z, h: r.height * z };
 }
 
 export default function BrowserPane({ id, url, title, hidden = false, focused = false, onFocus, onClose }: Props) {
@@ -62,7 +67,7 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
       if (!alive) return;
       try {
         const first = url ? resolveAddress(url) : null;
-        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(host.current!) });
+        await invoke("browser_open", { id, url: first && "url" in first ? first.url : BLANK, spot: spot(host.current!), background: backgroundBehind(host.current) });
         opened.current = true;
         if (alive) {
           setOpen(true);
@@ -85,17 +90,30 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
   useEffect(() => {
     if (!open) return;
     const el = host.current!;
-    const send = () => {
+    const send = (theme = false) => {
       const shown = !hidden && el.clientWidth > 0 && el.clientHeight > 0;
-      invoke("browser_bounds", { id, spot: shown ? spot(el) : { x: 0, y: 0, w: 0, h: 0 }, shown }).catch(() => {});
+      const background = theme ? backgroundBehind(el) : undefined;
+      invoke("browser_bounds", { id, spot: shown ? spot(el) : { x: 0, y: 0, w: 0, h: 0 }, shown, background }).catch(() => {});
     };
     send();
-    const observer = new ResizeObserver(send);
+    const resized = () => send();
+    const observer = new ResizeObserver(resized);
     observer.observe(el);
-    window.addEventListener("resize", send);
+    window.addEventListener("resize", resized);
+    // BROW-011: a theme change rewrites the root's style or mode; the page's loading surface takes
+    // the new pane colour at once, so the next load in a light theme is light.
+    let painted = JSON.stringify(backgroundBehind(el));
+    const themed = new MutationObserver(() => {
+      const now = JSON.stringify(backgroundBehind(el));
+      if (now === painted) return;
+      painted = now;
+      send(true);
+    });
+    themed.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class", "data-mode"] });
     return () => {
       observer.disconnect();
-      window.removeEventListener("resize", send);
+      themed.disconnect();
+      window.removeEventListener("resize", resized);
     };
   }, [id, open, hidden]);
 
@@ -135,19 +153,23 @@ export default function BrowserPane({ id, url, title, hidden = false, focused = 
             <Refresh size={12} />
           </button>
         )}
-        <input
-          ref={bar}
-          className="address"
-          aria-label="Address"
-          placeholder="Address"
-          value={address}
-          autoFocus
-          onFocus={(e) => e.currentTarget.select()}
-          onChange={(e) => setAddress(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") go();
-          }}
-        />
+        {/* BROW-006: the slot keeps the bar's place in the toolbar; in a narrow pane the bar inside it
+            is compact and, while focused, floats across the toolbar (browser.css). */}
+        <span className="address-slot">
+          <input
+            ref={bar}
+            className="address"
+            aria-label="Address"
+            placeholder="Address"
+            value={address}
+            autoFocus
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setAddress(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") go();
+            }}
+          />
+        </span>
         <span className="right">
           <button className="ib" onClick={onClose} title="Close tab (Ctrl+W)">
             <Close size={12} />
