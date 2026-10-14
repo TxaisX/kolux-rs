@@ -1,0 +1,66 @@
+import { expect, test } from "vitest";
+import { isTowerWindow, openTowerWindow, pickScreen, snapshotChanged, TOWER_HASH, TOWER_LABEL, type Screen, type WindowApi } from "./ownWindow";
+
+const main: Screen = { x: 0, y: 0, width: 2560, height: 1440, scale: 1.25 };
+const left: Screen = { x: -1920, y: 0, width: 1920, height: 1080, scale: 1 };
+
+const api = (o: Partial<WindowApi> & { made?: Array<{ label: string; opts: Record<string, unknown> }> } = {}): WindowApi & { made: Array<{ label: string; opts: Record<string, unknown> }> } => {
+  const made = o.made ?? [];
+  return {
+    made,
+    focus: o.focus ?? (async () => false),
+    screens: o.screens ?? (async () => ({ all: [main, left], current: main })),
+    create: o.create ?? (async (label, opts) => (made.push({ label, opts }), true)),
+  };
+};
+
+test("T-546-c: the Tower opens on a screen other than the one the main window is on", () => {
+  expect(pickScreen([main, left], main)).toEqual(left);
+  expect(pickScreen([left, main], main)).toEqual(left);
+  expect(pickScreen([main], main)).toBeNull();
+  expect(pickScreen([], null)).toBeNull();
+});
+
+test("T-546-c: a new Tower window is made on the second screen, filling it, at logical coordinates", async () => {
+  const a = api();
+  expect(await openTowerWindow(a)).toBe("opened");
+  expect(a.made).toHaveLength(1);
+  expect(a.made[0].label).toBe(TOWER_LABEL);
+  expect(a.made[0].opts).toMatchObject({ url: `index.html${TOWER_HASH}`, x: -1920, y: 0, width: 1920, height: 1080, maximized: true });
+});
+
+test("T-546-c: with one screen the Tower window opens centred on it, not maximised over the main window", async () => {
+  const a = api({ screens: async () => ({ all: [main], current: main }) });
+  expect(await openTowerWindow(a)).toBe("opened");
+  expect(a.made[0].opts).toMatchObject({ center: true, maximized: false });
+  expect(a.made[0].opts.x).toBeUndefined();
+});
+
+test("T-546-c: an open Tower window is brought forward instead of a second one being made", async () => {
+  const a = api({ focus: async () => true });
+  expect(await openTowerWindow(a)).toBe("focused");
+  expect(a.made).toHaveLength(0);
+});
+
+test("T-546-c: a window that cannot be made (no permission, an error) reports failed, so the Tower stays a switcher screen", async () => {
+  expect(await openTowerWindow(api({ create: async () => false }))).toBe("failed");
+  expect(await openTowerWindow(api({ create: async () => Promise.reject(new Error("not allowed")) }))).toBe("failed");
+  expect(await openTowerWindow(api({ focus: async () => Promise.reject(new Error("not allowed")), create: async () => false }))).toBe("failed");
+  // screens unknown: still tries, centred
+  const a = api({ screens: async () => Promise.reject(new Error("no monitors")) });
+  expect(await openTowerWindow(a)).toBe("opened");
+  expect(a.made[0].opts).toMatchObject({ center: true });
+});
+
+test("T-546-c: the Tower window is told apart by its address", () => {
+  expect(isTowerWindow(TOWER_HASH)).toBe(true);
+  expect(isTowerWindow("")).toBe(false);
+  expect(isTowerWindow("#other")).toBe(false);
+});
+
+test("T-546-c: the main window sends the Tower window a snapshot only when what it shows changed", () => {
+  const s = { seats: [{ key: 1, agent: "claude", title: "a", branch: null, cwd: null, account: null, chip: null, meter: null, since: 0 }], usage: [] };
+  expect(snapshotChanged(null, s)).toBe(true);
+  expect(snapshotChanged(s, JSON.parse(JSON.stringify(s)))).toBe(false);
+  expect(snapshotChanged(s, { ...s, seats: [{ ...s.seats[0], title: "b" }] })).toBe(true);
+});

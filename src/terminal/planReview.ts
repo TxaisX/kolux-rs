@@ -68,3 +68,55 @@ export function keepDraft(drafts: Record<string, PlanDraft>, key: string, d: Pla
 /** SAFE-007: the sheet's plan can still be answered only while the pane waits on that exact plan. */
 export const stillPending = (state: AgentState | undefined, turn: { tool?: string; plan?: string } | undefined, plan: string) =>
   showsReview(state, turn) && turn?.plan === plan;
+
+/** T-032-b: what the Request changes send needs from the window, so it runs and is tested here. */
+export type SendSteps = {
+  /** The agent's own no to its plan prompt; false when Kolux could not answer it. */
+  deny: () => Promise<boolean>;
+  /** Whether the pane still sits in its plan-approval ask. */
+  asking: () => boolean;
+  /** Types the message into the pane as one bracketed paste. */
+  type: (text: string) => Promise<void>;
+  enter: () => Promise<void>;
+  /** Whether the pane is still open. */
+  alive: () => boolean;
+  wait: (ms: number) => Promise<void>;
+};
+export type SendOutcome = "sent" | "cancelled" | "no-answer" | "still-asking" | "gone";
+/** How the send ended, whether the agent's no went out, and whether the message was typed in. */
+export type SendResult = { outcome: SendOutcome; answered: boolean; typed: boolean };
+export type PendingSend = { cancel: () => void; done: Promise<SendResult> };
+
+/** SAFE-004 / T-032-b: Request changes as a job. It says no, waits up to 3 seconds (30 steps of
+ * 100 ms) for the pane to leave the ask, pastes the message, waits 300 ms and presses Enter only if
+ * the pane is not asking again. An Enter while the menu is still open would pick its default, Yes,
+ * so a pane that keeps asking gets nothing typed (council re-review of chat a969502). `cancel` is
+ * safe at any point: nothing more goes out after it, and Enter is never pressed once it is called. */
+export function startFeedback(text: string, s: SendSteps): PendingSend {
+  let cancelled = false;
+  const run = async (): Promise<SendResult> => {
+    let answered = false;
+    let typed = false;
+    const end = (outcome: SendOutcome): SendResult => ({ outcome, answered, typed });
+    await Promise.resolve();
+    if (cancelled) return end("cancelled");
+    if (!(await s.deny())) return end("no-answer");
+    answered = true;
+    for (let i = 0; i < 30 && s.asking(); i++) {
+      if (cancelled) return end("cancelled");
+      await s.wait(100);
+    }
+    if (cancelled) return end("cancelled");
+    if (s.asking()) return end("still-asking");
+    if (!s.alive()) return end("gone");
+    await s.type(text);
+    typed = true;
+    await s.wait(300);
+    if (cancelled) return end("cancelled");
+    if (s.asking()) return end("still-asking");
+    if (!s.alive()) return end("gone");
+    await s.enter();
+    return end("sent");
+  };
+  return { cancel: () => void (cancelled = true), done: run() };
+}

@@ -17,6 +17,41 @@ import { sameDir } from "../workspaces";
 
 export type TurnInfo = { tool?: string; detail?: string; ask?: string; reply?: string; wrote?: string; stop?: StopInfo; plan?: string; planCut?: boolean; monitoring?: boolean };
 
+/** USAGE-001: one status-line report as the hook server sends it. `session` and `at` (the
+ * session's running time when the report was made) are optional: a report without them is
+ * ordered by arrival, which the hook server's one-at-a-time loop keeps. */
+export type UsageEvent = { paneKey: number; contextTokens: number | null; contextWindow: number | null; session?: string | null; at?: number | null };
+/** A pane's context reading with the stamp it came with, when it had one. */
+export type Reading = ContextReading & { session?: string; at?: number };
+/** The stamp of a reading a clear forgot, so a straggler from before the clear stays out. */
+export type Floor = { session?: string; at?: number };
+
+const sameClock = (a: { session?: string; at?: number } | undefined, b: Reading): a is { session: string; at: number } =>
+  a !== undefined && a.session !== undefined && a.session === b.session && a.at !== undefined && b.at !== undefined;
+
+/** USAGE-001: the reading a pane should show after report `e`, or null to keep what it has. The
+ * newest report wins, even a smaller figure (a compact shrinks context); a report of the same
+ * session stamped earlier than the one on screen, or no later than a reading a clear forgot, is
+ * a late one and is thrown away. */
+export function takeReading(shown: Reading | undefined, floor: Floor | undefined, e: UsageEvent): Reading | null {
+  if (e.contextTokens === null || e.contextWindow === null) return null;
+  const next: Reading = { tokens: e.contextTokens, window: e.contextWindow };
+  if (e.session) next.session = e.session;
+  if (typeof e.at === "number") next.at = e.at;
+  if (sameClock(shown, next) && (next.at as number) < shown.at) return null;
+  if (sameClock(floor, next) && (next.at as number) <= floor.at) return null;
+  return next;
+}
+
+/** USAGE-001: closing a pane forgets its reading; the same object back when nothing closed. */
+export function forgetGone<T>(byPane: Record<number, T>, open: Set<number>): Record<number, T> {
+  const gone = Object.keys(byPane).filter((k) => !open.has(Number(k)));
+  if (gone.length === 0) return byPane;
+  const kept = { ...byPane };
+  for (const k of gone) delete kept[Number(k)];
+  return kept;
+}
+
 export function useAgentStatusState(running: Record<number, boolean>) {
   const [needs, setNeeds] = useState<Record<number, boolean>>({}); // TERM-030: panes waiting on the user
   const [hook, setHook] = useState<Record<number, AgentState>>({}); // STAT-001: each pane's last hook-fed state
@@ -27,7 +62,7 @@ export function useAgentStatusState(running: Record<number, boolean>) {
   const [turn, setTurn] = useState<Record<number, TurnInfo>>({});
   // STAT-045: the terminal has printed nothing for the quiet window; cleared by the next event.
   const [stale, setStale] = useState<Record<number, boolean>>({});
-  const [context, setContext] = useState<Record<number, ContextReading>>({}); // STAT-040: each Claude pane's last context reading
+  const [context, setContext] = useState<Record<number, Reading>>({}); // STAT-040 / USAGE-001: each Claude pane's last context reading
   const [crew, setCrew] = useState<Record<number, Crew>>({}); // STAT-026: each pane's sub-agents and teammates
   const hookRef = useRef(hook);
   hookRef.current = hook;
@@ -94,6 +129,8 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
   quietRef.current = quiet;
   const panesRef = useRef(panes);
   panesRef.current = panes;
+  // USAGE-001: the stamp of each reading a clear forgot.
+  const floorRef = useRef<Record<number, Floor>>({});
   useEffect(() => {
     // STAT-001: the hooks report each pane's state; a turn ending out of view is noticed like an exit.
     const off = listen<{ paneKey: number; children: Crew; tool?: string; detail?: string; ask?: string; wrote?: string; plan?: string; planCut?: boolean; session?: string } & Turn>("agent-status", (e) => {
@@ -113,15 +150,31 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
       // STAT-046: a stop on a sign-in failure has the account checked, so the main-window notice
       // (SignInNotice) names the lapsed account without waiting for the next start.
       if (stop?.cause === "signin" && prev !== "blocked") invoke("claude_account_check").catch(() => {});
+      // USAGE-001: clearing the pane (a /clear, a resume, a manual compact) forgets its reading; the
+      // next status report brings the new figure.
+      if (boundary)
+        setContext((c) => {
+          const r = c[paneKey];
+          if (!r) return c;
+          floorRef.current[paneKey] = { session: r.session, at: r.at };
+          const kept = { ...c };
+          delete kept[paneKey];
+          return kept;
+        });
       if (prev !== state) {
         setHook((h) => ({ ...h, [paneKey]: state }));
         setStamp((m) => ({ ...m, [paneKey]: { at: Date.now(), interrupted: e.payload.interrupted || boundary } }));
       }
     });
     // STAT-045: the quiet alert comes from the terminal's own silence, judged in Rust.
-    const offUsage = listen<{ paneKey: number; contextTokens: number | null; contextWindow: number | null }>("claude-usage", (e) => {
-      const { paneKey, contextTokens, contextWindow } = e.payload;
-      if (contextTokens !== null && contextWindow !== null) setContext((c) => ({ ...c, [paneKey]: { tokens: contextTokens, window: contextWindow } }));
+    // USAGE-001: readings are per pane and the newest wins; a late one, or one for a closed pane, is dropped.
+    const offUsage = listen<UsageEvent>("claude-usage", (e) => {
+      const { paneKey } = e.payload;
+      if (!panesRef.current.some((p) => p.key === paneKey)) return;
+      setContext((c) => {
+        const next = takeReading(c[paneKey], floorRef.current[paneKey], e.payload);
+        return next ? { ...c, [paneKey]: next } : c;
+      });
     });
     const offQuiet = listen<{ paneKey: number; minutes: number }>("agent-quiet", (e) => {
       const p = panesRef.current.find((x) => x.key === e.payload.paneKey);
@@ -145,5 +198,11 @@ export function useAgentEvents({ panes, setPanes, titles, settings, inView, setT
     setUnreadPanes((u) => new Set([...u].filter((k) => !seen.includes(k))));
     for (const p of panes) if (seen.includes(p.key) && p.cwd !== null) markDir(p.cwd, false);
   });
+  useEffect(() => {
+    // USAGE-001: closing a pane forgets its reading.
+    const open = new Set(panes.map((p) => p.key));
+    setContext((c) => forgetGone(c, open));
+    floorRef.current = forgetGone(floorRef.current, open);
+  }, [panes]);
   return { noticed, panesRef };
 }

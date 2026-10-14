@@ -30,11 +30,17 @@ fn grantable(real: &Path) -> bool {
     !is_share(real) && !is_drive_root(real) && !real.is_dir()
 }
 
-/// A network share: `\\server\share`, `//server/share` or, once resolved, `\\?\UNC\...`.
+/// A network share or a namespace path: `\\server\share`, `//server/share`, `\\?\UNC\...`, and
+/// every other spelling that starts with two separators (the device namespace `\\.\` and the
+/// verbatim `\\?\` ones, such as `\\.\UNC\host\share` or `\\?\GLOBALROOT\Device\Mup\host\share`,
+/// which reach a share too) except a verbatim disk path such as `\\?\C:\...`. Decided from the
+/// spelling alone, so a refused path is never resolved and its host never contacted (FIX-2).
 fn is_share(p: &Path) -> bool {
     let s = p.to_string_lossy();
-    if s.starts_with("//") || (s.starts_with("\\\\") && !s.starts_with("\\\\?\\") && !s.starts_with("\\\\.\\")) {
-        return true;
+    let sep = |c: Option<char>| matches!(c, Some('\\' | '/'));
+    let mut chars = s.chars();
+    if sep(chars.next()) && sep(chars.next()) {
+        return !matches!(p.components().next(), Some(Component::Prefix(x)) if matches!(x.kind(), Prefix::VerbatimDisk(..)));
     }
     matches!(p.components().next(), Some(Component::Prefix(x)) if matches!(x.kind(), Prefix::UNC(..) | Prefix::VerbatimUNC(..)))
 }
@@ -182,6 +188,30 @@ mod tests {
         assert!(check(Path::new("//server/share/x.txt"), &roots, &[], true).is_err());
         let drive = t.0.ancestors().last().unwrap().to_path_buf();
         assert!(check(&t.0.join("outside/other.txt"), &[drive], &[], true).is_err(), "a drive root is never a root");
+    }
+
+    // FIX-2 (council FS-1): the device-namespace and verbatim spellings of a share are refused as
+    // shares from the spelling, before anything resolves them (the old code canonicalized them, which
+    // contacts the host, and only then said "outside"); a verbatim disk path still works.
+    #[cfg(windows)]
+    #[test]
+    fn acct_055_namespace_spellings_of_a_share_are_refused_before_they_resolve() {
+        let t = temp("namespace");
+        let roots = [t.0.join("project")];
+        for p in [
+            r"\\.\UNC\kolux-none.invalid\share\p.txt",
+            r"\\?\GLOBALROOT\Device\Mup\kolux-none.invalid\share\p.txt",
+            r"\\?\UNC\kolux-none.invalid\share\p.txt",
+            r"\/.\UNC\kolux-none.invalid\share\p.txt",
+            r"\\.\C:\Windows\win.ini",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\p.txt",
+        ] {
+            let err = check(Path::new(p), &roots, &[], true).unwrap_err();
+            assert!(err.contains("shares"), "{p}: {err}");
+        }
+        let verbatim = t.0.join("project/src/a.txt").canonicalize().unwrap();
+        assert!(verbatim.to_string_lossy().starts_with(r"\\?\"), "{}", verbatim.display());
+        assert!(check(&verbatim, &roots, &[], true).is_ok(), "a verbatim disk path inside a project is fine");
     }
 
     #[test]

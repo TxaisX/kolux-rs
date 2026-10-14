@@ -86,6 +86,9 @@ fn closed(mut rec: Onboarding, outcome: &str, now: u64) -> Result<Onboarding, St
         rec.outcome = Some(outcome.into());
         if outcome == "completed" {
             rec.step = LAST;
+        } else {
+            // ONB-006: Skip (the only way to close as dismissed) also dismisses the sidebar checklist.
+            rec.rest.insert("checklistDismissed".into(), true.into());
         }
     }
     Ok(rec)
@@ -177,6 +180,42 @@ pub struct Guide {
     /// ONB-032: whether this profile gets tours by itself, decided once (tours_get) and never again.
     #[serde(default)]
     pub tours_auto: Option<bool>,
+    /// ONB-042: each known feature's first use and running use count on this machine. Unknown
+    /// features and damaged entries are dropped on load without notice.
+    #[serde(default, deserialize_with = "features_de")]
+    pub features: std::collections::BTreeMap<String, Use>,
+}
+
+/// ONB-042: one feature's record: when it was first used (ms since 1970) and how often.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Use {
+    pub first: u64,
+    pub count: u64,
+}
+
+/// ONB-042: the fixed list of features whose use the profile keeps.
+pub const FEATURES: &[&str] = &[
+    "board", "palette", "browser", "browser-page", "tasks", "automations", "split", "workspace-create", "workspace-switch", "skill-setup",
+    "kits", "kit-results", "editor", "diff", "notes", "pr", "ship", "commit", "push", "usage",
+    "inbox", "artifacts", "settings", "shortcuts", "search", "file-find", "markdown", "floating", "layout", "zoom",
+    "rename", "orchestration", "cli", "notifications", "default-agent", "setup-script", "second-repo", "explore", "setup-guide", "parallel",
+];
+
+fn features_de<'de, D: serde::Deserializer<'de>>(d: D) -> Result<std::collections::BTreeMap<String, Use>, D::Error> {
+    let raw = <serde_json::Value as Deserialize>::deserialize(d)?;
+    let serde_json::Value::Object(m) = raw else { return Ok(Default::default()) };
+    Ok(m.into_iter().filter(|(k, _)| FEATURES.contains(&k.as_str())).filter_map(|(k, v)| serde_json::from_value::<Use>(v).ok().filter(|u| u.count > 0).map(|u| (k, u))).collect())
+}
+
+/// ONB-042: a use of `id`: the first time is written once, the count only goes up. The count is
+/// raised here, under the store lock, so a late save from the window can never lower it.
+fn used(mut g: Guide, id: &str, now: u64) -> Result<Guide, String> {
+    if !FEATURES.contains(&id) {
+        return Err(format!("{id} is not a feature Kolux keeps"));
+    }
+    let u = g.features.entry(id.into()).or_insert(Use { first: now, count: 0 });
+    u.count = u.count.saturating_add(1);
+    Ok(g)
 }
 
 /// ONB-033: every contextual tour id, built or planned; a seen entry for any other id (one an older
@@ -223,6 +262,9 @@ pub fn tours_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
 
 /// `id` added once to `list` (tipsSeen, visited or tried).
 fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
+    if list == "used" {
+        return used(g, id, now_ms());
+    }
     if id.is_empty() || id.len() > 40 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(format!("{id:?} is not a guide id"));
     }
@@ -241,10 +283,46 @@ fn marked(mut g: Guide, list: &str, id: &str) -> Result<Guide, String> {
     Ok(g)
 }
 
+/// ONB-013: what the newcomer checklist reads from the first-run record: whether the wizard was
+/// closed (and how), the checklist's dismissed mark and the first-success milestones. None for a
+/// profile with no record (one from before the wizard), which never gets the checklist.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstRun {
+    pub closed: bool,
+    pub outcome: Option<String>,
+    pub checklist_dismissed: bool,
+    pub milestones: serde_json::Map<String, serde_json::Value>,
+}
+
+fn first_run(rec: Option<Onboarding>) -> Option<FirstRun> {
+    let rec = rec?;
+    let milestones = match rec.rest.get("milestones") {
+        Some(serde_json::Value::Object(m)) => m.iter().filter(|(k, v)| MILESTONES.contains(&k.as_str()) && v.is_u64()).map(|(k, v)| (k.clone(), v.clone())).collect(),
+        _ => Default::default(),
+    };
+    Some(FirstRun {
+        closed: rec.closed_at.is_some(),
+        outcome: rec.outcome,
+        checklist_dismissed: rec.rest.get("checklistDismissed").and_then(|v| v.as_bool()).unwrap_or(false),
+        milestones,
+    })
+}
+
+/// The guide record as the window reads it: the stored lists plus the first-run view (ONB-013).
+/// The view is read only; guide_mark never stores it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideView {
+    #[serde(flatten)]
+    pub guide: Guide,
+    pub first_run: Option<FirstRun>,
+}
+
 #[tauri::command]
-pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<Guide, String> {
+pub fn guide_get(store: State<'_, Mutex<Store>>) -> Result<GuideView, String> {
     let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(guide_load(&store))
+    Ok(GuideView { guide: guide_load(&store), first_run: first_run(load(&store)) })
 }
 
 #[tauri::command]
@@ -412,6 +490,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn this_source_file_holds_no_shell_expansion_of_an_account_id() {
+        // FIX-1 (council d2 FB1): a backtick in a shell heredoc once ran a command and wrote its
+        // account-id output into a comment here. The needles are built at run time so this test
+        // does not find itself.
+        let src = include_str!("onboarding.rs");
+        for needle in [["uid", "="].concat(), ["gid", "="].concat(), ["groups", "=1"].concat()] {
+            assert!(!src.contains(&needle), "onboarding.rs holds {needle:?}: shell expansion damage");
+        }
+        assert!(src.contains(&["a use of `", "id`:"].concat()), "the ONB-042 comment keeps its original wording");
+    }
+
+    #[test]
     fn guide_lists_keep_each_id_once_and_drop_unknown_tips() {
         let (s, dir) = store("guide");
         s.set(GUIDE, r#"{"tipsSeen":["old-tip","cli","cli"],"visited":["agents"]}"#).unwrap();
@@ -494,7 +584,8 @@ mod tests {
     static DEAD_ASKED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     fn spy(p: &std::path::Path, d: &std::path::Path) -> bool {
-        if crate::links::host_path(&p.to_string_lossy(), &[]) {
+        // judged by the test host's name, not by host_path, so a form host_path misses still counts
+        if p.to_string_lossy().contains("x.invalid") {
             HOST_ASKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         if p.to_string_lossy().contains("w2-dead") {
@@ -511,7 +602,7 @@ mod tests {
         let other = dir.join("other");
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(dir.join(if cfg!(windows) { "kolux.exe" } else { "kolux" }), "").unwrap();
-        let shares = [r"\\x.invalid\bin", r"\\?\UNC\x.invalid\bin", "//x.invalid/bin"].map(std::path::PathBuf::from);
+        let shares = [r"\\x.invalid\bin", r"\\?\UNC\x.invalid\bin", "//x.invalid/bin", r"\??\UNC\x.invalid\bin", r"\??\unc\x.invalid\s"].map(std::path::PathBuf::from);
         let mut entries: Vec<&std::path::Path> = shares.iter().map(|p| p.as_path()).collect();
         entries.push(&other);
         let path = std::env::join_paths(entries).unwrap();
@@ -575,6 +666,9 @@ mod tests {
         assert_eq!(closed(done.clone(), "dismissed", 60).unwrap(), done);
         let skipped = closed(stepped(open.clone(), 1), "dismissed", 70).unwrap();
         assert_eq!((skipped.step, skipped.outcome.as_deref()), (1, Some("dismissed")));
+        assert_eq!(skipped.rest.get("checklistDismissed"), Some(&serde_json::Value::Bool(true)), "Skip dismisses the sidebar checklist");
+        assert_eq!(done.rest.get("checklistDismissed"), None, "a completed close keeps the checklist");
+        assert_eq!(first_run(Some(skipped.clone())).map(|v| v.checklist_dismissed), Some(true));
         assert!(closed(open, "maybe", 1).unwrap_err().contains("maybe"));
     }
 
@@ -600,6 +694,46 @@ mod tests {
         assert_eq!((back.step, back.closed_at, back.outcome), (-1, None, None));
         assert_eq!(serde_json::Value::Object(back.rest), serde_json::json!({"checklist":[true],"milestones":{"aiConnected":5}}), "only the dismissed mark goes");
         assert_eq!(reopened(None), Onboarding { version: VERSION, step: -1, closed_at: None, outcome: None, rest: Default::default() }, "a profile with no record gets a fresh one");
+    }
+
+    #[test]
+    fn the_checklist_view_comes_from_the_first_run_record() {
+        assert_eq!(first_run(None), None, "a profile from before the wizard gets no checklist");
+        let open = Onboarding { version: VERSION, step: 1, closed_at: None, outcome: None, rest: Default::default() };
+        assert_eq!(first_run(Some(open)), Some(FirstRun { closed: false, outcome: None, checklist_dismissed: false, milestones: Default::default() }));
+        let rest = serde_json::from_str(r#"{"checklistDismissed":true,"milestones":{"aiConnected":5,"kitLaunched":"soon","lunch":7}}"#).unwrap();
+        let done = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: Some("dismissed".into()), rest };
+        let v = first_run(Some(done)).unwrap();
+        assert!(v.closed && v.checklist_dismissed && v.outcome.as_deref() == Some("dismissed"));
+        assert_eq!(serde_json::Value::Object(v.milestones), serde_json::json!({"aiConnected":5}), "unknown names and non-times are dropped");
+        let bad = Onboarding { version: VERSION, step: 3, closed_at: Some(9), outcome: None, rest: serde_json::from_str(r#"{"milestones":[1],"checklistDismissed":"yes"}"#).unwrap() };
+        let v = first_run(Some(bad)).unwrap();
+        assert!(!v.checklist_dismissed && v.milestones.is_empty(), "a damaged record reads as nothing done, not dismissed");
+        let wire = serde_json::to_value(GuideView { guide: Guide::default(), first_run: None }).unwrap();
+        assert!(wire.get("tried").is_some() && wire.get("firstRun").is_some(), "the view keeps the record's own fields beside firstRun: {wire}");
+    }
+
+    #[test]
+    fn feature_uses_keep_the_first_time_and_only_count_up() {
+        let g = used(Guide::default(), "split", 10).unwrap();
+        let g = used(g, "split", 20).unwrap();
+        assert_eq!(g.features["split"], Use { first: 10, count: 2 }, "the first time stays, the count goes up");
+        assert!(used(g.clone(), "lunch", 30).unwrap_err().contains("lunch"));
+        assert_eq!(marked(g, "used", "board").unwrap().features["board"].count, 1, "guide_mark's used list records a use");
+        assert!(FEATURES.len() >= 35 && FEATURES.len() <= 45, "roughly forty features");
+    }
+
+    #[test]
+    fn unknown_or_damaged_feature_entries_are_dropped_on_load() {
+        let (s, dir) = store("features");
+        s.set(GUIDE, r#"{"tried":["usage"],"features":{"split":{"first":5,"count":3},"teleport":{"first":1,"count":1},"board":{"first":"x"},"palette":7,"tasks":{"first":2,"count":0}}}"#).unwrap();
+        let g = guide_load(&s);
+        assert_eq!(g.tried, ["usage"], "the rest of the record survives a damaged entry");
+        assert_eq!(g.features.keys().collect::<Vec<_>>(), ["split"], "unknown, damaged and zero-count entries go");
+        s.set(GUIDE, r#"{"features":[1,2]}"#).unwrap();
+        assert!(guide_load(&s).features.is_empty());
+        drop(s);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -3,7 +3,8 @@
 //! that host; a file link aimed at a program, script, installer or shortcut is revealed in its
 //! folder instead of run. EDIT-045: `fence` guards every command that takes a path from the
 //! interface: inside a registered root (or granted exactly, through `file_grant`), never out
-//! through a link; `open_path` is the one door for handing a file to the system.
+//! through a link; `open_path` is the one door for handing a file to the system. SESS-039:
+//! `editor_open` opens a worktree folder (fenced the same way) in an outside editor.
 //!
 //! ponytail: there are no terminal or note links yet; when they land they call `open_path` and
 //! need nothing of their own. On Linux a reveal opens the folder without selecting the file; the
@@ -61,7 +62,9 @@ pub fn refuse_host(path: &str, roots: &[String]) -> Result<(), String> {
 
 /// A share written with two leading slashes or backslashes, a file URL naming a host, the
 /// long-path or device form of one (`\\?\UNC\`, `\\.\pipe\`), or any such path that climbs with
-/// `..`. WSL roots and long-path local drives are local; a share under a registered root is allowed.
+/// `..`. The NT object form (`\??\UNC\`, `\??\GLOBALROOT\`) is read like the long-path form, since
+/// Windows passes it straight through to the object manager. WSL roots and long-path local drives
+/// are local; a share under a registered root is allowed.
 pub fn host_path(text: &str, roots: &[String]) -> bool {
     let low = text.trim().to_ascii_lowercase();
     let path = match low.strip_prefix("file:") {
@@ -99,9 +102,13 @@ pub fn host_path(text: &str, roots: &[String]) -> bool {
     })
 }
 
-/// Backslashes throughout, and the `/c:/x` a file URL yields turned into `c:\x`.
+/// Backslashes throughout, the NT object prefix `\??\` written as `\\?\` (council FS1, FIX-2), and
+/// the `/c:/x` a file URL yields turned into `c:\x`.
 fn windows_form(path: &str) -> String {
     let mut s = path.replace('/', "\\");
+    if s.starts_with("\\??\\") {
+        s.replace_range(..4, "\\\\?\\");
+    }
     let b = s.as_bytes();
     if b.len() >= 3 && b[0] == b'\\' && b[1].is_ascii_alphabetic() && b[2] == b':' {
         s.remove(0);
@@ -331,9 +338,122 @@ pub async fn open_path(store: tauri::State<'_, Mutex<crate::state::Store>>, path
     .map_err(|e| e.to_string())?
 }
 
+/// SESS-039: how an editor is started on a folder.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EditorPlan {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+    /// Windows: a console window of its own (NeoVim); otherwise no console at all.
+    pub console: bool,
+}
+
+/// Text safe inside POSIX single quotes, then inside an AppleScript string.
+fn mac_script(dir: &Path, program: &str) -> String {
+    let sq = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
+    let shell = format!("cd {} && {} .", sq(&dir.to_string_lossy()), sq(program));
+    format!("tell application \"Terminal\" to do script \"{}\"", shell.replace('\\', r"\\").replace('"', r#"\""#))
+}
+
+/// SESS-039: a windowed editor (or its command-line launcher) gets the folder as its argument; a
+/// console editor opens `.` in the folder, in a console window: its own on Windows, the
+/// desktop's terminal on Linux, Terminal on macOS. A `.cmd` launcher on Windows goes through the
+/// shell with its arguments quoted for it (the standard library does that for batch files).
+pub fn editor_plan(editor: &crate::tools::Editor, dir: &Path) -> EditorPlan {
+    let path = PathBuf::from(&editor.path);
+    let (program, args) = if !editor.console {
+        (path, vec![dir.to_string_lossy().into_owned()])
+    } else if cfg!(windows) {
+        (path, vec![".".to_string()])
+    } else if cfg!(target_os = "macos") {
+        (PathBuf::from("osascript"), vec!["-e".to_string(), mac_script(dir, &editor.path)])
+    } else {
+        (PathBuf::from("x-terminal-emulator"), vec!["-e".to_string(), editor.path.clone(), ".".to_string()])
+    };
+    EditorPlan { program, args, cwd: dir.to_path_buf(), console: editor.console }
+}
+
+/// Starts the plan and lets it run on its own.
+pub fn spawn_editor(plan: &EditorPlan) -> Result<std::process::Child, String> {
+    use std::process::Stdio;
+    let mut c = std::process::Command::new(&plan.program);
+    c.args(&plan.args).current_dir(&plan.cwd);
+    // A console editor talks to its own new console; only a windowed one gets empty handles.
+    if !plan.console {
+        c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NEW_CONSOLE for NeoVim; CREATE_NO_WINDOW keeps a .cmd launcher's shell out of sight.
+        c.creation_flags(if plan.console { 0x0000_0010 } else { 0x0800_0000 });
+    }
+    c.spawn().map_err(|e| format!("could not start {}: {e}", plan.program.display()))
+}
+
+/// SESS-039: opens the folder `dir` (a worktree inside a registered root) in the editor `editor`.
+/// Answers the editor's name.
+// T-304: registered by the coordinator's lib.rs hunk; unused until then.
+#[tauri::command]
+pub async fn editor_open(store: tauri::State<'_, Mutex<crate::state::Store>>, grants: tauri::State<'_, Grants>, editor: String, dir: String) -> Result<String, String> {
+    let folder = fence(&dir, &roots(&store), &grants.snapshot(), true)?;
+    if !folder.is_dir() {
+        return Err(format!("{dir} is not a folder"));
+    }
+    // The editor search walks the search path and the install folders: off the main thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let found = crate::tools::editors().into_iter().find(|e| e.id == editor).ok_or_else(|| format!("{editor} is not installed"))?;
+        spawn_editor(&editor_plan(&found, &folder))?;
+        Ok(found.name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ed(path: &str, console: bool) -> crate::tools::Editor {
+        crate::tools::Editor { id: "x".into(), name: "X".into(), path: path.into(), console }
+    }
+
+    #[test]
+    fn sess039_a_windowed_editor_gets_the_folder_and_a_console_editor_opens_dot_in_a_console() {
+        let dir = Path::new("C:/work/my repo");
+        let p = editor_plan(&ed("C:/x/code.cmd", false), dir);
+        assert_eq!((p.program, p.args, p.cwd.as_path(), p.console), (PathBuf::from("C:/x/code.cmd"), vec!["C:/work/my repo".to_string()], dir, false));
+        let n = editor_plan(&ed("C:/x/nvim.exe", true), dir);
+        assert!(n.console);
+        assert_eq!(n.cwd, dir);
+        if cfg!(windows) {
+            assert_eq!((n.program, n.args), (PathBuf::from("C:/x/nvim.exe"), vec![".".to_string()]));
+        } else {
+            assert!(n.args.iter().any(|a| a.contains("nvim")));
+        }
+        // the macOS Terminal script survives quotes in the folder name
+        let s = mac_script(Path::new("/tmp/it's \"here\""), "/usr/bin/nvim");
+        assert_eq!(s, r#"tell application "Terminal" to do script "cd '/tmp/it'\\''s \"here\"' && '/usr/bin/nvim' .""#);
+    }
+
+    /// A stand-in `code.cmd` records the arguments it was handed, forwarding them with `%*` the
+    /// way real launchers do: the shell quoting holds for a folder with a space and an ampersand.
+    #[cfg(windows)]
+    #[test]
+    fn sess039_a_cmd_launcher_is_started_through_the_shell_with_the_folder_intact() {
+        let base = std::env::temp_dir().join(format!("krs-edopen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("my repo & co");
+        std::fs::create_dir_all(&dir).unwrap();
+        let cmd = base.join("code.cmd");
+        std::fs::write(&cmd, "@echo off\r\n>\"%~dp0seen.txt\" echo(%*\r\n").unwrap();
+        let plan = editor_plan(&ed(&cmd.to_string_lossy(), false), &dir);
+        let status = spawn_editor(&plan).unwrap().wait().unwrap();
+        assert!(status.success());
+        let seen = std::fs::read_to_string(base.join("seen.txt")).unwrap();
+        assert_eq!(seen.trim_end(), format!("\"{}\"", dir.display()), "one argument, quoted whole");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     fn host(s: &str) -> bool {
         host_path(s, &[])
@@ -356,6 +476,13 @@ mod tests {
             r"\\?\C:\a\..\b",
             r"\\wsl$\Ubuntu\..\..\server\share",
             r"  \\server\share  ",
+            // FIX-2 (council FS1): the NT object form `\??\` is read like `\\?\`
+            r"\??\UNC\server\share\a",
+            r"\??\unc\x.invalid\s",
+            "/??/UNC/server/share",
+            r"\??\GLOBALROOT\Device\Mup\server\share",
+            r"\??\pipe\kolux",
+            r"\??\C:\..\..\UNC\server\share",
         ] {
             assert!(host(p), "{p}");
         }
@@ -368,6 +495,8 @@ mod tests {
             r"\\?\UNC\wsl$\Ubuntu\home",
             r"\\?\C:\very\long\path",
             r"\\?\c:",
+            r"\??\C:\very\long\path",
+            r"\??\UNC\wsl$\Ubuntu\home",
             "file:///C:/Users/me/a.txt",
             "file://localhost/C:/a.txt",
             "file://wsl$/Ubuntu/home",
@@ -382,6 +511,8 @@ mod tests {
         assert!(!host_path(r"\\NAS\projects\repo\src\a.rs", &roots));
         assert!(!host_path(r"\\nas\projects\repo", &roots));
         assert!(!host_path(r"\\?\UNC\nas\projects\repo\a", &roots));
+        assert!(!host_path(r"\??\UNC\nas\projects\repo\a", &roots));
+        assert!(host_path(r"\??\UNC\nas\projects\other", &roots));
         assert!(!host_path("//nas/projects/repo/a", &roots));
         assert!(host_path(r"\\nas\projects\repo2\a", &roots));
         assert!(host_path(r"\\nas\projects\other", &roots));

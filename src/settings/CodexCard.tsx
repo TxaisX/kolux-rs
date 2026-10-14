@@ -7,6 +7,7 @@
 // account Kolux made, and for Codex's own login only explains how to sign out in Codex.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { clearReadFailure, connectFailed, STATUSES_FAILED } from "../onboarding/firstRun";
 import { AttentionNote, fixDoes, fixFor, openInstallPage, type Attention } from "./Attention";
 import { listen } from "@tauri-apps/api/event";
 import VendorMark from "../chrome/VendorMark";
@@ -145,8 +146,11 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
   const [pending, setPending] = useState(false);
   const read = useCallback(() => {
     invoke<CodexView>("codex_accounts")
-      .then(setView)
-      .catch((e) => setError(String(e)));
+      .then((v) => {
+        setView(v);
+        setError(clearReadFailure);
+      })
+      .catch(() => setError(STATUSES_FAILED));
   }, []);
   useEffect(() => {
     read();
@@ -171,7 +175,7 @@ export default function CodexCard({ onConnected = () => {} }: { onConnected?: (o
             ? openInstallPage("codex")
             : invoke("codex_account_sign_in", { device: a.kind === "code", again: null });
     if (a.kind !== "cancel") setPending(true);
-    call.catch((e) => setError(String(e)));
+    call.catch((e) => setError(a.kind === "connect" || a.kind === "code" ? connectFailed("Codex", e) : String(e)));
     // ACCT-002: a choice comes back after 30 seconds even if no answer arrives.
     void settleWithin(call).then(() => {
       setPending(false);

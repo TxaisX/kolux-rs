@@ -9,6 +9,7 @@ import ResourceManager from "../status/ResourceManager";
 import { Chip, Cup, Plug } from "./icons";
 import { STATUS_ITEMS } from "./statusItems";
 import { BAR_EVENT, SHOW_EVENT, currentBar } from "../update/UpdateCenter";
+import { KeepAwakeItem, useKeepAwake } from "../launch/KeepAwakeCard";
 
 type Props = {
   terminals: number;
@@ -29,6 +30,8 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
   const [open, setOpen] = useState(false);
   const [menu, setMenu] = useState<{ left: number; bottom: number } | null>(null);
   const shows = (id: string) => !hidden.includes(id);
+  // TERM-122: shown only while the computer is being kept awake.
+  const awake = useKeepAwake();
   // VIEW-100: the app update item, while an update is offered, downloading, ready or failed.
   const [update, setUpdate] = useState(currentBar);
   useEffect(() => {
@@ -88,6 +91,7 @@ export default function StatusBar({ terminals, agents = 0, names = () => ({}), w
           {agents}
         </span>
       )}
+      {shows("awake") && <KeepAwakeItem held={awake} />}
       {menu && (
         <>
           <div className="menu-backdrop" onClick={() => setMenu(null)} onContextMenu={(e) => (e.preventDefault(), setMenu(null))} aria-hidden="true" />

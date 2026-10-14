@@ -38,10 +38,11 @@ import KeyLostNotice from "./settings/KeyLostNotice";
 import { LAST_SCREEN_FIELD, lastWriter, OPEN_PAGE_FIELD, openPageAt, saveLayout, startScreen, stripOn } from "./settings/general";
 import { cacheDue, cacheMinutes } from "./projects/cache";
 import { OPEN_SETTINGS, openSettings, type SettingsTarget, PAGES, type PageId } from "./settings/pages";
-import WorktreePalette, { dirMark, type PaletteItem } from "./projects/WorktreePalette";
+import WorktreePalette, { dirMark, dirMonitoring, type PaletteItem } from "./projects/WorktreePalette";
 import { navTarget, travel, visit, type Place } from "./projects/nav";
 import LayoutStrip, { type NewTab, type ShellInfo } from "./chrome/LayoutStrip";
 import BrowserPane, { OPEN_IN_BROWSER } from "./browser/BrowserPane";
+import { pageChord } from "./browser/chord";
 import { writerOf } from "./scm/generate";
 import EditorPane, { editors } from "./editor/EditorPane";
 import { baseName, keyOf } from "./editor/buffers";
@@ -60,6 +61,7 @@ import { KitGallery, KitSetup } from "./kits/Kits";
 import Wizard from "./onboarding/Wizard";
 import Guides from "./onboarding/Guides";
 import { ADD_PROJECT } from "./onboarding/firstRun";
+import { startGridTour } from "./onboarding/tour";
 import { KITS, RECALL_KEY, remember, type Kit, type Vendor } from "./kits/catalog";
 import KitStrip from "./kits/KitStrip";
 import { datedName, roleDone, rolePrompt, seatTitle, type RunCheck } from "./kits/run";
@@ -127,8 +129,9 @@ import { useWizard } from "./onboarding/useWizard";
 import { hooksOn } from "./settings/AgentsPage";
 import ToolNotices from "./launch/ToolNotices";
 import { AgentsChat } from "./chat/ChatView";
+import { useTeamsHost, withTeams } from "./launch/teams";
 import PlanSheet from "./terminal/PlanSheet";
-import { draftKey, feedbackMessage, keepDraft, showsReview, stillPending, type PlanDraft } from "./terminal/planReview";
+import { draftKey, feedbackMessage, keepDraft, showsReview, startFeedback, stillPending, type PendingSend, type PlanDraft } from "./terminal/planReview";
 
 export type ShellTarget = { dir: string | null; branch: string | null };
 
@@ -228,7 +231,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   }, []);
   // SAFE-002..004: the pane whose plan is open for review, and each plan's unsent comments.
   // SAFE-007: the sheet holds the plan it opened with, so it can tell when the pane moved on.
-  const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean } | null>(null);
+  // T-032-b: `send` is a Request changes still waiting to go out, which the sheet can cancel.
+  const [reviewing, setReviewing] = useState<{ key: number; plan: string; cut: boolean; send?: PendingSend } | null>(null);
   const [planDrafts, setPlanDrafts] = useState<Record<string, PlanDraft>>({});
   const plan = usePlan(); // USAGE-002: the plan figures the pills read
   const { needs, setNeeds, hook, setHook, stamp, setStamp, turn, setTurn, stale, setStale, context, setContext, crew, setCrew, hookRef, runRef, unreadPanes, setUnreadPanes, unreadDirs, winFocused, markDir } = useAgentStatusState(running);
@@ -255,7 +259,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // held here rather than in the grid; Classic keeps the chooser pane (SESS-019).
   const [sheet, setSheet] = useState<Pane | null>(null);
   // SET-027: everywhere but Settings, only agents that are switched on are offered.
-  const agents = useMemo(() => offeredAgents(allAgents, settings), [allAgents, settings]);
+  const teamsHost = useTeamsHost();
+  const agents = useMemo(() => withTeams(offeredAgents(allAgents, settings), settings, teamsHost), [allAgents, settings, teamsHost]);
   const [dirty, setDirty] = useState<Record<number, boolean>>({}); // EDIT-001: editor tabs with unsaved text
   const [picking, setPicking] = useState<"file" | "markdown" | "change" | null>(null); // EDIT-036 / EDIT-012 / EDIT-027: which file picker is open
   const defaultId = defaultAgentId(settings);
@@ -476,9 +481,15 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   useEffect(() => {
     // A chord from inside a page also makes that page's split the focused one: a click into the
     // page never reaches the app, so the app may still think another split has the keyboard.
+    // Council FIX-3: only a chord pressed in the page (the app's window does not hold the
+    // keyboard) does that or moves the keyboard; one the page's script sent runs page-only actions.
     const un = listen<{ id: number; what: string }>("browser-chord", (e) => {
-      setFocused(e.payload.id);
-      chord.current(e.payload.id, e.payload.what);
+      const { id, what } = e.payload;
+      const plan = pageChord(what, document.hasFocus());
+      if (plan.focusPane) setFocused(id);
+      const run = () => plan.run && chord.current(id, what);
+      if (plan.takeKeyboard) void invoke("browser_go", { id, what: "focusApp" }).finally(run);
+      else run();
     });
     return () => {
       un.then((u) => u());
@@ -1719,27 +1730,33 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   };
   const requestChanges = async (p: Pane, plan: string) => {
     if (!planLive(p, plan)) return;
-    const d = planDrafts[draftKey(p.key, plan)] ?? { comments: [], note: "" };
-    const text = feedbackMessage(d.comments, d.note);
-    setReviewing(null);
-    dropDraft(draftKey(p.key, plan));
-    // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
-    const left = await invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => true, () => false);
-    if (!left) return setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
-    setHook((h) => ({ ...h, [p.key]: "working" }));
-    // SAFE-004: the feedback is typed only once the agent has left its menu; an Enter while the menu
-    // is still open would pick its default, which is Yes (council re-review of chat a969502).
-    const asking = () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission";
-    for (let i = 0; i < 30 && asking(); i++) await new Promise((r) => setTimeout(r, 100));
-    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not typed.");
-    const id = ptys.current[p.key];
-    if (id === undefined || !panesRef.current.some((x) => x.key === p.key)) return;
-    await invoke("terminal_write", { id, data: "\x1b[200~" + text + "\x1b[201~" }).catch(() => {});
-    await new Promise((r) => setTimeout(r, 300));
-    if (asking()) return setToast("The agent is still asking. Answer it in its terminal; your feedback was not sent.");
-    await invoke("terminal_write", { id, data: "\r" }).catch(() => {});
-    setHook((h) => ({ ...h, [p.key]: "working" }));
-    setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+    const key = draftKey(p.key, plan);
+    const d = planDrafts[key] ?? { comments: [], note: "" };
+    const write = (data: string) => {
+      const id = ptys.current[p.key];
+      return id === undefined ? Promise.resolve() : invoke("terminal_write", { id, data }).then(() => {}, () => {});
+    };
+    // SAFE-004 / T-032-b: the send runs as a job (planReview) that the sheet can cancel until Enter.
+    const job = startFeedback(feedbackMessage(d.comments, d.note), {
+      // Claude has no hook for a deny inside its own menu, so the pane leaves "permission" here, as answer() does.
+      deny: () => invoke("agent_answer", { paneKey: p.key, agent: p.agent, approve: false }).then(() => (setHook((h) => ({ ...h, [p.key]: "working" })), true), () => false),
+      asking: () => hookRef.current[p.key] === "waiting" || hookRef.current[p.key] === "permission",
+      type: (text) => write("\x1b[200~" + text + "\x1b[201~"),
+      enter: () => write("\r"),
+      alive: () => ptys.current[p.key] !== undefined && panesRef.current.some((x) => x.key === p.key),
+      wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    });
+    setReviewing((r) => (r && r.key === p.key ? { ...r, send: job } : r));
+    const { outcome, answered, typed } = await job.done;
+    // A cancel before anything went out leaves the sheet open on the draft; any other end closes it.
+    setReviewing((r) => (r?.send === job ? (outcome === "cancelled" && !answered ? { ...r, send: undefined } : null) : r));
+    if (outcome === "sent") {
+      dropDraft(key); // SAFE-004: sending wipes the saved draft; a cancelled send keeps it.
+      setHook((h) => ({ ...h, [p.key]: "working" }));
+      setStamp((m) => ({ ...m, [p.key]: { at: Date.now(), interrupted: false } }));
+    } else if (outcome === "no-answer") setToast("Kolux could not answer the agent. Answer it in its terminal; your feedback was not typed.");
+    else if (outcome === "still-asking") setToast(`The agent is still asking. Answer it in its terminal; your feedback was not ${typed ? "sent" : "typed"}.`);
+    else if (outcome === "cancelled" && answered) setToast(typed ? "Cancelled before sending: your feedback is typed in the agent's prompt but was not sent." : "Cancelled: Claude's plan prompt was dismissed and your feedback was not typed.");
   };
   // GIT-041: every note goes to the workspace's agent (the focused one, else the first) as one
   // pasted message; a note edited while the send was in flight is not marked sent.
@@ -1876,7 +1893,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             prOf={(d) => Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1].pr ?? null}
             atOf={(d) => {
               const row = Object.entries(rowStates).find(([x]) => sameDir(x, d))?.[1];
-              const mark = dirMark(row?.state ?? null, [...unreadDirs].some((x) => sameDir(x, d)));
+              // STAT-024: the radio mark when the folder's working panes only watch background work.
+              const watching = dirMonitoring(panes.filter((p) => sameDir(p.cwd, d)).map((p) => ({ state: hook[p.key], monitoring: turn[p.key]?.monitoring })));
+              const mark = dirMark(row?.state ?? null, [...unreadDirs].some((x) => sameDir(x, d)), watching);
               return mark ? { mark, since: row?.changed ?? 0 } : null;
             }}
             recent={recentDirs.current}
@@ -2091,7 +2110,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               title={nameOf(names, reviewPane.cwd) ?? (reviewPane.cwd ? folderName(reviewPane.cwd) : tabName(reviewPane, titles))}
               plan={reviewing.plan}
               cut={reviewing.cut}
-              closed={!stillPending(hook[reviewPane.key], turn[reviewPane.key], reviewing.plan)}
+              closed={!reviewing.send && !stillPending(hook[reviewPane.key], turn[reviewPane.key], reviewing.plan)}
+              sending={!!reviewing.send}
+              onCancel={() => reviewing.send?.cancel()}
               draft={planDrafts[draftKey(reviewPane.key, reviewing.plan)] ?? { comments: [], note: "" }}
               onDraft={(d) => setPlanDrafts((m) => keepDraft(m, draftKey(reviewPane.key, reviewing.plan), d))}
               onApprove={() => approvePlan(reviewPane, reviewing.plan)}
@@ -2394,7 +2415,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
                     args={p.args}
                     env={p.env}
                     stop={turn[p.key]?.stop}
-                    context={context[p.key] && contextFill(context[p.key], capOn(settings))}
+                    context={context[p.key] ? contextFill(context[p.key], capOn(settings)) : null}
                     focused={p.key === focused}
                     onFocus={() => setFocused(p.key)}
                     onRunning={(on) => {
@@ -2535,7 +2556,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
               if (real) saveSetting(RECALL_KEY, remember(settings, activeDir!, kit, values)[RECALL_KEY]);
               if (activeDir)
                 void startKit(kit, values, assigned, activeDir).then((ok) => {
-                  if (ok && fromWizard) endWizard("completed");
+                  if (ok && fromWizard) endWizard("completed", startGridTour); // ONB-012
                   if (ok && chooser !== null) closePane(chooser);
                 });
             }}
