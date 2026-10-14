@@ -2,8 +2,9 @@
 // inline, with whitespace-only changes hidden and long lines unwrapped; the actions menu turns
 // either on. F7 and Shift+F7 (App's shortcut router, `diffNav`) step through the changes. An
 // unstaged diff's right side is the working file itself, kept in the shared buffer (buffers.ts), so
-// it can be edited and Mod+S writes the file. The sides are read again every two seconds while the
-// tab is in front, so a change made in a terminal, or a stage made elsewhere, shows without
+// it can be edited and Mod+S writes the file. The sides are read again whenever git state moves
+// (the git status watcher, scm/watch.ts) while the tab is in front, or when it comes to the front
+// after a move, so a change made in a terminal, or a stage made elsewhere, shows without
 // reopening. A markdown file's diff is source text, never the rich view. GIT-040: a review note
 // hangs under a line of the new side, in both layouts; the plus in the note gutter or Mod+Shift+A
 // on a selection opens the note popover.
@@ -20,6 +21,7 @@ import { ChevronDown, Close, Dots, FileCode, TRASH_PATH } from "../chrome/icons"
 import { attach, baseName, detach, isDirty, relay, replaceAll, subscribe, textOf } from "./buffers";
 import { editors, look, saveFile, StaleNotice } from "./EditorPane";
 import { editedText, type LineNote } from "./diffNotes";
+import { watchStatus } from "../scm/watch";
 
 /** Next (1) or previous (-1) change, by pane key; App's F7 and Shift+F7 call the focused one. */
 export const diffNav = new Map<number, (dir: 1 | -1) => void>();
@@ -157,7 +159,15 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
   });
   const notesKey = JSON.stringify(notes);
 
-  // The sides, now and every two seconds while the tab is in front.
+  // The sides, now and whenever git state moves; a move while the tab is hidden is read on its return.
+  const missed = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!hidden && missed.current) {
+      const f = missed.current;
+      missed.current = null;
+      f();
+    }
+  }, [hidden]);
   useEffect(() => {
     let alive = true;
     setError(null);
@@ -167,11 +177,14 @@ export default function DiffPane({ id, path, staged, hidden = false, focused = f
         (err) => alive && setError(String(err)),
       );
     void fetch();
-    // ponytail: a 2 s poll stands in for a git status watcher; swap in Source Control's watcher once it exists
-    const t = window.setInterval(() => front.current && void fetch(), 2000);
+    const stop = watchStatus(path, () => {
+      if (front.current) void fetch();
+      else missed.current = () => void fetch();
+    });
     return () => {
       alive = false;
-      window.clearInterval(t);
+      missed.current = null;
+      stop();
     };
   }, [path, staged, tries]);
 
