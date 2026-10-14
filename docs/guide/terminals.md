@@ -166,4 +166,4 @@ On Windows, the main key is Ctrl. You can change every shortcut in Settings (see
 | Ctrl+Shift+C | Copy selection |
 | Ctrl+Shift+A | Select all terminal text |
 
-<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/permissionAnswer.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts at 944b6cb -->
+<!-- verified against: src/chrome/LayoutStrip.tsx, src/chrome/TopBar.tsx, src/App.tsx, src/terminal/TerminalPane.tsx, src/terminal/PaneMenu.tsx, src/terminal/paste.ts, src/terminal/permissionAnswer.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/status.ts, src/terminal/layout.ts, src/launch/ChooserPane.tsx, src/keys/actions.ts at 3e09a0f -->

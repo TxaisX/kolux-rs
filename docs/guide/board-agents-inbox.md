@@ -23,7 +23,7 @@ Lanes run left to right. A lane is drawn only when it holds a card.
 | State | Lane | Line on the card |
 |---|---|---|
 | Needs permission | Needs you | The tool and detail, with Approve and Deny |
-| Asked a question | Needs you | "Question" |
+| Asked a question | Needs you | Every question it asked, joined by " · " ("Which framework? · Which database?") |
 | Blocked | Stopped | The cause: "Limit reached · resets at …", "Sign in again", or "The AI hit an error" |
 | Interrupted | Stopped | "Interrupted" |
 | Exited | Stopped | "Exited" |
@@ -81,7 +81,7 @@ The same words appear in pane headers, tabs, the sidebar, the Board and the Inbo
 |---|---|
 | Working | The agent is working on its turn |
 | Working (background) | The turn is over, but Kolux is watching the agent's background tasks. Shown as "Working" |
-| Needs you | It asked a question, or needs permission for a tool. The first line of the question or plan shows with it |
+| Needs you | It asked a question, or needs permission for a tool. Every question it asked shows with it; for a plan, its first line |
 | Blocked | It cannot go on: a limit, a sign-in or an error. Open the pane to see why |
 | Interrupted | The turn was stopped before it finished: you pressed Esc or Ctrl+C and no finish arrived within about 3 seconds. If the agent then starts a new step, it goes back to Working, so a Ctrl+C that only cleared what you were typing does not leave it Interrupted. Otherwise it stays until your next prompt |
 | Failed | The program could not start |
@@ -123,4 +123,4 @@ Settings, Notifications has three switches and a sound choice (System default, C
 
 The pill in the top bar shows how much of your weekly allowance is left for each installed AI program, for example "Claude 80% left". It is read-only. Hover for the weekly limit and when it resets. It tints as the allowance runs down (warning at 70% used, danger above 90%). See [Getting started](getting-started.md) for the full description.
 
-<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src-tauri/src/status.rs at 5004094 -->
+<!-- verified against: src/board/chip.ts, src/App.tsx, src/agents/AgentsRail.tsx, src/agents/rail.ts, src/inbox/inbox.ts, src/inbox/InboxView.tsx, src/terminal/status.ts, src/terminal/notify.ts, src/status/useAgentStatus.ts, src/usage/meter.ts, src-tauri/src/status.rs at 64f50c8 -->
