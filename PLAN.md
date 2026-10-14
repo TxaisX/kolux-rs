@@ -672,7 +672,7 @@ foundations every later card stands on; the cards they touch are finished in the
 
 ### P2 · theme 11 · Orchestration and automations (8 cards)
 
-- [ ] T-288 · PROJ-036 Linked issues can start with a per-project issue command
+- [x] T-288 · PROJ-036 Linked issues can start with a per-project issue command · done 2026-10-13 (lane/setup from 0819c57; evidence/T-288.txt: kolux.yaml issueCommand or the per-user .kolux/issue-command override, local wins; the issue number and address filled in, never the title; 3 cargo + 2 vitest tests; lib.rs registration and the composer call are coordinator hunks in the commit body, so no live run yet)
 - [x] T-289 · TERM-036 Copy session, terminal and pane IDs · TERM-096 Links to other terminals and orchestration tasks (first part: Copy Session ID in the pane menu once the agent's hooks name its session, Copy Terminal ID and Copy Pane ID always, each with a success notice or a failure notice and never both; a whole-word term-N that names an open terminal is a link that opens its pane, and anything else stays plain text)
 - [ ] T-289-b · the rest of T-289's cards: printed orchestration task references (task-N) opening that task, once the window has a view of orchestration tasks
 - [x] T-290 · ORCH-043 Kolux checks whether each agent has the orchestration skill

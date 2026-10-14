@@ -30,7 +30,18 @@ pub fn setup_script(yaml: &str) -> Option<String> {
 
 /// `scripts.<key>` from kolux.yaml's text, read the way `setup_script` reads `scripts.setup`.
 pub fn scripts_entry(yaml: &str, key: &str) -> Option<String> {
+    yaml_entry(yaml, Some("scripts"), key)
+}
+
+/// PROJ-036: a top-level kolux.yaml value such as `issueCommand`, read the same way.
+pub fn top_entry(yaml: &str, key: &str) -> Option<String> {
+    yaml_entry(yaml, None, key)
+}
+
+/// `key` at the top level (`parent` None) or one level under `parent:`; plain, quoted or block.
+fn yaml_entry(yaml: &str, parent: Option<&str>, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
+    let head = parent.map(|p| format!("{p}:"));
     let indent = |l: &str| l.len() - l.trim_start().len();
     let lines: Vec<&str> = yaml.lines().map(|l| l.trim_end_matches('\r')).collect();
     let mut in_scripts = false;
@@ -40,12 +51,14 @@ pub fn scripts_entry(yaml: &str, key: &str) -> Option<String> {
             continue;
         }
         let ind = indent(line);
-        if ind == 0 {
-            in_scripts = t == "scripts:";
-            continue;
-        }
-        if !in_scripts {
-            continue;
+        match &head {
+            Some(h) if ind == 0 => {
+                in_scripts = t == h;
+                continue;
+            }
+            Some(_) if !in_scripts => continue,
+            None if ind > 0 => continue,
+            _ => {}
         }
         let Some(rest) = t.strip_prefix(prefix.as_str()) else { continue };
         let rest = rest.trim();
@@ -138,6 +151,58 @@ pub fn workspace_setup(path: String) -> Result<Option<SetupLine>, String> {
     let Some(script) = setup_script(&text) else { return Ok(None) };
     let configured = crate::pty::auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)).into_iter().next().map(|(p, _)| p);
     setup_line(&script, cfg!(windows), configured.as_deref(), find_posix).map(Some)
+}
+
+/// PROJ-036 / COMPAT 5.6: the per-user issue command, a file in the repository's .kolux folder
+/// (kept out of git by the user); its whole text is the command. It wins over kolux.yaml's.
+pub const ISSUE_OVERRIDE: &str = ".kolux/issue-command";
+/// PROJ-036: kolux.yaml's shared issue command key (COMPAT 5.6).
+pub const ISSUE_KEY: &str = "issueCommand";
+
+/// PROJ-036: the issue command for a workspace at `worktree` of the repository at `root`, and
+/// whether it is the shared one: the local override (main folder first, then the worktree's own)
+/// wins; else `issueCommand` from the worktree's kolux.yaml, else the main folder's.
+pub fn issue_command(root: &Path, worktree: &Path) -> Option<(String, bool)> {
+    let read = |p: PathBuf| std::fs::read_to_string(p).ok().map(|t| t.trim_start_matches('\u{feff}').trim().replace("\r\n", "\n")).filter(|t| !t.is_empty());
+    if let Some(local) = read(root.join(ISSUE_OVERRIDE)).or_else(|| read(worktree.join(ISSUE_OVERRIDE))) {
+        return Some((local, false));
+    }
+    [worktree, root].iter().find_map(|d| std::fs::read_to_string(d.join(crate::include::CONFIG_FILE)).ok().and_then(|y| top_entry(&y, ISSUE_KEY))).map(|c| (c, true))
+}
+
+/// PROJ-036: the issue filled into the command: `{{issue}}` becomes its number and `{{issueUrl}}`
+/// its address (only an address of plain URL characters; anything else becomes empty, so nothing
+/// from GitHub can reach the shell as code); a command with neither gets the number as its last
+/// word. The issue's title is never put in: anyone can write it.
+pub fn fill_issue(command: &str, number: u64, url: &str) -> String {
+    let safe = url.starts_with("https://") && url.chars().all(|c| c.is_ascii_alphanumeric() || "-._~:/".contains(c));
+    let url = if safe { url } else { "" };
+    if command.contains("{{issue}}") || command.contains("{{issueUrl}}") {
+        command.replace("{{issueUrl}}", url).replace("{{issue}}", &number.to_string())
+    } else {
+        format!("{} {number}", command.trim_end())
+    }
+}
+
+/// PROJ-036: what runs the issue command, and where it came from (a shared one needs the
+/// repository's trust first, SAFE-025).
+#[derive(serde::Serialize, Debug, PartialEq, Clone)]
+pub struct IssueRun {
+    pub line: SetupLine,
+    pub shared: bool,
+    pub command: String,
+}
+
+/// PROJ-036: the issue command for issue `number` in the new workspace at `path` of the
+/// repository at `root`; None when the project has none; an error when it cannot run as written.
+// ponytail: registered in lib.rs by the coordinator (hunk in the T-288 commit); until then only the tests call it.
+#[allow(dead_code)]
+#[tauri::command(async)]
+pub fn workspace_issue_command(root: String, path: String, number: u64, url: String) -> Result<Option<IssueRun>, String> {
+    let Some((command, shared)) = issue_command(Path::new(&root), Path::new(&path)) else { return Ok(None) };
+    let configured = crate::pty::auto_shells(crate::agents::find_program, std::env::var_os("ComSpec").map(PathBuf::from)).into_iter().next().map(|(p, _)| p);
+    let line = setup_line(&fill_issue(&command, number, &url), cfg!(windows), configured.as_deref(), find_posix).map_err(|e| e.replacen("The setup script", "The issue command", 1))?;
+    Ok(Some(IssueRun { line, shared, command }))
 }
 
 /// VIEW-112: a config file is read only up to this size; a larger one is refused before parsing.
@@ -408,5 +473,48 @@ mod tests {
         assert_eq!(setup_script(&std::fs::read_to_string(dir.join("kolux.yaml")).unwrap()).as_deref(), Some("pnpm i"));
         assert!(setup_imports(&dir).is_empty(), "nothing is offered twice");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn proj036_the_issue_command_is_kolux_yamls_top_level_entry() {
+        assert_eq!(top_entry("scripts:\n  setup: x\nissueCommand: 'claude \"fix #{{issue}}\"'\nnext: claude # a comment\n", ISSUE_KEY).as_deref(), Some("claude \"fix #{{issue}}\""));
+        assert_eq!(top_entry("issueCommand: |\r\n  #!/bin/sh\r\n  gh issue view {{issue}}\r\nnext: 1\r\n", ISSUE_KEY).as_deref(), Some("#!/bin/sh\ngh issue view {{issue}}"));
+        assert_eq!(top_entry("scripts:\n  issueCommand: nested\n", ISSUE_KEY), None, "only the top level counts");
+        assert_eq!(scripts_entry("issueCommand: top\nscripts:\n  setup: s\n", "issueCommand"), None);
+        assert_eq!(setup_script("issueCommand: x\nscripts:\n  setup: s\n").as_deref(), Some("s"), "setup still reads under scripts");
+        assert_eq!(top_entry("issueCommand: ''\n", ISSUE_KEY), None);
+        assert_eq!(top_entry("issueCommand: gh issue develop # a comment\n", ISSUE_KEY).as_deref(), Some("gh issue develop"));
+    }
+
+    #[test]
+    fn proj036_the_issue_is_filled_in_and_its_title_never_reaches_the_shell() {
+        let url = "https://github.com/o/r/issues/12";
+        assert_eq!(fill_issue("work {{issue}} at {{issueUrl}}", 12, url), "work 12 at https://github.com/o/r/issues/12");
+        assert_eq!(fill_issue("gh issue develop\n", 12, url), "gh issue develop 12", "no placeholder: the number goes last");
+        assert_eq!(fill_issue("open {{issueUrl}}", 12, "https://x/$(rm -rf ~)"), "open ", "an address with shell characters is dropped");
+        assert_eq!(fill_issue("open {{issueUrl}}", 12, "file:///c/x"), "open ");
+    }
+
+    #[test]
+    fn proj036_a_create_from_issue_12_runs_the_command_and_the_local_one_wins() {
+        let root = tree(&[("kolux.yaml", b"issueCommand: echo shared {{issue}}\n")]);
+        let wt = tree(&[("kolux.yaml", b"issueCommand: echo worktree {{issue}}\n")]);
+        let run = |r: &PathBuf, w: &PathBuf| workspace_issue_command(r.to_string_lossy().into_owned(), w.to_string_lossy().into_owned(), 12, "https://github.com/o/r/issues/12".into()).unwrap();
+        let got = run(&root, &wt).expect("a shared issue command");
+        assert!(got.shared);
+        assert_eq!(got.line.script, "echo worktree 12", "the worktree's own kolux.yaml is read first");
+        assert!(got.line.args.last().unwrap().contains("echo worktree 12"));
+        let bare = tree(&[("README.md", b"x")]);
+        assert_eq!(run(&root, &bare).unwrap().line.script, "echo shared 12", "else the main folder's");
+        std::fs::create_dir_all(root.join(".kolux")).unwrap();
+        std::fs::write(root.join(ISSUE_OVERRIDE), "\u{feff}echo local {{issue}}\r\n").unwrap();
+        let got = run(&root, &wt).unwrap();
+        assert!(!got.shared, "the local override wins over both shared ones");
+        assert_eq!(got.line.script, "echo local 12");
+        assert_eq!(got.command, "echo local {{issue}}");
+        assert_eq!(run(&bare, &bare), None, "no issue command, nothing runs");
+        for d in [root, wt, bare] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 }
