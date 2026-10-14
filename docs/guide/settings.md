@@ -174,7 +174,7 @@ A number you type is corrected to the nearest allowed value when you press Enter
 | Copy on select | Off | `terminalCopyOnSelect` |
 | Right-click pastes (or copies the selection) | Off | `terminalRightClickPaste` |
 
-For now a right-click paste skips the checks a Ctrl+V paste gets, such as the size limit and the safe way of pasting several lines, so leave it off unless you need it.
+A right-click paste gets the same checks as a Ctrl+V paste: the size limit, the safe way of pasting several lines and the "Paste N lines?" question (see [Terminals](terminals.md#paste-and-copy)).
 
 ### Default shell
 
@@ -236,4 +236,4 @@ The "Shortcuts in terminals" card decides who gets a key while you type in a ter
 
 Each project has two settings: "New workspaces start from" (blank means the default branch) and "Workspaces folder" (blank means the global folder). The page notes that setup scripts, the display name and the icon come later.
 
-<!-- verified against: src/settings/pages.ts, src/settings/GeneralPage.tsx, src/settings/AppearancePage.tsx, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/GitPage.tsx, src/settings/NotificationsPage.tsx, src/settings/privacy.ts, src/settings/RepoPage.tsx, src/keys/actions.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/closing.ts, src/terminal/text.ts, src/settings/SettingsPage.tsx, src/settings/TerminalPage.tsx, src/settings/ShortcutsPage.tsx, src/settings/search.ts, src/settings/zoom.ts, src/keys/terminalPolicy.ts, src/chrome/chromeItems.ts, src-tauri/src/keybindings.rs, src-tauri/src/pty.rs at aaafe20 -->
+<!-- verified against: src/settings/pages.ts, src/settings/GeneralPage.tsx, src/settings/AppearancePage.tsx, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/GitPage.tsx, src/settings/NotificationsPage.tsx, src/settings/privacy.ts, src/settings/RepoPage.tsx, src/keys/actions.ts, src/terminal/pin.ts, src/terminal/remove.ts, src/terminal/closing.ts, src/terminal/text.ts, src/settings/SettingsPage.tsx, src/settings/TerminalPage.tsx, src/settings/ShortcutsPage.tsx, src/settings/search.ts, src/settings/zoom.ts, src/keys/terminalPolicy.ts, src/chrome/chromeItems.ts, src-tauri/src/keybindings.rs, src-tauri/src/pty.rs, src/terminal/TerminalPane.tsx, src/terminal/paste.ts at 2c8b9d8 -->

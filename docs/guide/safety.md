@@ -54,6 +54,10 @@ The Kolux window reads and writes files only in two places: inside your projects
 
 When you do hit the fence, the editor says "<path> is outside your projects; Kolux reads and writes only inside them". It then offers **Open this file anyway**, which grants that one file for this session and nothing beneath it. Clicking a link to a program reveals it in its folder instead of running it.
 
+Kolux decides what counts as a program from a fixed list of file types, not from what Windows would do with the file. The list covers scripts and installers and also remote-desktop shortcuts (`.rdp`), Windows Sandbox files (`.wsb`), update packages (`.msu`), provisioning packages (`.ppkg`), `.appref-ms` shortcuts and disk images (`.iso`, `.img`, `.vhd`, `.vhdx`). Opening a file this way needs a full path to a file that exists; a folder, a relative path or a missing file is refused. A name holding a hidden control character is refused too, because Windows can read such a name as a different file than the one shown.
+
+**Show in file manager** in Source Control stays inside the workspace. Kolux checks each folder on the way to the file, and if any of them is a link (a symbolic link or junction), it refuses with an error saying the path "goes through a link that leads outside the worktree" and opens nothing, so a link cannot lead the file manager to a folder elsewhere. If the file or its folders have been deleted, it shows the nearest folder that still exists, as before. A workspace path that points at another computer is refused as well.
+
 ## Secrets
 
 - Saved keys and sign-ins are sealed by the system keyring (Windows' secret store). There is no plain-text fallback.
@@ -74,4 +78,4 @@ Nothing about your use. The list of outside connections is in Settings, General,
 
 Kolux pre-trusts the workspaces it creates, for Claude and Codex, so an agent's first prompt is not swallowed by a "do you trust this folder" question. Only workspaces Kolux made are pre-trusted. Pre-trust for Cursor and Copilot is not built.
 
-<!-- verified against: src-tauri/src/protected.rs, src-tauri/src/hooks.rs, src-tauri/src/fence.rs, src-tauri/src/links.rs, src-tauri/src/files.rs, src-tauri/src/cli.rs, src-tauri/src/trust.rs, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/privacy.ts at 07c5d80 -->
+<!-- verified against: src-tauri/src/protected.rs, src-tauri/src/hooks.rs, src-tauri/src/fence.rs, src-tauri/src/links.rs, src-tauri/src/files.rs, src-tauri/src/cli.rs, src-tauri/src/trust.rs, src/settings/AgentsPage.tsx, src-tauri/src/agents.rs, src/settings/privacy.ts, src-tauri/src/scm.rs at 2c8b9d8 -->

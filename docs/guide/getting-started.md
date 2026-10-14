@@ -76,7 +76,7 @@ The bar across the top is 36 pixels tall and replaces the Windows title bar. Dra
 
 | Control | What it does |
 |---|---|
-| Kolux mark | Names the app. Not clickable |
+| Kolux mark | Opens the Kolux menu (File, Edit, View, Window, Help). See the next section |
 | Menu (dots) | Opens a "View" menu with Zoom In, Zoom Out and Reset Size. They act on the focused terminal |
 | Sidebar button | Hides or shows the project sidebar (Ctrl+B) |
 | Back / Forward | Return to the last workspace or page you were on, and go forward again (Ctrl+Alt+Left, Ctrl+Alt+Right) |
@@ -92,6 +92,20 @@ The usage pill turns to a warning tint at 70% used and a danger tint above 90%. 
 In the Classic look (Settings, Appearance) the screen switcher is absent and the window stays on Terminals.
 
 Press Escape to leave a full page such as the Inbox.
+
+### The Kolux menu
+
+Click the Kolux mark at the left end of the top bar (its tooltip says "Kolux menu"). A menu opens under it with the usual menu names. The window has no menu bar across the top, so this is where they live. Where a command has a keyboard shortcut, the menu shows it as a hint, and it follows any shortcut you change on the Shortcuts page.
+
+| Menu | What is in it |
+|---|---|
+| File | **Settings...** opens Settings (Ctrl+, by default). **Exit** closes the window the way its close button does, which stops every terminal |
+| Edit | Undo, Redo, Cut, Copy, Paste, Select All. In a text box they act on the text. In a terminal pane only **Copy** (the selected text; nothing is copied when nothing is selected) and **Select All** work; Undo, Redo and Cut do nothing there. **Paste** does nothing yet from this menu: use Ctrl+V |
+| View | **Workspace View** has Agents, Board and Terminals with the current screen ticked (absent in the Classic look). **Appearance** has Toggle Left Sidebar, Toggle Right Sidebar and four ticks: Show Status Bar, Show Tasks Button, Show Automations Button and Show Titlebar App Name. Each tick matches its switch in [Settings](settings.md) and changes it. Then come Reload, Force Reload (Ctrl+Shift+R), Toggle Developer Tools (does nothing in the released app), Actual Size, Zoom In, Zoom Out and Toggle Full Screen |
+| Window | Minimize, and Zoom (which maximizes the window) |
+| Help | **About Kolux** shows the version. The other Help items (Report Crash, Explore Kolux, Getting Started, Check for Updates) are not in the menu yet |
+
+The menu's Zoom In, Zoom Out and Actual Size change the whole interface size, the same one as "Zoom: Interface size" in Settings, Appearance. The dots menu described above, in contrast, acts on the focused terminal.
 
 ## The views
 
@@ -127,4 +141,4 @@ More detail is in [Projects and worktrees](projects-and-worktrees.md).
 
 Other ways in: press Ctrl+T for a plain shell, or use "New tab" and "Choose agent…" to pick the AI, model and number of sessions before anything starts.
 
-<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts, src/onboarding/Guides.tsx, src/onboarding/HelpMenu.tsx, src/onboarding/Tours.tsx, src/onboarding/guide.ts, src/onboarding/tour.ts, src-tauri/src/onboarding.rs, src/skills/SkillsPage.tsx, src/skills/skills.ts, src/skills/nav.ts, src/projects/SkillsRow.tsx, src/projects/HideableRow.tsx, src/chrome/chromeItems.ts, src-tauri/src/skills.rs at aaafe20 -->
+<!-- verified against: src/onboarding/Wizard.tsx, src/chrome/TopBar.tsx, src/usage/meter.ts, src/usage/ClaudePill.tsx, src/usage/CodexPill.tsx, src/settings/general.ts, src/projects/AddProject.tsx, src/projects/ProjectsPanel.tsx, src/launch/PlusMenu.tsx, src/keys/actions.ts, src/onboarding/Guides.tsx, src/onboarding/HelpMenu.tsx, src/onboarding/Tours.tsx, src/onboarding/guide.ts, src/onboarding/tour.ts, src-tauri/src/onboarding.rs, src/skills/SkillsPage.tsx, src/skills/skills.ts, src/skills/nav.ts, src/projects/SkillsRow.tsx, src/projects/HideableRow.tsx, src/chrome/chromeItems.ts, src-tauri/src/skills.rs, src-tauri/src/menu.rs, src/chrome/useChrome.ts at 2c8b9d8 -->
