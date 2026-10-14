@@ -15,7 +15,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ChevronDown, Close, FileCode, FolderPlus, Plus, Search } from "../chrome/icons";
+import { ChevronDown, Close, Expand, FileCode, FolderPlus, Plus, Search } from "../chrome/icons";
+import { loadTargets, openIn, type Target } from "./openIn";
 import ContentSearch from "./ContentSearch";
 import { useKeymap } from "../keys/KeymapContext";
 import { matchEvent } from "../keys/keymap";
@@ -109,6 +110,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
   // brings the search forward (with its text selected) while the explorer is shown.
   const [searching, setSearching] = useState(false);
   const [searchAsk, setSearchAsk] = useState(0);
+  // EDIT-043: the Open in menu (null while closed) and the last launch that failed.
+  const [openTargets, setOpenTargets] = useState<{ list: Target[]; x: number; y: number } | null>(null);
+  const [openErr, setOpenErr] = useState<string | null>(null);
   useEffect(() => {
     if (hidden) return;
     const key = (e: KeyboardEvent) => {
@@ -502,6 +506,9 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
         <button className={`ib${searching ? " on" : ""}`} onClick={() => (setSearching(!searching), setSearchAsk((n) => n + 1))} aria-pressed={searching} title="Search file contents (Ctrl+Shift+F)" aria-label="Search file contents">
           <Search size={12} />
         </button>
+        <button className="ib" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); if (openTargets) setOpenTargets(null); else void loadTargets().then((list) => setOpenTargets({ list, x: r.left, y: r.bottom + 4 })); }} aria-expanded={!!openTargets} aria-haspopup="menu" title="Open this folder in another app" aria-label="Open in">
+          <Expand size={12} />
+        </button>
         <button className="ib" onClick={() => startNew(false)} title="New file" aria-label="New file">
           <Plus size={12} />
         </button>
@@ -512,6 +519,23 @@ export default function Explorer({ root, hidden, focusAsk, onOpen, onClose }: Pr
           <Close size={12} />
         </button>
       </header>
+      {openTargets && (
+        <div className="menu open-in-menu" role="menu" aria-label="Open in" style={{ left: openTargets.x, top: openTargets.y }} onKeyDown={(e) => e.key === "Escape" && setOpenTargets(null)}>
+          {openTargets.list.map((t) => (
+            <button key={t.label} role="menuitem" className="menu-item" onClick={() => (setOpenTargets(null), setOpenErr(null), void openIn(root, t).catch((err) => setOpenErr(`${t.label} did not open: ${err}`)))}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {openErr && (
+        <div className="notice load-failed" role="alert">
+          {openErr}
+          <button className="btn" onClick={() => setOpenErr(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {failed[root] && (
         <div className="notice load-failed" role="alert">
           The folder did not load: {failed[root]}

@@ -529,3 +529,169 @@ mod tests {
         assert!(read_text(&d.join("bin")).unwrap_err().contains("not UTF-8"));
     }
 }
+
+// ---- EDIT-043 (T-237-a): Open in another app ----
+use std::path::PathBuf;
+/// EDIT-043 (T-237-a): opens a project folder in another app or the system file manager. `command`
+/// is the app's launch command (the user's own, from General settings; the window falls back to
+/// VS Code's when a row has none); none at all opens the file manager. A relative or missing path
+/// is refused, and a launch that fails comes back as an error for the window to show.
+#[allow(dead_code)] // live once lib.rs registers files::open_in (coordinator hunk); drop this line then
+#[tauri::command(async)]
+pub fn open_in(path: String, command: Option<String>, fence: tauri::State<'_, crate::fence::Fence>, store: tauri::State<'_, std::sync::Mutex<crate::state::Store>>, git: tauri::State<'_, crate::git::Git>) -> Result<(), String> {
+    checked_folder(&path)?;
+    let command = command.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    if let Some(c) = &command {
+        let settings = store.lock().map_err(|e| e.to_string())?.settings();
+        if !saved_command(&settings, c) {
+            return Err(format!("{c} is not one of the apps under General settings, so it was not run"));
+        }
+    }
+    let dir = fence.allow(&path, &store, &git, false)?;
+    match command.as_deref() {
+        None => crate::artifacts::system_open(&dir.to_string_lossy()),
+        Some(c) => launch_in(&dir, c, std::env::var_os("PATH")),
+    }
+}
+
+/// EDIT-043: only a full path to something that exists is opened.
+pub fn checked_folder(path: &str) -> Result<PathBuf, String> {
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err(format!("{path} is not a full path, so it was not opened"));
+    }
+    if !p.exists() {
+        return Err(format!("{path} does not exist"));
+    }
+    Ok(p.to_path_buf())
+}
+
+/// A launch command split into the program and its arguments; double quotes group words.
+pub fn split_command(cmd: &str) -> Vec<String> {
+    let (mut out, mut word, mut quoted, mut any) = (Vec::new(), String::new(), false, false);
+    for ch in cmd.chars() {
+        match ch {
+            '"' => {
+                quoted = !quoted;
+                any = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if any {
+                    out.push(std::mem::take(&mut word));
+                    any = false;
+                }
+            }
+            c => {
+                word.push(c);
+                any = true;
+            }
+        }
+    }
+    if any {
+        out.push(word);
+    }
+    out
+}
+
+/// The program a launch command names: a full path as it is, else the first match on `path_var`
+/// (on Windows trying each of .exe, .cmd, .bat, .com, the way a shell would).
+pub fn find_program(program: &str, path_var: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let exts: &[&str] = if cfg!(windows) { &["", ".exe", ".cmd", ".bat", ".com"] } else { &[""] };
+    let given = Path::new(program);
+    if given.components().count() > 1 || given.is_absolute() {
+        return exts.iter().map(|e| PathBuf::from(format!("{program}{e}"))).find(|p| p.is_file());
+    }
+    let dirs = path_var.map(|v| std::env::split_paths(&v).collect::<Vec<_>>()).unwrap_or_default();
+    dirs.iter().flat_map(|d| exts.iter().map(move |e| d.join(format!("{program}{e}")))).find(|p| p.is_file())
+}
+
+/// Starts `command` with `dir` as its last argument, without a console window. Batch launchers
+/// (VS Code's `code` is one) get the standard library's batch-argument escaping, which refuses an
+/// argument it cannot pass safely instead of handing it to the shell.
+pub fn launch_in(dir: &Path, command: &str, path_var: Option<std::ffi::OsString>) -> Result<(), String> {
+    let parts = split_command(command);
+    let Some(name) = parts.first() else { return Err("the launch command is empty".into()) };
+    let program = find_program(name, path_var).ok_or_else(|| format!("{name} was not found; check the app's launch command in General settings"))?;
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(&parts[1..]).arg(dir).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd.spawn().map(|_| ()).map_err(|e| format!("{name} did not start: {e}"))
+}
+
+/// EDIT-043: the window may only run VS Code's command or one the user saved under General
+/// settings (openInApps), so a page cannot hand this command a program of its own.
+pub fn saved_command(settings: &serde_json::Value, cmd: &str) -> bool {
+    cmd == "code" || settings["openInApps"].as_array().is_some_and(|a| a.iter().any(|r| r["command"].as_str().map(str::trim) == Some(cmd)))
+}
+
+#[cfg(test)]
+mod open_in_tests {
+    use super::*;
+
+    #[test]
+    fn edit043_relative_or_missing_paths_are_refused() {
+        assert!(checked_folder("relative\\folder").unwrap_err().contains("not a full path"));
+        let gone = std::env::temp_dir().join("kolux-edit043-not-there-7f3a");
+        assert!(checked_folder(&gone.to_string_lossy()).unwrap_err().contains("does not exist"));
+        assert!(checked_folder(&std::env::temp_dir().to_string_lossy()).is_ok());
+    }
+
+    #[test]
+    fn edit043_launch_commands_split_on_spaces_with_quotes_grouping() {
+        assert_eq!(split_command("code"), vec!["code"]);
+        assert_eq!(split_command("  code   -n "), vec!["code", "-n"]);
+        assert_eq!(split_command(r#""C:\Program Files\Zed\zed.exe" --new"#), vec![r"C:\Program Files\Zed\zed.exe", "--new"]);
+        assert_eq!(split_command(r#"app """#), vec!["app", ""]);
+        assert!(split_command("   ").is_empty());
+    }
+
+    #[test]
+    fn edit043_a_launcher_runs_with_the_folder_and_a_missing_one_is_reported() {
+        let base = std::env::temp_dir().join(format!("kolux-edit043-{}", std::process::id()));
+        let bin = base.join("bin");
+        let work = base.join("my work");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        let out = base.join("got.txt");
+        #[cfg(windows)]
+        std::fs::write(bin.join("fakeed.cmd"), format!("@echo %~1> \"{}\"\r\n", out.display())).unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let f = bin.join("fakeed");
+            std::fs::write(&f, format!("#!/bin/sh\necho \"$1\" > \"{}\"\n", out.display())).unwrap();
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = Some(bin.clone().into_os_string());
+        assert!(find_program("fakeed", path.clone()).is_some());
+        launch_in(&work, "fakeed", path.clone()).unwrap();
+        let mut got = String::new();
+        for _ in 0..100 {
+            if let Ok(s) = std::fs::read_to_string(&out) {
+                if !s.trim().is_empty() {
+                    got = s;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(got.trim(), work.to_string_lossy());
+        let err = launch_in(&work, "no-such-editor-edit043", path).unwrap_err();
+        assert!(err.contains("no-such-editor-edit043 was not found"), "{err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn edit043_only_vs_code_or_a_saved_app_command_is_run() {
+        let none = serde_json::json!({});
+        assert!(saved_command(&none, "code"));
+        assert!(!saved_command(&none, "cmd /c calc"));
+        let saved = serde_json::json!({ "openInApps": [{ "label": "Zed", "command": " zed " }] });
+        assert!(saved_command(&saved, "zed"));
+        assert!(!saved_command(&saved, "zed --evil"));
+    }
+}
