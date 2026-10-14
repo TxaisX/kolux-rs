@@ -6,15 +6,19 @@
 // backdrop, so it is never clipped by the pane or sidebar card it opens from. SESS-009: Claude Code,
 // Codex and Grok lead and the rest fold behind "Show more agents" (folded again on each open); the
 // search box reaches every installed agent; a blank-terminal row and "Manage agents" sit at the foot.
+// SESS-039: opened from a pane with a worktree folder, it also offers "Open in <editor>" for each
+// outside editor installed (editors.ts).
 import { useState, type CSSProperties } from "react";
 import VendorMark, { type Agent } from "../chrome/VendorMark";
 import { Kbd, useLabel } from "../keys/KeymapContext";
 import { agentRows, MAX_SEARCH, searchAgents, wantsTerminal, type AgentPass } from "./agents";
+import { openIn, openLabel, openTitle, useEditors, type Editor } from "./editors";
 
 export type AgentInfo = { id: string; name: string; program: string; args: string[]; installed: boolean; path: string | null; docs?: boolean };
 
 /** Which vendor mark an agent id draws; anything unknown gets the plain-shell glyph. */
 export function markFor(id: string): Agent {
+  if (id === "claude-agent-teams") return "claude";
   return id === "claude" || id === "codex" ? id : "shell";
 }
 
@@ -49,10 +53,17 @@ type Props = {
   /** SESS-002: where the agent search stands, and a way to look again. */
   pass?: AgentPass;
   onRefresh?: () => void;
+  /** SESS-039: the pane's worktree folder; with it the menu offers "Open in <editor>" rows. */
+  dir?: string;
+  /** The editors to offer; looked up from the Rust side when left out. */
+  editors?: Editor[];
 };
 
-export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault, onChoose, onClose, onTerminal, onManage, busy = false, style, allOff = false, pass, onRefresh }: Props) {
+export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault, onChoose, onClose, onTerminal, onManage, busy = false, style, allOff = false, pass, onRefresh, dir, editors }: Props) {
   const [query, setQuery] = useState("");
+  const looked = useEditors(!!dir && editors === undefined);
+  const outside = dir ? (editors ?? looked) : [];
+  const [openError, setOpenError] = useState<string | null>(null);
   const [more, setMore] = useState(false);
   const { top, more: folded } = agentRows(agents, defaultId);
   const found = searchAgents(agents, query);
@@ -132,6 +143,31 @@ export default function PlusMenu({ agents, defaultId = "", onPick, onSetDefault,
             </span>
             <span className="name">Choose what to run…</span>
           </button>
+        )}
+        {dir && outside.length > 0 && (
+          <>
+            <div className="menu-title">This folder</div>
+            {outside.map((e) => (
+              <button
+                key={`open-${e.id}`}
+                role="menuitem"
+                className="menu-item"
+                title={openTitle(e, dir)}
+                onClick={() => {
+                  setOpenError(null);
+                  openIn(e.id, dir).then(onClose, (err) => setOpenError(String(err)));
+                }}
+              >
+                <span className="agent-mark" aria-hidden="true" />
+                <span className="name">{openLabel(e)}</span>
+              </button>
+            ))}
+            {openError && (
+              <div className="menu-hint warn" role="alert">
+                {openError}
+              </div>
+            )}
+          </>
         )}
         {onManage && (
           <button role="menuitem" className="menu-item muted" onClick={onManage}>

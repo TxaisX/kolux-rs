@@ -20,7 +20,6 @@ import { HeldKeys, screenLines, shouldRefocus, watchScale } from "./recover";
 import { decodeOutput, endedLabel, forPane, type ExitEvent, type OutputEvent } from "./codec";
 import { encodeHistory, replay, restoreTail, viewTop } from "./history";
 import { batchAcks, memoryProfile } from "./flow";
-import { resumes } from "./layout";
 import { explain as explainError, exitAdvice } from "./errors";
 import { DIVIDER_DONE, dragging } from "./dividers";
 import { currentDark, currentTerminal, TERMINAL_EVENT, termFont } from "../theme";
@@ -115,6 +114,8 @@ type Props = {
   restored?: boolean;
   /** TERM-075: the setting "Programs can copy to the clipboard" (OSC 52); on unless turned off. */
   clipboardFromPrograms?: boolean;
+  /** TERM-107 (T-066-c): false when the restored agent's start line carries no resume form. */
+  resumed?: boolean;
   /** The session failed to start (SESS-024: the window drops the pane rather than leaving it blank). */
   onFailed?: (error: string) => void;
   /** A job title from the seat (SESS-024) wins over the workspace name. */
@@ -187,7 +188,7 @@ const stagger = () =>
     }, 150 + 60 * waiting++),
   );
 
-export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile }: Props) {
+export default function TerminalPane({ hidden = false, gpu = true, name, plan, cwd = null, branch = null, focused = false, agent = "shell", program = null, args = [], env, onRunning, onNeedsYou, hook, pendingTool, keySettings = null, crew, stop, context, onBell, unread = false, onPty, onFailed, title: jobTitle, typed, shellName, custom = false, onRename, renameAsk = 0, sessionKnown = false, onCopyId, findHandle, number, onFocus, onClose, onReviewPlan, agents = [], launching = false, onLaunch, defaultId, onSetDefault, onChoose, onSplit, expand, card, account, notice = null, restored = false, clipboardFromPrograms = true, linksOpenInKolux = false, onOpenLink, onOpenFile, resumed }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const keySettingsRef = useRef(keySettings);
   keySettingsRef.current = keySettings;
@@ -692,7 +693,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
         // onData: the terminal's own answers to the shell's start-up questions go through onData.
         let keepInView = false;
         if (restored) {
-          setRestoredMark(agent !== "shell" && !resumes(agent, args) ? "restored without resume" : "restored");
+          setRestoredMark(resumed === false ? "restored without resume" : "restored");
           const unmark = () => {
             setRestoredMark(null);
             key.dispose();
@@ -1283,6 +1284,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
       {plusAt && (
         <PlusMenu
           agents={agents}
+          dir={cwd ?? undefined}
           defaultId={defaultId}
           onSetDefault={onSetDefault}
           busy={launching}

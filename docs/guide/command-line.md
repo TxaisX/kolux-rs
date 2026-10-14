@@ -117,6 +117,8 @@ A pane is one terminal. Each has a handle (its name for scripts) that looks like
 | `kolux terminal send` | Types into a pane: `--text`, `--enter`, `--interrupt`. With none of them it refuses. When it sends a prompt to an agent, it watches 3 seconds and reports whether the agent began its turn, or warns that Enter may have been lost. If the agent is already working, it says "queued" at once, exit 0: the prompt waits behind the agent's turn. A plain send always exits 0, so a script does not read a warning as a failure and send the prompt twice. `--wait-submit <seconds>` (1 or more; 0 is refused) changes the watch time and asks for a firm answer: if the agent has not taken the prompt in that time, the command fails (exit 1) and says why, for example "term-2 did not submit the prompt within 5 s (it is working; the prompt waits behind its turn)". With `--retry-request <id>`, sending the same id to the same pane again answers with the first receipt and types nothing (until Kolux restarts) |
 | `kolux terminal wait --for exit\|tui-idle` | Waits until the program ends, or a full-screen program stops moving. `--timeout-ms` sets the limit; if it passes first, the command fails (exit 1) and names the state the pane is in ("term-3 did not reach exit within 60000 ms (it is running)"). With no status hooks reporting, `tui-idle` means 3 seconds without output, and a warning says so |
 
+With `--json`, `kolux terminal list` and `kolux terminal show` give each pane's `cwd` (the folder it started in), `program` (what it runs), and the workspace and branch that folder belongs to. For a plain shell pane opened without a folder, `cwd` is your home folder and `program` is the shell that actually started (a fallback shell if your chosen one would not start), so neither is empty any more. Unless your home folder is itself inside a workspace, such a pane belongs to no workspace, so its workspace and branch stay empty. The plain-text form of `show` prints the handle, title, workspace, pane, tab and whether it is in view.
+
 Examples:
 
 ```
@@ -167,7 +169,7 @@ One Windows quirk: the `kolux.cmd` helper refuses `kolux orchestration send` and
 |---|---|
 | `kolux agent-context` | Lists every command with its flags and usage, for an agent to read |
 | `kolux skills list`, `skills get <topic>`, `skills coverage` | Lists Kolux's skill documents, prints one, and shows which installed agents have the orchestration skill |
-| `kolux agent hooks status` | Shows, for each agent, whether its status hooks are installed, partial, not installed or in error |
+| `kolux agent hooks status` | Shows, for each agent, whether its status hooks are installed, partial, not installed or in error. Antigravity can also show "disabled" when its Kolux bundle is switched off in its own file (`"enabled": false`) |
 | `kolux agent hooks on`, `agent hooks off` | Switches the status hooks and brings every agent in line |
 | `kolux agent hooks prepare-codex` | Installs and trusts Kolux's Codex hooks before Codex is first started |
 
@@ -190,4 +192,4 @@ A mistyped command is caught before Kolux is contacted, with a suggestion: "no c
 
 These do not exist, so do not look for them: opening or comparing files from the command line, a `tab` command, and registering `kolux` on the PATH for the whole computer.
 
-<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, src/status/ResourceManager.tsx, PLAN.md (T-250-a, T-250-b, T-076-c, T-287-c, MERGE-49) at e19b35b -->
+<!-- verified against: src-tauri/src/cli.rs, src-tauri/src/bin/kolux.rs, src-tauri/src/bin/kolux-dev.rs, src-tauri/Cargo.toml, src-tauri/cli/kolux.cmd, src-tauri/src/terminal.rs, src-tauri/src/resources.rs, src/status/ResourceManager.tsx, PLAN.md (T-262-c, T-250-a, T-250-b, T-076-c, T-287-c, MERGE-49) at 73f5e38 -->
