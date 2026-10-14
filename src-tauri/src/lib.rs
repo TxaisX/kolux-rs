@@ -362,6 +362,7 @@ pub fn run() {
             agents::agent_start_line,
             trust::trust_folders_cmd,
             scm::scm_status,
+            scm::scm_watch, scm::scm_unwatch,
             scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
             scm::scm_merge_info,
             scm::scm_merge,
