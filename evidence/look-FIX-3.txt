@@ -35,3 +35,24 @@ LIVE PROOF PENDING (batched): in a project, Ctrl+Shift+F, turn on Regular expres
 `x{300}` in a folder holding a one-line file of 400 x's: the hit in the list ends in an ellipsis
 after 200 characters; click it: the editor selects all 300 characters. Type quickly in the box on a
 large folder: only one rg.exe stays running (Task Manager), the old ones end as you type.
+
+## 3. T-546-c window patch regenerated; Own-window double click; tower.json wording (FB-2, FIX-SOON 2 and 3)
+- evidence/look-FIX-3-t546c.patch replaces FIX-2-t546c-window.patch (do not apply that one). Made
+  against main 136bb62 (the lane tree equals 136bb62 in every file it touches: `git diff 136bb62 --
+  capabilities lib.rs App.tsx main.tsx` printed 0 lines). main.tsx hunk rebuilt on the new imports
+  (installMenuWheel, restoreAsks). App.tsx hunk builds the seats once per render (AFTER 7, half:
+  the stringify compare stays). tower.json description reworded instead of an AppManifest (that
+  needs build.rs, a coordinator file): it now says the app's own commands stay callable from the
+  Tower window, as Tauri 2 allows every registered app command to every window by default
+  (v2.tauri.app/security/capabilities). Last hunk flips OWN_WINDOW_WIRED to true in
+  src/tower/ownWindow.ts; apply it last, after the capability, lib.rs, main.tsx and App.tsx hunks.
+- With the whole patch applied in the lane checkout (then reverted, never committed): cargo test
+  fence 11/11, clippy -D warnings exit 0, tsc exit 0, vitest related (ownWindow, main, App,
+  TowerWindow) 2 files / 11 tests passed. `git apply --check evidence/look-FIX-3-t546c.patch` on
+  this commit: see the commit body.
+- openTowerWindow keeps one open in flight: a click during it shares its answer. Red first on the
+  old code: ["opened","failed"] (the reported race); green: ["opened","opened"] with one window made.
+  Test: src/tower/ownWindow.test.ts "FIX-3: a second click while the Tower window is being made
+  shares the first click's answer".
+LIVE PROOF PENDING (batched, after the patch): Tower, double-click Own window fast: one Tower
+window opens on the second screen, no "could not open" note appears in the main Tower.

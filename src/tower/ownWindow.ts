@@ -47,7 +47,21 @@ export type WindowApi = {
 
 export type OpenResult = "opened" | "focused" | "failed";
 
-export async function openTowerWindow(api: WindowApi = tauriWindows): Promise<OpenResult> {
+/** FIX-3 (council FIX-SOON 3): the open under way, if any. A click while one is in flight shares its
+ * answer instead of racing it (both would miss focus() and both make the window; the second would get
+ * "label taken" and show NO_WINDOW while the window is up). */
+let inFlight: Promise<OpenResult> | null = null;
+
+export function openTowerWindow(api: WindowApi = tauriWindows): Promise<OpenResult> {
+  if (inFlight) return inFlight;
+  const run = openOnce(api).finally(() => {
+    if (inFlight === run) inFlight = null;
+  });
+  inFlight = run;
+  return run;
+}
+
+async function openOnce(api: WindowApi): Promise<OpenResult> {
   try {
     if (await api.focus(TOWER_LABEL)) return "focused";
   } catch {
