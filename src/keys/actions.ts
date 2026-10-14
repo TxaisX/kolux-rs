@@ -90,6 +90,7 @@ export const actions: Action[] = [
   a("floatingTerminal.toggle", "Toggle Floating Terminal", "global", ["Mod+Alt+A"]),
   a("floatingWorkspace.maximize", "Maximize Floating Workspace Panel", "global", [], { darwin: ["Mod+Alt+Shift+A"] }),
   a("view.inbox", "Show Inbox", "global", []),
+  a("view.tower", "Show Tower", "global", []),
   a("sidebar.sleeping.toggle", "Show or Hide Sleeping Workspaces", "global", [], { keywords: ["sleep", "asleep", "wake"] }),
   a("view.floor", "Show Floor", "global", []),
   a("view.code", "Show Code", "global", ["Mod+Shift+3"]),

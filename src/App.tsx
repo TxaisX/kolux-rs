@@ -96,6 +96,8 @@ import { Bell, Globe, Pin, Spinner, StatusGlyph } from "./chrome/icons";
 import Tip from "./chrome/Tip";
 import InboxView from "./inbox/InboxView";
 import { inboxItems, type Source } from "./inbox/inbox";
+import TowerView from "./tower/TowerView";
+import { towerRows, usageByAccount } from "./tower/tower";
 import { LANES, chipOf } from "./board/chip";
 import Ring from "./usage/Ring";
 import { capOn, contextFill, meterOf, meterText, planOf, readsLeft, usageLine } from "./usage/meter";
@@ -558,6 +560,9 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
           break;
         case "view.inbox":
           setScreen((s) => (s === "inbox" ? "terminals" : "inbox"));
+          break;
+        case "view.tower":
+          setScreen((s) => (s === "tower" ? "terminals" : "tower"));
           break;
         case "view.code":
           leavePage();
@@ -1489,12 +1494,13 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   const terminals = screen === "terminals";
   const board = screen === "board";
   const inbox = screen === "inbox";
+  const tower = screen === "tower";
   const agentsScreen = screen === "agents";
   // STAT-050: the Inbox and the Board read the panes the window already tracks; the clock ticks while one is open.
   const [now, setNow] = useState(Date.now());
-  const timed = inbox || board;
+  const timed = inbox || board || tower;
   // VIEW-009: a full page fills the workspace area; Show Code (view.code) and an Escape nothing else used leave it.
-  const fullPage = settingsOpen || (terminals && page !== null) || inbox || screen === "artifacts";
+  const fullPage = settingsOpen || (terminals && page !== null) || inbox || tower || screen === "artifacts";
   const leavePage = () => {
     setSettingsOpen(false);
     setPage(null);
@@ -1644,6 +1650,8 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
   // VIEW-023: a card's chip and lane; VIEW-025: an answer typed into the agent's own prompt.
   const chipFor = (p: Pane) => chipOf({ agent: p.agent, state: hook[p.key], running: running[p.key], stale: stale[p.key] ?? false, ...turn[p.key], since: stamp[p.key]?.at ?? 0 }, now);
   const laneOf = (p: Pane) => (p.seats || p.kind || p.agent === "shell" ? "idle" : (chipFor(p)?.lane ?? "idle"));
+  // T-546: the control tower reads the same chip and meter per agent pane as the Board.
+  const towerSeats = () => panes.filter((p) => !p.kind && !p.seats && p.agent !== "shell").map((p) => ({ key: p.key, agent: p.agent, title: tabName(p, titles), branch: p.branch, cwd: p.cwd, account: p.account ?? null, chip: chipFor(p), meter: meterOf(context[p.key], p.agent, plan.claude, plan.codex, capOn(settings)), since: stamp[p.key]?.at ?? 0 }));
   const lanes = board ? LANES.filter((l) => cardPanes(panes).some((p) => laneOf(p) === l.id)) : [];
   const columnOf = (p: Pane) => lanes.findIndex((l) => l.id === laneOf(p)) + 1;
   const answer = (p: Pane, approve: boolean) =>
@@ -2148,6 +2156,7 @@ function Window({ initial, layout, read }: { initial: Record<string, unknown>; l
             </>
           )}
           {inbox && <InboxView items={inboxItems(sources, now)} now={now} onOpen={openPane} />}
+          {tower && <TowerView rows={towerRows(towerSeats())} usage={usageByAccount(towerSeats(), plan)} now={now} onOpen={openPane} />}
           {agentsScreen && selected === null && (
             <div className="empty">
               <h2>Agents</h2>

@@ -48,6 +48,24 @@ export function setBanner(path: string, up: boolean): void {
   entry(path).banner = up;
 }
 
+/** T-073-e (council MERGE 33 A1): files whose own save is in flight. The disk carries the new stamp
+ *  as soon as file_write lands, but the buffer stays dirty until the write answers and remember()
+ *  runs; a poll in that window would otherwise flash the banner for one round. Checks treat a
+ *  saving file as unchanged. Counted, so two overlapping saves (Mod+S twice) clear only when the
+ *  last one is done. */
+const saving = new Map<string, number>();
+export function beginSave(path: string): void {
+  const k = keyOf(path);
+  saving.set(k, (saving.get(k) ?? 0) + 1);
+}
+export function endSave(path: string): void {
+  const k = keyOf(path);
+  const n = (saving.get(k) ?? 1) - 1;
+  if (n <= 0) saving.delete(k);
+  else saving.set(k, n);
+}
+export const savingNow = (path: string): boolean => saving.has(keyOf(path));
+
 /** T-073-d / EDIT-002: autosave asks this and holds back while the banner is up. */
 export const bannerUp = (path: string): boolean => entries.get(keyOf(path))?.banner ?? false;
 
@@ -102,8 +120,14 @@ export type Io = { stamp: () => Promise<Stamp | null>; read: () => Promise<strin
  *  tab without unsaved edits takes the new disk copy quietly; one with edits gets the banner,
  *  reported through `onBanner` with the stamp that raised it (Keep my edits keeps that one). */
 export async function checkOnce(path: string, io: Io, onBanner: (now: Stamp | null) => void): Promise<Verdict> {
+  // T-073-e A1: a save of this very file is under way (checked before and after the stamp read,
+  // since the save can start while the read is out); the next check sees the remembered stamp.
+  if (savingNow(path)) return "none";
   const now = await io.stamp();
+  if (savingNow(path)) return "none";
   const v = verdict(path, now, io.dirty());
+  // T-073-e A2: the flag follows the verdict, so it never sticks after a flash or a put-back file.
+  if (v !== "banner") setBanner(path, false);
   if (v === "reload") {
     const got = await readFresh(path, io.stamp, io.read);
     // Typing that started while the read was out turns this into the banner at the next check.
