@@ -18,14 +18,14 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Ask from "../chrome/Ask";
-import { ChevronDown, Close, FileCode, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
+import { ChevronDown, Close, FileCode, Funnel, List, Minus, Plus, Refresh, Spark, Stop, Undo } from "../chrome/icons";
 import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGenerate, type Writer } from "./generate";
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import { watchStatus } from "./watch";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, PULL_POLICIES, filterRows, fullPath } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -90,7 +90,7 @@ function GraphCell({ row }: { row: GraphRow }) {
   );
 }
 
-type Failure = { title: string; output: string; fix?: string | null };
+type Failure = { title: string; output: string; fix?: string | null; policy?: boolean };
 
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
@@ -298,7 +298,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
       setFailure(null);
       setInfo(`${label}: done`);
     } else {
-      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null });
+      setFailure({ title: failureTitle(label, out), output: out.output, fix: out.kind === "hook" ? (out.detail ?? out.output) : !out.kind || out.kind === "other" ? out.output : null, policy: out.kind === "no-policy" });
     }
   };
   const remote = (action: RemoteAction, label: string) => guarded(() => runRemote(action, label));
@@ -426,6 +426,9 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
   const [history, setHistory] = useState<Commit[] | null>(null);
   const [picked, setPicked] = useState<{ hash: string; files: Change[] | null } | null>(null);
   const [ctx, setCtx] = useState<{ x: number; y: number; commit: Commit } | null>(null);
+  // GIT-014: the changes filter (Escape empties and closes it) and a changed file's menu.
+  const [filter, setFilter] = useState<string | null>(null);
+  const [fileCtx, setFileCtx] = useState<{ x: number; y: number; path: string } | null>(null);
   useEffect(() => {
     setHistory(null);
     setPicked(null);
@@ -490,6 +493,10 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
         aria-selected={selected.includes(r.path)}
         style={depth ? { paddingLeft: 6 + depth * 12 + 12 } : undefined}
         title={r.from ? `${r.from} → ${r.path}` : r.path}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setFileCtx({ x: Math.min(e.clientX, window.innerWidth - 240), y: Math.min(e.clientY, window.innerHeight - 170), path: r.path });
+        }}
         onClick={(e) => {
           pick(r.path, e);
           if (!e.shiftKey && !e.ctrlKey && !e.metaKey) onOpenDiff?.(r.path, name === "Staged");
@@ -497,6 +504,11 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
       >
         <span className="letter">{r.status}</span>
         <span className="path">{label}</span>
+        {status?.submodules?.[r.path] && (
+          <span className="scm-sub" style={{ fontSize: 10, color: "var(--fg-muted)", marginLeft: 6, whiteSpace: "nowrap" }} data-submodule={r.path} title={`Submodule: ${status.submodules[r.path]}`}>
+            submodule · {status.submodules[r.path]}
+          </span>
+        )}
         {n && (
           <span className="scm-lines" title={`${n[0]} added, ${n[1]} removed`}>
             {n[0] > 0 && <span className="add">+{n[0]}</span>}
@@ -523,8 +535,9 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     );
   };
 
-  const section = (name: "Conflicts" | Section, rows: Change[], on: boolean) =>
-    rows.length > 0 && (
+  const section = (name: "Conflicts" | Section, all: Change[], on: boolean) => {
+    const rows = filterRows(all, filter ?? "");
+    return rows.length > 0 && (
       <div className="scm-sec-wrap" data-section={name}>
         <div className="scm-sec">
           <span>{name}</span>
@@ -565,6 +578,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
           : rows.map((r) => fileRow(name, r, on, 0, r.from ? `${r.from} → ${r.path}` : r.path))}
       </div>
     );
+  };
 
   return (
     <aside
@@ -604,6 +618,9 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 <FileCode />
               </button>
             )}
+            <button className="ib" title="Filter the changes" aria-label="Filter the changes" aria-pressed={filter !== null} onClick={() => setFilter((f) => (f === null ? "" : null))}>
+              <Funnel />
+            </button>
             {onView && (
               <button className="ib" title={view === "tree" ? "View as list" : "View as tree"} aria-label={view === "tree" ? "View as list" : "View as tree"} aria-pressed={view === "tree"} onClick={() => onView(view === "tree" ? "list" : "tree")}>
                 <List />
@@ -935,7 +952,22 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                   <summary>{failure.title}</summary>
                   <pre>{failure.output || "git gave no reason"}</pre>
                 </details>
-                {failure.fix !== null && (
+                {failure.policy && (
+                  <div className="scm-policy" data-pull-policy style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div>Pick how to bring the remote's commits in; the pull runs again with it.</div>
+                    {PULL_POLICIES.map((p) => (
+                      <div key={p.action} className="btn-row">
+                        <button className="btn" disabled={busy} title={p.title} data-policy={p.action} onClick={() => remote(p.action, `Pull (${p.label.toLowerCase()})`)}>
+                          {p.label}
+                        </button>
+                        <button className="btn ghost" title={`Copies "${p.config}" to set this for good; nothing changes until you run it`} data-policy-copy={p.action} onClick={() => copy(p.config, "git config command")}>
+                          Copy setting
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {failure.fix !== null && !failure.policy && (
                   <button className="btn" onClick={() => onFix(failure.fix ?? failure.output)}>
                     Fix with AI
                   </button>
@@ -1002,12 +1034,35 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 </button>
               </div>
             )}
+            {filter !== null && (
+              <input
+                className="field scm-filter"
+                style={{ margin: "6px 8px 0", width: "calc(100% - 16px)", boxSizing: "border-box" }}
+                aria-label="Filter the changes"
+                placeholder="Filter by path"
+                autoFocus
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Escape") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setFilter(null);
+                }}
+              />
+            )}
             <div className="sb-list">
               {status && changeCount(status) === 0 && <div className="sb-hint">No changes{status.branch ? ` on ${status.branch}` : ""}.</div>}
               {status &&
                 scmGroups(groupOrder).map((g) =>
                   g === "conflicts" ? conflictCards() : g === "staged" ? section("Staged", status.staged, false) : g === "changes" ? section("Changes", status.changed, true) : section("Untracked", status.untracked, true),
                 )}
+              {status && filter && changeCount(status) > 0 && [status.staged, status.changed, status.untracked].every((rows) => filterRows(rows, filter).length === 0) && <div className="sb-hint">No changed file matches “{filter}”.</div>}
+              {status && (status.submodulesCut ?? 0) > 0 && (
+                <div className="sb-hint" data-submodules-cut>
+                  {status.submodulesCut} more changed submodule{status.submodulesCut === 1 ? " was" : "s were"} left out of this list.
+                </div>
+              )}
             </div>
             {notesSection}
             <details className="scm-history" open={histOpen} onToggle={(e) => setHistOpen((e.target as HTMLDetailsElement).open)}>
@@ -1077,6 +1132,33 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 ))}
               </div>
             </details>
+            {fileCtx && (
+              <>
+                <div className="menu-backdrop" onClick={() => setFileCtx(null)} aria-hidden="true" />
+                <div className="menu" role="menu" aria-label="File actions" style={{ left: fileCtx.x, top: fileCtx.y }}>
+                  <div className="menu-title">{fileCtx.path}</div>
+                  {[
+                    { id: "full", label: "Copy path", run: () => copy(fullPath(dir, fileCtx.path), "path") },
+                    { id: "relative", label: "Copy relative path", run: () => copy(fileCtx.path, "relative path") },
+                    { id: "open", label: "Open in its app", run: () => invoke("open_path", { path: fullPath(dir, fileCtx.path) }).catch((err) => setError(String(err))) },
+                    { id: "reveal", label: "Show in file manager", run: () => invoke("scm_reveal", { worktree: dir, path: fileCtx.path }).catch((err) => setError(String(err))) },
+                  ].map((item) => (
+                    <button
+                      key={item.id}
+                      role="menuitem"
+                      className="menu-item"
+                      data-file-action={item.id}
+                      onClick={() => {
+                        setFileCtx(null);
+                        void item.run();
+                      }}
+                    >
+                      <span className="name">{item.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             {ctx && (
               <>
                 <div className="menu-backdrop" onClick={() => setCtx(null)} aria-hidden="true" />

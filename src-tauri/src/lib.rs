@@ -18,6 +18,7 @@ mod files;
 mod fsops;
 mod fonts;
 mod git;
+mod github;
 mod groups;
 mod hooks;
 mod include;
@@ -387,7 +388,7 @@ pub fn run() {
             token_usage::token_usage_scan,
             token_usage::token_tracking_set,
             trust::trust_folders_cmd,
-            scm::scm_status,
+            scm::scm_status, scm::scm_reveal,
             scm::scm_watch, scm::scm_unwatch,
             scm::scm_base_changes, scm::scm_base_sides,
             scm::scm_pushed, scm::scm_head, scm::scm_summary, scm::scm_abort,
@@ -401,6 +402,8 @@ pub fn run() {
             scm::scm_commit_message_stop,
             scm::scm_task_detail,
             scm::scm_repo_labels,
+            github::github_repo_parent,
+            github::github_people,
             scm::scm_task_labels,
             scm::scm_task_body,
             scm::scm_stage,
