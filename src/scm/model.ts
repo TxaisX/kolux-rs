@@ -282,11 +282,18 @@ export const AC_TREE_KEY = "allChangesTree";
 export type AcLayout = { split: boolean; wrap: boolean; spaces: boolean; tree: boolean };
 export const acLayoutOf = (s: Record<string, unknown> | null): AcLayout => ({ split: s?.[AC_SPLIT_KEY] === true, wrap: s?.[AC_WRAP_KEY] === true, spaces: s?.[AC_WHITESPACE_KEY] === true, tree: s?.[AC_TREE_KEY] === true });
 export type ScmGroup = "conflicts" | "staged" | "changes" | "untracked";
-/** GIT-066: the orders on offer, `[id, label, groups]`; conflicts lead in each, since they block a commit. */
+/** GIT-066 / VIEW-062: the orders on offer, `[id, label, groups]`, the default first (Changes,
+ *  Staged, Untracked); conflicts are pinned above the rest in each, since they block a commit. */
 export const SCM_GROUP_ORDERS: [string, string, ScmGroup[]][] = [
+  ["changes-first", "Changes first", ["conflicts", "changes", "staged", "untracked"]],
   ["staged-first", "Staged first", ["conflicts", "staged", "changes", "untracked"]],
-  ["changes-first", "Changes first", ["conflicts", "changes", "untracked", "staged"]],
+  ["untracked-first", "Untracked first", ["conflicts", "untracked", "changes", "staged"]],
 ];
+/** VIEW-062: the most rows one section lists; a bigger change set shows a banner instead of freezing the panel. */
+export const SECTION_CAP = 500;
+/** VIEW-062: the banner under a capped section. */
+export const tooManyLine = (more: number): string =>
+  `${grouped(more)} more ${more === 1 ? "file is" : "files are"} not listed here, so the panel stays quick. Type part of a path in the filter, or open All Changes, to see ${more === 1 ? "it" : "them"}.`;
 /** GIT-066: the groups in the saved order; anything else reads as the first one. */
 export const scmGroups = (order: unknown): ScmGroup[] => (SCM_GROUP_ORDERS.find((o) => o[0] === order) ?? SCM_GROUP_ORDERS[0])[2];
 
@@ -314,9 +321,36 @@ export const summaryLabel = (branch: string | null, s: Summary): string => {
   return `${branch ?? "Detached HEAD"}, ${s.ahead} ahead and ${s.behind} behind ${s.against}, ${grouped(t.added)} line${t.added === 1 ? "" : "s"} added and ${grouped(t.removed)} removed: ${split}`;
 };
 
-/** GIT-002: every row's path in display order (conflicts, staged, changes, untracked), each once;
- * a file with staged and unstaged parts sits in two sections and is one selection. */
-export const rowOrder = (s: Status): string[] => [...new Set([...s.conflicts, ...s.staged, ...s.changed, ...s.untracked].map((c) => c.path))];
+/** GIT-002 / FIX-BEFORE-2: what the panel draws: the filter text, and in the tree view the closed
+ *  folders as the panel keys them (`<Section>/<folder>`); `tree` is null or missing in the list view. */
+export type Drawn = { filter?: string; tree?: Set<string> | null };
+
+/** GIT-002 / FIX-BEFORE-2: every row's path in the order the panel draws it, each once: the groups in
+ * the saved order (`scmGroups(order)`, so Changes first by default; conflicts always lead). With
+ * `drawn`, only the rows actually on screen count: the filter applies, each section stops at its cap
+ * (conflicts at CONFLICT_CAP), and the tree view runs folders first and skips closed folders' files,
+ * so a Shift-click span never takes in a row the user cannot see. Without `drawn`, every row counts
+ * (the review prompt). A file with staged and unstaged parts sits in two sections and is one selection. */
+export const rowOrder = (s: Status, order?: unknown, drawn?: Drawn): string[] => {
+  const paths: string[] = [];
+  for (const g of scmGroups(order)) {
+    if (g === "conflicts") {
+      paths.push(...(drawn ? capped(s.conflicts, CONFLICT_CAP).shown : s.conflicts).map((c) => c.path));
+      continue;
+    }
+    const [name, all] = g === "staged" ? ["Staged", s.staged] : g === "changes" ? ["Changes", s.changed] : ["Untracked", s.untracked];
+    if (!drawn) {
+      paths.push(...all.map((c) => c.path));
+      continue;
+    }
+    const shown = capped(filterRows(all, drawn.filter ?? ""), SECTION_CAP).shown;
+    if (drawn.tree) {
+      const closed = new Set([...drawn.tree].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)));
+      paths.push(...fileTree(shown, closed).flatMap((i) => (i.kind === "file" ? [i.change.path] : [])));
+    } else paths.push(...shown.map((c) => c.path));
+  }
+  return [...new Set(paths)];
+};
 
 export type SelectMode = "one" | "toggle" | "span";
 
@@ -335,8 +369,8 @@ export const select = (selected: string[], order: string[], path: string, mode: 
 
 /** GIT-002: what the bulk bar covers: the selected rows still listed, the ones that can be staged
  * (conflicts, changes, untracked) and the ones that can be unstaged (staged), in display order. */
-export const bulk = (s: Status, selected: string[]): { present: string[]; stage: string[]; unstage: string[] } => {
-  const present = rowOrder(s).filter((p) => selected.includes(p));
+export const bulk = (s: Status, selected: string[], order?: unknown): { present: string[]; stage: string[]; unstage: string[] } => {
+  const present = rowOrder(s, order).filter((p) => selected.includes(p));
   const stageable = new Set([...s.conflicts, ...s.changed, ...s.untracked].map((c) => c.path));
   const staged = new Set(s.staged.map((c) => c.path));
   return { present, stage: present.filter((p) => stageable.has(p)), unstage: present.filter((p) => staged.has(p)) };
@@ -538,8 +572,15 @@ export function fileTree(rows: Change[], closed: Set<string>): TreeItem[] {
   const all = (n: Node): string[] => [...n.files.map((f) => f.path), ...[...n.dirs.values()].flatMap(all)].sort(byName);
   const out: TreeItem[] = [];
   const walk = (n: Node, prefix: string, depth: number) => {
-    for (const name of [...n.dirs.keys()].sort(byName)) {
-      const sub = n.dirs.get(name)!;
+    for (const first of [...n.dirs.keys()].sort(byName)) {
+      // VIEW-062: a chain of folders that each hold only one folder folds into one row.
+      let sub = n.dirs.get(first)!;
+      let name = first;
+      while (sub.files.length === 0 && sub.dirs.size === 1) {
+        const [only, next] = [...sub.dirs.entries()][0];
+        name += "/" + only;
+        sub = next;
+      }
       const path = prefix + name;
       out.push({ kind: "dir", path, name, depth, files: all(sub) });
       if (!closed.has(path)) walk(sub, path + "/", depth + 1);

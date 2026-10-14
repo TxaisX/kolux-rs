@@ -25,7 +25,7 @@ import HandoffNote from "./HandoffNote";
 import { watchStatus } from "./watch";
 import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
-import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, PULL_POLICIES, filterRows, fullPath } from "./model";
+import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine, PULL_POLICIES, filterRows, fullPath } from "./model";
 
 type Props = {
   /** The workspace in front; null outside any workspace. */
@@ -470,12 +470,15 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
     if (r) setMenu({ left: Math.max(8, r.right - 250), top: r.bottom + 4 });
   };
 
+  // FIX-BEFORE-2: the rows on screen, in the order drawn (saved group order, filter, cap, closed
+  // folders), so a span and the bulk bar only ever cover rows the user can see.
+  const drawnOrder = status ? rowOrder(status, groupOrder, { filter: filter ?? "", tree: view === "tree" ? closedDirs : null }) : [];
   const pick = (path: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
     if (!status) return;
-    setSelected((prev) => select(prev, rowOrder(status), path, e.shiftKey ? "span" : e.ctrlKey || e.metaKey ? "toggle" : "one", anchor));
+    setSelected((prev) => select(prev, drawnOrder, path, e.shiftKey ? "span" : e.ctrlKey || e.metaKey ? "toggle" : "one", anchor));
     if (!e.shiftKey) setAnchor(path);
   };
-  const chosen = status ? bulk(status, selected) : { present: [], stage: [], unstage: [] };
+  const chosen = status ? bulk(status, selected.filter((p) => drawnOrder.includes(p)), groupOrder) : { present: [], stage: [], unstage: [] };
   const plan = discardingRows && discardPlan(discardingRows);
   const rowsOf = (paths: string[]): Change[] => {
     const all = status ? [...status.conflicts, ...status.staged, ...status.changed, ...status.untracked] : [];
@@ -537,6 +540,8 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
 
   const section = (name: "Conflicts" | Section, all: Change[], on: boolean) => {
     const rows = filterRows(all, filter ?? "");
+    // VIEW-062: a huge section lists the first SECTION_CAP rows; the counts and bulk buttons still cover all.
+    const { shown, more } = capped(rows, SECTION_CAP);
     return rows.length > 0 && (
       <div className="scm-sec-wrap" data-section={name}>
         <div className="scm-sec">
@@ -552,7 +557,7 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
           </button>
         </div>
         {view === "tree"
-          ? fileTree(rows, new Set([...closedDirs].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)))).map((i) =>
+          ? fileTree(shown, new Set([...closedDirs].filter((k) => k.startsWith(name + "/")).map((k) => k.slice(name.length + 1)))).map((i) =>
               i.kind === "file" ? (
                 fileRow(name, i.change, on, i.depth, i.name)
               ) : (
@@ -575,7 +580,8 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
                 </div>
               ),
             )
-          : rows.map((r) => fileRow(name, r, on, 0, r.from ? `${r.from} → ${r.path}` : r.path))}
+          : shown.map((r) => fileRow(name, r, on, 0, r.from ? `${r.from} → ${r.path}` : r.path))}
+        {more > 0 && <div className="sb-hint" role="note">{tooManyLine(more)}</div>}
       </div>
     );
   };

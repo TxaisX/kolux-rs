@@ -42,7 +42,9 @@ export function folderName(path: string): string {
 export function worktreeLabel(w: Worktree): string {
   if (w.name) return w.name;
   if (w.branch) return w.branch;
-  return `detached at ${w.head.slice(0, 7)}`;
+  // GIT-064: with neither a branch nor a commit known no detached label shows; the row (and every
+  // sentence that names it) falls back to the folder name.
+  return w.head ? `detached at ${w.head.slice(0, 7)}` : folderName(w.path);
 }
 
 /** Rows in display order: the main checkout first, then the others by branch name. */

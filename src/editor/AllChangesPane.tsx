@@ -58,6 +58,19 @@ export const estimate = (e: Entry) => {
 export const tagOf = (e: Entry, base: boolean) => (base ? (e.code === "A" ? "Added" : e.code === "D" ? "Deleted" : e.code === "?" ? "Untracked" : "Changed") : e.code === "?" ? "Untracked" : e.staged ? "Staged" : "Unstaged");
 /** The call that reads the branch against its base; `known` is the base the last status named. */
 export const baseCall = (root: string, pinned: string | null, status: Status | null): [string, Record<string, unknown>] => ["scm_base_changes", { worktree: root, pinned, known: status?.base ?? null }];
+/** FIX-2: the status read as the tab opens is used only until the watcher's first status lands, so a late answer never replaces a newer one. */
+export function statusGate(take: (s: Status) => void): { first: (s: Status) => void; watched: (s: Status) => void } {
+  let fresh = false;
+  return {
+    first: (s) => {
+      if (!fresh) take(s);
+    },
+    watched: (s) => {
+      fresh = true;
+      take(s);
+    },
+  };
+}
 /** The command and arguments a section reads its two texts with. */
 export const sidesCall = (base: Base | null, root: string, e: Entry): [string, Record<string, unknown>] => (base ? ["scm_base_sides", { worktree: root, path: e.path, since: base.since }] : ["diff_sides", { path: e.path, staged: e.staged }]);
 
@@ -96,27 +109,32 @@ export default function AllChangesPane({ id, root, hidden = false, focused = fal
   }, [hidden]);
   useEffect(() => {
     let alive = true;
-    const read = mode === "base" ? () => invoke<BaseChanges>(...baseCall(root, pinnedBase, latest.current)).then((b) => (setBase({ against: b.against, since: b.since, note: b.note }), b.entries)) : () => invoke<Entry[]>("change_entries", { root }).then((es) => (setBase(null), es));
+    // The read hands back its base with the entries, so nothing lands after the tab moved on (FIX-2).
+    const read = (): Promise<{ base: Base | null; es: Entry[] }> =>
+      mode === "base" ? invoke<BaseChanges>(...baseCall(root, pinnedBase, latest.current)).then((b) => ({ base: { against: b.against, since: b.since, note: b.note }, es: b.entries })) : invoke<Entry[]>("change_entries", { root }).then((es) => ({ base: null, es }));
     const fetch = () =>
       read().then(
-        (es) => {
+        ({ base, es }) => {
           if (!alive) return;
+          setBase(base);
           setError(null);
           setEntries((old) => (old && JSON.stringify(old) === JSON.stringify(es) ? old : es));
         },
         (err) => alive && setError(String(err)),
       );
-    const took = (s: Status) => {
+    const gate = statusGate((s) => {
+      if (!alive) return;
       latest.current = s;
       setStatus(s);
-    };
+    });
     // One status as the tab opens: Commit is ready at once instead of after the watcher's first
-    // tick, and in base mode the first read already knows the base.
-    const first = invoke<Status>("scm_status", { worktree: root }).then((s) => alive && took(s), () => undefined);
+    // tick, and in base mode the first read already knows the base. A watcher status that came in
+    // first wins over it.
+    const first = invoke<Status>("scm_status", { worktree: root }).then(gate.first, () => undefined);
     if (mode === "base") void first.then(fetch);
     else void fetch();
     const stop = watchStatus(root, (s) => {
-      took(s);
+      gate.watched(s);
       if (front.current) void fetch();
       else missed.current = () => void fetch();
     });

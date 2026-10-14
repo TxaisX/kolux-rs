@@ -1,6 +1,6 @@
 // GIT-004: when the panel may commit, and which keystroke is the commit shortcut.
 import { describe, expect, it, test } from "vitest";
-import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt } from "./model";
+import { canCommit, conflictPrompt, emptyStatus, savedFixAgent, grouped, handedLine, sinceText, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type Status, type Summary, bulk, rowOrder, select, discardAsk, type Section, budgetLine, budgetLow, mergeActions, mergeLabel, type MergeInfo, graph, clashWord, abortLabel, capped, CONFLICT_CAP, filesWord, graphLines, commitUrl, explainPrompt, type Commit, linkedPrs, withLink, prMismatch, scmGroups, SCM_GROUP_ORDERS, prRefreshDelay, prLooked, PR_STALE_MS, prStateWord, prReason, withPr, type PrLook, commitItems, failureTitle, pushBadge, discardPlan, fileTree, reviewPrompt, SECTION_CAP, tooManyLine } from "./model";
 
 const commit = (hash: string, parents: string[], subject = hash): Commit => ({ hash, short: hash, parents, author: "a", time: 0, subject, message: subject, labels: [], outgoing: false, incoming: false });
 
@@ -37,8 +37,12 @@ test("GIT-036: a commit opens at its GitHub page, and only when the project is o
 });
 
 test("GIT-066: the Source Control groups come in the chosen order, conflicts always first", () => {
-  expect(scmGroups(undefined)).toEqual(["conflicts", "staged", "changes", "untracked"]);
-  expect(scmGroups("changes-first")).toEqual(["conflicts", "changes", "untracked", "staged"]);
+  // VIEW-062: Changes, Staged, Untracked by default; staged-first and untracked-first on offer.
+  expect(scmGroups(undefined)).toEqual(["conflicts", "changes", "staged", "untracked"]);
+  expect(scmGroups("changes-first")).toEqual(scmGroups(undefined));
+  expect(scmGroups("staged-first")).toEqual(["conflicts", "staged", "changes", "untracked"]);
+  expect(scmGroups("untracked-first")).toEqual(["conflicts", "untracked", "changes", "staged"]);
+  expect(SCM_GROUP_ORDERS.map(([id]) => id)).toEqual(["changes-first", "staged-first", "untracked-first"]);
   expect(scmGroups("nonsense")).toEqual(scmGroups(undefined));
   for (const [id] of SCM_GROUP_ORDERS) expect([...scmGroups(id)].sort()).toEqual(["changes", "conflicts", "staged", "untracked"]);
 });
@@ -255,12 +259,45 @@ test("GIT-002: a click selects one row, Ctrl toggles, Shift spans from the ancho
 
 test("GIT-002: the bulk bar counts the selected rows each action covers, in display order, ignoring rows that are gone", () => {
   const s: Status = { ...emptyStatus, staged: [row("s1"), row("s2")], changed: [row("c1")], untracked: [row("u1")], conflicts: [row("x1")] };
-  expect(rowOrder(s)).toEqual(["x1", "s1", "s2", "c1", "u1"]);
-  const b = bulk(s, ["s1", "c1", "u1", "x1", "gone"]);
+  expect(rowOrder(s, "staged-first")).toEqual(["x1", "s1", "s2", "c1", "u1"]);
+  const b = bulk(s, ["s1", "c1", "u1", "x1", "gone"], "staged-first");
   expect(b.present).toEqual(["x1", "s1", "c1", "u1"]);
+  expect(bulk(s, ["s1", "c1", "u1", "x1", "gone"]).present).toEqual(["x1", "c1", "s1", "u1"]);
   expect(b.stage).toEqual(["x1", "c1", "u1"]);
   expect(b.unstage).toEqual(["s1"]);
   expect(bulk(s, []).present).toEqual([]);
+});
+
+// FIX-BEFORE-2: Shift-click spans the rows the panel draws, in the order it draws them: the saved
+// group order (Changes first by default), the filter, the per-section cap and closed tree folders.
+test("FIX-BEFORE-2: a span follows the drawn order across a reordered, capped, filtered or folded section", () => {
+  const s: Status = { ...emptyStatus, staged: [row("s1"), row("s2")], changed: [row("c1"), row("c2")], untracked: [row("u1")], conflicts: [row("x1")] };
+  // Default order: conflicts, Changes, Staged, Untracked; every saved order is followed.
+  expect(rowOrder(s)).toEqual(["x1", "c1", "c2", "s1", "s2", "u1"]);
+  expect(rowOrder(s, "untracked-first")).toEqual(["x1", "u1", "c1", "c2", "s1", "s2"]);
+  expect(rowOrder(s, "no-such-order")).toEqual(rowOrder(s));
+  // Click a Changes row, Shift-click the Staged row below it: just the rows between, as drawn.
+  expect(select(["c2"], rowOrder(s, undefined, {}), "s1", "span", "c2")).toEqual(["c2", "s1"]);
+  // A capped section: rows past the cap are not drawn, so a span never takes them in.
+  const many = Array.from({ length: SECTION_CAP + 2 }, (_, i) => row(`c${String(i).padStart(3, "0")}`));
+  const big: Status = { ...emptyStatus, changed: many, staged: [row("s1")] };
+  const last = many[SECTION_CAP - 1].path;
+  const drawn = rowOrder(big, undefined, {});
+  expect(drawn).toHaveLength(SECTION_CAP + 1);
+  expect(drawn).not.toContain(many[SECTION_CAP].path);
+  expect(select([last], drawn, "s1", "span", last)).toEqual([last, "s1"]);
+  // Without a drawn view (the review prompt) every row still counts.
+  expect(rowOrder(big)).toHaveLength(SECTION_CAP + 3);
+  // A filter hides rows from the span.
+  expect(select(["c1"], rowOrder(s, undefined, { filter: "s2" }), "s2", "span", "c1")).toEqual(["s2"]);
+  expect(rowOrder(s, undefined, { filter: "c" })).toEqual(["x1", "c1", "c2"]);
+  // Tree view: a closed folder's files are not drawn; rows run folders first, then by name.
+  const t: Status = { ...emptyStatus, changed: [row("z.txt"), row("a/x.ts"), row("a/y.ts")], staged: [row("b/q.ts")] };
+  expect(rowOrder(t, undefined, { tree: new Set() })).toEqual(["a/x.ts", "a/y.ts", "z.txt", "b/q.ts"]);
+  expect(rowOrder(t, undefined, { tree: new Set(["Changes/a"]) })).toEqual(["z.txt", "b/q.ts"]);
+  expect(select(["z.txt"], rowOrder(t, undefined, { tree: new Set(["Changes/a"]) }), "b/q.ts", "span", "z.txt")).toEqual(["z.txt", "b/q.ts"]);
+  // A folder closed in one section stays open in another.
+  expect(rowOrder({ ...t, staged: [row("a/w.ts")] }, undefined, { tree: new Set(["Changes/a"]) })).toEqual(["z.txt", "a/w.ts"]);
 });
 
 // VIEW-067: the prompt says what discarding does to each kind of row, in the right number.
@@ -429,4 +466,25 @@ describe("T-313 (GIT-008 / GIT-014)", () => {
     expect(fullPath("C:\\work\\repo\\", "a.ts")).toBe("C:\\work\\repo\\a.ts");
     expect(fullPath("/home/u/repo", "src/a.ts")).toBe("/home/u/repo/src/a.ts");
   });
+});
+
+test("VIEW-062: the tree folds a chain of single-child folders into one row, never a folder with more than one child", () => {
+  const rows = ["a/b/c/x.ts", "a/b/c/y.ts", "d/e.ts", "d/f/g.ts"].map((path) => ({ path, status: "M", from: null }));
+  const open = fileTree(rows, new Set());
+  expect(open.map((i) => `${i.depth}:${i.kind}:${i.name}`)).toEqual(["0:dir:a/b/c", "1:file:x.ts", "1:file:y.ts", "0:dir:d", "1:dir:f", "2:file:g.ts", "1:file:e.ts"]);
+  expect(open[0].kind === "dir" && open[0].path).toBe("a/b/c");
+  // A folded row closes as one: its key is the deepest folder's path.
+  expect(fileTree(rows, new Set(["a/b/c"])).map((i) => i.name)).toEqual(["a/b/c", "d", "f", "g.ts", "e.ts"]);
+  // A folder holding a folder and a file keeps its own row.
+  const mixed = fileTree(["p/q/r.ts", "p/s.ts"].map((path) => ({ path, status: "M", from: null })), new Set());
+  expect(mixed.map((i) => i.name)).toEqual(["p", "q", "r.ts", "s.ts"]);
+});
+
+test("VIEW-062: a very large change set lists the first rows and says plainly how many more there are", () => {
+  expect(SECTION_CAP).toBeGreaterThanOrEqual(200);
+  const rows = Array.from({ length: SECTION_CAP + 1234 }, (_, i) => ({ path: `f${i}.ts`, status: "M", from: null }));
+  const { shown, more } = capped(rows, SECTION_CAP);
+  expect(shown).toHaveLength(SECTION_CAP);
+  expect(tooManyLine(more)).toBe("1,234 more files are not listed here, so the panel stays quick. Type part of a path in the filter, or open All Changes, to see them.");
+  expect(tooManyLine(1)).toBe("1 more file is not listed here, so the panel stays quick. Type part of a path in the filter, or open All Changes, to see it.");
 });
