@@ -23,6 +23,7 @@ import { dismissGenerate, generate, genState, genSubscribe, genVersion, stopGene
 import type { AgentInfo } from "../launch/PlusMenu";
 import HandoffNote from "./HandoffNote";
 import { watchStatus } from "./watch";
+import { DIFF_SPLITS, type DiffSplit } from "./split";
 import { openInBrowser } from "../browser/BrowserPane";
 import { canCommit, changeCount, conflictPrompt, grouped, savedFixAgent, isCommitShortcut, nextStep, remoteItems, summaryLabel, summaryRows, summaryTotal, type ActionOutcome, type Change, type CommitOutcome, type RemoteAction, type Status, type Summary, bulk, rowOrder, select, discardAsk, type DiscardAsk, type Section, mergeActions, mergeLabel, type MergeAction, type MergeInfo, abortLabel, capped, clashWord, CONFLICT_CAP, filesWord, graph, graphLines, commitUrl, explainPrompt, type Commit, type GraphRow, prMismatch, prStateWord, scmGroups, prLooked, prRefreshDelay, PR_STALE_MS, prReason, withPr, type Pr, type PrLook, commitItems, failureTitle, discardPlan, fileTree, reviewPrompt } from "./model";
 
@@ -61,6 +62,9 @@ type Props = {
   onView?: (view: "list" | "tree") => void;
   /** GIT-037: a plain click on a changed file opens its diff in the cell's preview tab. */
   onOpenDiff?: (path: string, staged: boolean) => void;
+  /** GIT-037 (T-033-c): which split that diff opens in, remembered as a setting (`DIFF_SPLIT_KEY`). */
+  diffSplit?: DiffSplit;
+  onDiffSplit?: (split: DiffSplit) => void;
   /** GIT-038: every change in one scrolling tab. */
   onAllChanges?: () => void;
   /** GIT-041: the review notes section, drawn above History. */
@@ -91,7 +95,7 @@ type Failure = { title: string; output: string; fix?: string | null };
 type Composer = { title: string; body: string; base: string; draft: boolean; error: string | null; busy: boolean };
 
 // VIEW-069: an agent action runs once at a time; the button stays greyed until the start has an answer.
-export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, onAllChanges, notesSection }: Props) {
+export default function SourceControlPanel({ dir, writer = { mode: "claude", command: null, instructions: "" }, draft, onDraft, onClose, onFix, pinnedBase, onChangeBase, againstUpstream, groupOrder, onAgainstUpstream, agents, onHand, fixAgent, onFixAgent, onAgentAction, linkedPr, onLinkPr, view = "list", onView, onOpenDiff, diffSplit = "here", onDiffSplit, onAllChanges, notesSection }: Props) {
   const [asking, setAsking] = useState<Asking | null>(null);
   // GIT-003: the rows waiting for a yes before their work is thrown away.
   const [discardingRows, setDiscardingRows] = useState<Change[] | null>(null);
@@ -585,6 +589,15 @@ export default function SourceControlPanel({ dir, writer = { mode: "claude", com
               <button className="ib" title="Review changes: an agent checks the branch before it ships" aria-label="Review changes" disabled={busyAgent} onClick={review}>
                 <Spark />
               </button>
+            )}
+            {onDiffSplit && (
+              <select className="scm-split" aria-label="Open diffs in" title="Which split a clicked file's diff opens in" value={diffSplit} onChange={(e) => onDiffSplit(e.target.value as DiffSplit)}>
+                {DIFF_SPLITS.map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
             )}
             {onAllChanges && (
               <button className="ib" title="All changes: every changed file's diff in one tab" aria-label="All changes" onClick={onAllChanges}>
