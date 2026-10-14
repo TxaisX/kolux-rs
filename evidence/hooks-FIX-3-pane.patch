@@ -1,0 +1,13 @@
+diff --git a/src/terminal/TerminalPane.tsx b/src/terminal/TerminalPane.tsx
+index 1da6699..3a9ddba 100644
+--- a/src/terminal/TerminalPane.tsx
++++ b/src/terminal/TerminalPane.tsx
+@@ -362,7 +362,7 @@ export default function TerminalPane({ hidden = false, gpu = true, name, plan, c
+     // STAT-033: the title the program sets stands in for its state while no hook reports.
+     term.onTitleChange((t) => setGuess((g) => titleState(t) ?? g));
+     // STAT-034: a status printed in band (OSC 9999) goes to Rust; xterm never draws the sequence.
+-    term.parser.registerOscHandler(9999, (data) => (invoke("status_inband", { paneKey: number, data }).catch(() => {}), true));
++    term.parser.registerOscHandler(9999, (data) => (invoke("status_inband", { paneKey: number, terminal: idRef.current, data }).catch(() => {}), true));
+     // council D2 MERGE 31 (3): in a dev build the pane's terminal is reachable from its host element, so the
+     // evidence probes can read the scrollback cap and the buffer length (the way launchWarn.ts exposes
+     // __koluxUsage). A release build has no handle.
