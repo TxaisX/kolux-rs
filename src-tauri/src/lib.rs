@@ -314,8 +314,15 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             // The window is gone: no shell may outlive it.
+            // T-546-c: only the main window holds shells, so the Tower's own window closing changes nothing;
+            // the Tower window goes with the main one, so it never keeps the app running on its own.
             if let tauri::WindowEvent::Destroyed = event {
-                window.state::<Terminals>().kill_all();
+                if window.label() == "main" {
+                    window.state::<Terminals>().kill_all();
+                    if let Some(t) = window.app_handle().get_webview_window("tower") {
+                        let _ = t.close();
+                    }
+                }
             }
             // ACCT-055: files dropped in from outside may be copied into the Explorer, nothing else.
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {

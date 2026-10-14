@@ -560,7 +560,9 @@ pub fn open_in(path: String, command: Option<String>, fence: tauri::State<'_, cr
 /// the `\\?\` prefix of a disk path dropped), never the caller's spelling: Windows collapses `..`
 /// before the disk sees a path, so `C:\proj\a"&x|y\..\sub` is a real folder, and its quote and
 /// shell characters must not reach the app's launcher.
-pub fn open_target(path: &str, allow: impl FnOnce(&str) -> Result<PathBuf, String>) -> Result<PathBuf, String> {
+/// FIX-3 (council AFTER 1): the canonical folder is put to the fence again before it is returned, so
+/// a junction swapped in after the fence's first look cannot send the launcher outside the projects.
+pub fn open_target(path: &str, mut allow: impl FnMut(&str) -> Result<PathBuf, String>) -> Result<PathBuf, String> {
     if !Path::new(path).is_absolute() {
         return Err(format!("{path} is not a full path, so it was not opened"));
     }
@@ -572,14 +574,20 @@ pub fn open_target(path: &str, allow: impl FnOnce(&str) -> Result<PathBuf, Strin
         return Err(format!("{path} is not a folder, so it was not opened"));
     }
     let real = dir.canonicalize().map_err(|e| format!("{path}: {e}"))?;
+    allow(&real.to_string_lossy())?;
     Ok(plain_disk_path(real))
 }
 
-/// `\\?\C:\x` as `C:\x`; any other path as it is (the fence refuses shares and namespace paths).
+/// The longest plain path Windows opens without the verbatim prefix (MAX_PATH less its end mark).
+const PLAIN_MAX: usize = 259;
+
+/// `\\?\C:\x` as `C:\x` while it fits in MAX_PATH (FIX-3, council AFTER 2: a longer one keeps the
+/// prefix, the only spelling of it Windows opens); any other path as it is (the fence refuses shares
+/// and namespace paths).
 fn plain_disk_path(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy();
     match (s.strip_prefix(r"\\?\"), p.components().next()) {
-        (Some(rest), Some(std::path::Component::Prefix(x))) if matches!(x.kind(), std::path::Prefix::VerbatimDisk(..)) => PathBuf::from(rest),
+        (Some(rest), Some(std::path::Component::Prefix(x))) if matches!(x.kind(), std::path::Prefix::VerbatimDisk(..)) && rest.encode_utf16().count() <= PLAIN_MAX => PathBuf::from(rest),
         _ => p,
     }
 }
@@ -693,6 +701,42 @@ mod open_in_tests {
     // FIX-2 (council FS-2): the launcher gets the canonical folder, never the caller's spelling.
     // Windows collapses `..` before the disk sees the path, so a spelling with a quote and shell
     // characters in a component that `..` cancels is a real folder; none of it may come back.
+    // FIX-3 (council AFTER 1): the canonical folder is fenced again before it is launched, so a
+    // junction swapped in between the fence's look and the launch cannot carry the launcher outside.
+    #[test]
+    fn edit043_the_canonical_folder_is_fenced_again_before_it_opens() {
+        let base = std::env::temp_dir().join(format!("kolux-edit043-refence-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let spelled = base.to_string_lossy().to_string();
+        let canonical = base.canonicalize().unwrap().to_string_lossy().to_string();
+        let mut asked = Vec::new();
+        assert!(open_target(&spelled, |p| {
+            asked.push(p.to_string());
+            Ok(PathBuf::from(p))
+        })
+        .is_ok());
+        assert_eq!(asked, vec![spelled.clone(), canonical.clone()]);
+        // a fence that lets the spelling in but not where it really leads refuses the open
+        let err = open_target(&spelled, |p| if p == spelled { Ok(PathBuf::from(p)) } else { Err(format!("{p} is outside them")) }).unwrap_err();
+        assert!(err.contains("outside"), "{err}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // FIX-3 (council AFTER 2): the launcher gets a plain C:\ path only while it fits in MAX_PATH;
+    // a longer one keeps its verbatim prefix, which is the only spelling of it Windows opens.
+    #[cfg(windows)]
+    #[test]
+    fn edit043_a_folder_path_over_max_path_keeps_its_verbatim_prefix() {
+        let short = PathBuf::from(r"\\?\C:\proj\sub");
+        assert_eq!(plain_disk_path(short), PathBuf::from(r"C:\proj\sub"));
+        let fits = format!(r"\\?\C:\{}", "a".repeat(256));
+        assert_eq!(plain_disk_path(PathBuf::from(&fits)).to_string_lossy().chars().count(), 259);
+        let long = format!(r"\\?\C:\{}", "a".repeat(257));
+        assert_eq!(plain_disk_path(PathBuf::from(&long)), PathBuf::from(&long));
+        let share = PathBuf::from(r"\\?\UNC\host\share");
+        assert_eq!(plain_disk_path(share.clone()), share);
+    }
+
     #[cfg(windows)]
     #[test]
     fn edit043_the_folder_opened_is_the_canonical_one_not_the_callers_spelling() {
