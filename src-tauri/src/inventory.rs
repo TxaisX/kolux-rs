@@ -72,6 +72,37 @@ pub fn tabs(terminals: &Terminals) -> Vec<Tab> {
     compose(terminals.every(), &terminals.layout())
 }
 
+/// The program's own name from a program line, quoted or not: no folder, no executable extension
+/// and none of the arguments (which may carry a key or a token).
+pub fn program_name(line: &str) -> Option<String> {
+    let line = line.trim();
+    let first = match line.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or_default(),
+        None => line.split_whitespace().next().unwrap_or_default(),
+    };
+    let base = first.rsplit(['/', '\\']).next().unwrap_or_default();
+    let stem = match base.rsplit_once('.') {
+        Some((stem, ext)) if ["exe", "cmd", "bat", "com", "ps1"].contains(&ext.to_ascii_lowercase().as_str()) => stem,
+        _ => base,
+    };
+    (!stem.is_empty()).then(|| stem.to_string())
+}
+
+/// T-279-c (MERGE 41 review): the inventory as served to agents over the runtime socket: each
+/// tab's program line is cut to the program's name, so a key or token on a command line never
+/// leaves the app; the agent credit is worked out before the cut, so it is unchanged.
+pub fn for_socket(tabs: Vec<Tab>) -> Vec<Tab> {
+    tabs.into_iter().map(|t| Tab { program: t.program.as_deref().and_then(program_name), ..t }).collect()
+}
+
+/// The inventory for the runtime socket right now (see `for_socket`).
+// ponytail: nothing serves the inventory over the socket yet; the cli lane's T-262-b hunk does,
+// and it calls this, never `tabs`.
+#[allow(dead_code)] // the cli lane's T-262-b hunk is its first caller
+pub fn tabs_for_socket(terminals: &Terminals) -> Vec<Tab> {
+    for_socket(tabs(terminals))
+}
+
 /// ORCH-060: the session tab inventory, for the app and for anything that asks the runtime.
 #[tauri::command]
 pub fn session_tabs(terminals: tauri::State<'_, Terminals>) -> Vec<Tab> {
@@ -129,5 +160,29 @@ mod tests {
     fn orch060_an_agent_started_from_a_quoted_path_is_credited() {
         let tabs = compose(vec![session("term-1", Some(r#""C:\Program Files\nodejs\codex.cmd" --sandbox workspace-write"#)), session("term-2", Some("  "))], &[]);
         assert_eq!((tabs[0].agent, tabs[1].agent), (Some("codex"), None));
+    }
+
+    /// T-279-c: over the runtime socket a tab's program line is only the program's name; the
+    /// app's own list keeps the whole line.
+    #[test]
+    fn t279c_the_socket_inventory_carries_the_program_name_and_no_arguments() {
+        let sessions = vec![
+            session("term-1", Some(r#""C:\Program Files\nodejs\codex.cmd" --api-key sk-secret-1"#)),
+            session("term-2", Some("claude --permission-mode auto --token tok-secret-2")),
+            session("term-3", Some("C:/tools/aider.EXE --openai-api-key k-3")),
+            session("term-4", Some("  ")),
+            session("term-5", None),
+        ];
+        let full = compose(sessions, &[]);
+        assert!(full[0].program.as_deref().is_some_and(|p| p.contains("sk-secret-1")), "the app's list keeps the line");
+        let out = for_socket(full.clone());
+        let programs: Vec<Option<&str>> = out.iter().map(|t| t.program.as_deref()).collect();
+        assert_eq!(programs, [Some("codex"), Some("claude"), Some("aider"), None, None]);
+        assert_eq!(out.iter().map(|t| t.agent).collect::<Vec<_>>(), full.iter().map(|t| t.agent).collect::<Vec<_>>(), "the agent credit is unchanged");
+        let wire = serde_json::to_string(&out).unwrap();
+        assert!(!wire.contains("secret") && !wire.contains("k-3"), "{wire}");
+        assert_eq!(program_name("pwsh.exe -NoLogo"), Some("pwsh".to_string()));
+        assert_eq!(program_name("./run.sh --x"), Some("run.sh".to_string()));
+        assert!(super::tabs_for_socket(&Terminals::default()).is_empty());
     }
 }

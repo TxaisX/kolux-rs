@@ -1,0 +1,71 @@
+orchestration lane, council D2 FIX-1 (re-review orchestration-29be574)
+Lane checkout lane/orchestration; BEFORE 29be574; STEP 0 merge of main fb322d5 = 80f677a.
+
+WHAT CHANGED (src-tauri/src/orchestration.rs)
+B1  A failed worker start's way out now runs, in order. A worker that did not answer is
+    stopped first (worker-stop --dispatch, which frees the task) whether or not a terminal was
+    seen; a failed setup's leftover terminal is released; the retry is a plain
+    `worker-start --task <task>` (the old `--retry-of` form was refused because the task was
+    still dispatched). New start_check(tasks,id,run) is the one check worker-start uses, so the
+    test runs the way out against the real refusal.
+A2  The worktree-remove command quotes the path ("path:<p>"), so a folder with a space pastes
+    as one word.
+A3  keep_open's dead `launch == "reused_terminal"` branch removed; a non-null mode is the
+    "handed already open" record.
+S1  keep_open also asks what the terminal runs now (agent_of): another agent than the worker's,
+    or a shell / non-agent program, stays open with the reason. New worker_terminal(fresh,
+    agent) picks a session only when exactly one terminal that appeared during the start sits
+    in the worktree and runs the agent (wired by the cli hunk's wait_ready).
+S2  stop_with applies keep_open: a terminal left open is not killed, the process reads
+    "unverifiable", the dispatch and receipt carry terminalLeftOpen, and stop_warning says
+    "the worker's process was left running: <why>". stop() and release() are kept as wrappers
+    (passing "cannot tell") so the in-flight T-089-c cli patch still compiles; release_with is
+    the real release, called once the cli lane wires it (#[allow(dead_code)] until then).
+S4  worker_label goes through one_line: ANSI/cursor codes stripped (terminal::strip_ansi),
+    every other control char and invisible direction/width mark (U+200B-200F, 202A-202E,
+    2066-2069, FEFF) turned to a space first, whitespace folded, cut to 60.
+S3  fixed on the cli side (created = now_ms()); attention's made-at < 1e12 guard is unchanged.
+
+TESTS (orchestration::)
+Updated  orch017_a_failed_worker_start_names_its_stage_leftovers_and_the_way_out
+Added    orch017_the_way_out_of_a_failed_start_runs_in_order
+         orch022_a_stop_never_ends_a_terminal_that_is_not_the_workers_own
+         orch024_a_release_leaves_open_a_terminal_that_runs_something_else
+         orch016_a_tab_the_user_opens_during_the_wait_is_never_recorded
+         orch066_a_label_is_one_clean_short_line_whatever_the_task_names_hold
+Red on the old code: 5 FAILED, 38 passed (w4-red-keep).
+Green: orchestration:: 43 passed, 0 failed.
+
+CROSS-LANE HUNKS (not applied here; for the coordinator)
+evidence/orchestration-FIX-1-cli.patch                 against fb322d5
+evidence/orchestration-FIX-1-cli-after-T-172-c.patch   against fb322d5 + T-089-c.patch + T-172-c.patch
+  (the first does not apply after T-172-c: cli.rs `let receipt` became `let mut receipt`;
+   use the after-variant when T-089-c and T-172-c land first)
+cli.rs (cli lane):
+  wait_ready(terminals, dir, before, agent, since, timeout): only a terminal not open before the
+    start, in the worktree, running the agent, and only while exactly one does
+    (orchestration::worker_terminal); `before` snapshot taken ahead of `since`.
+  worker-start's dispatched/completed match replaced by orchestration::start_check.
+  hint path quoted (A2); "created": now_ms() (S3).
+  worker-stop calls o::stop_with with agent_of reading "term-N" through terminals.program.
+  the no-report escalation's retry text: worker-stop --dispatch <id> then worker-start --task <task>;
+    its test assertion updated.
+terminal.rs (core lane): deletes program_in, unused after the wait_ready change.
+
+PROOF
+Patch against fb322d5, temporarily applied in-tree then reverted:
+  clippy --all-targets -D warnings clean; cli:: 43 ok, orchestration:: 43 ok, terminal:: 13 ok.
+After-variant, applied on top of T-089-c + T-172-c in-tree then reverted:
+  clippy clean; cli:: 43 ok, orchestration:: 43 ok, terminal:: 13 ok.
+Apply checks (scratch index, removed): FIX-1-cli on fb322d5 ok; T-089-c + T-172-c on fb322d5 ok;
+  after-variant --check on fb322d5 + T-089-c + T-172-c ok.
+Without any patch: clippy clean.
+
+OPEN
+S5 archive truncation marker; S6 release pending saved before the kill; FS3 WORKER_SHOW in the
+read-only list (cli.rs); release_with in the T-089-c RELEASE hunk (cli lane).
+T-172-e exact-spawn stamp (PLAN.md). AFTER A1 (/clear session) and A4 (duplicate ids on restore).
+
+SEEN, NOT FIXED
+terminal::strip_ansi drops newlines, gluing words; one_line pre-spaces them.
+The first full cargo run after the merge died silently after 603 oks under load; the rerun was clean.
