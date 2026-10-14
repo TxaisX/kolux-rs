@@ -174,3 +174,14 @@ export function linkParts(text: string): { text: string; url?: string }[] {
   if (last < text.length) out.push({ text: text.slice(last) });
   return out;
 }
+
+/** STAT-053 (T-027): the ids of the Thought rows, which the toolbar's Expand all opens together. */
+export const thoughtIds = (items: { id: string; kind: string }[]) => items.filter((i) => i.kind === "thought").map((i) => i.id);
+
+/** STAT-053 (T-027): one Thought row opened or folded; every other row keeps its state. */
+export function toggled(open: ReadonlySet<string>, id: string): Set<string> {
+  const n = new Set(open);
+  if (n.has(id)) n.delete(id);
+  else n.add(id);
+  return n;
+}

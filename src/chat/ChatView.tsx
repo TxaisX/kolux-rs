@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { locale } from "../language";
 import "./chat.css";
-import { fold, type View } from "./steps";
+import { fold, thoughtIds as idsOf, toggled, type View } from "./steps";
 import { NoticeRow, PlanRow, StepRow, ThoughtRow } from "./StepRows";
 import { applyRead, chatOffer, combine, lastReply, previewToShow, stamp, type ChatItem, type ChatRead, type Extra, type Offer, type Pending, type Preview, type Row } from "./model";
 
@@ -63,8 +63,8 @@ export default function ChatView({ pane, preview = null, pending = [] }: { pane:
   const [full, setFull] = useState<string | null>(null);
   // STAT-053: Thought rows start folded; the toolbar opens or folds them all.
   const [thoughts, setThoughts] = useState<Set<string>>(() => new Set());
-  const thoughtIds = items.filter((i) => i.kind === "thought").map((i) => i.id);
-  const toggle = (id: string) => setThoughts((t) => { const n = new Set(t); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const thoughtIds = idsOf(items);
+  const toggle = (id: string) => setThoughts((t) => toggled(t, id));
 
   return (
     <div className="chat" aria-label="Chat">
