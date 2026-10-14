@@ -132,3 +132,10 @@ test("a terminal title stands in for the state while no hook reports: spinners a
   expect(headerOf("claude", "running", undefined, false, null, 0, titleState("\u2733 ready") ?? undefined).state).toBe("done");
   expect(headerOf("claude", "running", undefined, false, null, 0, titleState("vim") ?? undefined).state).toBe("working");
 });
+
+test("a title that starts with the done mark reads done first, even when permission words follow it (T-124-c)", () => {
+  expect(titleState("✳ Waiting for permission review")).toBe("done");
+  expect(titleState("  ✳ Needs you: allow Bash?")).toBe("done");
+  // The mark only counts at the start; elsewhere the words decide as before.
+  expect(titleState("Waiting for permission ✳")).toBe("permission");
+});

@@ -272,7 +272,15 @@ impl Session {
         if after != before {
             self.remember(after);
         }
-        Some((Change { state: after, ..Change::default() }, announce))
+        // T-124-c: a child's hook permission names its pending tool, which is what lets the card answer it.
+        let tool = (after == "permission").then(|| self.children.iter().find(|c| c.state == "permission").and_then(|c| c.pending.clone())).flatten();
+        Some((Change { state: after, tool, ..Change::default() }, announce))
+    }
+
+    /// T-124-c: a hook PermissionRequest stands, the lead's or a child's, naming the tool it waits on.
+    /// A permission printed in band (OSC 9999) names none, so there is nothing for a card to answer.
+    pub fn answerable(&self) -> bool {
+        (self.own == Some("permission") && self.pending.is_some()) || self.children.iter().any(|c| c.state == "permission" && c.pending.is_some())
     }
 
     fn apply_lead(&mut self, agent: Agent, name: &str, event: &Value) -> Option<(Change, Option<String>)> {
@@ -285,10 +293,10 @@ impl Session {
         if name == "UserPromptSubmit" && agent == Agent::Claude && str_of(event, "prompt").is_some_and(|p| p.trim_start().starts_with(CONTINUATION)) {
             return None;
         }
-        // T-123-c: Ctrl+C on a draft or Escape on a menu leaves the turn running. A tool step whose id
-        // the lead never reported before the cancel proves it: the cancel is dropped inside the grace,
-        // and a settled interrupt is undone, its misread history line with it.
-        if self.fresh_tool(name, event) {
+        // T-123-c: Ctrl+C on a draft or Escape on a menu leaves the turn running. A sign of life after
+        // the cancel proves it (goes_on): the cancel is dropped inside the grace, and a settled
+        // interrupt is undone, its misread history line with it.
+        if self.goes_on(agent, name, event) {
             self.cancelled = false;
             if self.interrupted {
                 self.interrupted = false;
@@ -402,6 +410,17 @@ impl Session {
         }
     }
 
+    /// T-123-c-b: what proves a turn went on after a cancel. Claude Code's hook reference says Stop
+    /// does not run when the user interrupts and cancelling a running tool fires no Post* hook, so for
+    /// Claude a Stop, or a tool step carrying any id, means the turn was not interrupted. Agents whose
+    /// hook semantics are unverified (Codex) keep T-123-c's rule: only an id unseen at the cancel.
+    fn goes_on(&self, agent: Agent, name: &str, event: &Value) -> bool {
+        match agent {
+            Agent::Claude => name == "Stop" || (matches!(name, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") && str_of(event, "tool_use_id").is_some()),
+            Agent::Codex => self.fresh_tool(name, event),
+        }
+    }
+
     /// T-123-c: a tool step carrying an id the lead had not started when the cancel came. The killed
     /// tool reporting late carries an id on the list; a step with no id at all proves nothing.
     fn fresh_tool(&self, name: &str, event: &Value) -> bool {
@@ -488,7 +507,12 @@ pub fn agent_answer(terminals: tauri::State<'_, crate::terminal::Terminals>, pan
         "codex" => Agent::Codex,
         _ => return Err("not an agent pane".into()),
     };
-    let terminal = with_sessions(|s| s.get(&pane_key).and_then(|x| x.terminal)).ok_or("no session for this pane")?;
+    let (terminal, answerable) = with_sessions(|s| s.get(&pane_key).map(|x| (x.terminal, x.answerable()))).ok_or("no session for this pane")?;
+    let terminal = terminal.ok_or("no session for this pane")?;
+    // T-124-c: keys are typed only for a hook permission; an in-band one has nothing to answer.
+    if !answerable {
+        return Err("no hook permission to answer".into());
+    }
     terminals.write(terminal, answer_keys(agent, approve))?;
     with_sessions(|s| {
         if let Some(x) = s.get_mut(&pane_key) {
@@ -859,6 +883,9 @@ mod tests {
 
     #[test]
     fn stop_after_a_kolux_cancel_reads_interrupted_and_late_events_cannot_revive_it() {
+        // T-123-c-b: the old rule, kept for agents whose hook semantics are unverified (Codex); for
+        // Claude a Stop after a cancel is done (stat_028_rest_b_*).
+        let state = |s: &mut Session, j: &str| s.apply(Agent::Codex, &ev(j)).map(|(c, _)| c.state);
         let mut s = Session::default();
         state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long job"}"#);
         state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#);
@@ -996,14 +1023,16 @@ mod tests {
         assert!(s.settle_cancel(s.cancelled_at + CANCEL_GRACE_MS));
         assert_eq!((s.resolved(), s.interrupted), ("interrupted", true));
         assert!(!s.settle_cancel(u64::MAX), "settled once");
+        // A step with no id proves nothing (a Claude Stop here is T-123-c-b's done, stat_028_rest_b_*).
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash"}"#), None);
-        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), None);
         assert_eq!(s.resolved(), "interrupted");
         assert_eq!(s.history.back().map(|e| (e.state, e.interrupted)), Some(("interrupted", true)));
     }
 
     #[test]
     fn stat_028_rest_a_tool_step_after_a_draft_clearing_cancel_keeps_the_turn_working() {
+        // T-123-c-b: this is the rule for agents with unverified hook semantics (Codex).
+        let state = |s: &mut Session, j: &str| s.apply(Agent::Codex, &ev(j)).map(|(c, _)| c.state);
         // T-123-c: Ctrl+C on a non-empty input box only clears the draft (Esc also closes menus), so the
         // turn goes on. A tool step the lead never reported before the cancel proves it inside the grace.
         let mut s = Session::default();
@@ -1023,6 +1052,8 @@ mod tests {
 
     #[test]
     fn stat_028_rest_a_settled_interrupt_is_undone_by_a_tool_step_it_never_saw_before_the_cancel() {
+        // T-123-c-b: this is the rule for agents with unverified hook semantics (Codex).
+        let state = |s: &mut Session, j: &str| s.apply(Agent::Codex, &ev(j)).map(|(c, _)| c.state);
         // T-123-c: prompt, Ctrl+C on a draft, a Bash step longer than the grace: the settle reads
         // interrupted, then the PreToolUse at +5 s revives the turn and its Stop reads done.
         let mut s = Session::default();
@@ -1051,7 +1082,75 @@ mod tests {
         s.cancel();
         assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#), Some("working"));
         assert!(s.cancelled);
-        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("interrupted"), "a Stop while the cancel stands is still an interruption");
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop"}"#), Some("interrupted"), "for Codex a Stop while the cancel stands is still an interruption");
+    }
+
+    #[test]
+    fn stat_028_rest_b_for_claude_a_stop_while_the_cancel_stands_is_done() {
+        // T-123-c-b: Claude Code runs no Stop when the user interrupts, so a Stop inside the grace
+        // means the cancel only cleared a draft or closed a menu: the turn is done, with its reply.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"again"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu3"}"#);
+        s.cancel();
+        assert!(s.cancelled);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"all set"}"#), Some("done"), "for Claude a Stop while the cancel stands is done");
+        assert_eq!((s.interrupted, s.cancelled, s.reply.as_deref()), (false, false, Some("all set")));
+        assert!(!s.settle_cancel(u64::MAX), "nothing left to settle");
+        let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
+        assert_eq!(states, [("working", false), ("done", false)]);
+    }
+
+    #[test]
+    fn stat_028_rest_b_for_claude_the_pre_cancel_tools_post_and_a_late_stop_undo_a_settled_interrupt() {
+        // T-123-c-b: Ctrl+C on a draft while the turn's last tool runs past the grace, then a reply with
+        // no new tool. A cancelled tool fires no Post* in Claude Code, so PostToolUse(tu1) proves the
+        // turn went on, and the Stop that follows reads done with the reply.
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"long build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + 5_000));
+        assert_eq!(s.resolved(), "interrupted");
+        // A step with no id still proves nothing.
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash"}"#), None);
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#), Some("working"));
+        assert_eq!((s.resolved(), s.interrupted, s.cancelled), ("working", false, false));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"built"}"#), Some("done"));
+        assert_eq!(s.reply.as_deref(), Some("built"));
+        let states: Vec<_> = s.history.iter().map(|e| (e.state, e.interrupted)).collect();
+        assert_eq!(states, [("working", false), ("done", false)], "one turn, never interrupted");
+        // Settled with no tool event at all: the Stop alone undoes the interrupt.
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"think"}"#);
+        s.cancel();
+        assert!(s.settle_cancel(s.cancelled_at + 5_000));
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"Stop","last_assistant_message":"thought"}"#), Some("done"));
+        assert_eq!((s.interrupted, s.reply.as_deref()), (false, Some("thought")));
+        // Inside the grace the pre-cancel tool's Post clears the cancel (the tool finished as the key landed).
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"race"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu9"}"#);
+        s.cancel();
+        assert_eq!(state(&mut s, r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"tu9","error":"exit 1"}"#), Some("working"));
+        assert!(!s.cancelled && !s.settle_cancel(u64::MAX));
+    }
+
+    #[test]
+    fn t124c_an_in_band_permission_has_nothing_to_answer_and_a_hook_one_names_its_tool() {
+        let mut s = Session::default();
+        state(&mut s, r#"{"hook_event_name":"UserPromptSubmit","prompt":"build"}"#);
+        state(&mut s, r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"tu1"}"#);
+        assert_eq!(s.inband("permission").state, "permission");
+        assert!(!s.answerable(), "an OSC 9999 permission names no tool to answer");
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"cargo build"}}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("permission", Some("Bash")));
+        assert!(s.answerable());
+        s.answered();
+        assert!(!s.answerable());
+        // A child's hook permission carries its tool on the lead's change, so the card can answer it.
+        state(&mut s, r#"{"hook_event_name":"SubagentStart","agent_id":"k","agent_type":"w"}"#);
+        let (c, _) = s.apply(Agent::Claude, &ev(r#"{"hook_event_name":"PermissionRequest","agent_id":"k","tool_name":"Write","tool_input":{"file_path":"a.txt"}}"#)).unwrap();
+        assert_eq!((c.state, c.tool.as_deref()), ("permission", Some("Write")));
+        assert!(s.answerable());
     }
 
     #[test]
