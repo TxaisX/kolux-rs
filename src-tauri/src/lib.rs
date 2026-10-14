@@ -32,6 +32,7 @@ mod install;
 mod keybindings;
 mod kits;
 mod links;
+mod menu;
 mod names;
 mod newproject;
 mod notifications;
@@ -61,6 +62,7 @@ mod terminal;
 mod test_dir;
 mod tools;
 mod token_usage;
+mod tray;
 mod trust;
 mod update;
 mod visibility;
@@ -416,6 +418,7 @@ pub fn run() {
             scm::scm_pr, scm::scm_pr_checks, scm::scm_pr_create, scm::scm_open_pr,
             scm::scm_history, scm::scm_commit_files, scm::scm_github_repo,
             keybindings::keybindings_read,
+            menu::menu_sync, menu::menu_popup,
             keybindings::keybindings_write,
             keybindings::keybindings_reload,
             keybindings::keybindings_show,

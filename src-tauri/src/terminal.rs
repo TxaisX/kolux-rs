@@ -686,7 +686,10 @@ impl Terminals {
                 // Drop the session so the PTY closes and the reader thread can finish. A session
                 // still listed ended by itself: Kolux's own kills take it off the list first.
                 let mut by_itself = false;
+                let mut tail = None;
                 if let Ok(mut inner) = registry.lock() {
+                    // AUTO-014: keep the end of a followed run's output before the log goes.
+                    tail = inner.logs.get(&id).map(|l| crate::automations::screen_text(&l.read(None, Some(crate::automations::RUN_OUTPUT_LINES))));
                     by_itself = inner.sessions.remove(&id).is_some();
                     inner.dirs.remove(&id);
                     inner.marks.remove(&id);
@@ -701,7 +704,13 @@ impl Terminals {
                 }
                 crate::activity::terminal_ended(id);
                 // AUTO-012: an automation run followed in this pane is over with it.
-                crate::automations::follow(&exit_app, |s| crate::automations::pane_ended(s, id, code, crate::automations::now_ms()));
+                crate::automations::follow(&exit_app, |s| {
+                    let run = crate::automations::pane_ended(s, id, code, crate::automations::now_ms())?;
+                    if let (Some(r), Some((text, cut))) = (&run, &tail) {
+                        crate::automations::keep_output(s, r, text, *cut)?;
+                    }
+                    Ok(run)
+                });
                 // ORCH-027: a worker's agent that died mid-task tells its coordinator.
                 if by_itself && is_program {
                     if let Ok(store) = exit_app.state::<Mutex<crate::state::Store>>().lock() {
