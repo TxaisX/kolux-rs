@@ -8,8 +8,8 @@
 //!   no event name, so each command passes it as its argument and the script puts it in the route.
 //! - Amp: a plugin file in `~/.config/amp/plugins/` that posts each event itself.
 
-use super::super::{codex_change, home_dir, install_groups, script, write_json, write_script, Change};
-use super::{fenced, names_mine, read_opt, remove_groups, saved::SPOOL_FILE, scratch_only, switch, Plan};
+use super::super::{codex_change, home_dir, install_groups, script, write_atomic, write_json, write_script, Change};
+use super::{back_up, backup_of, fenced, kept, names_mine, read_opt, remove_groups, saved::SPOOL_FILE, scratch_only, switch, target_dir, Plan, BACKUP_RECORD};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,6 +23,10 @@ const GEMINI_TOOL_EVENTS: [&str; 2] = ["BeforeTool", "AfterTool"];
 /// Gemini CLI takes hook timeouts in milliseconds.
 const GEMINI_TIMEOUT: u64 = 10_000;
 pub const ANTIGRAVITY_EVENTS: [&str; 5] = ["PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop"];
+/// FIX-1 (e): Antigravity's tool events take matcher groups; its other events a plain list of handlers.
+const ANTIGRAVITY_TOOL_EVENTS: [&str; 2] = ["PreToolUse", "PostToolUse"];
+/// FIX-1 (e): Amp's tool events carry no input and are never held in the spool (COMPAT 3.1).
+const AMP_TOOL_EVENTS: [&str; 2] = ["tool.call", "tool.result"];
 pub const AMP_EVENTS: [&str; 5] = ["session.start", "agent.start", "tool.call", "tool.result", "agent.end"];
 /// Antigravity's tools that put a question to the user: the pane waits on them (STAT-010).
 const ASK_TOOLS: [&str; 2] = ["ask_question", "ask_permission"];
@@ -74,7 +78,7 @@ pub fn normalize(path: &str, event: &Value) -> Option<Value> {
     } else if path == "/amp" {
         let (name, out) = match str_of("event")? {
             "agent.start" => ("UserPromptSubmit", json!({ "prompt": str_of("message") })),
-            "tool.call" => ("PreToolUse", json!({ "tool_name": str_of("tool"), "tool_input": event.get("input") })),
+            "tool.call" => ("PreToolUse", json!({ "tool_name": str_of("tool") })),
             "tool.result" => ("PostToolUse", json!({ "tool_name": str_of("tool") })),
             // STAT-011: an end that is not `done` (cancelled, an error) is an interruption.
             "agent.end" => ("Stop", json!({ "kolux_interrupted": str_of("status") != Some("done") })),
@@ -130,6 +134,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 const EVENTS = {EVENTS}
+const TOOL_EVENTS = {TOOL_EVENTS}
 const text = (v) => (typeof v === 'string' ? v : undefined)
 
 async function send(name, event) {
@@ -141,14 +146,16 @@ async function send(name, event) {
     const [p, t] = readFileSync(env.KOLUX_HOOK_ENDPOINT, 'utf8').trim().split(/\s+/)
     if (p && t) { port = p; token = t }
   } catch {}
-  const body = JSON.stringify({ event: name, thread: text(event?.thread?.id), message: text(event?.message), tool: text(event?.tool), input: event?.input, status: text(event?.status) })
+  // The prompt goes with agent.start only; a tool's input never leaves Amp.
+  const body = JSON.stringify({ event: name, thread: text(event?.thread?.id), message: name === 'agent.start' ? text(event?.message) : undefined, tool: text(event?.tool), status: text(event?.status) })
   try {
     if (!port || !token) throw new Error('no Kolux')
     // Loopback only: the same hook listener the .cmd scripts post to with curl.
-    const local = `http://127.0.0.1:${port}/amp`
-    await fetch(local, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Kolux-Token': token, 'X-Kolux-Pane': env.KOLUX_HOOK_IDENTITY }, body, signal: AbortSignal.timeout(1500) })
+    await fetch(`http://127.0.0.1:${port}/amp`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Kolux-Token': token, 'X-Kolux-Pane': env.KOLUX_HOOK_IDENTITY }, body, signal: AbortSignal.timeout(1500) })
   } catch {
     // Kolux is closed or not answering: the event waits, one whole line, for the next start.
+    // A tool event is only worth its moment: it is never held.
+    if (TOOL_EVENTS.includes(name)) return
     try {
       if (env.KOLUX_HOOK_ENDPOINT) appendFileSync(join(dirname(env.KOLUX_HOOK_ENDPOINT), '{SPOOL}'), `amp|${env.KOLUX_HOOK_IDENTITY}||${body}` + String.fromCharCode(10))
     } catch {}
@@ -161,6 +168,7 @@ export default function (amp) {
 "#
     .replace("{SPOOL}", SPOOL_FILE)
     .replace("{EVENTS}", &json!(AMP_EVENTS).to_string())
+    .replace("{TOOL_EVENTS}", &json!(AMP_TOOL_EVENTS).to_string())
 }
 
 /// A fenced run (test, dev, lane) writes only below a scratch marker in the temp folder; the
@@ -180,33 +188,95 @@ fn parse(file: &Path, text: Option<&str>) -> Result<Value, String> {
     }
 }
 
+/// FIX-1 (a): a copy of the user's `file` is kept (and checked against its record) before Kolux
+/// writes it (`agent_hooks::back_up`). A file that did not exist has nothing to keep; one that
+/// already holds Kolux's entries with no copy was written by Kolux (or by an install before FIX-1),
+/// so a copy of it would only bring Kolux's entries back on removal.
+fn keep_copy(home: &Path, file: &Path, agent: &str, existed: bool, mine_already: bool) -> Result<(), String> {
+    if !existed || (mine_already && !backup_of(file).exists()) {
+        return Ok(());
+    }
+    if let Some((original, copy)) = back_up(file, &target_dir(home, file).join(BACKUP_RECORD))? {
+        eprintln!("kolux-rs: {agent} hooks: kept a copy before the first write: sha256 original {original}, backup {copy}");
+    }
+    Ok(())
+}
+
+/// FIX-1 (a): `v` goes back into `file`; when it reads the same as the copy kept before Kolux's
+/// first write, the copy's own bytes are written, so the file is byte for byte the user's again.
+fn write_back(file: &Path, v: &Value, text: &str) -> Result<(), String> {
+    match kept(file).filter(|(_, c)| c == v) {
+        Some((bytes, _)) => write_atomic(file, &bytes, Some(text)),
+        None => write_json(file, v, Some(text)),
+    }
+}
+
+/// FIX-1 (c): a value Kolux would have to replace to add its own groups is the user's, so the
+/// file is refused, never rewritten.
+fn refuse_shape(file: &Path, v: &Value, events: &[&str]) -> Result<(), String> {
+    let bad = |what: String| Err(format!("{} has {what}; left alone", file.display()));
+    let Some(root) = v.as_object() else { return bad("a top level that is not an object".into()) };
+    let Some(hooks) = root.get("hooks") else { return Ok(()) };
+    let Some(hooks) = hooks.as_object() else { return bad("a \"hooks\" value that is not an object".into()) };
+    match events.iter().find(|e| hooks.get(**e).is_some_and(|g| !g.is_array())) {
+        Some(e) => bad(format!("a \"{e}\" value that is not a list")),
+        None => Ok(()),
+    }
+}
+
+/// FIX-1 (b): Gemini CLI hands a hook command to PowerShell's `-Command` on Windows (its shell
+/// utilities take a PowerShell named by ComSpec, else pwsh, else Windows PowerShell), where a bare
+/// quoted path is only printed. So the script is called with `&` on a single-quoted path, any `'`
+/// doubled. Called this way it reads the agent's own stdin byte for byte; piping `$input` into it
+/// would re-encode the event through the console code page.
+pub fn gemini_command(script: &str) -> String {
+    format!("& '{}'", script.replace('\'', "''"))
+}
+
 /// Gemini CLI: one Kolux group under each event; the user's own hooks stay.
 pub fn install_gemini(home: &Path, file: &Path) -> Result<bool, String> {
-    let command = format!("\"{}\"", write_gemini_script(home)?);
+    let command = gemini_command(&write_gemini_script(home)?);
     let text = read_opt(file)?;
     let mut v = parse(file, text.as_deref())?;
+    refuse_shape(file, &v, &GEMINI_EVENTS)?;
+    let mine_already = remove_groups(&mut v.clone(), false);
     let changed = install_groups(&mut v, &GEMINI_EVENTS, &GEMINI_TOOL_EVENTS, &command, GEMINI_TIMEOUT);
     if changed {
+        keep_copy(home, file, "gemini", text.is_some(), mine_already)?;
         write_json(file, &v, text.as_deref())?;
     }
     Ok(changed)
 }
 
-/// Takes Kolux's entries out of a `{"hooks": {...}}` file (Gemini CLI's settings).
+/// Takes Kolux's entries out of a `{"hooks": {...}}` file (Gemini CLI's settings). A `hooks`
+/// object left empty goes too unless the copy kept before the install had one (as for Claude Code).
 pub fn remove_hooks(file: &Path) -> Result<bool, String> {
     let Some(text) = read_opt(file)? else { return Ok(false) };
     let mut v = parse(file, Some(&text))?;
-    let changed = remove_groups(&mut v, false);
+    let changed = remove_groups(&mut v, kept(file).is_none_or(|(_, c)| c.get("hooks").is_none()));
     if changed {
-        write_json(file, &v, Some(&text))?;
+        write_back(file, &v, &text)?;
     }
     Ok(changed)
 }
 
+/// Every handler of a bundle: those in a tool event's matcher groups and those listed directly
+/// under the other events.
+fn handlers(bundle: &Value) -> Vec<&Value> {
+    let mut out = Vec::new();
+    for h in bundle.as_object().into_iter().flat_map(|o| o.values()).filter_map(Value::as_array).flatten() {
+        match h.get("hooks").and_then(Value::as_array) {
+            Some(hs) => out.extend(hs),
+            None => out.push(h),
+        }
+    }
+    out
+}
+
 /// A bundle every command of which is Kolux's.
 fn bundle_mine(bundle: &Value) -> bool {
-    let hooks = || bundle.as_object().into_iter().flat_map(|o| o.values()).filter_map(Value::as_array).flatten().filter_map(|g| g.get("hooks")).filter_map(Value::as_array).flatten();
-    bundle.is_object() && hooks().next().is_some() && hooks().all(names_mine)
+    let hs = handlers(bundle);
+    bundle.is_object() && !hs.is_empty() && hs.into_iter().all(names_mine)
 }
 
 /// Antigravity: Kolux's own bundle, one command per event naming it.
@@ -218,12 +288,23 @@ pub fn install_antigravity(home: &Path, file: &Path) -> Result<bool, String> {
     if root.get(NAME).is_some_and(|b| !bundle_mine(b)) {
         return Err(format!("{} has a {NAME} bundle that is not Kolux's; left alone", file.display()));
     }
-    let bundle: Map<String, Value> = ANTIGRAVITY_EVENTS.iter().map(|e| (e.to_string(), json!([{ "hooks": [{ "type": "command", "command": format!("\"{path}\" {e}"), "timeout": 10 }] }]))).collect();
+    let handler = |e: &str| json!({ "type": "command", "command": format!("\"{path}\" {e}"), "timeout": 10 });
+    let mut bundle: Map<String, Value> = ANTIGRAVITY_EVENTS
+        .iter()
+        .map(|e| (e.to_string(), if ANTIGRAVITY_TOOL_EVENTS.contains(e) { json!([{ "matcher": "*", "hooks": [handler(e)] }]) } else { json!([handler(e)]) }))
+        .collect();
+    // FIX-1 (e): the user's switch on the bundle stays as he set it.
+    let had = root.get(NAME);
+    if let Some(on) = had.and_then(|b| b.get("enabled")) {
+        bundle.insert("enabled".into(), on.clone());
+    }
     let bundle = Value::Object(bundle);
-    if root.get(NAME) == Some(&bundle) {
+    if had == Some(&bundle) {
         return Ok(false);
     }
+    let mine_already = had.is_some();
     root.insert(NAME.into(), bundle);
+    keep_copy(home, file, "antigravity", text.is_some(), mine_already)?;
     write_json(file, &v, text.as_deref())?;
     Ok(true)
 }
@@ -236,7 +317,7 @@ pub fn remove_antigravity(file: &Path) -> Result<bool, String> {
         return Ok(false);
     }
     root.remove(NAME);
-    write_json(file, &v, Some(&text))?;
+    write_back(file, &v, &text)?;
     Ok(true)
 }
 
@@ -247,17 +328,22 @@ pub fn install_amp(file: &Path) -> Result<bool, String> {
     if old.as_deref() == Some(plugin.as_str()) {
         return Ok(false);
     }
-    if old.is_some_and(|o| !o.contains("Written by Kolux RS")) {
+    if old.as_deref().is_some_and(|o| !amp_mine(o)) {
         return Err(format!("{} is not Kolux's own plugin; left alone", file.display()));
     }
-    fs::create_dir_all(file.parent().ok_or("no plugin folder")?).map_err(|e| e.to_string())?;
-    fs::write(file, plugin).map_err(|e| format!("{}: {e}", file.display()))?;
+    // FIX-1 (e): whole or not at all, and never over a file saved since it was read.
+    write_atomic(file, plugin.as_bytes(), old.as_deref())?;
     Ok(true)
+}
+
+/// FIX-1 (e): Kolux's plugin says so on its first line; the words anywhere else are the user's.
+fn amp_mine(text: &str) -> bool {
+    text.lines().next().is_some_and(|l| l.starts_with("// ") && l.contains("Written by Kolux RS"))
 }
 
 pub fn remove_amp(file: &Path) -> Result<bool, String> {
     match read_opt(file)? {
-        Some(t) if t.contains("Written by Kolux RS") => fs::remove_file(file).map(|_| true).map_err(|e| format!("{}: {e}", file.display())),
+        Some(t) if amp_mine(&t) =>fs::remove_file(file).map(|_| true).map_err(|e| format!("{}: {e}", file.display())),
         _ => Ok(false),
     }
 }
@@ -295,6 +381,10 @@ fn inspect_antigravity(file: &Path) -> (&'static str, Option<String>) {
     if !bundle_mine(bundle) {
         return ("error", Some(format!("a {NAME} bundle that is not Kolux's")));
     }
+    // FIX-1 (e): the user switched the bundle off in Antigravity's own file.
+    if bundle.get("enabled") == Some(&Value::Bool(false)) {
+        return ("disabled", Some(format!("the {NAME} bundle is switched off (\"enabled\": false)")));
+    }
     let missing: Vec<&str> = ANTIGRAVITY_EVENTS.iter().copied().filter(|e| bundle.get(e).is_none()).collect();
     if missing.is_empty() {
         ("installed", None)
@@ -307,7 +397,7 @@ fn inspect_amp(file: &Path) -> (&'static str, Option<String>) {
     match read_opt(file) {
         Ok(None) => ("not installed", None),
         Ok(Some(t)) if t == amp_plugin() => ("installed", None),
-        Ok(Some(t)) if t.contains("Written by Kolux RS") => ("partial", Some("an older Kolux plugin".into())),
+        Ok(Some(t)) if amp_mine(&t) => ("partial", Some("an older Kolux plugin".into())),
         Ok(Some(_)) => ("error", Some(format!("{} is not Kolux's own plugin; left alone", file.display()))),
         Err(e) => ("error", Some(e)),
     }
@@ -443,5 +533,191 @@ mod tests {
     fn the_antigravity_script_routes_by_its_argument() {
         let s = script("antigravity", "antigravity/%~1", true);
         assert!(s.contains("/antigravity/%~1\"") && s.contains("antigravity/%~1|"));
+    }
+
+    fn sha(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// FIX-1 (a): the `.bak-kolux` copy holds the file as it was, and its record names the copy
+    /// with that hash.
+    fn kept_and_recorded(home: &Path, file: &Path, original: &[u8]) {
+        let copy = super::super::backup_of(file);
+        assert_eq!(fs::read(&copy).expect("a copy was kept before the first write"), original);
+        let record = fs::read_to_string(super::super::target_dir(home, file).join(super::super::BACKUP_RECORD)).expect("the copy has a record");
+        let want = (sha(original), copy.display().to_string());
+        assert!(record.lines().filter_map(|l| l.split_once("  ")).any(|(h, p)| (h.to_string(), p.to_string()) == want), "{record}");
+    }
+
+    #[test]
+    fn fix1_gemini_install_keeps_a_copy_and_removal_gives_back_the_bytes() {
+        let home = scratch("fix1-gemini");
+        let file = gemini_file(&home);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        // A layout Kolux's own writer would never produce, so only the kept bytes can give it back.
+        let original = b"{ \"theme\": \"dark\", \"mcpServers\": {\"a\": {\"command\": \"x\"}} }\n".to_vec();
+        fs::write(&file, &original).unwrap();
+        assert!(install_gemini(&home, &file).unwrap());
+        kept_and_recorded(&home, &file, &original);
+        assert!(!install_gemini(&home, &file).unwrap(), "a second install changes nothing and keeps the first copy");
+        kept_and_recorded(&home, &file, &original);
+        assert!(remove_hooks(&file).unwrap());
+        assert_eq!(fs::read(&file).unwrap(), original, "install then remove is byte for byte the user's file");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn fix1_antigravity_install_keeps_a_copy_and_removal_gives_back_the_bytes() {
+        let home = scratch("fix1-agy");
+        let file = antigravity_file(&home);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let original = b"{\"mine\": {\"Stop\": [{\"command\": \"notify\"}]}}".to_vec();
+        fs::write(&file, &original).unwrap();
+        assert!(install_antigravity(&home, &file).unwrap());
+        kept_and_recorded(&home, &file, &original);
+        assert!(remove_antigravity(&file).unwrap());
+        assert_eq!(fs::read(&file).unwrap(), original);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// FIX-1 (b): Gemini CLI runs a hook command through PowerShell's `-Command` on Windows (and
+    /// adds its own exit-code check); the stored command must run the script, with the event on
+    /// its stdin byte for byte, from a home whose path holds a `'`.
+    #[cfg(windows)]
+    #[test]
+    fn fix1_the_gemini_command_runs_the_script_through_powershell_with_stdin_intact() {
+        use std::io::Write as _;
+        use std::process::{Command, Stdio};
+        let home = scratch("fix1-ps-o'q");
+        let file = gemini_file(&home);
+        assert!(install_gemini(&home, &file).unwrap());
+        let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        let command = v["hooks"]["BeforeTool"].as_array().unwrap().iter().flat_map(|g| g["hooks"].as_array().unwrap()).find(|h| names_mine(h)).unwrap()["command"].as_str().unwrap().to_string();
+        // A stand-in in the script's place that keeps what reached its stdin.
+        let dir = home.join(crate::hooks::SCRIPT_DIR);
+        fs::write(dir.join(GEMINI_SCRIPT), "@echo off\r\n%SystemRoot%\\System32\\more.com >\"%~dp0got.txt\"\r\nexit /b 0\r\n").unwrap();
+        let payload = "{\"hook_event_name\":\"BeforeTool\",\"session_id\":\"g1\",\"prompt\":\"caf\u{e9} \u{2603}\"}";
+        let mut child = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &format!("{command}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}")])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(payload.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(!String::from_utf8_lossy(&out.stdout).contains(GEMINI_SCRIPT), "the command is run, not printed: {}", String::from_utf8_lossy(&out.stdout));
+        let got = fs::read(dir.join("got.txt")).expect("the script ran");
+        assert!(got.starts_with(payload.as_bytes()), "{:?}", String::from_utf8_lossy(&got));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn fix1_gemini_refuses_hook_values_it_would_have_to_replace() {
+        let home = scratch("fix1-shape");
+        let file = gemini_file(&home);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        for text in ["[1]", "\"text\"", r#"{"hooks":[1]}"#, r#"{"hooks":"off"}"#, r#"{"hooks":{"BeforeTool":{"matcher":"x","hooks":[]}}}"#, r#"{"hooks":{"AfterAgent":"run-me"}}"#, "not json"] {
+            fs::write(&file, text).unwrap();
+            let e = install_gemini(&home, &file).expect_err(text);
+            assert!(e.ends_with("left alone"), "{text}: {e}");
+            assert_eq!(fs::read_to_string(&file).unwrap(), text, "the file is untouched");
+            assert!(!super::super::backup_of(&file).exists(), "{text}: no copy of a file that is not written");
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn fix1_antigravity_refuses_malformed_files() {
+        let home = scratch("fix1-agy-shape");
+        let file = antigravity_file(&home);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        for text in ["[1]", "not json", r#"{"kolux-rs":"x"}"#, r#"{"kolux-rs":{"Stop":"notify"}}"#] {
+            fs::write(&file, text).unwrap();
+            assert!(install_antigravity(&home, &file).is_err(), "{text}");
+            assert_eq!(fs::read_to_string(&file).unwrap(), text);
+            assert!(!remove_antigravity(&file).unwrap_or(false));
+            assert_eq!(fs::read_to_string(&file).unwrap(), text);
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// FIX-1 (e): the documented shapes (tool events take matcher groups, the others a plain list of
+    /// handlers) and the user's off switch on the bundle survives a reinstall.
+    #[test]
+    fn fix1_antigravity_keeps_the_users_off_switch_and_writes_the_documented_shapes() {
+        let home = scratch("fix1-agy-off");
+        let file = antigravity_file(&home);
+        assert!(install_antigravity(&home, &file).unwrap());
+        let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v[NAME]["PreToolUse"][0]["matcher"], "*");
+        assert!(v[NAME]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("antigravity.cmd\" PreToolUse"));
+        for e in ["PreInvocation", "PostInvocation", "Stop"] {
+            assert!(v[NAME][e][0]["command"].as_str().unwrap().ends_with(&format!("antigravity.cmd\" {e}")), "{e}: {}", v[NAME][e]);
+        }
+        let mut off = v.clone();
+        off[NAME]["enabled"] = json!(false);
+        let text = serde_json::to_string_pretty(&off).unwrap();
+        fs::write(&file, &text).unwrap();
+        assert_eq!(inspect_antigravity(&file).0, "disabled");
+        assert!(!install_antigravity(&home, &file).unwrap(), "a reinstall leaves the switched-off bundle as it is");
+        assert_eq!(fs::read_to_string(&file).unwrap(), text);
+        // An older Kolux bundle is brought up to date and stays off.
+        off[NAME]["Stop"] = json!([{ "hooks": [{ "type": "command", "command": v[NAME]["Stop"][0]["command"] }] }]);
+        fs::write(&file, serde_json::to_string_pretty(&off).unwrap()).unwrap();
+        assert!(install_antigravity(&home, &file).unwrap());
+        let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v[NAME]["enabled"], false);
+        assert!(v[NAME]["Stop"][0]["command"].is_string());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// FIX-1 (e): the header is the first line only; the plugin is written whole or not at all; a
+    /// tool event carries no input and is never held in the spool; the prompt goes on agent.start only.
+    #[test]
+    fn fix1_amp_plugin_is_atomic_owned_by_its_first_line_and_keeps_tool_input_out() {
+        let home = scratch("fix1-amp");
+        let file = amp_file(&home);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let mine = "// my own plugin\n// (I copied the line \"Written by Kolux RS\" from theirs)\nexport default () => {}\n";
+        fs::write(&file, mine).unwrap();
+        assert!(install_amp(&file).is_err());
+        assert!(!remove_amp(&file).unwrap());
+        assert_eq!(fs::read_to_string(&file).unwrap(), mine);
+        assert_eq!(inspect_amp(&file).0, "error");
+        fs::remove_file(&file).unwrap();
+        assert!(install_amp(&file).unwrap());
+        let left: Vec<_> = fs::read_dir(file.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, vec![std::ffi::OsString::from(format!("{NAME}.js"))], "no temp file left beside it");
+        let plugin = amp_plugin();
+        assert!(plugin.lines().next().unwrap().contains("Written by Kolux RS"));
+        assert!(!plugin.contains("event?.input") && !plugin.contains("input:"), "the tool input never leaves Amp");
+        assert!(plugin.contains("name === 'agent.start' ? text(event?.message)"));
+        assert!(plugin.contains("if (TOOL_EVENTS.includes(name)) return"));
+        assert!(plugin.contains("fetch(`http://127.0.0.1:${port}/amp`"), "the loopback URL stays in the fetch call where the privacy audit sees it");
+        let e = normalize("/amp", &json!({"event":"tool.call","tool":"Bash","input":{"cmd":"echo secret"}})).unwrap();
+        assert!(e.get("tool_input").is_none(), "{e}");
+        assert!(normalize("/amp", &json!({"event":"agent.end","status":"done","message":"the whole reply"})).unwrap().get("prompt").is_none());
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// FIX-1 (S4): `apply` writes a vendor's file only below a scratch marker in a fenced run.
+    #[test]
+    fn fix1_apply_writes_vendor_files_only_below_a_scratch_marker() {
+        let home = scratch("fix1-fence");
+        let profile = Path::new("kolux-rs-test-profile");
+        for id in ["gemini", "antigravity", "amp"] {
+            let e = apply(&home, profile, id, Plan::Install).expect_err(id);
+            assert!(e.contains("left alone"), "{id}: {e}");
+        }
+        assert!(!gemini_file(&home).exists() && !antigravity_file(&home).exists() && !amp_file(&home).exists());
+        fs::write(home.join(super::super::SCRATCH_MARKER), "").unwrap();
+        for id in ["gemini", "antigravity", "amp"] {
+            assert_eq!(apply(&home, profile, id, Plan::Install), Ok("installed"), "{id}");
+        }
+        assert!(gemini_file(&home).exists() && antigravity_file(&home).exists() && amp_file(&home).exists());
+        let _ = fs::remove_dir_all(&home);
     }
 }
