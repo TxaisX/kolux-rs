@@ -19,6 +19,12 @@ The bottom of the sidebar holds "New session" (start an agent in a new pane insi
 
 When someone makes a worktree outside Kolux, a notice says "N new workspace(s)" with Show, Hide and Done.
 
+## The right sidebar
+
+On the Terminals view, the right sidebar holds Explorer, Source Control and Checks. Ctrl+L hides or shows it, dragging its edge resizes it, and it remembers the last tab you used. When it is too narrow for every tab, the ones that do not fit go into a **More** menu; picking one there brings it onto the strip.
+
+If a panel breaks, it is replaced by "This panel stopped working and was closed; the rest of Kolux keeps running." with **Try again**, which draws it afresh. Switching tabs also starts it afresh.
+
 ## What a worktree is
 
 A worktree is an extra working folder for the same Git repository, on its own branch. Kolux calls it a workspace. Each AI can then edit its own files, and nobody collides. The original folder stays as the main checkout.
@@ -36,6 +42,14 @@ Press the plus, or Ctrl+N (also Ctrl+Shift+N). The form asks for:
 | Note | An optional first request for the agent |
 
 "Advanced…" adds a branch name, reuse of an existing branch, opening a pull request, a setup script (run it, or skip it, in a tab, a split right or a split below, and optionally wait for it) and the base to start from. Press "Create workspace" or Cancel. Tick "Create more" to keep the form open for another.
+
+## Setup scripts and the issue command
+
+The setup script is `scripts: setup:` in the new workspace's `kolux.yaml` (a settings file in the repository). It runs inside the workspace with three variables set: `KOLUX_ROOT_PATH` (the main folder), `KOLUX_WORKTREE_PATH` (the workspace's folder) and `KOLUX_WORKSPACE_NAME` (that folder's name). A `.bat` or `.cmd` script runs through Command Prompt even when your shell is Git Bash. If Kolux was started from a half-active conda environment, those conda variables are cleared first.
+
+A workspace made from a linked GitHub issue also runs the project's issue command, in its own tab. It is your own `.kolux/issue-command` file in the repository when there is one, otherwise `issueCommand:` in `kolux.yaml`. `{{issue}}` becomes the issue number and `{{issueUrl}}` its address; a command with neither gets the number added at the end. The issue's title is never put in, because anyone can write it. A linked pull request runs nothing, and skipping the setup script skips the issue command too.
+
+Kolux does not yet ask before running a repository's `kolux.yaml` commands, so only create workspaces in repositories you trust.
 
 While Git works, a stand-in row shows "creating…" with a cancel x.
 
@@ -87,6 +101,8 @@ Each section has a count, Stage all or Unstage all, and Discard all. Each row ha
 
 Header buttons: Review changes (an agent checks the branch), All changes, list or tree view, Refresh, Close.
 
+"Open diffs in" picks where a clicked file's diff opens: **This split**, **Next split** (the split after this one; with only one split, a new one) or **New split**.
+
 ### Commit
 
 Type a message in the box (placeholder "Message (Ctrl+Enter to commit on <branch>)") and press Ctrl+Enter. "Write the message with AI" drafts one. Your draft is kept per workspace.
@@ -106,7 +122,7 @@ The main button proposes the next step on its own:
 
 A "Commit and" menu commits then pushes, syncs or force pushes. A "Remote actions" menu has Push, Pull, Sync, Fetch, Fast-forward, Force push with lease, Publish branch and Rebase from base.
 
-The panel can also create a pull request (Title, Description, base branch), open the current one, link another, merge it, and run "Fix with AI" on failed checks. The list refreshes after each action, and within about a second of any change to the workspace's files or Git state while the panel is open. Changes inside build and package folders (target, node_modules, dist, .venv) do not trigger it. If Kolux cannot watch the folder, it checks every 4 seconds instead. Open diffs and All Changes follow the same rule.
+The panel can also create a pull request (Title, Description, base branch), open the current one, link another, merge it, and run "Fix with AI" on failed checks. The list refreshes after each action, and within about a second of any change to the workspace's files or Git state while the panel is open. Changes to files Git ignores (your .gitignore, which usually covers build and package folders) do not trigger it, and while files keep changing the status is read at most once every 4 seconds. If Kolux cannot watch the folder, it checks every 4 seconds instead. Open diffs and All Changes follow the same rule.
 
 ### Discarding changes
 
@@ -133,4 +149,4 @@ Claude and Codex tabs with a known session resume it. Other agents return at the
 
 Quitting with unsaved editor text asks "Quit with unsaved changes?" with "Quit without saving" or "Keep working".
 
-<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx at d5034cd -->
+<!-- verified against: src/projects/ProjectsPanel.tsx, src/projects/AddProject.tsx, src/glossary.ts, src/scm/SourceControlPanel.tsx, src/scm/split.ts, src/scm/watch.ts, src-tauri/src/scm_watch.rs, src/scm/model.ts, src/chrome/RightSidebar.tsx, src/terminal/layout.ts, src/keys/actions.ts, src/App.tsx, src-tauri/src/setup.rs, src/setup/IssueCommand.tsx at c540055 -->

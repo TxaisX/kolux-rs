@@ -27,10 +27,146 @@ pub const SAFETY: Duration = Duration::from_secs(30);
 /// The old poll, for a worktree whose watch could not start or broke.
 pub const FALLBACK: Duration = Duration::from_secs(4);
 
-/// Folder names whose changes never count, on any path segment: build output and package caches,
-/// which git ignores in practice and which would keep the quiet timer from ever running out.
-/// ponytail: a fixed list; the upgrade is `git check-ignore --stdin` cached per root (T-033-c).
+/// The least time between the start of one read and the next change-driven read (T-033-c, council
+/// FIX-SOON 2): churn that git does not ignore is read at most this often instead of every second.
+pub const GAP: Duration = Duration::from_secs(4);
+
+/// Folder names that stand in for git's answer when git cannot give one (no repository, git
+/// missing): build output and package caches that are ignored in practice.
 pub const SKIP: [&str; 4] = ["target", "node_modules", "dist", ".venv"];
+
+/// GIT-001 (T-033-c): which working-tree folders git ignores, asked of git once per folder and
+/// remembered per root. A change under an ignored folder never moves the status, so it never
+/// starts a read. Folders are asked shortest first, so `target` is one answer for everything
+/// beneath it. A folder git ignores but still tracks files in is kept (T-033-f: a change to a
+/// tracked file moves the status whatever the ignore rules say). A change to a `.gitignore`, to
+/// the main checkout's `.git/info/exclude` or, for a linked worktree, to the shared
+/// `info/exclude` of its repository forgets the root's answers. Files are judged by their folder
+/// (an ignored file in a kept folder costs one extra read, never a missed one).
+#[derive(Debug, Default)]
+pub struct Ignores {
+    known: std::collections::HashMap<String, bool>,
+}
+
+impl Ignores {
+    /// Whether `rel` (forward slashes, relative to the root) lies under an ignored folder; `ask`
+    /// answers for the folders not yet known, in order, or None when git could not say.
+    pub fn ignored(&mut self, rel: &str, ask: &mut dyn FnMut(&[String]) -> Option<Vec<bool>>) -> bool {
+        let segs: Vec<&str> = rel.split('/').filter(|s| !s.is_empty()).collect();
+        let dirs: Vec<String> = (1..segs.len()).map(|n| segs[..n].join("/")).collect();
+        if dirs.iter().any(|d| self.known.get(d) == Some(&true)) {
+            return true;
+        }
+        let unknown: Vec<String> = dirs.iter().filter(|d| !self.known.contains_key(*d)).cloned().collect();
+        if unknown.is_empty() {
+            return false;
+        }
+        match ask(&unknown) {
+            Some(answers) => {
+                for (d, a) in unknown.iter().zip(answers) {
+                    self.known.insert(d.clone(), a);
+                }
+                dirs.iter().any(|d| self.known.get(d) == Some(&true))
+            }
+            None => segs.iter().any(|s| SKIP.iter().any(|k| s.eq_ignore_ascii_case(k))),
+        }
+    }
+    /// The ignore rules changed: every answer is stale.
+    pub fn forget(&mut self) {
+        self.known.clear();
+    }
+}
+
+/// Whether a working-tree path is a `.gitignore` anywhere or the repository's own exclude file.
+pub fn is_rule_file(rel: &str) -> bool {
+    let rel = rel.trim_start_matches('/');
+    rel.rsplit('/').next() == Some(".gitignore") || rel.eq_ignore_ascii_case(".git/info/exclude")
+}
+
+/// Asks git which of `dirs` it ignores, one `check-ignore --stdin` for the batch; None when git
+/// could not answer (exit codes other than 0 and 1, or no git). With `-v -n -z` every path comes
+/// back as source NUL line NUL pattern NUL path NUL; an empty source means not ignored, and a
+/// pattern starting with `!` is a negation, which un-ignores.
+pub fn ask_git(root: &Path, dirs: &[String]) -> Option<Vec<bool>> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = crate::git::command(&["check-ignore", "--stdin", "-z", "-v", "-n"], Some(root)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    {
+        let mut stdin = child.stdin.take()?;
+        for d in dirs {
+            stdin.write_all(format!("{d}/\0").as_bytes()).ok()?;
+        }
+    }
+    let out = child.wait_with_output().ok()?;
+    if !matches!(out.status.code(), Some(0 | 1)) {
+        return None;
+    }
+    let mut answers = parse_check_ignore(&String::from_utf8_lossy(&out.stdout), dirs);
+    // T-033-f: an ignored folder that still holds tracked files is not ignored for the watch.
+    let ignored: Vec<String> = dirs.iter().zip(&answers).filter(|(_, a)| **a).map(|(d, _)| format!("{d}/")).collect();
+    if !ignored.is_empty() {
+        let mut args = vec!["ls-files", "-z", "--"];
+        args.extend(ignored.iter().map(String::as_str));
+        let listed = crate::git::command(&args, Some(root)).stderr(Stdio::null()).output().ok()?;
+        let tracked = String::from_utf8_lossy(&listed.stdout).to_string();
+        for (d, a) in dirs.iter().zip(answers.iter_mut()) {
+            if *a && tracked_under(&tracked, d) {
+                *a = false;
+            }
+        }
+    }
+    Some(answers)
+}
+
+/// Whether `ls-files -z` output lists any file under the folder `dir`.
+pub fn tracked_under(ls_files: &str, dir: &str) -> bool {
+    let prefix = format!("{}/", dir.trim_end_matches('/'));
+    ls_files.split('\0').any(|f| f.starts_with(&prefix))
+}
+
+/// One answer per asked folder from `check-ignore -z -v -n` output.
+pub fn parse_check_ignore(out: &str, dirs: &[String]) -> Vec<bool> {
+    let mut map = std::collections::HashMap::new();
+    let f: Vec<&str> = out.split('\0').collect();
+    for rec in f.chunks(4) {
+        if let [source, _line, pattern, path] = rec {
+            map.insert(path.trim_end_matches('/').to_string(), !source.is_empty() && !pattern.starts_with('!'));
+        }
+    }
+    dirs.iter().map(|d| map.get(d.as_str()).copied().unwrap_or(false)).collect()
+}
+
+/// The ignore answers of every watched root.
+static IGNORES: Mutex<BTreeMap<String, Arc<Mutex<Ignores>>>> = Mutex::new(BTreeMap::new());
+
+fn ignores_of(root: &Path) -> Arc<Mutex<Ignores>> {
+    IGNORES.lock().unwrap_or_else(|e| e.into_inner()).entry(key(&root.to_string_lossy())).or_default().clone()
+}
+
+/// Whether a reported change can move the status: git's folder rules, and for the working tree
+/// git's own ignore rules (a changed rule file first forgets the remembered answers).
+pub fn matters(root: &Path, spot: Spot, rel: &str) -> bool {
+    // A rule file first (T-033-f): `.git/info/exclude` is not one of the git-folder paths
+    // `counts` lets through, and its change must still forget the answers and read once.
+    let rule = match spot {
+        Spot::Tree => is_rule_file(rel),
+        Spot::Info => rel.trim_start_matches('/').eq_ignore_ascii_case("exclude"),
+        Spot::GitDir | Spot::Refs => false,
+    };
+    if rule {
+        ignores_of(root).lock().unwrap_or_else(|e| e.into_inner()).forget();
+        return true;
+    }
+    if !counts(spot, rel) {
+        return false;
+    }
+    if spot != Spot::Tree || rel.trim_start_matches('/').split('/').next().is_some_and(|s| s.eq_ignore_ascii_case(".git")) {
+        return true;
+    }
+    let ig = ignores_of(root);
+    let mut ig = ig.lock().unwrap_or_else(|e| e.into_inner());
+    !ig.ignored(rel, &mut |dirs| ask_git(root, dirs))
+}
 
 /// Where a changed path was reported from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +177,8 @@ pub enum Spot {
     GitDir,
     /// The shared `refs` folder of a linked worktree's repository.
     Refs,
+    /// The shared `info` folder of a linked worktree's repository (its `exclude` file).
+    Info,
 }
 
 /// Whether a change at `rel` (relative to its spot, forward slashes) can move the status. Inside
@@ -51,6 +189,7 @@ pub fn counts(spot: Spot, rel: &str) -> bool {
     match spot {
         Spot::Refs => true,
         Spot::GitDir => rel == "HEAD" || rel == "index",
+        Spot::Info => false,
         Spot::Tree => {
             let mut segs = rel.split('/');
             let first = segs.next().unwrap_or_default();
@@ -58,7 +197,7 @@ pub fn counts(spot: Spot, rel: &str) -> bool {
                 let rest = &rel[first.len()..].trim_start_matches('/');
                 return *rest == "HEAD" || *rest == "index" || *rest == "refs" || rest.starts_with("refs/");
             }
-            !rel.split('/').any(|s| SKIP.iter().any(|k| s.eq_ignore_ascii_case(k)))
+            true
         }
     }
 }
@@ -146,6 +285,10 @@ impl Places {
         }
         if !same(&self.common, &inner) {
             out.push((self.common.join("refs"), true, Spot::Refs));
+            // Only when it exists: a missing folder cannot be watched and would cost the whole watch.
+            if self.common.join("info").is_dir() {
+                out.push((self.common.join("info"), false, Spot::Info));
+            }
         }
         out
     }
@@ -158,7 +301,9 @@ pub fn key(path: &str) -> String {
 
 /// Asks git where the worktree holding `path` (a folder or a file in it) keeps its state.
 pub fn places(path: &Path) -> Result<Places, String> {
-    let dir = if path.is_file() { path.parent().unwrap_or(path) } else { path };
+    // T-033-c (council FIX-SOON 1): a diff tab on a deleted file, or a file in a deleted folder,
+    // still gets its watch: git is asked from the nearest folder that exists.
+    let dir = path.ancestors().find(|p| p.is_dir()).ok_or_else(|| format!("{} is not inside any folder", path.display()))?;
     let out = crate::git::run(&["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-dir", "--git-common-dir"], Some(dir))?;
     let mut l = out.lines().map(|s| PathBuf::from(s.trim()));
     match (l.next(), l.next(), l.next()) {
@@ -280,6 +425,7 @@ pub fn unwatch(id: u64) {
         w.stop.store(true, Ordering::Relaxed);
         let _ = w.tx.send(Signal::Stop);
         all.remove(&k);
+        IGNORES.lock().unwrap_or_else(|e| e.into_inner()).remove(&k);
     }
 }
 
@@ -304,21 +450,68 @@ pub fn open_count() -> usize {
 #[cfg(test)]
 pub static STARTS: Mutex<Vec<(PathBuf, Instant)>> = Mutex::new(Vec::new());
 
+/// When the worker reads: a settled change (the debounce) no sooner than `gap` after the last read
+/// began, and the mode's tick regardless.
+#[derive(Debug)]
+pub struct Schedule {
+    deb: Debounce,
+    last: Instant,
+    pending: bool,
+    force: bool,
+    gap: Duration,
+}
+
+impl Schedule {
+    pub fn new(last: Instant, gap: Duration) -> Self {
+        Schedule { deb: Debounce::new(QUIET, CAP), last, pending: false, force: false, gap }
+    }
+    pub fn change(&mut self, now: Instant) {
+        self.deb.hit(now);
+    }
+    /// Read at the next turn whatever the gap says (changes may have been missed).
+    pub fn at_once(&mut self) {
+        self.force = true;
+    }
+    /// How long to wait for the next thing to do.
+    pub fn wait(&self, now: Instant, tick: Duration) -> Duration {
+        if self.force {
+            return Duration::ZERO;
+        }
+        let mut until = self.last + tick;
+        if self.pending {
+            until = until.min(self.last + self.gap);
+        }
+        let until = until.saturating_duration_since(now);
+        self.deb.wait(now).map_or(until, |d| d.min(until))
+    }
+    /// True when a read is due now (and counts it as begun).
+    pub fn due(&mut self, now: Instant, tick: Duration) -> bool {
+        if self.deb.take(now) {
+            self.pending = true;
+        }
+        if self.force || (self.pending && now >= self.last + self.gap) || now >= self.last + tick {
+            self.last = now;
+            self.pending = false;
+            self.force = false;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Waits on the signals, reads the status when a change has settled or a tick is due, and sends it.
 fn worker(root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, send: Sink, log: Log) {
-    let mut deb = Debounce::new(QUIET, CAP);
-    let mut last = Instant::now();
+    let mut sched = Schedule::new(Instant::now(), GAP);
     loop {
-        let now = Instant::now();
-        let until_tick = (last + mode.tick()).saturating_duration_since(now);
-        let wait = deb.wait(now).map_or(until_tick, |d| d.min(until_tick));
+        let wait = sched.wait(Instant::now(), mode.tick());
         match rx.recv_timeout(wait) {
-            Ok(Signal::Change) => deb.hit(Instant::now()),
+            Ok(Signal::Change) => sched.change(Instant::now()),
             Ok(Signal::Broken(why)) => {
                 let (next, first) = mode.broken();
                 if first {
                     log(&format!("source control: the watch on {} stopped ({why}); reading it every 4 s instead", root.display()));
-                    deb.hit(Instant::now()); // read now: changes may have been missed
+                    sched.at_once(); // read now: changes may have been missed
                 }
                 mode = next;
             }
@@ -326,9 +519,7 @@ fn worker(root: &Path, mut mode: Mode, rx: std::sync::mpsc::Receiver<Signal>, se
             Err(RecvTimeoutError::Timeout) => {}
         }
         let now = Instant::now();
-        let changed = deb.take(now);
-        if changed || now >= last + mode.tick() {
-            last = now;
+        if sched.due(now, mode.tick()) {
             #[cfg(test)]
             STARTS.lock().unwrap_or_else(|e| e.into_inner()).push((root.to_path_buf(), now));
             if let Ok(st) = crate::scm::status(root) {
@@ -360,6 +551,7 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
             unsafe { CloseHandle(self.0) };
         }
     }
+    let root = dir.to_path_buf();
     let wide: Vec<u16> = dir.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
     // SAFETY: a NUL-terminated wide path; the flags open a folder for overlapped change reads.
     let h = unsafe { CreateFileW(wide.as_ptr(), FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, std::ptr::null(), OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, std::ptr::null_mut()) };
@@ -421,7 +613,7 @@ fn start_reader(dir: &Path, recursive: bool, spot: Spot, tx: Sender<Signal>, sto
                 }
                 // SAFETY: the first n bytes of the buffer were written by the read.
                 let raw = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), n as usize) };
-                if parse_notify(raw).iter().any(|p| counts(spot, p)) {
+                if parse_notify(raw).iter().any(|p| matters(&root, spot, p)) {
                     if injected_break() {
                         return broke("injected for testing".into());
                     }
@@ -459,13 +651,149 @@ mod tests {
     }
 
     #[test]
-    fn build_folders_never_count_on_any_segment() {
-        for rel in ["target/debug/x.rlib", "src-tauri/target/debug/deps/a.d", "web/node_modules/react/index.js", "pkg/dist/app.js", ".venv/lib/site.py", "a/Node_Modules/b"] {
-            assert!(!counts(Spot::Tree, rel), "{rel}");
+    fn ignored_folders_are_asked_of_git_once_and_remembered_per_root() {
+        let mut ig = Ignores::default();
+        let asked = std::cell::RefCell::new(Vec::<Vec<String>>::new());
+        // git ignores `target/` and `web/node_modules/`; a negation pattern un-ignores `keep/`.
+        let mut ask = |dirs: &[String]| {
+            asked.borrow_mut().push(dirs.to_vec());
+            Some(dirs.iter().map(|d| d == "target" || d == "web/node_modules").collect())
+        };
+        assert!(ig.ignored("target/debug/x.rlib", &mut ask));
+        assert!(ig.ignored("target/debug/deps/a.d", &mut ask), "resolved from the remembered `target`");
+        assert!(!ig.ignored("src/main.rs", &mut ask));
+        assert!(!ig.ignored("src/lib.rs", &mut ask));
+        assert!(!ig.ignored("README.md", &mut ask), "a root file asks nothing");
+        assert!(ig.ignored("web/node_modules/react/index.js", &mut ask));
+        assert_eq!(*asked.borrow(), vec![vec!["target".to_string(), "target/debug".into()], vec!["src".to_string()], vec!["web".to_string(), "web/node_modules".into(), "web/node_modules/react".into()]]);
+        // The rules changed: the answers are forgotten and asked again.
+        ig.forget();
+        assert!(!ig.ignored("src/main.rs", &mut ask));
+        assert_eq!(asked.borrow().len(), 4);
+        // When git cannot answer, the fixed list stands in, on any segment, case-insensitive.
+        let mut none = |_: &[String]| None;
+        let mut fresh = Ignores::default();
+        for rel in ["target/debug/x.rlib", "src-tauri/target/debug/deps/a.d", "pkg/dist/app.js", ".venv/lib/site.py", "a/Node_Modules/b"] {
+            assert!(fresh.ignored(rel, &mut none), "{rel}");
         }
-        for rel in ["src/main.rs", "targets.md", "distance/a.txt", "README.md", "a b/ü.txt"] {
-            assert!(counts(Spot::Tree, rel), "{rel}");
+        for rel in ["src/main.rs", "targets.md", "distance/a.txt", "a b/ü.txt"] {
+            assert!(!fresh.ignored(rel, &mut none), "{rel}");
         }
+        // A stand-in answer is not remembered: once git can answer, it is asked.
+        assert!(!fresh.ignored("target/debug/x.rlib", &mut |d: &[String]| Some(vec![false; d.len()])));
+        assert!(is_rule_file(".gitignore") && is_rule_file("web/.gitignore") && is_rule_file(".git/info/exclude"));
+        assert!(!is_rule_file("src/gitignore.md") && !is_rule_file(".gitignore.bak"));
+    }
+
+    #[test]
+    fn check_ignore_output_is_read_per_asked_folder_with_negations() {
+        let dirs: Vec<String> = ["target", "src", "keep", "later"].iter().map(|s| s.to_string()).collect();
+        let out = ".gitignore\x001\x00target/\x00target/\x00\x00\x00\x00src/\x00.gitignore\x003\x00!keep/\x00keep/\x00\x00\x00\x00later/\x00";
+        assert_eq!(parse_check_ignore(out, &dirs), vec![true, false, false, false]);
+        assert_eq!(parse_check_ignore("", &dirs), vec![false; 4], "no output: nothing ignored");
+    }
+
+    #[test]
+    fn a_real_repo_answers_check_ignore_for_folders_and_nested_rules() {
+        let dir = repo("ignore");
+        std::fs::write(dir.join(".gitignore"), "target/\n*.log\n").unwrap();
+        std::fs::create_dir_all(dir.join("web")).unwrap();
+        std::fs::write(dir.join("web/.gitignore"), "node_modules/\n").unwrap();
+        let ask = |names: &[&str]| ask_git(&dir, &names.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(ask(&["target", "src", "web/node_modules", "web/src"]), Some(vec![true, false, true, false]));
+        assert_eq!(ask(&["src"]), Some(vec![false]), "exit 1 (nothing ignored) is an answer");
+        let mut ig = Ignores::default();
+        assert!(ig.ignored("target/debug/f1", &mut |d| ask_git(&dir, d)));
+        assert!(!ig.ignored("src/main.rs", &mut |d| ask_git(&dir, d)));
+        assert!(ig.ignored("web/node_modules/react/index.js", &mut |d| ask_git(&dir, d)));
+        let nowhere = std::env::temp_dir().join(format!("scm-watch-norepo-{}", std::process::id()));
+        std::fs::create_dir_all(&nowhere).unwrap();
+        assert_eq!(ask_git(&nowhere, &["target".to_string()]), None, "outside a repository git cannot answer");
+        let _ = std::fs::remove_dir_all(&nowhere);
+    }
+
+    #[test]
+    fn t033f_an_ignored_folder_with_tracked_files_is_kept_and_exclude_edits_forget_through_matters() {
+        assert!(tracked_under("gen/a.txt\0src/b.rs\0", "gen") && !tracked_under("generated/a.txt\0", "gen"));
+        let dir = repo("t033f");
+        std::fs::create_dir_all(dir.join("gen")).unwrap();
+        std::fs::write(dir.join("gen/a.txt"), "tracked\n").unwrap();
+        crate::git::run(&["add", "gen/a.txt"], Some(&dir)).unwrap();
+        std::fs::write(dir.join(".gitignore"), "gen/\n").unwrap();
+        assert!(matters(&dir, Spot::Tree, ".gitignore"));
+        assert!(matters(&dir, Spot::Tree, "gen/a.txt"), "gen/ is ignored but tracks a file: a change there counts");
+        // The main checkout's exclude file: the answers it gave are forgotten when it changes.
+        std::fs::create_dir_all(dir.join(".git/info")).unwrap();
+        std::fs::write(dir.join(".git/info/exclude"), "build/\n").unwrap();
+        assert!(matters(&dir, Spot::Tree, ".git/info/exclude"), "an exclude edit reads once");
+        assert!(!matters(&dir, Spot::Tree, "build/out.bin"), "build/ is excluded and tracks nothing");
+        std::fs::write(dir.join(".git/info/exclude"), "").unwrap();
+        assert!(matters(&dir, Spot::Tree, ".git/info/exclude"));
+        assert!(matters(&dir, Spot::Tree, "build/out.bin"), "the old answer was forgotten");
+        // A linked worktree watches the shared info folder and its exclude forgets that worktree's answers.
+        std::fs::write(dir.join(".git/info/exclude"), "cache/\n").unwrap();
+        crate::git::run(&["commit", "-q", "-m", "gen"], Some(&dir)).unwrap();
+        let linked = std::env::temp_dir().join(format!("scm-watch-t033f-linked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&linked);
+        crate::git::run(&["worktree", "add", "-q", &linked.to_string_lossy(), "-b", "t033f-linked"], Some(&dir)).unwrap();
+        let p = places(&linked).unwrap();
+        assert!(p.watches().iter().any(|(d, r, s)| *s == Spot::Info && !r && d.ends_with("info")), "{:?}", p.watches());
+        assert!(!matters(&p.root, Spot::Tree, "cache/x"), "the shared exclude applies to the linked worktree");
+        std::fs::write(dir.join(".git/info/exclude"), "").unwrap();
+        assert!(!matters(&p.root, Spot::Info, "other"), "only the exclude file counts in info/");
+        assert!(matters(&p.root, Spot::Info, "exclude"));
+        assert!(matters(&p.root, Spot::Tree, "cache/x"), "forgotten through the shared info folder");
+        let _ = crate::git::run(&["worktree", "remove", "--force", &linked.to_string_lossy()], Some(&dir));
+        let _ = std::fs::remove_dir_all(&linked);
+    }
+
+    #[test]
+    fn a_diff_tab_on_a_deleted_file_still_finds_its_worktree() {
+        let dir = repo("deleted-file");
+        let whole = places(&dir).unwrap();
+        assert_eq!(places(&dir.join("gone/deeper/deleted.txt")).unwrap(), whole);
+        assert_eq!(places(&dir.join("a.txt")).unwrap(), whole);
+        assert!(places(Path::new("Q:/no-such-drive/x.txt")).is_err());
+    }
+
+    #[test]
+    fn a_change_soon_after_a_read_waits_for_the_gap_but_a_tick_never_does() {
+        let t0 = Instant::now();
+        let gap = Duration::from_secs(3);
+        let tick = Duration::from_secs(30);
+        // Just read at t0: a change at +100 ms settles at +350 ms but is read at +3 s.
+        let mut s = Schedule::new(t0, gap);
+        s.change(t0 + Duration::from_millis(100));
+        assert_eq!(s.wait(t0 + Duration::from_millis(100), tick), QUIET);
+        assert!(!s.due(t0 + Duration::from_millis(400), tick));
+        assert_eq!(s.wait(t0 + Duration::from_millis(400), tick), Duration::from_millis(2600), "waits for the gap, not the tick");
+        assert!(!s.due(t0 + Duration::from_millis(2999), tick));
+        assert!(s.due(t0 + Duration::from_secs(3), tick));
+        assert!(!s.due(t0 + Duration::from_secs(3), tick), "read once");
+        // Churn for a minute: reads begin at most every `GAP` (4 s: 15 a minute).
+        let mut s = Schedule::new(t0, GAP);
+        let mut reads = 0;
+        let mut t = t0;
+        while t < t0 + Duration::from_secs(60) {
+            s.change(t);
+            if s.due(t, tick) {
+                reads += 1;
+            }
+            t += Duration::from_millis(100);
+        }
+        assert!(reads <= 15, "{reads} reads in a minute");
+        // Long quiet: a change is read as soon as it settles, and the tick comes on time.
+        let mut s = Schedule::new(t0 - Duration::from_secs(10), gap);
+        s.change(t0);
+        assert!(s.due(t0 + QUIET, tick));
+        assert_eq!(s.wait(t0 + QUIET, tick), tick);
+        assert!(s.due(t0 + QUIET + tick, tick), "the tick reads regardless of the gap");
+        // A broken watch reads at once, gap or not.
+        let mut s = Schedule::new(t0, gap);
+        s.at_once();
+        assert_eq!(s.wait(t0 + Duration::from_millis(10), tick), Duration::ZERO);
+        assert!(s.due(t0 + Duration::from_millis(10), tick));
+        assert!(!s.due(t0 + Duration::from_millis(20), tick));
     }
 
     #[test]
@@ -547,6 +875,8 @@ mod tests {
         git(&["config", "user.email", "t@example.com"]);
         git(&["config", "user.name", "t"]);
         std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        // T-033-c: the build folders are skipped because git ignores them, not by name.
+        std::fs::write(dir.join(".gitignore"), "target/\n").unwrap();
         git(&["add", "."]);
         git(&["commit", "-q", "--no-verify", "-m", "first"]);
         dir

@@ -2,7 +2,7 @@
 // page is AI connections (ACCT-004): the Claude card connects on the 1-year key by default. The
 // Connect grid with install steps is ConnectGrid (ACCT-001, ACCT-003); the Claude account route and
 // the Codex sign-ins came with T-043-b / T-043-c.
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { saveChanged } from "./saveChanged";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -19,6 +19,10 @@ import { AttentionNote, fixDoes, openInstallPage, type Fix } from "./Attention";
 import type { Project } from "../projects/model";
 import RepoPage from "./RepoPage";
 import { PAGES, pageOf, rememberPage, lastPage, type Page, type SettingsTarget } from "./pages";
+import { markGuide } from "../onboarding/guide";
+import { useKeymap } from "../keys/KeymapContext";
+import { matchEvent } from "../keys/keymap";
+import { hideRule, MAX_REPOS_DRAWN, MAX_SEARCH, SearchFolds, searchRepos, searchSettings } from "./search";
 
 // SET-006: a page loads the first time it is opened, so Settings itself opens quickly.
 const AppearancePage = lazy(() => import("./AppearancePage"));
@@ -160,6 +164,66 @@ export function ClaudeCard({ onConnected = () => {} }: { onConnected?: (on: bool
 }
 
 
+/** One page's settings; Settings draws one, a search draws each page that holds a match. */
+function PageBody({ page, repo, onSaved }: { page: Page; repo?: Project; onSaved: (p: Project) => void }) {
+  return (
+    <>
+      {page === "general" && <GeneralPage />}
+      {page === "appearance" && (
+        <>
+          <p className="settings-sub">How Kolux looks. Changes show straight away.</p>
+          <AppearancePage />
+        </>
+      )}
+      {page === "accounts" && (
+        <>
+          <p className="settings-sub">Link Kolux to the AI services you already pay for. Kolux charges nothing and ships no models or keys of its own: each agent runs on your plan or key and talks straight to its provider, and Kolux neither relays nor records that traffic. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
+          <div data-section="connections">
+            <ConnectGrid cards={{ claude: <ClaudeCard />, codex: <CodexCard />, grok: <GrokCard /> }} />
+          </div>
+          <div className="conn-advanced" data-section="accounts-advanced">
+            <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
+            <ClaudeAccounts />
+            <CodexAccounts />
+          </div>
+        </>
+      )}
+      {page === "shortcuts" && <ShortcutsPage />}
+      {page === "terminal" && <TerminalPage />}
+      {page === "git" && <GitPage />}
+      {page === "agents" && <AgentsPage />}
+      {page === "notifications" && (
+        <>
+          <NotificationsPage />
+          <div data-section="alerts">
+            <Notifications />
+          </div>
+        </>
+      )}
+      {page === "usage" && (
+        <>
+          <div data-section="activity">
+            <Activity />
+          </div>
+          <div data-section="tokens">
+            <p className="settings-sub">What your agents used, read from the logs they keep on this computer.</p>
+            <TokenAnalytics />
+          </div>
+        </>
+      )}
+      {page === "safety" && (
+        <p className="conn-detail">
+          Protected commands are advisory and cover Claude only: Claude asks before a command that trips a built-in rule
+          (force-push to main, throwing away uncommitted work, deleting database objects, Stripe changes, infrastructure
+          changes, production deploys). This is not a safety control: a command can be written around it, and Codex is not
+          covered.
+        </p>
+      )}
+      {repo && <RepoPage project={repo} onSaved={onSaved} />}
+    </>
+  );
+}
+
 /** Scrolls a section of the open page into view once it is drawn (pages load lazily). */
 function useScrollTo(section: string | undefined, page: Page, n: number) {
   useEffect(() => {
@@ -184,6 +248,7 @@ function useScrollTo(section: string | undefined, page: Page, n: number) {
 /** `target` comes from a link elsewhere in the app; `n` changes on every open so a repeat link scrolls again. */
 export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () => void; target?: SettingsTarget | null; n?: number }) {
   const [projects, setProjects] = useState<Project[]>([]);
+  const saved = (u: Project) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x)));
   const [page, setPage] = useState<Page>(() => pageOf(target?.page ?? lastPage(), []));
   useEffect(() => {
     invoke<Project[]>("project_list")
@@ -197,7 +262,32 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
   useEffect(() => {
     if (target) setPage(target.page);
   }, [target, n]);
+  // SET-007: a search across every page; a link into Settings or a page picked on the left ends it.
+  const [query, setQuery] = useState("");
+  const box = useRef<HTMLInputElement>(null);
+  const keymap = useKeymap();
+  useEffect(() => setQuery(""), [target, n]);
+  const hits = useMemo(() => searchSettings(query), [query]);
+  const repoHits = useMemo(() => searchRepos(query, projects), [query, projects]);
+  const go = (p: Page) => {
+    setQuery("");
+    setPage(p);
+  };
+  useEffect(() => {
+    // Mod+F (settings.search) wins over a terminal's or the window's own use of the chord.
+    const find = (e: KeyboardEvent) => {
+      if (matchEvent(keymap, e, ["settings"])?.id !== "settings.search") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      box.current?.focus();
+      box.current?.select();
+    };
+    window.addEventListener("keydown", find, true);
+    return () => window.removeEventListener("keydown", find, true);
+  }, [keymap]);
   useEffect(() => rememberPage(page), [page]);
+  // USAGE 012: opening the Usage page counts as having tried the usage feature (Explore Kolux).
+  useEffect(() => void (page === "usage" && markGuide("tried", "usage").catch(() => {})), [page]);
   useScrollTo(target?.section, page, n);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -212,71 +302,60 @@ export default function SettingsPage({ onClose, target, n = 0 }: { onClose: () =
     <div className="settings" role="dialog" aria-label="Settings">
       <nav className="settings-nav" aria-label="Settings pages">
         <div className="settings-title">Settings</div>
-        {(Object.keys(PAGES) as Array<keyof typeof PAGES>).map((p) => (
-          <button key={p} className="settings-link" aria-current={page === p ? "page" : undefined} onClick={() => setPage(p)}>
+        <input
+          ref={box}
+          className="field settings-search"
+          type="search"
+          aria-label="Search settings"
+          placeholder="Search settings"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && query) {
+              e.stopPropagation();
+              setQuery("");
+            }
+          }}
+        />
+        {(Object.keys(PAGES) as Array<keyof typeof PAGES>).filter((p) => !hits || hits.pages.some((h) => h.page === p)).map((p) => (
+          <button key={p} className="settings-link" aria-current={!hits && page === p ? "page" : undefined} onClick={() => go(p)}>
             {PAGES[p]}
           </button>
         ))}
-        {projects.length > 0 && <div className="settings-group">Repositories</div>}
-        {projects.map((p) => (
-          <button key={p.id} className="settings-link repo" aria-current={page === `repo:${p.id}` ? "page" : undefined} onClick={() => setPage(`repo:${p.id}`)}>
+        {(hits ? repoHits : projects).length > 0 && <div className="settings-group">Repositories</div>}
+        {(hits ? repoHits : projects).map((p) => (
+          <button key={p.id} className="settings-link repo" aria-current={!hits && page === `repo:${p.id}` ? "page" : undefined} onClick={() => go(`repo:${p.id}`)}>
             {p.name}
           </button>
         ))}
       </nav>
       <main className="settings-main">
         <header className="settings-head">
-          <h1>{title}</h1>
+          <h1>{hits ? "Search" : title}</h1>
           <button className="ib" title="Close Settings (Esc)" aria-label="Close Settings" onClick={onClose}>
             ×
           </button>
         </header>
-        <Suspense fallback={null}>
-          {page === "general" && <GeneralPage />}
-          {page === "appearance" && (
-            <>
-              <p className="settings-sub">How Kolux looks. Changes show straight away.</p>
-              <AppearancePage />
-            </>
-          )}
-          {page === "accounts" && (
-            <>
-              <p className="settings-sub">Link Kolux to the AI services you already pay for. Kolux charges nothing and ships no models or keys of its own: each agent runs on your plan or key and talks straight to its provider, and Kolux neither relays nor records that traffic. Keys and sign-ins are sealed on this PC for your Windows account only.</p>
-              <ConnectGrid cards={{ claude: <ClaudeCard />, codex: <CodexCard />, grok: <GrokCard /> }} />
-              <div className="conn-advanced" data-section="accounts-advanced">
-                <h3 className="conn-advanced-head">Manage accounts (advanced)</h3>
-                <ClaudeAccounts />
-                <CodexAccounts />
+        {hits ? (
+          <SearchFolds.Provider value={hits.folds}>
+            <style>{hideRule(hits)}</style>
+            {hits.refused && <p className="conn-detail warn">That search is too long: {MAX_SEARCH} characters at most.</p>}
+            {!hits.refused && hits.pages.length === 0 && repoHits.length === 0 && <p className="conn-detail">No setting matches.</p>}
+            {hits.pages.map((h) => (
+              <div key={h.page} className="settings-found" data-page={h.page}>
+                <h2 className="settings-found-title">{PAGES[h.page]}</h2>
+                <Suspense fallback={null}>
+                  <PageBody page={h.page} onSaved={saved} />
+                </Suspense>
               </div>
-            </>
-          )}
-          {page === "shortcuts" && <ShortcutsPage />}
-          {page === "terminal" && <TerminalPage />}
-          {page === "git" && <GitPage />}
-          {page === "agents" && <AgentsPage />}
-          {page === "notifications" && (
-            <>
-              <NotificationsPage />
-              <Notifications />
-            </>
-          )}
-          {page === "usage" && (
-            <>
-              <Activity />
-              <p className="settings-sub">What your agents used, read from the logs they keep on this computer.</p>
-              <TokenAnalytics />
-            </>
-          )}
-          {page === "safety" && (
-            <p className="conn-detail">
-              Protected commands are advisory and cover Claude only: Claude asks before a command that trips a built-in rule
-              (force-push to main, throwing away uncommitted work, deleting database objects, Stripe changes, infrastructure
-              changes, production deploys). This is not a safety control: a command can be written around it, and Codex is not
-              covered.
-            </p>
-          )}
-          {repo && <RepoPage project={repo} onSaved={(u) => setProjects((ps) => ps.map((x) => (x.id === u.id ? u : x)))} />}
-        </Suspense>
+            ))}
+            {repoHits.length <= MAX_REPOS_DRAWN ? repoHits.map((p) => <RepoPage key={p.id} project={p} onSaved={saved} />) : <p className="conn-detail">{repoHits.length} repositories match; pick one on the left.</p>}
+          </SearchFolds.Provider>
+        ) : (
+          <Suspense fallback={null}>
+            <PageBody page={page} repo={repo} onSaved={saved} />
+          </Suspense>
+        )}
       </main>
     </div>
   );
